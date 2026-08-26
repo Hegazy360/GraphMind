@@ -1,0 +1,93 @@
+---
+title: GraphMind
+description: GraphMind is a live debugger for AI agents. Attach to a running agent, pause on error, inspect every input and output, inject a fix, and resume. Local-first, open source, MIT.
+template: splash
+tableOfContents: false
+editUrl: false
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+<div class="gm-hero not-content">
+  <p class="gm-eyebrow">Open source · MIT · Local-first</p>
+  <h1>The live debugger for AI&nbsp;agents.</h1>
+  <p class="gm-tagline">Attaches while it&rsquo;s happening.</p>
+  <p class="gm-lede">
+    Phoenix and Langfuse show you what your agent <em>did</em>. GraphMind attaches to the run
+    itself: watch execution as a live graph, hold the agent at a gate, read every input, output
+    and token, substitute a result, and let it carry on.
+  </p>
+
+  <div class="gm-cta-row">
+    <a class="gm-btn gm-btn--primary" href="/start/install/">Install &amp; first run</a>
+    <a class="gm-btn gm-btn--ghost" href="/start/what-is-graphmind/">Why a debugger?</a>
+  </div>
+
+  <code class="gm-cmd">npx graphmind-ai demo</code>
+  <p class="gm-cmd-note">
+    One command, no API key. Replays a recorded agent that hits a planted bug — and really
+    pauses on it.
+  </p>
+</div>
+
+<figure class="gm-demo not-content">
+  <img src="/demo.gif" alt="The GraphMind viewer: an agent run drawn as a live graph, pausing on a failing tool call, with the inspector open on its inputs and outputs." width="1280" height="720" loading="eager" />
+  <figcaption>graphmind demo — pause on error, inspect, inject, resume.</figcaption>
+</figure>
+
+## Start here
+
+<CardGrid>
+  <LinkCard
+    title="What GraphMind is"
+    description="Live debugger vs. post-hoc observability — the honest comparison, and when each one wins."
+    href="/start/what-is-graphmind/"
+  />
+  <LinkCard
+    title="Install & first run"
+    description="npx graphmind-ai demo, then instrument a real app in about five lines."
+    href="/start/install/"
+  />
+  <LinkCard
+    title="Core concepts"
+    description="Runs, nodes and instances, gates, fail-open guarantees, local-first storage."
+    href="/start/concepts/"
+  />
+  <LinkCard
+    title="Integrations"
+    description="Vercel AI SDK, Anthropic, OpenAI, LangGraph, Python — copy-pasteable end to end."
+    href="/integrations/"
+  />
+</CardGrid>
+
+## What you can actually do
+
+<CardGrid>
+  <Card title="Pause on error" icon="warning">
+    Armed by default. The first time a tool throws, the agent stops *in place* — arguments,
+    partial state and stack still live — instead of leaving you a trace to read afterwards.
+  </Card>
+  <Card title="Breakpoints & step mode" icon="seti:config">
+    Break before any node by kind or name, or step every boundary. Held gates are indefinite:
+    nothing is in flight while you think.
+  </Card>
+  <Card title="Inject and continue" icon="random">
+    Replace a tool's result — or a failure — with a value you type, and let the agent keep
+    running on it. Test the recovery path without touching your code.
+  </Card>
+  <Card title="Fails open, always" icon="approve-check">
+    No debugger attached? Instrumentation is a no-op. Debugger disconnects mid-hold? Every gate
+    auto-continues. Your production path never waits on a viewer.
+  </Card>
+</CardGrid>
+
+## Wire up your stack
+
+<CardGrid>
+  <LinkCard title="Vercel AI SDK" href="/integrations/vercel-ai-sdk/" description="@graphmind-ai/sdk — wrapModel + wrapTools" />
+  <LinkCard title="Anthropic SDK" href="/integrations/anthropic/" description="@graphmind-ai/anthropic — wrapClient + wrapTools" />
+  <LinkCard title="OpenAI SDK" href="/integrations/openai/" description="@graphmind-ai/openai — wrapClient + wrapTools" />
+  <LinkCard title="LangGraph / LangChain" href="/integrations/langgraph/" description="@graphmind-ai/langgraph — callback handler" />
+  <LinkCard title="Python" href="/integrations/python/" description="openai · anthropic · langgraph" />
+  <LinkCard title="Anything else" href="/integrations/other-frameworks/" description="Import a trace, or write a 200-line adapter" />
+</CardGrid>

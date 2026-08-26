@@ -1,0 +1,217 @@
+---
+title: Vercel AI SDK
+description: Debug an agent built on the ai package — wrap the model and the tools, then pause, inspect, inject and resume live.
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
+
+`@graphmind-ai/sdk` is the reference GraphMind adapter. It uses two public extension points of
+the `ai` package — `wrapLanguageModel` middleware and tool-`execute` decoration — so there is no
+fork and nothing patched at runtime.
+
+<Tabs syncKey="pkg">
+<TabItem label="npm">
+
+```sh
+npm i -D @graphmind-ai/sdk
+```
+
+</TabItem>
+<TabItem label="pnpm">
+
+```sh
+pnpm add -D @graphmind-ai/sdk
+```
+
+</TabItem>
+<TabItem label="yarn">
+
+```sh
+yarn add -D @graphmind-ai/sdk
+```
+
+</TabItem>
+</Tabs>
+
+**Peer range:** `ai >=6 <8`. Primary target is v7 (provider spec V4, validated against 7.0.79);
+v6 is untested.
+
+## End to end
+
+```ts title="support-agent.ts"
+import { anthropic } from '@ai-sdk/anthropic';
+import { graphmind } from '@graphmind-ai/sdk';
+import { stepCountIs, streamText, tool } from 'ai';
+import { z } from 'zod';
+
+const gm = graphmind({ app: 'support-agent' });
+
+const searchOrders = tool({
+  description: 'Find a customer’s recent orders',
+  inputSchema: z.object({ email: z.string() }),
+  execute: async ({ email }) => db.orders.findMany({ where: { email } }),
+});
+
+const issueRefund = tool({
+  description: 'Refund an order',
+  inputSchema: z.object({ orderId: z.string(), cents: z.number() }),
+  execute: async ({ orderId, cents }) => payments.refund(orderId, cents),
+});
+
+async function main() {
+  // Gates are armed once the handshake lands. `false` = no debugger, carry on.
+  await gm.ready();
+
+  const model = gm.wrapModel(anthropic('claude-sonnet-4-5'));
+  const tools = gm.wrapTools({ searchOrders, issueRefund });
+
+  const answer = await gm.run('handle-ticket', async () => {
+    const result = streamText({
+      model,
+      tools,
+      stopWhen: stepCountIs(8),
+      prompt: 'Customer alex@example.com says order #4471 arrived broken. Sort it out.',
+    });
+    await result.consumeStream();
+    return result.text;
+  });
+
+  console.log(answer);
+  await gm.dispose();
+}
+
+main();
+```
+
+Run `graphmind` in one terminal, `tsx support-agent.ts` in another. That is the whole setup.
+
+## The three calls
+
+### `gm.wrapModel(model)`
+
+Wraps a language model with the debug middleware. Per model step it:
+
+- emits `node.started` for the logical node `llm:step`, one `instanceId` per step;
+- awaits the **`before` gate before calling** `doStream` / `doGenerate` — nothing is in flight
+  while a gate is held, so holds are indefinite by design;
+- tees the provider stream to emit batched `node.token` deltas (one batch per node per ~34 ms)
+  without disturbing what the SDK consumes;
+- emits `node.finished` with token usage from the finish part;
+- emits `graph.hint` from `params.tools` on the first step of an invocation, so the viewer draws
+  your whole tool roster greyed out before anything runs.
+
+### `gm.wrapTools(tools)`
+
+Wraps each tool's `execute` with three gates:
+
+| Gate | Behaviour on each resume action |
+| --- | --- |
+| `before` | `inject` skips execution and returns your value · `abort` cancels the run |
+| `after` | `inject` replaces the result · `retry` re-runs `execute` |
+| `error` | `inject` swallows the error and returns your value · `retry` re-invokes `execute` · `continue` rethrows the original error (the SDK serialises it as an error tool result and keeps looping) · `abort` surfaces an `AbortError`, which SDK retry logic never retries |
+
+Parallel tool calls gate **independently** — two concurrent calls hold two pauses, each resumable
+on its own.
+
+### `gm.run(name, fn)`
+
+The run boundary. It groups everything `fn` does into one run, names the agent node
+(`agent:<name>`), and carries the `AbortController` the debugger's `abort` action uses. Optional
+but strongly recommended: without it, concurrent invocations can be merged into one scope.
+
+## Node identity
+
+| Node | `nodeId` | `instanceId` |
+| --- | --- | --- |
+| Agent (a run) | `agent:<runName>` | the run id |
+| Model step | `llm:step` | `<invocationId>:s<N>` |
+| Tool call | `tool:<toolName>` | the tool call id |
+
+Steps are grouped into invocations by the `AsyncLocalStorage` run context, with a prompt-prefix
+heuristic inside a scope: a step whose prompt shares the first message and has grown continues
+the previous invocation. Outside `gm.run` every step shares one scope, so two *concurrent*
+un-wrapped calls with the same first message can merge — wrap concurrent work in `gm.run`.
+
+## Attach guarantee
+
+```ts
+const attached = await gm.ready();                 // default timeout 2000ms
+const attached = await gm.ready({ timeoutMs: 500 });
+```
+
+or let the adapter do it on first use:
+
+```ts
+const gm = graphmind({ app: 'support-agent', waitForAttach: true }); // 2000ms
+const gm = graphmind({ app: 'support-agent', waitForAttach: 500 });  // 500ms
+```
+
+With `waitForAttach` set, the first `gm.run()` / first wrapped model step / first wrapped tool
+call awaits `gm.ready()` before proceeding. Still fail-open: on timeout the app continues
+detached and later calls never wait.
+
+## Streaming and provider-executed tools
+
+**Streaming tools** — `execute` declared as `async function*` — are wrapped with a non-async
+delegate so the SDK still sees an `AsyncIterable` on the direct return value. They are gated at
+before-start only; chunks are observed as `node.token` previews but never paused mid-stream, and
+mid-stream errors are observed rather than gated.
+
+<Aside type="caution">
+A plain `async` `execute` that *returns* an `AsyncIterable` cannot be passed through
+synchronously. The adapter drains it to the final value and warns once. Declare it
+`async function*` to keep preliminary results.
+</Aside>
+
+**Provider-executed tools** (`providerExecuted`, MCP-style) run on the provider's side and
+cannot be gated at all. The adapter observes them from stream parts and marks their events
+`providerExecuted: true` and `ungated: true`, so the viewer renders them with the "ungated"
+affordance instead of pretending you can break on them.
+
+## Timeouts while debugging
+
+`ai`'s `timeout` configs (`totalMs`, `stepMs`, `toolMs`, …) materialise as abort signals whose
+reason is named `TimeoutError`. A held gate would burn those budgets while you think.
+
+While a debugger is attached, the adapter **chains — never replaces —** user and SDK abort
+signals with the debugger's, and filters timeout-driven aborts out of what the model call and
+tool executes see, warning once. User aborts (any other reason) pass through untouched. When
+detached, signals are not touched at all.
+
+<Aside type="caution" title="Known limit">
+`toolMs` is fully neutralised. `totalMs` / `stepMs` / `chunkMs` are stripped from the in-flight
+provider call, but `streamText`'s own outer loop also watches its merged signal — so those can
+still abort the surrounding run after a long hold. Prefer removing `timeout` while debugging.
+</Aside>
+
+## Options
+
+`graphmind()` accepts every `@graphmind-ai/client` session option plus:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `app` | `'ai-app'` | Application name shown in the viewer |
+| `sdk` | detected `ai` version | Override the reported SDK info |
+| `tokenFlushIntervalMs` | `34` | `node.token` batching interval per node (~30/sec) |
+| `waitForAttach` | `false` | `true` (2000 ms) or a number: first call awaits `ready()` |
+| `url` | `ws://127.0.0.1:4747/ingest` | Ingest endpoint (or `GRAPHMIND_URL`) |
+| `enabled` | kill-switch logic | Force on/off (`GRAPHMIND_DISABLED=1` still wins) |
+| `meta` | — | Extra metadata merged into every `run.started` |
+| `pauseTimeoutMs` | hold forever | Auto-continue a gate nobody resumes |
+| `bufferSize` | `2000` | Replay ring buffer capacity |
+
+`gm.session` exposes the underlying session for `stats()` and custom events.
+
+## Next
+
+<Steps>
+
+1. [Pause on error](/debugging/pause-on-error/) — the default workflow.
+
+2. [Inject and continue](/debugging/inject-and-continue/) — fix a value without touching code.
+
+3. [Breakpoints & step mode](/debugging/breakpoints-and-step/) — break before a specific tool.
+
+</Steps>

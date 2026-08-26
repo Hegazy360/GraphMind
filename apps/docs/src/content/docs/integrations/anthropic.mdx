@@ -1,0 +1,194 @@
+---
+title: Anthropic SDK
+description: Debug an agent built directly on @anthropic-ai/sdk — wrap the client and your tool functions, then pause, inspect, inject and resume live.
+sidebar:
+  order: 3
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+`@graphmind-ai/anthropic` instruments the official Anthropic TypeScript SDK. You wrap the client
+once; every `messages.create` — streaming or not — becomes a gated `llm:step` node, and your
+tool functions become gated `tool:<name>` nodes.
+
+<Tabs syncKey="pkg">
+<TabItem label="npm">
+
+```sh
+npm i -D @graphmind-ai/anthropic
+```
+
+</TabItem>
+<TabItem label="pnpm">
+
+```sh
+pnpm add -D @graphmind-ai/anthropic
+```
+
+</TabItem>
+<TabItem label="yarn">
+
+```sh
+yarn add -D @graphmind-ai/anthropic
+```
+
+</TabItem>
+</Tabs>
+
+`@anthropic-ai/sdk` is a peer dependency — the adapter uses the client's public surface, so it
+does not pin your SDK version.
+
+## End to end
+
+A complete hand-rolled tool loop, instrumented:
+
+```ts title="support-agent.ts"
+import Anthropic from '@anthropic-ai/sdk';
+import { graphmind } from '@graphmind-ai/anthropic';
+
+const gm = graphmind({ app: 'support-agent' });
+
+// 1. Wrap the client — every messages.create becomes a gated llm:step node.
+const client = gm.wrapClient(new Anthropic());
+
+// 2. Wrap your tool implementations — each call becomes a gated tool node.
+const tools = gm.wrapTools({
+  searchOrders: async ({ email }: { email: string }) =>
+    db.orders.findMany({ where: { email } }),
+  issueRefund: async ({ orderId, cents }: { orderId: string; cents: number }) =>
+    payments.refund(orderId, cents),
+});
+
+const toolSpecs = [
+  {
+    name: 'searchOrders',
+    description: 'Find a customer’s recent orders',
+    input_schema: {
+      type: 'object' as const,
+      properties: { email: { type: 'string' } },
+      required: ['email'],
+    },
+  },
+  {
+    name: 'issueRefund',
+    description: 'Refund an order',
+    input_schema: {
+      type: 'object' as const,
+      properties: { orderId: { type: 'string' }, cents: { type: 'number' } },
+      required: ['orderId', 'cents'],
+    },
+  },
+];
+
+async function main() {
+  await gm.ready();
+
+  const answer = await gm.run('handle-ticket', async (ctx) => {
+    const messages: Anthropic.MessageParam[] = [
+      { role: 'user', content: 'Order #4471 for alex@example.com arrived broken. Sort it out.' },
+    ];
+
+    for (let step = 0; step < 8; step++) {
+      const message = await client.messages.create(
+        { model: 'claude-sonnet-4-5', max_tokens: 1024, tools: toolSpecs, messages },
+        // Pass the run's signal so the debugger's `abort` action cancels cleanly.
+        { signal: ctx.signal },
+      );
+
+      messages.push({ role: 'assistant', content: message.content });
+
+      const calls = message.content.filter((b) => b.type === 'tool_use');
+      if (calls.length === 0) {
+        return message.content.find((b) => b.type === 'text')?.text ?? '';
+      }
+
+      const results = await Promise.all(
+        calls.map(async (call) => ({
+          type: 'tool_result' as const,
+          tool_use_id: call.id,
+          content: JSON.stringify(await tools[call.name](call.input as never)),
+        })),
+      );
+      messages.push({ role: 'user', content: results });
+    }
+
+    return '';
+  });
+
+  console.log(answer);
+  await gm.dispose();
+}
+
+main();
+```
+
+Run `graphmind` in one terminal and this in another.
+
+## The three calls
+
+### `gm.wrapClient(client)`
+
+Returns a client with the same surface. Around every `messages.create`:
+
+- awaits the **`before` gate before the request goes out** — a hold costs no open connection;
+- emits `node.started` for `llm:step` with the model, system prompt and messages as input;
+- streams token deltas as batched `node.token` events when you use `stream: true` or
+  `messages.stream()`;
+- emits `node.finished` with the stop reason and `TokenUsage` from the response;
+- routes a thrown request error through the **`error` gate** before your code sees it.
+
+Identity when GraphMind is disabled — you get your own client object straight back.
+
+### `gm.wrapTools(tools)`
+
+Takes a record of `name → async function` and returns the same record with each function gated
+at `before`, `after` and `error`. `inject` at any of them substitutes the return value; `retry`
+re-invokes the original function; `continue` at an `error` gate rethrows the original error.
+
+Because it is a plain record of functions, it composes with whatever dispatch you already have —
+a `switch`, a map lookup, an agent framework. Keep your Anthropic `tools` *specs* exactly as
+they were; GraphMind only wraps the implementations.
+
+### `gm.run(name, fn)`
+
+Opens the run, names the agent node, and provides `ctx.signal`.
+
+<Aside type="caution" title="Pass ctx.signal">
+The `abort` resume action works by aborting the run's `AbortController` with an
+`AbortError`-named reason. If you never pass `ctx.signal` into `messages.create`, an abort will
+not cancel a request already in flight — it will only stop the loop at the next gate.
+</Aside>
+
+## Node identity
+
+| Node | `nodeId` | `instanceId` |
+| --- | --- | --- |
+| Agent (a run) | `agent:<runName>` | the run id |
+| Model request | `llm:step` | one per `messages.create` |
+| Tool call | `tool:<toolName>` | the `tool_use` id when available |
+
+## Streaming
+
+`client.messages.stream(...)` and `create({ stream: true })` both work. The adapter tees the
+stream: deltas are batched into `node.token` events on the `text` and `reasoning` channels
+(extended thinking shows up as `reasoning`) while your code consumes the stream exactly as
+before. The `before` gate fires before the stream is opened; there is no mid-stream pause.
+
+## Options
+
+Same shape as every adapter:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `app` | app name | Shown in the viewer's run list |
+| `waitForAttach` | `false` | `true` (2000 ms) or a number: first call awaits `ready()` |
+| `url` | `ws://127.0.0.1:4747/ingest` | Ingest endpoint (or `GRAPHMIND_URL`) |
+| `enabled` | kill-switch logic | Force on/off (`GRAPHMIND_DISABLED=1` still wins) |
+| `meta` | — | Extra metadata on every `run.started` |
+| `pauseTimeoutMs` | hold forever | Auto-continue a gate nobody resumes |
+
+<Aside type="tip">
+Using the Anthropic provider *through* the Vercel AI SDK (`@ai-sdk/anthropic`)? Use
+[`@graphmind-ai/sdk`](/integrations/vercel-ai-sdk/) instead — it hooks the SDK layer and gets
+tool gating for free.
+</Aside>

@@ -1,0 +1,117 @@
+---
+title: Inject and continue
+description: Substitute a tool result — or a failure — with a value you type, and let the agent keep running on it. The capability no post-hoc tracer can offer.
+sidebar:
+  order: 4
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+This is the one GraphMind does that a trace viewer structurally cannot.
+
+At a held gate you supply a value. The adapter **skips the real execution** (or swallows the
+real error) and hands your value to the agent as though the call had returned it. The run
+carries on from there, live, on the value you chose.
+
+## Why you want it
+
+Every one of these is a five-second experiment instead of a code change plus a re-run:
+
+- **The API is down and you are not debugging the API.** Inject a plausible response and get on
+  with the part you care about.
+- **"What does it do if this comes back empty?"** Inject `[]`. Watch.
+- **The tool is right and the model is wrong.** Inject the correct result and see whether the
+  model still misreads it — that tells you the bug is in the prompt, not the tool.
+- **Reproducing a customer's failure needs data you cannot get locally.** Inject their payload
+  at the exact node.
+- **A rate limit blocks the last step of a long run.** Inject past it rather than paying for the
+  first eight steps again.
+- **Testing the recovery path.** Force the failure branch on demand, without a fault-injection
+  library.
+
+The alternatives are stubbing code you will have to remember to un-stub, or a mock layer that
+drifts from reality. Injection touches nothing on disk.
+
+## Using it
+
+<Steps>
+
+1. **Get to a gate.** Pause-on-error is armed by default; otherwise set a breakpoint on the node
+   ([breakpoints & step mode](/debugging/breakpoints-and-step/)).
+
+2. **Read what is there.** The inspector shows the input the node received, and the error if it
+   threw — that is usually what tells you what the right value would have been.
+
+3. **Choose `inject` and enter the value.** JSON, so anything a tool could legitimately return:
+   an object, an array, a string, `null`.
+
+4. **Resume.** The agent receives your value as the node's result and keeps going.
+
+</Steps>
+
+## Exactly what happens, per gate
+
+The action means the same thing everywhere, and the adapter implements it precisely:
+
+| Gate | Effect of `inject` |
+| --- | --- |
+| `before` | The real `execute` is **never called**. Your value becomes the result. |
+| `after` | The real result is **discarded**. Your value goes back to the model instead. |
+| `error` | The error is **swallowed**. Your value becomes the result; the model sees a success. |
+
+<Aside type="note" title="It is recorded">
+Injected results are marked `injected: true` on the wire and rendered as injected in the viewer.
+A run you steered by hand never looks like a clean run when you come back to it later — and
+`graphmind record` keeps the marker, so an exported run stays honest.
+</Aside>
+
+## Worked example
+
+The bundled demo plants a bug in `convertCurrency`: it inverts an exchange rate, so a ¥520,000
+trip total becomes an absurd number and `checkBudget` throws.
+
+```sh
+npx graphmind-ai demo
+```
+
+<Steps>
+
+1. The run pauses at `checkBudget` with an error gate held.
+
+2. The inspector shows the input: a total that is off by a factor of about 150. The bug is
+   upstream, in the conversion — not here.
+
+3. Choose `inject` and supply what `checkBudget` should have returned:
+
+   ```json
+   { "withinBudget": true, "totalUsd": 3421, "budgetUsd": 3800 }
+   ```
+
+4. The agent continues, writes its summary, and finishes — and you have confirmed in one pass
+   that the *only* bug is the conversion, with nothing downstream also broken.
+
+</Steps>
+
+That confirmation is the real product. Fixing `convertCurrency` and re-running would have told
+you the same thing in several minutes and another round of tokens.
+
+## When to reach for retry instead
+
+`inject` supplies a value. `retry` re-runs the node as written. Use `retry` when the failure was
+about the world (network blip, expired token, unstarted database) and `inject` when it was about
+the value. See [retry and abort](/debugging/retry-and-abort/).
+
+## Adapter contract
+
+If you are writing an adapter, `inject` is one of four decisions your gate handling must
+implement:
+
+```ts
+const decision = await session.gate('before', node);
+if (decision.action === 'inject') return decision.output;  // skip execution entirely
+```
+
+`decision.output` is `unknown` — whatever the viewer sent. Adapters should pass it through
+without validation: it is deliberately the debugger operator's responsibility, exactly like
+setting a variable in `gdb`. Full contract in
+[writing an adapter](/contributing/writing-an-adapter/).

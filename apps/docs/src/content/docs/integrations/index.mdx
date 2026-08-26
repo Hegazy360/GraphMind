@@ -1,0 +1,91 @@
+---
+title: Integrations
+description: One adapter per framework, all with the same four-call surface — Vercel AI SDK, Anthropic, OpenAI, LangGraph/LangChain, Python, and everything else via trace import.
+sidebar:
+  order: 1
+  label: Overview
+---
+
+import { LinkCard, CardGrid, Aside } from '@astrojs/starlight/components';
+
+Every GraphMind adapter exposes the **same four calls**, so the debugger works the same way
+whatever you write your agents in:
+
+```ts
+const gm = graphmind({ app: 'my-agent' });
+
+gm.wrapClient(client);   // or gm.wrapModel(model) / gm.handler()
+gm.wrapTools({ ... });   // gates each tool call
+gm.run(name, fn);        // one run, one AbortController, one agent node
+await gm.ready();        // wait for the debugger handshake (optional, recommended)
+```
+
+Adapters are built strictly on **public extension points** — middleware, callback handlers,
+client hooks, tool decoration. No forks, no monkey-patching of module internals, nothing that
+breaks on your framework's next minor release.
+
+## Pick your stack
+
+<CardGrid>
+  <LinkCard
+    title="Vercel AI SDK"
+    href="/integrations/vercel-ai-sdk/"
+    description="@graphmind-ai/sdk — wrapLanguageModel middleware + tool execute decoration. The reference adapter."
+  />
+  <LinkCard
+    title="Anthropic SDK"
+    href="/integrations/anthropic/"
+    description="@graphmind-ai/anthropic — wrap the client, gate messages.create and your tool loop."
+  />
+  <LinkCard
+    title="OpenAI SDK"
+    href="/integrations/openai/"
+    description="@graphmind-ai/openai — wrap the client, gate responses / chat.completions and tools."
+  />
+  <LinkCard
+    title="LangGraph & LangChain (JS)"
+    href="/integrations/langgraph/"
+    description="@graphmind-ai/langgraph — a callback handler that renders the run tree, plus gated tools."
+  />
+  <LinkCard
+    title="Python"
+    href="/integrations/python/"
+    description="graphmind-ai on PyPI — openai, anthropic and langgraph, same protocol."
+  />
+  <LinkCard
+    title="Anything else"
+    href="/integrations/other-frameworks/"
+    description="Import an OTel / OpenInference trace, or write an adapter against the wire schema."
+  />
+</CardGrid>
+
+## What every adapter guarantees
+
+| Guarantee | Meaning |
+| --- | --- |
+| Never throws into your app | Internal failures degrade to a no-op plus one rate-limited warning |
+| Identity when disabled | `wrapClient` / `wrapTools` return their input unchanged — zero overhead |
+| Fast path when detached | Gates resolve from a shared promise; events go to the ring buffer only |
+| Auto-continue on disconnect | Every held gate releases with `continue` |
+| `instanceId` on every event | Correct attribution when the same node runs concurrently |
+| Kill switches honoured | `GRAPHMIND_DISABLED=1`; off under `NODE_ENV=production` unless `GRAPHMIND=1` |
+
+<Aside type="note" title="Adapter maturity">
+`@graphmind-ai/sdk` (Vercel AI SDK) is the reference adapter and the most exercised. The
+Anthropic, OpenAI, LangGraph and Python adapters ship alongside it at 0.1.0 and cover the same
+surface; if you hit a gap, an
+[issue](https://github.com/Hegazy360/GraphMind/issues) is the fastest way to close it — the
+protocol is small enough that most gaps are a day of work.
+</Aside>
+
+## Framework not listed?
+
+Two paths, in increasing order of effort:
+
+1. **Import a trace** you already produce. `graphmind import trace.json` accepts OTLP/JSON and
+   flat OpenInference-style span lists and turns them into a run you can read in the viewer —
+   history only, no live control. See [other frameworks](/integrations/other-frameworks/).
+2. **Write an adapter.** The wire contract is nine event types over one WebSocket, and
+   `@graphmind-ai/client` already owns the session, the gate engine and the fail-open logic. A
+   working adapter is a few hundred lines. The
+   [guide](/contributing/writing-an-adapter/) walks the whole thing.

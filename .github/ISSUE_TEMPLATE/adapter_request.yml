@@ -1,0 +1,32 @@
+name: Framework support
+description: Ask for (or offer) an adapter for a framework GraphMind does not cover
+labels: [adapter]
+body:
+  - type: input
+    id: framework
+    attributes:
+      label: Framework
+      placeholder: "CrewAI, Mastra, Pydantic AI, Semantic Kernel, ..."
+    validations:
+      required: true
+  - type: textarea
+    id: usage
+    attributes:
+      label: How you write agents with it
+      description: A short snippet of real code helps more than a description.
+    validations:
+      required: true
+  - type: textarea
+    id: hooks
+    attributes:
+      label: Extension points it offers
+      description: |
+        Does it have middleware, callbacks, or wrappable clients? Crucially,
+        does it `await` anything an adapter could hold execution inside? That
+        determines whether GraphMind can pause it or only observe it.
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Would you like to build it?
+      options:
+        - label: I would like to contribute this adapter (see CONTRIBUTING.md)

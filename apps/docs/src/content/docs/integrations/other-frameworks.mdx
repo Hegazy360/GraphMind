@@ -1,0 +1,106 @@
+---
+title: Other frameworks
+description: No adapter for your stack yet? Import an existing OTel or OpenInference trace, instrument by hand against the client runtime, or write a real adapter.
+sidebar:
+  order: 7
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+
+Three ways in, from least to most work.
+
+## 1. Import a trace you already have
+
+If your stack already exports OpenTelemetry or OpenInference spans, you can read them in the
+GraphMind viewer today:
+
+```sh
+graphmind import trace.json
+```
+
+Accepted inputs:
+
+- **OTLP/JSON** — the OTel collector `file` exporter, or SDK JSON exporters.
+- **Flat span lists** — OpenInference / Arize Phoenix-style JSON or JSONL.
+
+Recognised span dialects: Vercel AI SDK OTel spans, OTel GenAI semantic conventions, and
+OpenInference. Unrecognised spans are imported as generic nodes or skipped with a note. The
+command prints a summary — nodes, errors, duration, skipped spans — and a viewer deep link.
+
+<Aside type="caution" title="History only">
+An imported run is stored with `source: "import"` and rendered with the viewer's "imported"
+treatment. You get the graph, the timings, the inputs and outputs and the errors — but not the
+live features. Nothing is running, so there is nothing to pause.
+</Aside>
+
+## 2. Instrument by hand
+
+For a framework GraphMind has no adapter for, you can drive the runtime directly.
+`@graphmind-ai/client` owns the session, the transport, the ring buffer and the gate engine —
+you only supply the events and the awaits.
+
+```ts
+import { createSession } from '@graphmind-ai/client';
+
+const session = createSession({
+  appName: 'my-framework-app',
+  sdk: { name: 'my-framework', version: '1.2.3' },
+});
+
+await session.ready();
+
+await session.run('nightly-report', async (ctx) => {
+  const nodeId = 'tool:fetchMetrics';
+  const instanceId = 'call-1';
+
+  session.emit('node.started', {
+    nodeId,
+    kind: 'tool',
+    name: 'fetchMetrics',
+    instanceId,
+    input: { range: '7d' },
+  });
+
+  const decision = await session.gate('before', { nodeId, kind: 'tool', name: 'fetchMetrics' });
+  if (decision.action === 'inject') return decision.output;   // skip execution
+  if (decision.action === 'abort') throw ctx.signal.reason;   // cooperative cancel
+
+  const started = Date.now();
+  try {
+    const output = await fetchMetrics({ range: '7d' }, { signal: ctx.signal });
+    session.emit('node.finished', {
+      nodeId,
+      instanceId,
+      output,
+      durationMs: Date.now() - started,
+      status: 'ok',
+    });
+    return output;
+  } catch (error) {
+    session.emit('node.error', { nodeId, instanceId, error: toErrorInfo(error) });
+    const onError = await session.gate('error', { nodeId, kind: 'tool', name: 'fetchMetrics' });
+    if (onError.action === 'inject') return onError.output;
+    throw error;
+  }
+});
+
+await session.dispose();
+```
+
+That is roughly what every adapter does; the work in a real adapter is finding the right hook
+points and mapping the framework's shapes onto the schema, not the GraphMind plumbing.
+
+## 3. Write an adapter
+
+Adapters are how the project scales past what one maintainer can cover, and the protocol is
+deliberately small enough to make that realistic — nine event types, four control types, one
+WebSocket.
+
+<LinkCard
+  title="Writing an adapter"
+  href="/contributing/writing-an-adapter/"
+  description="The full guide: hook points, node identity, the gate contract, fail-open rules, and how to test one."
+/>
+
+Adapters in other languages target the [wire protocol](/reference/wire-protocol/) directly —
+`@graphmind-ai/schema` ships a JSON Schema export of the envelope for exactly that purpose.

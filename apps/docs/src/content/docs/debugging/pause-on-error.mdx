@@ -1,0 +1,110 @@
+---
+title: Pause on error
+description: The default GraphMind workflow — when a node throws, the agent stops in place with its state intact, and you decide what happens next.
+sidebar:
+  order: 1
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import pausedImg from '../../../assets/debugger-paused.png';
+
+Pause-on-error is **armed by default**. You do not set it up. The first time a node throws with
+a debugger attached, the run stops right there — before the framework sees the error, before a
+retry loop swallows it, before the model gets to invent a recovery.
+
+This is the workflow that makes GraphMind worth attaching.
+
+## Why "in place" matters
+
+An agent that throws inside a tool usually does one of three unhelpful things: it retries with
+the same bad input, it feeds the error text back to the model which apologises and tries
+something else, or it dies three frames later with a stack that says nothing about the cause.
+
+By the time a trace reaches you, all of it is past tense. Pause-on-error freezes the moment:
+
+- the **arguments** the model actually passed, not a summary;
+- the **error** as thrown, with its stack;
+- the rest of the run, still ahead, still changeable.
+
+<figure>
+  <img src={pausedImg.src} alt="The GraphMind viewer holding a run at a failed tool call: the node is outlined in red, a pause banner offers continue, retry, inject and abort, and the inspector shows the tool's inputs." width={pausedImg.width} height={pausedImg.height} />
+</figure>
+
+## The loop
+
+<Steps>
+
+1. **Run the debugger and your agent.** `graphmind` in one terminal, your app in another. Nothing
+   else to configure.
+
+2. **Wait for the stop.** The node turns red, a pause banner appears on it, and the run bar shows
+   the run as held. Nothing is in flight — no socket is open burning a timeout, so you can take
+   as long as you like.
+
+3. **Read the state.** Open the inspector on the paused node: input, the error name, message and
+   stack, and the outputs of everything upstream that got you here. See
+   [inspecting a run](/debugging/inspecting/).
+
+4. **Decide.**
+
+   | Action | Use it when |
+   | --- | --- |
+   | `continue` | You want the original error to propagate — the framework handles it from here |
+   | `retry` | The failure was transient, or you fixed something outside the process |
+   | `inject` | You know what the call *should* have returned — supply it and move on |
+   | `abort` | This run is a write-off; stop it cleanly without a retry storm |
+
+5. **Watch the rest.** The run resumes from exactly that point. No restart, no re-billing the
+   tokens you already spent.
+
+</Steps>
+
+## What each action does to your code
+
+The adapter — not the viewer — implements these, and the semantics are precise:
+
+- **`continue`** rethrows the *original* error. In the Vercel AI SDK that means the SDK
+  serialises it as an error tool-result and the agent loop keeps going, exactly as if GraphMind
+  had not been there.
+- **`retry`** re-invokes the original `execute` with the same arguments. Useful for a flaky HTTP
+  call, or after you have fixed the world (started the database, refreshed the token).
+- **`inject`** swallows the error and returns the value you typed as the tool's result. The
+  model sees a success. This is how you test a recovery path in seconds — see
+  [inject and continue](/debugging/inject-and-continue/).
+- **`abort`** aborts the run's `AbortController` with an `AbortError`-named reason. SDK retry
+  logic treats `AbortError` as terminal, so the run stops instead of retrying `maxRetries` times
+  on the way out.
+
+## Turning it off
+
+Pause-on-error is a breakpoint like any other: a matcher of `{ point: 'error' }`. The viewer
+shows it as a removable chip in the run bar — clear the chip and errors flow straight through
+while everything else stays live.
+
+<Aside type="tip" title="Long autonomous runs">
+Leaving pause-on-error armed is the point of running a long agent under GraphMind at all: it
+runs unattended and stops the instant something breaks, with full state, instead of failing at
+3 a.m. into a log file.
+</Aside>
+
+## If the debugger goes away
+
+Fail-open is absolute. If you close the viewer, kill the server, or your laptop sleeps while a
+gate is held:
+
+- every held gate resolves `continue` immediately (measured under 100 ms);
+- breakpoints and mode are forgotten until a new handshake re-arms them;
+- your agent finishes as though nothing had ever attached.
+
+An agent held at an error gate is never *stuck* because of GraphMind. The worst case is that it
+proceeds exactly as it would have without a debugger.
+
+## Try it right now
+
+```sh
+npx graphmind-ai demo
+```
+
+The bundled recording plants a real bug: `convertCurrency` inverts an exchange rate, so the
+budget check throws on an absurd total. It pauses for real, and all four actions steer the
+replay onto the matching branch.

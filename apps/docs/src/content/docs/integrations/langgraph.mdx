@@ -1,0 +1,168 @@
+---
+title: LangGraph & LangChain (JS)
+description: Debug a LangGraph or LangChain agent — attach a callback handler that renders the run tree as a live graph, and wrap your tools to gate them.
+sidebar:
+  order: 5
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+`@graphmind-ai/langgraph` hooks LangChain's **callback system** — the same public interface
+LangSmith uses — so it works with LangGraph graphs, LCEL chains, prebuilt agents and bare
+`Runnable`s alike. Chains, retrievers, LLM calls and tools each get their own node kind, so a
+LangChain run renders as itself rather than as a row of generic boxes.
+
+<Tabs syncKey="pkg">
+<TabItem label="npm">
+
+```sh
+npm i -D @graphmind-ai/langgraph
+```
+
+</TabItem>
+<TabItem label="pnpm">
+
+```sh
+pnpm add -D @graphmind-ai/langgraph
+```
+
+</TabItem>
+<TabItem label="yarn">
+
+```sh
+yarn add -D @graphmind-ai/langgraph
+```
+
+</TabItem>
+</Tabs>
+
+`@langchain/core` is a peer dependency; LangGraph is optional.
+
+## End to end
+
+```ts title="support-agent.ts"
+import { ChatAnthropic } from '@langchain/anthropic';
+import { tool } from '@langchain/core/tools';
+import { graphmind } from '@graphmind-ai/langgraph';
+import { createReactAgent } from '@langchain/langgraph/prebuilt';
+import { z } from 'zod';
+
+const gm = graphmind({ app: 'support-agent' });
+
+const searchOrders = tool(
+  async ({ email }) => db.orders.findMany({ where: { email } }),
+  {
+    name: 'searchOrders',
+    description: 'Find a customer’s recent orders',
+    schema: z.object({ email: z.string() }),
+  },
+);
+
+const issueRefund = tool(
+  async ({ orderId, cents }) => payments.refund(orderId, cents),
+  {
+    name: 'issueRefund',
+    description: 'Refund an order',
+    schema: z.object({ orderId: z.string(), cents: z.number() }),
+  },
+);
+
+async function main() {
+  await gm.ready();
+
+  // Wrap tools so their calls can be gated (paused, injected, retried).
+  const tools = gm.wrapTools({ searchOrders, issueRefund });
+
+  const agent = createReactAgent({
+    llm: new ChatAnthropic({ model: 'claude-sonnet-4-5' }),
+    tools: Object.values(tools),
+  });
+
+  const result = await gm.run('handle-ticket', (ctx) =>
+    agent.invoke(
+      { messages: [{ role: 'user', content: 'Order #4471 arrived broken. Sort it out.' }] },
+      // The handler streams the run tree; the signal carries the debugger's abort.
+      { callbacks: [gm.handler()], signal: ctx.signal },
+    ),
+  );
+
+  console.log(result.messages.at(-1)?.content);
+  await gm.dispose();
+}
+
+main();
+```
+
+Run `graphmind` in one terminal and this in another.
+
+## The pieces
+
+### `gm.handler()`
+
+A LangChain `BaseCallbackHandler`. Pass it in `callbacks` on `invoke` / `stream` / `batch`, or
+set it once at construction so every call inherits it:
+
+```ts
+const agent = createReactAgent({ llm, tools, callbacks: [gm.handler()] });
+```
+
+It translates the callback stream into GraphMind events:
+
+| LangChain callback | GraphMind node |
+| --- | --- |
+| `handleChainStart` / `End` / `Error` | `chain:<name>` (kind `chain`) |
+| `handleLLMStart` / `NewToken` / `End` / `Error` | `llm:step` (kind `llm`), with `node.token` deltas |
+| `handleToolStart` / `End` / `Error` | `tool:<name>` (kind `tool`) |
+| `handleRetrieverStart` / `End` / `Error` | `retriever:<name>` (kind `retriever`) |
+
+Parent/child relationships come from LangChain's own run tree, so nested chains nest on the
+canvas. In a LangGraph graph each node becomes a `chain` node named after the graph node, which
+is usually exactly the granularity you want to break on.
+
+<Aside type="note" title="Callbacks are observe-first">
+LangChain's callback interface is notification-only: the handler is told a step happened, it
+does not sit in the call path. So `gm.handler()` gives you the **live graph, inputs, outputs,
+tokens and errors**, and honours `before`-style holds where the callback boundary allows — but
+the actions that *change* a value (`inject`, `retry`) need to sit in the call path. That is what
+`gm.wrapTools` is for.
+</Aside>
+
+### `gm.wrapTools(tools)`
+
+Takes your LangChain tools (a record, or the objects themselves) and returns tools whose
+invocation is fully gated at `before`, `after` and `error` — the full `continue` / `retry` /
+`inject` / `abort` set, with parallel calls gating independently. Since tool failures are where
+agent runs actually go wrong, wrapping tools buys most of the debugger's value.
+
+### `gm.run(name, fn)`
+
+Opens the run and provides `ctx.signal`. Pass the signal in your `RunnableConfig` so the
+debugger's `abort` cancels in flight.
+
+## Node identity
+
+| Node | `nodeId` | `instanceId` |
+| --- | --- | --- |
+| Agent (a run) | `agent:<runName>` | the run id |
+| Chain / graph node | `chain:<name>` | LangChain's run id |
+| Model call | `llm:step` | LangChain's run id |
+| Tool call | `tool:<toolName>` | LangChain's run id |
+| Retriever | `retriever:<name>` | LangChain's run id |
+
+The same graph node executing on ten loop iterations stays **one** node with ten instances.
+
+## Python
+
+For LangGraph in Python, see the [Python page](/integrations/python/) — same protocol, same
+viewer, `gm.handler()` on the Python side too.
+
+## Options
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `app` | app name | Shown in the viewer's run list |
+| `waitForAttach` | `false` | `true` (2000 ms) or a number: first call awaits `ready()` |
+| `url` | `ws://127.0.0.1:4747/ingest` | Ingest endpoint (or `GRAPHMIND_URL`) |
+| `enabled` | kill-switch logic | Force on/off (`GRAPHMIND_DISABLED=1` still wins) |
+| `meta` | — | Extra metadata on every `run.started` |
+| `pauseTimeoutMs` | hold forever | Auto-continue a gate nobody resumes |

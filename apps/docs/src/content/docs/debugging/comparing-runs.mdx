@@ -1,0 +1,96 @@
+---
+title: Comparing runs
+description: Answering "it worked yesterday" — every run is persisted locally, so you can put the good one and the bad one side by side and find the divergence.
+sidebar:
+  order: 7
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every run that reaches the server is persisted to SQLite, so "it worked yesterday" is a question
+with an answer on disk rather than a shrug.
+
+## Two runs, side by side
+
+Open two browser tabs on `http://127.0.0.1:4747` and select a different run in each. Both are
+live views of the same server, so the good run and the bad run sit next to each other on your
+screen.
+
+Work the divergence from the top:
+
+<Aside type="tip" title="The usual order">
+1. **Same nodes?** A node present in one run and missing in the other tells you the model chose
+   differently — that is a prompt or tool-description problem, not a tool bug.
+2. **Same inputs to the first shared node?** If the inputs differ, the divergence is upstream.
+   Walk back a node and repeat.
+3. **Same output for the same input?** If yes, keep going. If no, you have found it: a
+   non-deterministic tool, changed external data, or an expired cache.
+4. **Token usage.** A step that grew enormously usually means a tool started returning far more
+   than it used to.
+</Aside>
+
+Most "it worked yesterday" bugs are a tool whose *external* world changed. Comparing inputs and
+outputs node by node finds that faster than re-reading the agent's code.
+
+## Finding the runs
+
+The run picker lists runs most-recent-first with app name, status, source and error count. For
+a specific one, the `GET /api/runs` endpoint returns the same list as JSON:
+
+```sh
+curl -s http://127.0.0.1:4747/api/runs | jq '.runs[] | {id, app, status, errorCount, startedAt}'
+```
+
+Each entry: `{ id, app, startedAt, finishedAt, status, schemaVersion, source, eventCount,
+errorCount, live }`. `status` is `running | ok | error | aborted`; `source` is
+`live | import | demo`; `live` says whether the owning app socket is connected right now.
+
+## Diffing them properly
+
+For a real textual diff, export both runs to NDJSON and use your normal tools:
+
+```sh
+graphmind record run_01H8… --out good.ndjson
+graphmind record run_01H9… --out bad.ndjson
+
+# just the node inputs, in order, so a diff is readable
+jq -r 'select(.type=="node.started") | "\(.payload.nodeId)\t\(.payload.input|tojson)"' good.ndjson > good.txt
+jq -r 'select(.type=="node.started") | "\(.payload.nodeId)\t\(.payload.input|tojson)"' bad.ndjson  > bad.txt
+
+diff -u good.txt bad.txt | less
+```
+
+Each line of the export is a full wire envelope — `{ gm, seq, ts, runId, type, payload }` — so
+any JSON tooling works on it. See [recording runs](/debugging/recording-runs/).
+
+## Ask your coding agent to compare them
+
+The MCP server exposes recorded runs read-only, so an agent in your editor can do the comparison
+narratively:
+
+```sh
+claude mcp add graphmind -- npx graphmind-ai mcp
+```
+
+> "Compare the last two `support-agent` runs — which node first got different input?"
+
+`list_runs`, `get_run`, `get_node` and `find_errors` read the database directly (no server
+needed), and each result carries a deep link back into the viewer, so the answer cites the exact
+node you can then open. See the [MCP reference](/reference/mcp/).
+
+## Name your runs
+
+The single highest-leverage habit here:
+
+```ts
+await gm.run('handle-ticket', fn);           // good
+await gm.run(`handle-ticket:${ticketId}`, fn); // better
+```
+
+The run name becomes the agent node's label and rides along in the run's metadata. A week later
+you can find the run you mean instead of guessing between six timestamps.
+
+<Aside type="note" title="Where it lives">
+`~/.graphmind/graphmind.db` (override with `GRAPHMIND_DB` or `--db`). Point `--db` at a
+project-local file to keep one project's history separate from another's.
+</Aside>

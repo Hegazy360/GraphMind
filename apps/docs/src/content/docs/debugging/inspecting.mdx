@@ -1,0 +1,102 @@
+---
+title: Inspecting a run
+description: Read the real inputs, outputs, streamed tokens, usage and errors of any node — live or after the fact.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import inspectorImg from '../../../assets/inspector-open.png';
+
+Click any node to open the inspector. It shows what that node actually received and produced —
+not a rendered summary, the values themselves.
+
+<figure>
+  <img src={inspectorImg.src} alt="The GraphMind inspector open on a node, showing its input and output as an expandable JSON tree alongside timing and token usage." width={inspectorImg.width} height={inspectorImg.height} />
+</figure>
+
+## What a node shows
+
+| Field | Detail |
+| --- | --- |
+| **Input** | Tool arguments, or the messages and settings going into a model step |
+| **Output** | The return value, or the model's completion |
+| **Error** | `name`, `message` and `stack` when the node threw |
+| **Duration** | Wall-clock milliseconds for that execution |
+| **Usage** | `inputTokens` / `outputTokens` on LLM nodes |
+| **Status** | `ok`, `error` or `aborted` |
+| **Instances** | Every execution of this logical node, newest first |
+
+Inputs and outputs render as an expandable JSON tree, so a large tool result stays navigable
+instead of becoming a wall of text.
+
+## Instances: the same node, many executions
+
+One node on the canvas can hold many executions. A retrieval tool called eleven times is **one**
+node with eleven instances — select an instance to see that call's own input, output, duration
+and usage.
+
+This is the payoff of stable node ids. You are looking at one place in your code and its
+history, which is almost always the question you actually have ("what did `searchOrders` get
+called with, across this run?").
+
+<Aside type="note" title="Concurrency">
+Each execution carries an `instanceId`, so results are attributed to the right call even when
+the same node runs several times in parallel. Without it a receiver would have to guess by
+recency — which is wrong exactly when it matters.
+</Aside>
+
+## Streamed tokens
+
+Model nodes accumulate their stream live. Deltas arrive batched (roughly 30 per second per node,
+so the UI stays smooth on a fast provider) on three channels:
+
+| Channel | Contents |
+| --- | --- |
+| `text` | The visible completion |
+| `reasoning` | Reasoning / extended-thinking output where the provider exposes it |
+| `tool-args` | Tool arguments as the model streams them |
+
+Watching `tool-args` stream is often the fastest way to see a model committing to a bad call —
+you can have a breakpoint on that tool waiting before it finishes writing the arguments.
+
+## Usage and cost
+
+`node.finished` on an LLM node carries `TokenUsage` — `inputTokens` and `outputTokens` as
+integers. The viewer shows them per step and rolled up for the run, which makes the "why did
+this run cost eleven cents" question answerable in one look: usually one tool returning a huge
+blob that gets re-sent on every subsequent step.
+
+<Aside type="tip">
+Providers put extra fields (cached tokens, reasoning tokens) on their usage objects. The wire
+schema is deliberately **loose** — unknown fields are preserved rather than stripped — so
+adapters can pass them straight through.
+</Aside>
+
+## Live vs. history
+
+The inspector works the same on a finished run. Pick any run from the run picker and read it
+node by node; the whole event stream is persisted in SQLite. The only difference is that a
+finished run has nothing to resume.
+
+If you attach *mid-run*, the client replays its ring buffer (2000 events by default) oldest-first
+with the original sequence numbers, so you get the history you missed and the viewer
+deduplicates on `(runId, seq)`.
+
+## Searching a big run
+
+The viewer has a search overlay for jumping to a node by name in a graph too large to scan. For
+the wider strategies — collapsing, filtering, long-running runs — see
+[working with large graphs](/debugging/large-graphs/).
+
+## Reading a run from your coding agent
+
+Everything the inspector shows is also available over MCP, so Claude Code or Cursor can pull up
+the failing run and reason about it with you:
+
+```sh
+claude mcp add graphmind -- npx graphmind-ai mcp
+```
+
+`list_runs`, `get_run`, `get_node` and `find_errors` read the SQLite database directly — they
+work with the viewer closed. See the [MCP reference](/reference/mcp/).

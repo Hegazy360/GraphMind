@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://docs.graphmind.ai
+    about: Guides, integrations, CLI reference and the wire protocol.
+  - name: Questions and ideas
+    url: https://github.com/Hegazy360/GraphMind/discussions
+    about: Anything that is not a bug report.

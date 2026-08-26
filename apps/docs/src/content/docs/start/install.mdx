@@ -1,0 +1,266 @@
+---
+title: Install & first run
+description: Run the keyless GraphMind demo in one command, then instrument a real agent and watch it pause on its first error.
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem, Steps, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import pausedImg from '../../../assets/debugger-paused.png';
+
+**Requirements:** Node ≥ 22.13 (GraphMind uses Node's built-in SQLite — no native modules, no
+build step). macOS, Linux and Windows all work.
+
+## 1. See it work — no API key
+
+```sh
+npx graphmind-ai demo
+```
+
+This starts the local server, opens the viewer, and replays a recorded trip-planner agent that
+contains a **planted bug**: `convertCurrency` inverts an exchange rate, so the budget check
+later throws on an absurd total.
+
+The replay is not a video. It goes through the real ingest pipeline and honours the real control
+protocol — the planted error genuinely pauses, and `continue` / `retry` / `inject` / `abort`
+from the viewer steer the replay onto the matching pre-recorded branch. It is the same code path
+your own agent will take.
+
+<figure>
+  <img src={pausedImg.src} alt="The GraphMind viewer holding a run at a failed tool call, with the pause banner and resume actions visible." width={pausedImg.width} height={pausedImg.height} />
+</figure>
+
+Press <kbd>Ctrl</kbd>+<kbd>C</kbd> when you are done; the server shuts down with it.
+
+## 2. Start the debugger for your own app
+
+Leave this running in its own terminal:
+
+<Tabs syncKey="pkg">
+<TabItem label="npx">
+
+```sh
+npx graphmind-ai
+```
+
+</TabItem>
+<TabItem label="pnpm">
+
+```sh
+pnpm dlx graphmind-ai
+```
+
+</TabItem>
+<TabItem label="yarn">
+
+```sh
+yarn dlx graphmind-ai
+```
+
+</TabItem>
+<TabItem label="global">
+
+```sh
+npm i -g graphmind-ai
+graphmind
+```
+
+</TabItem>
+</Tabs>
+
+With no command, the CLI runs `serve`: a server on `http://127.0.0.1:4747` (always bound to
+loopback — never expose the port) and the viewer in your browser. `--port` moves it, `--no-open`
+suppresses the browser. See the [CLI reference](/reference/cli/) for everything else.
+
+## 3. Instrument your agent
+
+Install the adapter for your framework:
+
+<Tabs syncKey="framework">
+<TabItem label="Vercel AI SDK">
+
+```sh
+npm i -D @graphmind-ai/sdk
+```
+
+</TabItem>
+<TabItem label="Anthropic">
+
+```sh
+npm i -D @graphmind-ai/anthropic
+```
+
+</TabItem>
+<TabItem label="OpenAI">
+
+```sh
+npm i -D @graphmind-ai/openai
+```
+
+</TabItem>
+<TabItem label="LangGraph">
+
+```sh
+npm i -D @graphmind-ai/langgraph
+```
+
+</TabItem>
+<TabItem label="Python">
+
+```sh
+pip install graphmind-ai
+```
+
+</TabItem>
+</Tabs>
+
+<Aside type="tip">
+Install it as a **dev dependency**. GraphMind disables itself under `NODE_ENV=production`
+anyway, but keeping it out of your production dependency tree is the cleaner statement.
+</Aside>
+
+Then wrap the two things a debugger needs handles on — the model and the tools — and name the
+run:
+
+<Tabs syncKey="framework">
+<TabItem label="Vercel AI SDK">
+
+```ts title="agent.ts" {1,4,6-7,11-13}
+import { graphmind } from '@graphmind-ai/sdk';
+import { streamText } from 'ai';
+
+const gm = graphmind({ app: 'support-agent' });
+
+const model = gm.wrapModel(anthropic('claude-sonnet-4-5'));
+const tools = gm.wrapTools({ searchOrders, issueRefund });
+
+// Wait for the debugger handshake so gates are armed from the first event.
+await gm.ready();
+
+await gm.run('handle-ticket', () =>
+  streamText({ model, tools, prompt: userMessage }).consumeStream(),
+);
+
+await gm.dispose();
+```
+
+</TabItem>
+<TabItem label="Anthropic">
+
+```ts title="agent.ts" {1,5,7-8,13-15}
+import { graphmind } from '@graphmind-ai/anthropic';
+import Anthropic from '@anthropic-ai/sdk';
+
+const gm = graphmind({ app: 'support-agent' });
+
+const client = gm.wrapClient(new Anthropic());
+const tools = gm.wrapTools({ searchOrders, issueRefund });
+
+await gm.ready();
+
+await gm.run('handle-ticket', async () => {
+  // your normal messages.create / tool loop, using `client` and `tools`
+});
+
+await gm.dispose();
+```
+
+</TabItem>
+<TabItem label="OpenAI">
+
+```ts title="agent.ts" {1,5,7-8,13-15}
+import { graphmind } from '@graphmind-ai/openai';
+import OpenAI from 'openai';
+
+const gm = graphmind({ app: 'support-agent' });
+
+const client = gm.wrapClient(new OpenAI());
+const tools = gm.wrapTools({ searchOrders, issueRefund });
+
+await gm.ready();
+
+await gm.run('handle-ticket', async () => {
+  // your normal responses.create / chat.completions loop
+});
+
+await gm.dispose();
+```
+
+</TabItem>
+<TabItem label="LangGraph">
+
+```ts title="agent.ts" {1,4,7,10}
+import { graphmind } from '@graphmind-ai/langgraph';
+
+const gm = graphmind({ app: 'support-agent' });
+
+await gm.ready();
+
+await gm.run('handle-ticket', () =>
+  app.invoke({ messages }, { callbacks: [gm.handler()] }),
+);
+
+await gm.dispose();
+```
+
+</TabItem>
+<TabItem label="Python">
+
+```python title="agent.py" {1,3,5,8,10}
+import graphmind
+
+gm = graphmind.graphmind(app="support-agent")
+
+client = graphmind.instrument_openai(OpenAI())
+
+gm.ready()
+
+with gm.run("handle-ticket"):
+    ...  # your normal loop
+
+gm.dispose()
+```
+
+</TabItem>
+</Tabs>
+
+That is the whole integration. Every adapter exposes the same four calls — `wrapClient` /
+`wrapModel`, `wrapTools`, `run`, `ready` — so switching frameworks does not mean relearning
+GraphMind. Each [integration page](/integrations/) has the complete, runnable version.
+
+<Aside type="caution" title="Why await gm.ready()">
+The transport is lazy: nothing touches the network until the first event. An agent that starts
+in the same tick as `graphmind()` can therefore blow past its first gates before the handshake
+lands. `await gm.ready()` forces the connection and resolves once the viewer's breakpoints and
+mode are armed. It resolves `false` after 2 s if no debugger is there — that is not an error,
+it means "carry on undebugged". You can also pass `waitForAttach: true` and let the first call
+do it for you.
+</Aside>
+
+## 4. Run it
+
+<Steps>
+
+1. Keep `graphmind` serving in one terminal.
+
+2. Start your agent normally in another — `node agent.js`, `tsx agent.ts`, `next dev`, whatever
+   you already do. No flags, no wrapper process.
+
+3. Watch the viewer. Nodes appear as the agent reaches them and light up while they execute.
+
+4. When something throws, the run **stops there**. Pause-on-error is armed by default. Open the
+   inspector, read the inputs, and choose `continue`, `retry`, `inject` or `abort`.
+
+</Steps>
+
+If nothing appears, work through [troubleshooting](/reference/troubleshooting/) — it is almost
+always a port mismatch or a process that exited before the handshake.
+
+## Where to go next
+
+<CardGrid>
+  <LinkCard title="Core concepts" href="/start/concepts/" description="Runs, nodes, instances, gates, fail-open." />
+  <LinkCard title="Pause on error" href="/debugging/pause-on-error/" description="The default workflow, in detail." />
+  <LinkCard title="Inject and continue" href="/debugging/inject-and-continue/" description="The hero capability." />
+  <LinkCard title="CLI reference" href="/reference/cli/" description="Every command, flag and env var." />
+</CardGrid>

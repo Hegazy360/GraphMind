@@ -1,0 +1,61 @@
+{
+  "name": "@graphmind-ai/openai",
+  "version": "0.1.0",
+  "description": "OpenAI Node SDK adapter for the GraphMind live agent debugger: wrap your OpenAI client and tools to stream execution events and honour pause / step / inject / retry / abort gates.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "keywords": [
+    "openai",
+    "graphmind",
+    "debugger",
+    "agents",
+    "observability",
+    "tracing",
+    "breakpoints"
+  ],
+  "dependencies": {
+    "@graphmind-ai/client": "workspace:*",
+    "@graphmind-ai/schema": "workspace:*"
+  },
+  "peerDependencies": {
+    "openai": ">=5 <7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "@types/ws": "^8.18.1",
+    "openai": "^6.9.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "ws": "^8.21.3",
+    "zod": "^4.4.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hegazy360/GraphMind.git",
+    "directory": "packages/openai"
+  },
+  "homepage": "https://graphmind.ai"
+}

@@ -1,0 +1,185 @@
+---
+title: OpenAI SDK
+description: Debug an agent built directly on the openai Node SDK — wrap the client and your tool functions, then pause, inspect, inject and resume live.
+sidebar:
+  order: 4
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+`@graphmind-ai/openai` instruments the official OpenAI Node SDK. Wrap the client once and every
+`responses.create` / `chat.completions.create` becomes a gated `llm:step` node; wrap your tool
+functions and each call becomes a gated `tool:<name>` node.
+
+<Tabs syncKey="pkg">
+<TabItem label="npm">
+
+```sh
+npm i -D @graphmind-ai/openai
+```
+
+</TabItem>
+<TabItem label="pnpm">
+
+```sh
+pnpm add -D @graphmind-ai/openai
+```
+
+</TabItem>
+<TabItem label="yarn">
+
+```sh
+yarn add -D @graphmind-ai/openai
+```
+
+</TabItem>
+</Tabs>
+
+`openai` is a peer dependency.
+
+## End to end
+
+```ts title="support-agent.ts"
+import { graphmind } from '@graphmind-ai/openai';
+import OpenAI from 'openai';
+
+const gm = graphmind({ app: 'support-agent' });
+
+// 1. Wrap the client — every model request becomes a gated llm:step node.
+const client = gm.wrapClient(new OpenAI());
+
+// 2. Wrap your tool implementations — each call becomes a gated tool node.
+const tools = gm.wrapTools({
+  searchOrders: async ({ email }: { email: string }) =>
+    db.orders.findMany({ where: { email } }),
+  issueRefund: async ({ orderId, cents }: { orderId: string; cents: number }) =>
+    payments.refund(orderId, cents),
+});
+
+const toolSpecs = [
+  {
+    type: 'function' as const,
+    name: 'searchOrders',
+    description: 'Find a customer’s recent orders',
+    parameters: {
+      type: 'object',
+      properties: { email: { type: 'string' } },
+      required: ['email'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function' as const,
+    name: 'issueRefund',
+    description: 'Refund an order',
+    parameters: {
+      type: 'object',
+      properties: { orderId: { type: 'string' }, cents: { type: 'number' } },
+      required: ['orderId', 'cents'],
+      additionalProperties: false,
+    },
+  },
+];
+
+async function main() {
+  await gm.ready();
+
+  const answer = await gm.run('handle-ticket', async (ctx) => {
+    let input: any[] = [
+      { role: 'user', content: 'Order #4471 for alex@example.com arrived broken. Sort it out.' },
+    ];
+
+    for (let step = 0; step < 8; step++) {
+      const response = await client.responses.create(
+        { model: 'gpt-5.1', tools: toolSpecs, input },
+        // Pass the run's signal so the debugger's `abort` action cancels cleanly.
+        { signal: ctx.signal },
+      );
+
+      const calls = response.output.filter((item) => item.type === 'function_call');
+      if (calls.length === 0) return response.output_text;
+
+      input = [
+        ...input,
+        ...response.output,
+        ...(await Promise.all(
+          calls.map(async (call) => ({
+            type: 'function_call_output' as const,
+            call_id: call.call_id,
+            output: JSON.stringify(await tools[call.name](JSON.parse(call.arguments))),
+          })),
+        )),
+      ];
+    }
+
+    return '';
+  });
+
+  console.log(answer);
+  await gm.dispose();
+}
+
+main();
+```
+
+Run `graphmind` in one terminal and this in another.
+
+<Aside type="note">
+The Chat Completions API works the same way — `client.chat.completions.create` is wrapped too,
+and `tool_calls` are correlated by their call id.
+</Aside>
+
+## The three calls
+
+### `gm.wrapClient(client)`
+
+Returns a client with the identical surface. Around every model request it:
+
+- awaits the **`before` gate before the request goes out** — a hold costs no open connection;
+- emits `node.started` for `llm:step` with model and input as the node's input;
+- batches streamed deltas into `node.token` events when you pass `stream: true`;
+- emits `node.finished` with `TokenUsage` (`inputTokens` / `outputTokens`) from the response;
+- routes a thrown request error through the **`error` gate** before your code sees it.
+
+Identity when GraphMind is disabled.
+
+### `gm.wrapTools(tools)`
+
+A record of `name → async function`, returned with each function gated at `before`, `after` and
+`error`. `inject` substitutes the return value, `retry` re-invokes the original, `continue` at
+an `error` gate rethrows. Your JSON tool *specs* stay untouched — only the implementations are
+wrapped.
+
+### `gm.run(name, fn)`
+
+Opens the run, names the agent node, and hands you `ctx.signal`.
+
+<Aside type="caution" title="Pass ctx.signal">
+`abort` cancels via the run's `AbortController`. Without `ctx.signal` on your requests, an abort
+stops the loop at the next gate rather than cancelling the in-flight call.
+</Aside>
+
+## Node identity
+
+| Node | `nodeId` | `instanceId` |
+| --- | --- | --- |
+| Agent (a run) | `agent:<runName>` | the run id |
+| Model request | `llm:step` | one per request |
+| Tool call | `tool:<toolName>` | the `call_id` when available |
+
+## Options
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `app` | app name | Shown in the viewer's run list |
+| `waitForAttach` | `false` | `true` (2000 ms) or a number: first call awaits `ready()` |
+| `url` | `ws://127.0.0.1:4747/ingest` | Ingest endpoint (or `GRAPHMIND_URL`) |
+| `enabled` | kill-switch logic | Force on/off (`GRAPHMIND_DISABLED=1` still wins) |
+| `meta` | — | Extra metadata on every `run.started` |
+| `pauseTimeoutMs` | hold forever | Auto-continue a gate nobody resumes |
+
+<Aside type="tip">
+Using OpenAI *through* the Vercel AI SDK (`@ai-sdk/openai`)? Use
+[`@graphmind-ai/sdk`](/integrations/vercel-ai-sdk/) instead — it hooks the SDK layer and gets
+tool gating for free.
+</Aside>

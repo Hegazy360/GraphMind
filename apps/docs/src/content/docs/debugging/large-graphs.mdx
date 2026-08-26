@@ -1,0 +1,104 @@
+---
+title: Big & long-running graphs
+description: Strategies for agents with hundreds of steps, heavy fan-out, or runs that last hours — and the design choices that keep them legible.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Toy agents are easy to look at. The runs you actually need to debug are 40 model steps, 200 tool
+calls, and a fan-out that would draw a hairball in any span-per-call view.
+
+## The design that does the heavy lifting
+
+**One node per logical node.** A tool called 200 times is one box with 200 instances, not 200
+boxes. Graph size scales with the size of your *code*, not the length of the run — a 40-step
+loop over six tools draws about seven nodes whether it runs once or a hundred times.
+
+That single decision is why GraphMind stays readable where a trace waterfall does not. Select
+the node, then scroll its instances.
+
+## Live runs
+
+**Nodes appear as they are reached** and light up while executing, so the canvas is a status
+display rather than a wall of text. The important motion — what is running now, what just failed
+— is what your eye is drawn to.
+
+**Search** jumps to a node by name when the graph is too large to scan.
+
+**Pause-on-error is your filter.** In a 200-step run you do not want to watch; you want to be
+told. Leave run mode on with only the error breakpoint armed and let the agent stop itself.
+
+## Attaching to something already running
+
+The client keeps a bounded ring buffer of events (2000 by default, drop-oldest). Attach a viewer
+mid-run and the whole buffer replays oldest-first with the original sequence numbers — you get
+the history you missed, and the viewer deduplicates on `(runId, seq)`.
+
+For a genuinely long run, raise the buffer so nothing is dropped before you get there:
+
+```ts
+const gm = graphmind({ app: 'nightly-batch', bufferSize: 20_000 });
+```
+
+The buffer only governs what a *late* viewer can replay — once a viewer is attached, events are
+persisted to SQLite as they arrive and are never lost.
+
+<Aside type="tip" title="Debug the second hour, not the first">
+For a run that takes hours, start it detached. Instrumentation is effectively free while nothing
+is attached. Attach the viewer when you suspect trouble; you get the recent history and full
+live control from that point on.
+</Aside>
+
+## Long holds
+
+Holding a gate costs nothing structurally — the adapter awaits *before* it starts the work, so
+no connection is open and no partial request is waiting. Two practical guards:
+
+- **SDK timeouts** are neutralised while a debugger is attached (adapters chain rather than
+  replace abort signals, and filter timeout-driven aborts). There are limits with the Vercel AI
+  SDK's outer loop —
+  [see the details](/integrations/vercel-ai-sdk/#timeouts-while-debugging) — so prefer removing
+  `timeout` configs while debugging.
+- **`pauseTimeoutMs`** auto-continues a gate nobody resumed. Unset by default (hold forever).
+  Set it when you leave an agent running under a debugger unattended:
+
+  ```ts
+  const gm = graphmind({ app: 'nightly-batch', pauseTimeoutMs: 5 * 60_000 });
+  ```
+
+## Fan-out and parallelism
+
+Concurrent tool calls hold **independent** gates. Ten parallel calls that all break give you ten
+separate pauses, each with its own state and its own resume — you are not forced into one global
+"paused" mode where resuming one resumes all.
+
+For that to attribute correctly, every event must carry its `instanceId`. The adapters in this
+repo do; if you are writing one, do not skip it — recency-based attribution mis-assigns results
+exactly in the concurrent case you most want to debug.
+
+<Aside type="caution" title="Wrap concurrent work in gm.run">
+Model steps are grouped into invocations by the run context. Outside `gm.run`, all steps share
+one scope, so two *concurrent* un-wrapped calls with the same first message can be merged into
+one invocation. Wrapping each concurrent unit in its own `gm.run` keeps them separate.
+</Aside>
+
+## Very large payloads
+
+A tool that returns a megabyte of JSON makes for a slow inspector and an expensive agent (that
+blob is re-sent to the model on every subsequent step). Two options:
+
+- **Summarise at the source.** Usually the right fix — the model did not want the megabyte
+  either, and your token bill agrees.
+- **Let the inspector do the work.** Payloads render as a collapsible tree, so a large object
+  stays navigable; the MCP tools compact payloads to a preview cap for the same reason.
+
+## Many runs
+
+The run list is most-recent-first, with per-run status, source (`live` / `import` / `demo`),
+event count and error count, so a bad run stands out without opening it. Name your runs
+(`gm.run('nightly-batch', …)`) and they stay identifiable a week later.
+
+To pull one out of the pile programmatically, the [MCP tools](/reference/mcp/) `list_runs` and
+`find_errors` answer "which recent run broke, and where" without opening the viewer at all.

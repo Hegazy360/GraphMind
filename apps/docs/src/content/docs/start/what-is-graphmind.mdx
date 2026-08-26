@@ -1,0 +1,94 @@
+---
+title: What GraphMind is
+description: GraphMind is a live debugger for AI agents — it attaches to a running agent and can hold execution. How that differs from post-hoc observability, and when you want each.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+GraphMind is a **debugger**, in the sense the word has meant since `gdb`: a tool that attaches to
+a running program, stops it, shows you the state, lets you change it, and lets it continue.
+
+The program here is your agent. GraphMind draws its execution as a live graph, and it can
+genuinely **hold** that execution — before an LLM step, before or after a tool call, or the
+moment something throws — while you look at the actual values and decide what happens next.
+
+## The difference that matters
+
+Tracing tools record what happened. You read the record afterwards, form a theory, change the
+code, and run it again. That loop is minutes long, and every iteration costs another set of
+tokens.
+
+A debugger collapses the loop. The agent is *still sitting on the failure* when you look at it.
+The arguments that broke the tool are still the live arguments. You can hand it the value it
+should have got and watch the rest of the run play out — without editing a line.
+
+<div class="gm-split not-content">
+  <div>
+    <h4>Post-hoc observability</h4>
+    <p>Phoenix, Langfuse, LangSmith, OTel-based tracing. Records spans, costs and latencies; strong at aggregate analysis, evals, regression tracking and production monitoring across many runs.</p>
+  </div>
+  <div>
+    <h4>GraphMind</h4>
+    <p>Attaches to one run as it happens and can stop it. Strong at the single confusing failure: pause on error, breakpoints, step mode, inspect, inject a substitute result, retry, abort.</p>
+  </div>
+</div>
+
+## The honest comparison
+
+|  | Post-hoc tracing | GraphMind |
+| --- | --- | --- |
+| When you look | After the run | While it runs |
+| Can it stop execution | No | Yes — indefinite holds |
+| Change a value mid-run | No | Yes — `inject` |
+| Re-run one failed step | No (re-run the app) | Yes — `retry` |
+| Aggregate analytics, evals, cost dashboards | **Yes, this is their job** | No |
+| Team-wide history, hosted retention | **Yes** | No — local SQLite, single machine |
+| Production monitoring | **Yes** | Disabled in production by default |
+| Where your prompts go | Their servers (or self-host) | Nowhere. `127.0.0.1` and a local file |
+
+These are not competitors so much as different halves of the loop. Keep your tracing tool for
+production and evals. Reach for GraphMind when a specific run is doing something you cannot
+explain.
+
+<Aside type="note" title="Not a replacement for evals">
+GraphMind has no eval harness, no scoring, no dataset management and no dashboards. If you need
+to know whether v2 of a prompt beats v1 across 500 cases, that is an eval tool's job.
+</Aside>
+
+## What it is technically
+
+Three pieces, all open source and MIT:
+
+1. **An adapter** in your app (`@graphmind-ai/sdk`, `@graphmind-ai/anthropic`,
+   `@graphmind-ai/openai`, `@graphmind-ai/langgraph`, …) built on public extension points of
+   the framework — middleware, callbacks, tool decoration. No forks, no monkey-patching.
+2. **The CLI** (`graphmind-ai`) — a local server on `127.0.0.1:4747`, SQLite storage, an MCP
+   server, and the bundled viewer UI.
+3. **The wire protocol** (`@graphmind-ai/schema`) — a small, versioned JSON contract over one
+   WebSocket. Anything that can speak it gets the whole debugger; see
+   [writing an adapter](/contributing/writing-an-adapter/).
+
+## The guarantees
+
+These are enforced in the client runtime and asserted in its test suite, not aspirations:
+
+- **Never throws into your app.** Internal failures degrade to a no-op plus one rate-limited
+  `console.warn`. Errors thrown by *your* code stay yours and propagate untouched.
+- **Free when detached.** With no debugger attached, an awaited gate short-circuits to a shared
+  resolved promise — the suite asserts an average under 1 ms; the design spike measured 0.03 ms
+  worst case. With GraphMind disabled outright, the wrappers are identity functions.
+- **Fails open.** If the viewer disconnects while gates are held, every held gate resolves
+  `continue` immediately, and the agent runs on as if nothing had attached.
+- **Local-first.** The server binds `127.0.0.1` only. Runs live in `~/.graphmind/graphmind.db`.
+  Your prompts and tool payloads never leave the machine.
+- **Off in production.** Under `NODE_ENV=production` instrumentation is disabled unless you set
+  `GRAPHMIND=1`, and `GRAPHMIND_DISABLED=1` beats everything.
+
+## Where to go next
+
+- [Install & first run](/start/install/) — see it work in one command, then instrument your app.
+- [Core concepts](/start/concepts/) — runs, nodes, instances, gates, and why the graph is a
+  projection of your code.
+- [Integrations](/integrations/) — the copy-pasteable version for your framework.

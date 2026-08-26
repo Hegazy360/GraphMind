@@ -27,7 +27,13 @@ export function ingestEnvelope(envelope: KnownEnvelope, source: RunSource): void
   if (!isEventType(envelope.type)) return; // controls/handshake are not viewer input
   const event = envelope as EventEnvelope;
   if (event.type === 'node.token') {
-    tokenBuffers.push(event.runId, event.seq, event.payload.nodeId, event.payload.deltas);
+    tokenBuffers.push(
+      event.runId,
+      event.seq,
+      event.payload.nodeId,
+      event.payload.deltas,
+      event.ts,
+    );
     return;
   }
   const applied = useRunStore.getState().applyEvent(event, source);

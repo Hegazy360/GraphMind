@@ -1,0 +1,174 @@
+---
+title: Core concepts
+description: Runs, nodes and instances, the graph as a projection of your code, gates and pause points, fail-open guarantees, and local-first storage.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Five ideas explain everything GraphMind does. None of them is deep, but the *instance* one and
+the *gate* one are where the design earns its keep.
+
+## Runs
+
+A **run** is one top-level agent invocation — one `gm.run('handle-ticket', …)`, one request, one
+job. It has an id, an app name, a start and end time, a status (`ok`, `error`, `aborted`), and
+everything that happened inside it.
+
+Runs are established with `AsyncLocalStorage`, so every event your agent emits — however many
+awaits and callbacks deep — is attributed to the right run automatically. Concurrent runs in
+the same process stay cleanly separate.
+
+You do not *have* to open a run. Events emitted outside one are collected into a single implicit
+run so nothing is lost. But naming your runs is what makes a run list readable a week later, and
+an explicit run is what carries the `AbortController` the debugger's `abort` action uses.
+
+## Nodes and instances
+
+This is the distinction that makes big graphs readable.
+
+- A **node** is a place in your code. Its `nodeId` is stable: `tool:searchFlights`, `llm:step`,
+  `agent:handle-ticket`. Every execution of that code location maps to the same node.
+- An **instance** is one execution of that node. Its `instanceId` is unique per execution — a
+  tool call id, a step index, a run id.
+
+The canvas draws **one node per logical node**, and instances light it up. An agent that loops
+`searchFlights` eleven times gives you one node with eleven instances, not eleven boxes. This is
+the "graph is a projection of code" thesis, and it is why GraphMind stays legible on runs where
+a span-per-call view turns into confetti.
+
+| Node | `nodeId` | `instanceId` |
+| --- | --- | --- |
+| Agent (a run) | `agent:<runName>` | the run id |
+| Model step | `llm:step` | `<invocationId>:s<N>` |
+| Tool call | `tool:<toolName>` | the tool call id |
+
+<Aside type="note">
+Adapters should always send `instanceId` on `node.finished` and `node.error` too. Without it a
+receiver has to attribute a result to the most recent open instance — which mis-attributes when
+the same logical node runs concurrently, exactly the case you most want to debug.
+</Aside>
+
+Node kinds are `agent`, `llm`, `tool`, `chain`, `retriever` and `custom`. The extra kinds exist
+so LangChain-shaped runs (chains, retrievers) render as themselves rather than as generic boxes.
+
+## The graph is a projection of your code
+
+GraphMind does not ask you to declare a graph. It infers one from what actually executes, and
+adapters can pre-announce structure with a `graph.hint` event — the Vercel AI SDK adapter sends
+the whole tool roster on the first model step, so you see every tool greyed out before anything
+runs, then watch them come alive.
+
+The consequence: **the graph you look at is the code you wrote**, not a parallel abstraction you
+have to keep in sync. Delete a tool and it disappears from the graph on the next run.
+
+## Gates and pause points
+
+A **gate** is a cooperative pause point the adapter awaits. Each one sits at a `point` in a
+node's lifecycle:
+
+| Point | Where | Fires when |
+| --- | --- | --- |
+| `before` | Before the node's work starts | A breakpoint matches, or step mode is on |
+| `after` | After work completes, before the value returns | Step mode |
+| `error` | The node threw, before the framework sees it | **Always, by default** |
+
+<figure class="not-content" style="margin:1.6rem 0;">
+<svg viewBox="0 0 720 132" width="100%" height="auto" role="img" aria-label="A node's lifecycle: the before gate precedes execution, the after gate follows it, and the error gate branches out of a throw. Each gate can resume with continue, retry, inject or abort." style="max-width:720px;">
+  <defs>
+    <marker id="gm-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 z" fill="var(--gm-border-strong)" />
+    </marker>
+  </defs>
+  <g fontFamily="var(--sl-font-mono)" fontSize="11.5">
+    <line x1="88" y1="42" x2="126" y2="42" stroke="var(--gm-border-strong)" strokeWidth="1.4" markerEnd="url(#gm-arrow)" />
+    <line x1="238" y1="42" x2="276" y2="42" stroke="var(--gm-border-strong)" strokeWidth="1.4" markerEnd="url(#gm-arrow)" />
+    <line x1="388" y1="42" x2="426" y2="42" stroke="var(--gm-border-strong)" strokeWidth="1.4" markerEnd="url(#gm-arrow)" />
+    <line x1="538" y1="42" x2="576" y2="42" stroke="var(--gm-border-strong)" strokeWidth="1.4" markerEnd="url(#gm-arrow)" />
+    <path d="M313 62 L313 96 L426 96" fill="none" stroke="var(--gm-danger)" strokeWidth="1.4" strokeDasharray="3 4" markerEnd="url(#gm-arrow)" />
+
+    <rect x="8" y="26" width="80" height="32" rx="8" fill="var(--gm-bg-card)" stroke="var(--gm-border)" />
+    <text x="48" y="46" textAnchor="middle" fill="var(--gm-text-3)">call</text>
+
+    <rect x="126" y="26" width="112" height="32" rx="8" fill="var(--gm-accent-dim)" stroke="var(--gm-accent)" />
+    <text x="182" y="46" textAnchor="middle" fill="var(--gm-accent)">before gate</text>
+
+    <rect x="276" y="26" width="112" height="32" rx="8" fill="var(--gm-bg-card)" stroke="var(--gm-border-strong)" />
+    <text x="332" y="46" textAnchor="middle" fill="var(--gm-text)">execute</text>
+
+    <rect x="426" y="26" width="112" height="32" rx="8" fill="var(--gm-accent-dim)" stroke="var(--gm-accent)" />
+    <text x="482" y="46" textAnchor="middle" fill="var(--gm-accent)">after gate</text>
+
+    <rect x="576" y="26" width="80" height="32" rx="8" fill="var(--gm-bg-card)" stroke="var(--gm-border)" />
+    <text x="616" y="46" textAnchor="middle" fill="var(--gm-text-3)">return</text>
+
+    <rect x="426" y="80" width="112" height="32" rx="8" fill="var(--gm-danger-dim)" stroke="var(--gm-danger)" />
+    <text x="482" y="100" textAnchor="middle" fill="var(--gm-danger)">error gate</text>
+
+    <text x="332" y="82" textAnchor="middle" fill="var(--gm-danger)" fontSize="10.5">throws</text>
+  </g>
+</svg>
+</figure>
+
+While a gate is held, **nothing is in flight**: the adapter awaits the gate *before* it calls the
+provider or the tool, so a hold can last as long as you like. No socket is sitting open burning
+a timeout, and no partial request is waiting to be finished.
+
+The viewer releases a gate with one of four actions:
+
+| Action | What the adapter does |
+| --- | --- |
+| `continue` | Proceed normally. At an `error` gate, rethrow the original error. |
+| `retry` | Re-run the node's execution from the top. |
+| `inject` | Skip execution (or swallow the error) and use the value you supplied. |
+| `abort` | Abort the run's `AbortController` — terminal, never retried by the SDK. |
+
+Gates are **independent**. Two concurrent tool calls hold two separate pauses, each resumable on
+its own.
+
+<Aside type="tip" title="Why abort is not just `throw new Error()`">
+Throwing a plain error out of SDK middleware lands in the SDK's *retry* logic — your "abort"
+would be retried `maxRetries` times before surfacing. So abort is cooperative cancellation: the
+session aborts the run's `AbortController` with an `AbortError`-named reason before the gate
+resolves. AI SDKs treat `AbortError` as terminal. This is why adapters must pass `ctx.signal`
+into their SDK calls.
+</Aside>
+
+## Fail-open
+
+GraphMind is instrumentation that ships in your codebase, so it is built to be harmless:
+
+- **Disabled** (`GRAPHMIND_DISABLED=1`, or `NODE_ENV=production` without `GRAPHMIND=1`): the
+  wrappers are identity functions. No sockets, no buffering, no warnings — but `gm.run` still
+  runs your function and still hands it a working context, so your code never has to branch.
+- **Enabled but detached**: gates take a fast path to a shared resolved promise (average under
+  1 ms in the test suite), and events go only to an in-memory ring buffer.
+- **Attached, then disconnected**: every held gate is released with `continue` immediately —
+  measured under 100 ms — and breakpoints are forgotten until a new handshake re-arms them.
+- **Internally broken**: the session catches its own errors, degrades to a no-op, and logs one
+  rate-limited warning. It never throws into your app. Errors thrown by *your* function inside
+  `gm.run` are yours and propagate untouched.
+
+## Replay on attach
+
+Events are kept in a bounded ring buffer (2000 by default, drop-oldest). When a viewer attaches
+mid-run, the whole buffer is replayed oldest-first **with the original sequence numbers**, so
+you see the history you missed and the viewer deduplicates on `(runId, seq)` across reconnects.
+
+Practically: you can start a long agent, notice it misbehaving, launch the debugger, and still
+get the graph from the beginning.
+
+## Local-first storage
+
+The server binds `127.0.0.1` and has no auth — it is a devtool, not a service; never expose the
+port. Runs are persisted to SQLite via `node:sqlite` (built into Node ≥ 22.13, zero native
+dependencies) at `~/.graphmind/graphmind.db`, in WAL mode, keyed `(run_id, seq)`.
+
+Your prompts, tool arguments and outputs stay on your machine. The only thing that leaves is an
+anonymous [telemetry](/reference/telemetry/) ping naming the command you ran — one line to opt
+out of.
+
+Because history is a plain local database, it stays readable when the viewer is closed: the
+[MCP server](/reference/mcp/) queries it directly, so your coding agent can pull up the run that
+failed and reason about it with you.

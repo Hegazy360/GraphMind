@@ -1,0 +1,110 @@
+---
+title: Retry & abort
+description: Re-run one failed step without restarting the agent, or stop a run cleanly without triggering the SDK's retry logic.
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The other two resume actions. `retry` re-runs a node; `abort` ends the run.
+
+## Retry
+
+`retry` re-invokes the node's execution from the top, with the same arguments, and gates it
+again. Everything before it in the run stays as it was — you are not restarting the agent.
+
+**Use it when the failure was about the world, not the value:**
+
+- a network blip or a 503 from an upstream API;
+- an expired token you just refreshed;
+- a database or local service you forgot to start;
+- a rate limit you have now waited out;
+- a fix you made to the tool's *external* dependency (a config file, a seed row).
+
+<Aside type="caution" title="Retry re-runs code that is already loaded">
+Retry does not reload your module. Editing the tool's source and hitting retry runs the **old**
+code — the process still has the old function in memory. Change the code and you need a new run.
+Retry is for the environment, not the implementation.
+</Aside>
+
+Because a retried node gates again, you can retry, watch it fail the same way, and then switch
+to `inject` without losing your place.
+
+### Where retry is available
+
+| Gate | Effect |
+| --- | --- |
+| `error` | Re-invoke the original execute — the common case |
+| `after` | Discard the result and run the node again |
+| `before` | No-op in most adapters (nothing has run yet — `continue` is the same thing) |
+
+## Abort
+
+`abort` stops the run. It exists as its own action, rather than "just throw an error", for a
+concrete reason.
+
+<Aside type="note" title="Why abort is not a throw">
+Throwing a plain `Error` out of SDK middleware lands in the SDK's **retry logic** — your abort
+would be retried `maxRetries` times before it surfaced, spending tokens on a run you already
+decided to kill.
+
+So abort is cooperative cancellation. When a gate resolves `abort`, the session aborts the run's
+`AbortController` with an `AbortError`-named reason **before** the gate promise resolves. The
+adapter then throws `ctx.signal.reason`, or simply lets the SDK observe the signal. AI SDKs treat
+`AbortError` as terminal — no retries — and the run is recorded with `status: 'aborted'`.
+</Aside>
+
+**Use it when:**
+
+- the run is clearly a write-off and you do not want it burning more tokens;
+- the agent is looping — same tool, same arguments, forever;
+- it is about to do something you would rather it did not (an email, a refund, a write);
+- you have learned what you needed and the remaining ten steps are irrelevant.
+
+### It only works if you pass the signal
+
+Adapters that own the call path (`@graphmind-ai/sdk`) wire this up for you. If you are
+hand-instrumenting, or using an adapter where *you* make the model calls, you must pass
+`ctx.signal` into them:
+
+```ts
+await gm.run('handle-ticket', async (ctx) => {
+  const response = await client.messages.create(params, { signal: ctx.signal });
+  //                                                      ^^^^^^^^^^^^^^^^^^
+});
+```
+
+Without it, an abort stops the loop at the next gate rather than cancelling the request already
+in flight.
+
+### An aborted run is a first-class outcome
+
+`status: 'aborted'` is distinct from `'error'` on both the run and the node. Aborted runs are
+not counted as failures in the run list, and adapters do not emit `node.error` for a node that
+was aborted — you stopped it, it did not break.
+
+## Choosing between the four
+
+| Situation | Action |
+| --- | --- |
+| The error should propagate; let the framework handle it | `continue` |
+| Transient failure, or the environment is fixed now | `retry` |
+| You know what the call should have returned | `inject` |
+| This run is finished as far as you are concerned | `abort` |
+
+## Adapter contract
+
+```ts
+const decision = await session.gate('error', node);
+switch (decision.action) {
+  case 'continue': throw error;                 // rethrow the ORIGINAL error
+  case 'retry':    return await execute(args);  // re-run, gate again
+  case 'inject':   return decision.output;      // swallow the error
+  case 'abort':    throw ctx.signal.reason;     // AbortError — terminal
+}
+```
+
+The session has already aborted the controller by the time an `abort` decision resolves, so
+`ctx.signal.reason` is populated. Full contract in
+[writing an adapter](/contributing/writing-an-adapter/).

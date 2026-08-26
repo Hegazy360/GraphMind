@@ -1,0 +1,53 @@
+name: Bug report
+description: Something in GraphMind does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. The most useful thing you can attach is a
+        recorded run: `graphmind record <runId> --out bug.ndjson` (it contains
+        your prompts and tool payloads, so check it before uploading).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Smallest code or steps that show the problem.
+    validations:
+      required: true
+  - type: dropdown
+    id: integration
+    attributes:
+      label: Integration
+      options:
+        - Vercel AI SDK (@graphmind-ai/sdk)
+        - Anthropic SDK (@graphmind-ai/anthropic)
+        - OpenAI SDK (@graphmind-ai/openai)
+        - LangGraph / LangChain (@graphmind-ai/langgraph)
+        - Python (graphmind-ai)
+        - Trace import (graphmind import)
+        - The viewer / CLI itself
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `npx graphmind-ai --version`, plus Node and the framework version.
+      placeholder: "graphmind 0.2.0, node 22.13, ai 7.0.79, macOS 15"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or recorded run
+      description: CLI output, browser console errors, or an attached .ndjson.
+      render: shell

@@ -1,0 +1,51 @@
+{
+  "name": "@graphmind-ai/anthropic",
+  "version": "0.1.0",
+  "description": "Anthropic TypeScript SDK adapter for the GraphMind live agent debugger: wrap the client and your tool functions to stream execution events and honour pause / step / inject / retry / abort gates.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@graphmind-ai/client": "workspace:*",
+    "@graphmind-ai/schema": "workspace:*"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/sdk": ">=0.60.0 <1"
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.121.0",
+    "@types/node": "^26.3.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "ws": "^8.21.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hegazy360/GraphMind.git",
+    "directory": "packages/anthropic"
+  },
+  "homepage": "https://graphmind.ai"
+}

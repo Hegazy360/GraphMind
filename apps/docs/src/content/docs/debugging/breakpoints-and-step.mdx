@@ -1,0 +1,113 @@
+---
+title: Breakpoints & step mode
+description: Break before a specific tool or every LLM call, or step every boundary in the run — how matchers work and when each mode is the right one.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Pause-on-error catches failures. Breakpoints and step mode catch everything else — the run that
+does not crash but does the wrong thing.
+
+## Two modes
+
+| Mode | Pauses at |
+| --- | --- |
+| **Run** (default) | Only where a breakpoint matches, plus every `error` gate |
+| **Step** | Every `before` and `error` gate, and `after` gates too |
+
+Toggle between them in the run bar. Mode is a property of the debug **session**, not of a run:
+switch to step mid-run and the next boundary holds.
+
+<Aside type="tip">
+Step mode is the "what on earth is this thing doing" mode. Turn it on, walk the agent one node
+at a time reading inputs and outputs, and turn it back off once you have found the step that
+goes wrong.
+</Aside>
+
+## Breakpoint matchers
+
+A breakpoint is a **matcher**, not a line number. Every field present must match; absent fields
+match anything:
+
+```ts
+{ kind?: 'agent' | 'llm' | 'tool' | 'chain' | 'retriever' | 'custom',
+  name?: string,
+  point?: 'before' | 'after' | 'error' }   // defaults to 'before'
+```
+
+Some useful shapes:
+
+| Matcher | Effect |
+| --- | --- |
+| `{}` | Pause before **every** node — the run bar's "Pause all" button |
+| `{ name: 'issueRefund' }` | Pause before every call to that one tool |
+| `{ kind: 'llm' }` | Pause before every model step |
+| `{ kind: 'tool', point: 'after' }` | Pause after each tool call, before its result returns |
+| `{ point: 'error' }` | Pause on any error — **armed by default** |
+| `{ kind: 'tool', name: 'issueRefund', point: 'error' }` | Only when that specific tool throws |
+
+Matchers are deduplicated by exact field equality, so setting the same one twice is a no-op, and
+clearing requires an identical matcher — which is what the chip's × does for you.
+
+## Setting them
+
+In the viewer:
+
+- **Pause all** in the run bar sets `{}`.
+- Every armed matcher shows as a **chip** in the run bar; the × clears it.
+- Pause-on-error appears as a chip too, so it is one click to remove.
+
+Breakpoints live on the **server**, not in a browser tab: they survive a viewer reload, apply to
+every connected app, and are re-armed on any app that reconnects (they ride in the `hello.ack`
+handshake). Two viewers open on the same server see the same breakpoints, and a change from one
+broadcasts to the other.
+
+## The three pause points
+
+```text
+      ┌────────── before ──────────┐          ┌───── after ─────┐
+call ─┤  gate: breakpoint or step  ├─ execute ┤  gate: step     ├─ return
+      └────────────────────────────┘    │     └─────────────────┘
+                                        │ throws
+                                        └────► error gate (default-armed)
+```
+
+- **`before`** fires *before the work starts* — before the provider request goes out, before the
+  tool body runs. Holding here costs nothing: no connection is open, no timeout is ticking.
+- **`after`** fires post-execute, pre-return. This is where you see what a tool actually
+  produced and can replace it before the model ever reads it. It fires in step mode.
+- **`error`** fires when the node throws, before the framework sees the error.
+
+## Gates are independent
+
+Two tools running concurrently hold two separate pauses. You can inspect one, resume it, and
+leave the other held; resuming one never releases the other. That independence is what makes
+GraphMind usable on fan-out agents, where a single global "paused" state would be useless.
+
+## Practical recipes
+
+**"This tool gets called with garbage sometimes."**
+Set `{ name: 'theTool' }` and read its input on every call until you see the bad one.
+
+**"The model picks the wrong tool at step 3."**
+Set `{ kind: 'llm' }` and read the prompt going into each step — the messages the model actually
+receives, not the ones you think you built.
+
+**"A tool succeeds but returns something weird."**
+Switch to step mode and stop at its `after` gate, where the return value is visible and
+replaceable.
+
+**"Something in this 200-node run is wrong and I do not know what."**
+Leave run mode on with only pause-on-error armed, let it fail, then narrow down from there. See
+[working with large graphs](/debugging/large-graphs/).
+
+## What holds do *not* cost you
+
+- No provider connection is open while a `before` gate is held.
+- Adapters neutralise SDK timeout budgets while a debugger is attached, so a long think does not
+  trip `toolMs` (see the [Vercel AI SDK page](/integrations/vercel-ai-sdk/#timeouts-while-debugging)
+  for the exact limits).
+- If you walk away, `pauseTimeoutMs` (unset by default — hold forever) can auto-continue held
+  gates after a deadline, and a disconnect always releases them.

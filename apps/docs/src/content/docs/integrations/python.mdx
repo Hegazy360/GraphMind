@@ -1,0 +1,192 @@
+---
+title: Python
+description: Debug Python agents built on openai, anthropic or langgraph — instrument the client, open a run, decorate your tools, and use the same viewer.
+sidebar:
+  order: 6
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+The Python package speaks the same wire protocol as the TypeScript adapters and connects to the
+same `graphmind` CLI, so a Python agent and a TypeScript one look identical in the viewer.
+
+```sh
+pip install graphmind-ai
+```
+
+The API is idiomatic Python rather than a transliteration: a context manager for runs, a
+decorator for tools, and one `instrument_*` call per client.
+
+## End to end (OpenAI)
+
+```python title="support_agent.py"
+import json
+import graphmind
+from openai import OpenAI
+
+gm = graphmind.graphmind(app="support-agent")
+
+# 1. Instrument the client — every request becomes a gated llm:step node.
+client = graphmind.instrument_openai(OpenAI())
+
+
+# 2. Decorate your tools — each call becomes a gated tool node.
+@gm.tool
+def search_orders(email: str):
+    return db.orders.find(email=email)
+
+
+@gm.tool
+def issue_refund(order_id: str, cents: int):
+    return payments.refund(order_id, cents)
+
+
+TOOLS = {"search_orders": search_orders, "issue_refund": issue_refund}
+
+TOOL_SPECS = [
+    {
+        "type": "function",
+        "name": "search_orders",
+        "description": "Find a customer's recent orders",
+        "parameters": {
+            "type": "object",
+            "properties": {"email": {"type": "string"}},
+            "required": ["email"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "issue_refund",
+        "description": "Refund an order",
+        "parameters": {
+            "type": "object",
+            "properties": {"order_id": {"type": "string"}, "cents": {"type": "integer"}},
+            "required": ["order_id", "cents"],
+        },
+    },
+]
+
+
+def main():
+    # Wait for the debugger handshake so gates are armed from the first event.
+    gm.ready()
+
+    # 3. Open a run — everything inside belongs to it.
+    with gm.run("handle-ticket"):
+        messages = [
+            {"role": "user", "content": "Order #4471 arrived broken. Sort it out."}
+        ]
+
+        for _ in range(8):
+            response = client.responses.create(
+                model="gpt-5.1", tools=TOOL_SPECS, input=messages
+            )
+
+            calls = [item for item in response.output if item.type == "function_call"]
+            if not calls:
+                print(response.output_text)
+                break
+
+            messages += response.output
+            for call in calls:
+                result = TOOLS[call.name](**json.loads(call.arguments))
+                messages.append({
+                    "type": "function_call_output",
+                    "call_id": call.call_id,
+                    "output": json.dumps(result),
+                })
+
+    gm.dispose()
+
+
+main()
+```
+
+Run `graphmind` in one terminal, `python support_agent.py` in another.
+
+## Anthropic
+
+Swap one line:
+
+```python
+import anthropic
+import graphmind
+
+gm = graphmind.graphmind(app="support-agent")
+client = graphmind.instrument_anthropic(anthropic.Anthropic())
+
+with gm.run("handle-ticket"):
+    message = client.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=1024,
+        tools=TOOL_SPECS,
+        messages=messages,
+    )
+```
+
+Everything else — `@gm.tool`, `gm.run`, `gm.ready` — is identical.
+
+## LangGraph / LangChain
+
+Attach the callback handler, exactly like the JS adapter:
+
+```python
+import graphmind
+from langgraph.prebuilt import create_react_agent
+
+gm = graphmind.graphmind(app="support-agent")
+gm.ready()
+
+agent = create_react_agent(model, tools=[search_orders, issue_refund])
+
+with gm.run("handle-ticket"):
+    result = agent.invoke(
+        {"messages": [{"role": "user", "content": "Order #4471 arrived broken."}]},
+        config={"callbacks": [gm.handler()]},
+    )
+
+gm.dispose()
+```
+
+Chains, LLM calls, tools and retrievers each get their own node kind, and LangChain's run tree
+becomes the parent/child structure on the canvas.
+
+## The surface
+
+| Call | What it does |
+| --- | --- |
+| `graphmind.graphmind(app=...)` | Create the session. Same options as the TS adapters. |
+| `graphmind.instrument_openai(client)` | Gate every OpenAI request; returns the client. |
+| `graphmind.instrument_anthropic(client)` | Gate every Anthropic request; returns the client. |
+| `gm.handler()` | LangChain `BaseCallbackHandler` for LangGraph / LCEL runs. |
+| `@gm.tool` | Decorate a function so its calls become gated `tool:<name>` nodes. |
+| `with gm.run("name"):` | Open a run — the context manager closes it, error or not. |
+| `gm.ready(timeout=2.0)` | Wait for the handshake. Returns `False` if no debugger — not an error. |
+| `gm.dispose()` | Release held gates, flush events, close the socket. |
+
+<Aside type="note" title="async">
+`async def` tools work with the same `@gm.tool` decorator, and `async with gm.run(...)` opens a
+run in an async context. Run scoping uses `contextvars`, so concurrent `asyncio` tasks stay
+correctly attributed.
+</Aside>
+
+## Same guarantees
+
+The Python package holds the identical contract:
+
+- **Never raises into your app.** Internal failures degrade to a no-op plus one warning.
+- **Free when detached.** No debugger, no cost — gates return immediately.
+- **Fails open.** A debugger that disconnects mid-hold releases every gate with `continue`.
+- **Off in production.** `GRAPHMIND_DISABLED=1` disables everything; production environments
+  need `GRAPHMIND=1` to opt in.
+- **Local-first.** Events go to `ws://127.0.0.1:4747/ingest` and no further.
+
+## Environment
+
+The same variables the TypeScript adapters read:
+
+| Variable | Meaning |
+| --- | --- |
+| `GRAPHMIND_URL` | Ingest endpoint (default `ws://127.0.0.1:4747/ingest`) |
+| `GRAPHMIND_DISABLED` | `1` disables instrumentation — beats everything |
+| `GRAPHMIND` | `1` re-enables it in a production environment |

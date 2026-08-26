@@ -11,11 +11,16 @@
  *    to each other instead of fanning out of the parent (agent → step 1 →
  *    step 2 → …)
  *  - tools hang off whatever `node.started` named as their parent
+ *
+ * Collapse: when a node is collapsed its whole subtree disappears and every
+ * edge that crossed the boundary is re-pointed at the summary card, so the
+ * graph stays connected at any zoom level (see collapse.ts).
  */
 import type { NodeKind } from '@graphmind-ai/schema';
+import { hiddenByCollapse } from './collapse.js';
 import { nodeStatus, type NodeState, type RunState } from './types.js';
 
-export type FlowNodeType = 'invocation' | 'llmStep' | 'tool';
+export type FlowNodeType = 'invocation' | 'llmStep' | 'tool' | 'group';
 
 export interface FlowNodeData extends Record<string, unknown> {
   runId: string;
@@ -41,6 +46,11 @@ export interface FlowGraph {
   edges: FlowEdgeSpec[];
 }
 
+export interface FlowOptions {
+  /** nodeIds whose subtree is folded into a summary card. */
+  collapsed?: readonly string[];
+}
+
 export function flowNodeType(kind: NodeKind): FlowNodeType {
   switch (kind) {
     case 'agent':
@@ -53,43 +63,71 @@ export function flowNodeType(kind: NodeKind): FlowNodeType {
 }
 
 export const NODE_DIMENSIONS: Record<FlowNodeType, { width: number; height: number }> = {
-  invocation: { width: 264, height: 108 },
-  llmStep: { width: 300, height: 168 },
-  tool: { width: 248, height: 104 },
+  invocation: { width: 264, height: 104 },
+  llmStep: { width: 300, height: 164 },
+  tool: { width: 248, height: 96 },
+  group: { width: 264, height: 104 },
 };
 
-/** Extra height a tool/step node gains while paused (resume action bar). */
-export const PAUSE_BANNER_HEIGHT = 118;
+/**
+ * Extra height a node gains while paused (resume action bar). Kept below the
+ * inter-layer spacing in elkLayout so a pause never forces a re-layout —
+ * the card grows into the gap it already owns.
+ */
+export const PAUSE_BANNER_HEIGHT = 92;
 
-export function nodeDimensions(node: NodeState): { width: number; height: number } {
-  const base = NODE_DIMENSIONS[flowNodeType(node.kind)];
+export function nodeDimensions(
+  node: NodeState,
+  collapsed = false,
+): { width: number; height: number } {
+  const base = NODE_DIMENSIONS[collapsed ? 'group' : flowNodeType(node.kind)];
   if (node.activePauseId !== undefined) {
     return { width: base.width, height: base.height + PAUSE_BANNER_HEIGHT };
   }
   return base;
 }
 
-export function runStateToFlow(run: RunState): FlowGraph {
+export function runStateToFlow(run: RunState, options: FlowOptions = {}): FlowGraph {
+  const collapsed = options.collapsed ?? [];
+  const hidden = collapsed.length === 0 ? new Map<string, string>() : hiddenByCollapse(run, collapsed);
+  const collapsedSet = new Set(collapsed.filter((id) => run.nodes[id] !== undefined && !hidden.has(id)));
+  /** A hidden node renders as its collapsed ancestor. */
+  const represent = (nodeId: string): string => hidden.get(nodeId) ?? nodeId;
+
   const nodes: FlowNodeSpec[] = [];
   const edges: FlowEdgeSpec[] = [];
+  const edgeIds = new Set<string>();
   /** Last-seen llm sibling per parentId, for step chaining. */
   const lastLlmSibling = new Map<string, string>();
+
+  const pushEdge = (source: string, target: string): void => {
+    const from = represent(source);
+    const to = represent(target);
+    if (from === to) return; // collapsed away into the same card
+    const id = `e:${from}->${to}`;
+    if (edgeIds.has(id)) return;
+    edgeIds.add(id);
+    edges.push({ id, source: from, target: to });
+  };
 
   for (const nodeId of run.order) {
     const node = run.nodes[nodeId];
     if (node === undefined) continue;
-    const type = flowNodeType(node.kind);
-    const { width, height } = nodeDimensions(node);
-    nodes.push({ id: nodeId, type, data: { runId: run.runId, nodeId }, width, height });
+    if (!hidden.has(nodeId)) {
+      const isGroup = collapsedSet.has(nodeId);
+      const type = isGroup ? 'group' : flowNodeType(node.kind);
+      const { width, height } = nodeDimensions(node, isGroup);
+      nodes.push({ id: nodeId, type, data: { runId: run.runId, nodeId }, width, height });
+    }
 
     if (node.parentId === undefined) continue;
     if (node.kind === 'llm') {
       const prev = lastLlmSibling.get(node.parentId);
       const source = prev ?? node.parentId;
-      edges.push({ id: `e:${source}->${nodeId}`, source, target: nodeId });
+      pushEdge(source, nodeId);
       lastLlmSibling.set(node.parentId, nodeId);
     } else {
-      edges.push({ id: `e:${node.parentId}->${nodeId}`, source: node.parentId, target: nodeId });
+      pushEdge(node.parentId, nodeId);
     }
   }
 

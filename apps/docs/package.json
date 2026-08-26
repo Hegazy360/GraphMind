@@ -1,0 +1,21 @@
+{
+  "name": "docs",
+  "private": true,
+  "type": "module",
+  "description": "docs.graphmind.ai — GraphMind documentation (Astro + Starlight, static)",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "typecheck": "astro sync"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.9",
+    "astro": "^7.2.8",
+    "sharp": "^0.35.4"
+  }
+}

@@ -1,0 +1,97 @@
+---
+title: Exporting a run
+description: graphmind record writes a run's event stream to NDJSON — the same format the ingest endpoint accepts, so an exported run can be replayed, diffed or attached to a bug report.
+sidebar:
+  order: 8
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+```sh
+graphmind record <runId>
+graphmind record <runId> --out bug-4471.ndjson
+```
+
+Writes the run's persisted event stream to NDJSON — **one wire envelope per line**. Default
+output is `graphmind-run-<runId>.ndjson`. Pass a run id you do not have and the command lists
+recent run ids instead of failing blankly.
+
+## The format
+
+Each line is a complete envelope, exactly as it went over the socket:
+
+```json
+{"gm":1,"seq":0,"ts":1756254187512,"runId":"run_01H8…","type":"run.started","payload":{"app":"support-agent","sdk":{"name":"ai","version":"7.0.79"},"meta":{"name":"handle-ticket"}}}
+{"gm":1,"seq":1,"ts":1756254187533,"runId":"run_01H8…","type":"node.started","payload":{"nodeId":"tool:searchOrders","kind":"tool","name":"searchOrders","instanceId":"call_a1","input":{"email":"alex@example.com"}}}
+{"gm":1,"seq":2,"ts":1756254187904,"runId":"run_01H8…","type":"node.finished","payload":{"nodeId":"tool:searchOrders","instanceId":"call_a1","output":[…],"durationMs":371,"status":"ok"}}
+```
+
+This is the same shape `graphmind demo` replays and `WS /ingest` accepts, which makes an export
+a **portable run**: it can be re-ingested, diffed, scripted over, or attached to an issue.
+
+<Aside type="caution" title="Exports contain your payloads">
+Inputs, outputs, prompts and errors are all in there verbatim. Read the file before you attach
+it to a public bug report — it is your data, and nothing has been redacted for you.
+</Aside>
+
+## What it is good for
+
+**Bug reports.** A trace narrative plus "it broke somewhere in the middle" is not reproducible.
+An NDJSON file is the actual run.
+
+**Diffing two runs.** Export both and use ordinary tools:
+
+```sh
+jq -r 'select(.type=="node.started") | "\(.payload.nodeId)\t\(.payload.input|tojson)"' bad.ndjson
+```
+
+See [comparing runs](/debugging/comparing-runs/).
+
+**Fixtures.** A recorded run replays deterministically with no API key and no cost — which is
+exactly how `graphmind demo` works. If you are building on GraphMind, record a run once and use
+it as a test fixture.
+
+**Analysis.** Every line is JSON, so `jq`, DuckDB, pandas and friends all apply:
+
+```sh
+# total token usage for the run
+jq -s '[.[] | select(.type=="node.finished") | .payload.usage // empty]
+       | { input: map(.inputTokens) | add, output: map(.outputTokens) | add }' run.ndjson
+
+# every error, in order
+jq -r 'select(.type=="node.error") | "\(.payload.nodeId)\t\(.payload.error.name): \(.payload.error.message)"' run.ndjson
+```
+
+## Finding the run id
+
+From the viewer's run picker, or from the API:
+
+```sh
+curl -s http://127.0.0.1:4747/api/runs | jq -r '.runs[] | "\(.id)\t\(.app)\t\(.status)"'
+```
+
+Or from MCP — ask your coding agent for the last failing run and it will hand you the id and a
+deep link. See the [MCP reference](/reference/mcp/).
+
+## Reading a run without the CLI
+
+Runs are also available over HTTP while the server runs:
+
+```sh
+curl -s 'http://127.0.0.1:4747/api/runs/<runId>/events?afterSeq=0&limit=1000'
+```
+
+Returns `{ runId, total, events, nextAfterSeq }` — `events` are full wire envelopes in ascending
+`seq` order, `nextAfterSeq` is the cursor for the next page (or `null` on the last one). `limit`
+defaults to 1000, max 5000.
+
+## Round-tripping
+
+Because the format *is* the wire format, an exported run can be pushed back into a server over
+`WS /ingest` — envelopes keep their original `seq`, and storage inserts are keyed `(run_id, seq)`
+with `INSERT OR IGNORE`, so re-ingesting the same run is idempotent rather than duplicating it.
+
+<Aside type="note" title="Injections are preserved">
+Results you substituted while debugging stay marked `injected: true` in the export. A steered
+run never masquerades as a clean one.
+</Aside>
