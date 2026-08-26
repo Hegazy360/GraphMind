@@ -68,8 +68,8 @@
             <button class="waitlist-button" id="waitlist-submit" type="submit">Join the waitlist</button>
           </div>
           <div class="hp" aria-hidden="true">
-            <label for="company">Company</label>
-            <input type="text" id="company" name="company" tabindex="-1" autocomplete="off">
+            <label for="gm_extra">Leave this field empty</label>
+            <input type="text" id="gm_extra" name="gm_extra" tabindex="-1" autocomplete="off">
           </div>
           <p class="form-status" id="form-status" role="status" aria-live="polite"></p>
           <p class="form-note">Get notified at launch, plus early access to the first builds.</p>
@@ -225,7 +225,7 @@
       var email = document.getElementById('email');
       var button = document.getElementById('waitlist-submit');
       var status = document.getElementById('form-status');
-      var honeypot = document.getElementById('company');
+      var honeypot = document.getElementById('gm_extra');
       var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
       function setStatus(message, kind) {
