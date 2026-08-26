@@ -1,0 +1,38 @@
+{
+  "name": "@graphmind/schema",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Versioned wire contract (Zod schemas + TypeScript types) for the GraphMind live agent debugger protocol.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schema.json": "./schema.json"
+  },
+  "files": [
+    "dist",
+    "schema.json",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json && node ./scripts/write-schema.mjs"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "fast-check": "^4.9.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

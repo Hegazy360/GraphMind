@@ -1,0 +1,1400 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://graphmind.dev/wire/v1/envelope.schema.json",
+  "title": "GraphMind wire envelope (protocol v1)",
+  "description": "Every frame exchanged between an instrumented app and a GraphMind viewer is one JSON envelope matching this schema. Receivers must tolerate unknown message types and unknown payload fields (forward compatibility) and must reject envelopes whose \"gm\" differs from theirs.",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/envelope.run.started"
+    },
+    {
+      "$ref": "#/$defs/envelope.run.finished"
+    },
+    {
+      "$ref": "#/$defs/envelope.graph.hint"
+    },
+    {
+      "$ref": "#/$defs/envelope.node.started"
+    },
+    {
+      "$ref": "#/$defs/envelope.node.token"
+    },
+    {
+      "$ref": "#/$defs/envelope.node.finished"
+    },
+    {
+      "$ref": "#/$defs/envelope.node.error"
+    },
+    {
+      "$ref": "#/$defs/envelope.exec.paused"
+    },
+    {
+      "$ref": "#/$defs/envelope.exec.resumed"
+    },
+    {
+      "$ref": "#/$defs/envelope.exec.resume"
+    },
+    {
+      "$ref": "#/$defs/envelope.breakpoint.set"
+    },
+    {
+      "$ref": "#/$defs/envelope.breakpoint.clear"
+    },
+    {
+      "$ref": "#/$defs/envelope.mode.set"
+    },
+    {
+      "$ref": "#/$defs/envelope.hello"
+    },
+    {
+      "$ref": "#/$defs/envelope.hello.ack"
+    }
+  ],
+  "$defs": {
+    "envelope.run.started": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema5"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema9"
+      }
+    },
+    "__schema0": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema1": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema2": {
+      "type": "number"
+    },
+    "__schema3": {
+      "type": "string"
+    },
+    "__schema4": {
+      "type": "string",
+      "const": "run.started"
+    },
+    "__schema5": {
+      "type": "object",
+      "properties": {
+        "app": {
+          "type": "string"
+        },
+        "sdk": {
+          "$ref": "#/$defs/SdkInfo"
+        },
+        "meta": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "app",
+        "sdk"
+      ],
+      "additionalProperties": {}
+    },
+    "SdkInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "version": {
+          "$ref": "#/$defs/__schema7"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema8"
+      }
+    },
+    "__schema6": {
+      "type": "string"
+    },
+    "__schema7": {
+      "type": "string"
+    },
+    "__schema8": {},
+    "__schema9": {},
+    "envelope.run.finished": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema10"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema11"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema12"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema13"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema14"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema15"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema20"
+      }
+    },
+    "__schema10": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema11": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema12": {
+      "type": "number"
+    },
+    "__schema13": {
+      "type": "string"
+    },
+    "__schema14": {
+      "type": "string",
+      "const": "run.finished"
+    },
+    "__schema15": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/RunStatus"
+        },
+        "error": {
+          "$ref": "#/$defs/ErrorInfo"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "additionalProperties": {}
+    },
+    "RunStatus": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "error",
+        "aborted"
+      ]
+    },
+    "ErrorInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/__schema16"
+        },
+        "message": {
+          "$ref": "#/$defs/__schema17"
+        },
+        "stack": {
+          "$ref": "#/$defs/__schema18"
+        }
+      },
+      "required": [
+        "name",
+        "message"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema19"
+      }
+    },
+    "__schema16": {
+      "type": "string"
+    },
+    "__schema17": {
+      "type": "string"
+    },
+    "__schema18": {
+      "type": "string"
+    },
+    "__schema19": {},
+    "__schema20": {},
+    "envelope.graph.hint": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema21"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema22"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema23"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema24"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema25"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema26"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema31"
+      }
+    },
+    "__schema21": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema22": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema23": {
+      "type": "number"
+    },
+    "__schema24": {
+      "type": "string"
+    },
+    "__schema25": {
+      "type": "string",
+      "const": "graph.hint"
+    },
+    "__schema26": {
+      "type": "object",
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GraphNodeHint"
+          }
+        }
+      },
+      "required": [
+        "nodes"
+      ],
+      "additionalProperties": {}
+    },
+    "GraphNodeHint": {
+      "type": "object",
+      "properties": {
+        "nodeId": {
+          "$ref": "#/$defs/__schema27"
+        },
+        "kind": {
+          "$ref": "#/$defs/NodeKind"
+        },
+        "name": {
+          "$ref": "#/$defs/__schema28"
+        },
+        "parentId": {
+          "$ref": "#/$defs/__schema29"
+        }
+      },
+      "required": [
+        "nodeId",
+        "kind",
+        "name"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema30"
+      }
+    },
+    "__schema27": {
+      "type": "string"
+    },
+    "NodeKind": {
+      "type": "string",
+      "enum": [
+        "agent",
+        "llm",
+        "tool",
+        "custom"
+      ]
+    },
+    "__schema28": {
+      "type": "string"
+    },
+    "__schema29": {
+      "type": "string"
+    },
+    "__schema30": {},
+    "__schema31": {},
+    "envelope.node.started": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema32"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema33"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema34"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema35"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema36"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema37"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema38"
+      }
+    },
+    "__schema32": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema33": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema34": {
+      "type": "number"
+    },
+    "__schema35": {
+      "type": "string"
+    },
+    "__schema36": {
+      "type": "string",
+      "const": "node.started"
+    },
+    "__schema37": {
+      "type": "object",
+      "properties": {
+        "nodeId": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/NodeKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "instanceId": {
+          "type": "string"
+        },
+        "input": {}
+      },
+      "required": [
+        "nodeId",
+        "kind",
+        "name",
+        "instanceId",
+        "input"
+      ],
+      "additionalProperties": {}
+    },
+    "__schema38": {},
+    "envelope.node.token": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema39"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema40"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema41"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema42"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema43"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema44"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema48"
+      }
+    },
+    "__schema39": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema40": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema41": {
+      "type": "number"
+    },
+    "__schema42": {
+      "type": "string"
+    },
+    "__schema43": {
+      "type": "string",
+      "const": "node.token"
+    },
+    "__schema44": {
+      "type": "object",
+      "properties": {
+        "nodeId": {
+          "type": "string"
+        },
+        "deltas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TokenDelta"
+          }
+        }
+      },
+      "required": [
+        "nodeId",
+        "deltas"
+      ],
+      "additionalProperties": {}
+    },
+    "TokenDelta": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "$ref": "#/$defs/__schema45"
+        },
+        "v": {
+          "$ref": "#/$defs/__schema46"
+        }
+      },
+      "required": [
+        "t",
+        "v"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema47"
+      }
+    },
+    "__schema45": {
+      "type": "string",
+      "enum": [
+        "text",
+        "reasoning",
+        "tool-args"
+      ]
+    },
+    "__schema46": {
+      "type": "string"
+    },
+    "__schema47": {},
+    "__schema48": {},
+    "envelope.node.finished": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema49"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema50"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema51"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema52"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema53"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema54"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema58"
+      }
+    },
+    "__schema49": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema50": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema51": {
+      "type": "number"
+    },
+    "__schema52": {
+      "type": "string"
+    },
+    "__schema53": {
+      "type": "string",
+      "const": "node.finished"
+    },
+    "__schema54": {
+      "type": "object",
+      "properties": {
+        "nodeId": {
+          "type": "string"
+        },
+        "output": {},
+        "usage": {
+          "$ref": "#/$defs/TokenUsage"
+        },
+        "durationMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "status": {
+          "$ref": "#/$defs/RunStatus"
+        }
+      },
+      "required": [
+        "nodeId",
+        "output",
+        "durationMs",
+        "status"
+      ],
+      "additionalProperties": {}
+    },
+    "TokenUsage": {
+      "type": "object",
+      "properties": {
+        "inputTokens": {
+          "$ref": "#/$defs/__schema55"
+        },
+        "outputTokens": {
+          "$ref": "#/$defs/__schema56"
+        }
+      },
+      "required": [
+        "inputTokens",
+        "outputTokens"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema57"
+      }
+    },
+    "__schema55": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema56": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema57": {},
+    "__schema58": {},
+    "envelope.node.error": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema59"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema60"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema61"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema62"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema63"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema64"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema65"
+      }
+    },
+    "__schema59": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema60": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema61": {
+      "type": "number"
+    },
+    "__schema62": {
+      "type": "string"
+    },
+    "__schema63": {
+      "type": "string",
+      "const": "node.error"
+    },
+    "__schema64": {
+      "type": "object",
+      "properties": {
+        "nodeId": {
+          "type": "string"
+        },
+        "error": {
+          "$ref": "#/$defs/ErrorInfo"
+        }
+      },
+      "required": [
+        "nodeId",
+        "error"
+      ],
+      "additionalProperties": {}
+    },
+    "__schema65": {},
+    "envelope.exec.paused": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema66"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema67"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema68"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema69"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema70"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema71"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema72"
+      }
+    },
+    "__schema66": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema67": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema68": {
+      "type": "number"
+    },
+    "__schema69": {
+      "type": "string"
+    },
+    "__schema70": {
+      "type": "string",
+      "const": "exec.paused"
+    },
+    "__schema71": {
+      "type": "object",
+      "properties": {
+        "pauseId": {
+          "type": "string"
+        },
+        "nodeId": {
+          "type": "string"
+        },
+        "point": {
+          "$ref": "#/$defs/PausePoint"
+        }
+      },
+      "required": [
+        "pauseId",
+        "nodeId",
+        "point"
+      ],
+      "additionalProperties": {}
+    },
+    "PausePoint": {
+      "type": "string",
+      "enum": [
+        "before",
+        "after",
+        "error"
+      ]
+    },
+    "__schema72": {},
+    "envelope.exec.resumed": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema73"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema74"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema75"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema76"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema77"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema78"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema79"
+      }
+    },
+    "__schema73": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema74": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema75": {
+      "type": "number"
+    },
+    "__schema76": {
+      "type": "string"
+    },
+    "__schema77": {
+      "type": "string",
+      "const": "exec.resumed"
+    },
+    "__schema78": {
+      "type": "object",
+      "properties": {
+        "pauseId": {
+          "type": "string"
+        },
+        "action": {
+          "$ref": "#/$defs/ResumeAction"
+        }
+      },
+      "required": [
+        "pauseId",
+        "action"
+      ],
+      "additionalProperties": {}
+    },
+    "ResumeAction": {
+      "type": "string",
+      "enum": [
+        "continue",
+        "retry",
+        "inject",
+        "abort"
+      ]
+    },
+    "__schema79": {},
+    "envelope.exec.resume": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema80"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema81"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema82"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema83"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema84"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema85"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema86"
+      }
+    },
+    "__schema80": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema81": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema82": {
+      "type": "number"
+    },
+    "__schema83": {
+      "type": "string"
+    },
+    "__schema84": {
+      "type": "string",
+      "const": "exec.resume"
+    },
+    "__schema85": {
+      "type": "object",
+      "properties": {
+        "pauseId": {
+          "type": "string"
+        },
+        "action": {
+          "$ref": "#/$defs/ResumeAction"
+        },
+        "output": {}
+      },
+      "required": [
+        "pauseId",
+        "action"
+      ],
+      "additionalProperties": {}
+    },
+    "__schema86": {},
+    "envelope.breakpoint.set": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema87"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema88"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema89"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema90"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema91"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema92"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema97"
+      }
+    },
+    "__schema87": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema88": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema89": {
+      "type": "number"
+    },
+    "__schema90": {
+      "type": "string"
+    },
+    "__schema91": {
+      "type": "string",
+      "const": "breakpoint.set"
+    },
+    "__schema92": {
+      "type": "object",
+      "properties": {
+        "matcher": {
+          "$ref": "#/$defs/BreakpointMatcher"
+        }
+      },
+      "required": [
+        "matcher"
+      ],
+      "additionalProperties": {}
+    },
+    "BreakpointMatcher": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/__schema93"
+        },
+        "name": {
+          "$ref": "#/$defs/__schema94"
+        },
+        "point": {
+          "$ref": "#/$defs/__schema95"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema96"
+      }
+    },
+    "__schema93": {
+      "$ref": "#/$defs/NodeKind"
+    },
+    "__schema94": {
+      "type": "string"
+    },
+    "__schema95": {
+      "$ref": "#/$defs/PausePoint"
+    },
+    "__schema96": {},
+    "__schema97": {},
+    "envelope.breakpoint.clear": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema98"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema99"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema100"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema101"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema102"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema103"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema104"
+      }
+    },
+    "__schema98": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema99": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema100": {
+      "type": "number"
+    },
+    "__schema101": {
+      "type": "string"
+    },
+    "__schema102": {
+      "type": "string",
+      "const": "breakpoint.clear"
+    },
+    "__schema103": {
+      "type": "object",
+      "properties": {
+        "matcher": {
+          "$ref": "#/$defs/BreakpointMatcher"
+        }
+      },
+      "required": [
+        "matcher"
+      ],
+      "additionalProperties": {}
+    },
+    "__schema104": {},
+    "envelope.mode.set": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema105"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema106"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema107"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema108"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema109"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema110"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema111"
+      }
+    },
+    "__schema105": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema106": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema107": {
+      "type": "number"
+    },
+    "__schema108": {
+      "type": "string"
+    },
+    "__schema109": {
+      "type": "string",
+      "const": "mode.set"
+    },
+    "__schema110": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/RunMode"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "additionalProperties": {}
+    },
+    "RunMode": {
+      "type": "string",
+      "enum": [
+        "run",
+        "step"
+      ]
+    },
+    "__schema111": {},
+    "envelope.hello": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema112"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema113"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema114"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema115"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema116"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema117"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema118"
+      }
+    },
+    "__schema112": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema113": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema114": {
+      "type": "number"
+    },
+    "__schema115": {
+      "type": "string"
+    },
+    "__schema116": {
+      "type": "string",
+      "const": "hello"
+    },
+    "__schema117": {
+      "type": "object",
+      "properties": {
+        "versions": {
+          "type": "object",
+          "properties": {
+            "protocol": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "client": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol",
+            "client"
+          ],
+          "additionalProperties": {}
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "app": {
+          "type": "string"
+        },
+        "sdk": {
+          "$ref": "#/$defs/SdkInfo"
+        }
+      },
+      "required": [
+        "versions",
+        "capabilities"
+      ],
+      "additionalProperties": {}
+    },
+    "__schema118": {},
+    "envelope.hello.ack": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema119"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema120"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema121"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema122"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema123"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema124"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema125"
+      }
+    },
+    "__schema119": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema120": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema121": {
+      "type": "number"
+    },
+    "__schema122": {
+      "type": "string"
+    },
+    "__schema123": {
+      "type": "string",
+      "const": "hello.ack"
+    },
+    "__schema124": {
+      "type": "object",
+      "properties": {
+        "versions": {
+          "type": "object",
+          "properties": {
+            "protocol": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "viewer": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol",
+            "viewer"
+          ],
+          "additionalProperties": {}
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "breakpoints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BreakpointMatcher"
+          }
+        },
+        "mode": {
+          "$ref": "#/$defs/RunMode"
+        }
+      },
+      "required": [
+        "versions",
+        "capabilities",
+        "breakpoints",
+        "mode"
+      ],
+      "additionalProperties": {}
+    },
+    "__schema125": {}
+  }
+}
