@@ -10,6 +10,7 @@ import { runImport } from './commands/import.js';
 import { runInit } from './commands/init.js';
 import { runMcp } from './commands/mcp.js';
 import { runRecord } from './commands/record.js';
+import { runRuns } from './commands/runs.js';
 import { openBrowser } from './open-browser.js';
 import { DEFAULT_PORT } from './paths.js';
 import { startServer } from './server.js';
@@ -42,6 +43,10 @@ const commands: Record<string, CommandDef> = {
     summary: 'Serve runs to MCP clients (Claude Code, Cursor) over stdio',
     run: runMcp,
   },
+  runs: {
+    summary: 'List stored runs, prune old ones, or delete them',
+    run: runRuns,
+  },
   record: {
     summary: 'Capture a run to a replayable NDJSON fixture',
     run: runRecord,
@@ -66,6 +71,10 @@ function printHelp(): void {
     '  --install      (init) run the package-manager install',
     '  --write        (init) write a graphmind.example.ts snippet file',
     '  --out <file>   (record) output NDJSON path',
+    '  --prune        (runs) apply the retention policy now',
+    '  --keep <n>     (runs) keep/show the n newest runs',
+    '  --days <n>     (runs) keep runs from the last n days',
+    '  --rm <runId>   (runs) delete one run   --clear --yes  delete all',
     '  -v, --version  Print the version and exit',
     '  -h, --help     Show this help',
   ];

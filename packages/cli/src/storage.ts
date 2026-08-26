@@ -97,6 +97,93 @@ export interface Storage {
   /** Events of one run in ascending `seq` order (paginated via `query`). */
   listEvents(runId: string, query?: EventQuery): EventPage;
 
+  /** Delete one run and its events. Returns false when it did not exist. */
+  deleteRun(id: string): boolean;
+
+  /**
+   * Enforce a retention policy. Runs are kept when they are among the
+   * `keepRuns` most recent AND started within `keepDays`; everything else is
+   * deleted with its events. Unfinished runs newer than `keepDays` are never
+   * pruned (a long-lived run must not vanish while it streams).
+   */
+  prune(policy: RetentionPolicy): PruneResult;
+
+  /** Reclaim file space after large deletions. Best-effort. */
+  vacuum(): void;
+
   /** Flush (checkpoint) and close. Idempotent. */
   close(): void;
+}
+
+export interface RetentionPolicy {
+  /** Keep at most this many runs (most recent first). */
+  keepRuns?: number | undefined;
+  /** Keep runs started within this many days. */
+  keepDays?: number | undefined;
+  /** Wall-clock now, in ms. Injectable for tests. */
+  now?: number | undefined;
+}
+
+export interface PruneResult {
+  runsDeleted: number;
+  eventsDeleted: number;
+}
+
+/** Defaults chosen so a laptop never fills up unattended. */
+export const DEFAULT_RETENTION: { keepRuns: number; keepDays: number } = {
+  keepRuns: 200,
+  keepDays: 30,
+};
+
+/**
+ * Payloads are developer data (prompts, tool results) and are usually small,
+ * but a single embedding array or scraped page can be enormous. Anything past
+ * this is stored as a marker so one event cannot bloat the database or wedge
+ * the viewer.
+ */
+export const MAX_PAYLOAD_BYTES = 512 * 1024;
+
+export interface TruncatedPayload {
+  __graphmindTruncated: true;
+  bytes: number;
+  preview: string;
+}
+
+export function isTruncatedPayload(value: unknown): value is TruncatedPayload {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { __graphmindTruncated?: unknown }).__graphmindTruncated === true
+  );
+}
+
+/**
+ * Serialize a payload, replacing it with a truncation marker when it exceeds
+ * `MAX_PAYLOAD_BYTES`. Returns the JSON text to store plus the effective
+ * payload, so callers can fan out exactly what was persisted.
+ */
+export function serializePayload(
+  payload: unknown,
+  maxBytes: number = MAX_PAYLOAD_BYTES,
+): { json: string; payload: unknown; truncated: boolean } {
+  let json: string;
+  try {
+    json = JSON.stringify(payload) ?? 'null';
+  } catch {
+    // Cyclic or non-serializable: keep the run alive, lose the payload.
+    const marker: TruncatedPayload = {
+      __graphmindTruncated: true,
+      bytes: 0,
+      preview: '[unserializable payload]',
+    };
+    return { json: JSON.stringify(marker), payload: marker, truncated: true };
+  }
+  const bytes = Buffer.byteLength(json);
+  if (bytes <= maxBytes) return { json, payload, truncated: false };
+  const marker: TruncatedPayload = {
+    __graphmindTruncated: true,
+    bytes,
+    preview: json.slice(0, 2000),
+  };
+  return { json: JSON.stringify(marker), payload: marker, truncated: true };
 }

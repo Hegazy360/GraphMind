@@ -1,22 +1,12 @@
 /** CLI argument parsing (hand-rolled, subcommand-shaped). */
 import { describe, expect, it } from 'vitest';
-import { parseCliArgs } from '../src/args.js';
+import { defaultFlags, parseCliArgs } from '../src/args.js';
 
 describe('parseCliArgs', () => {
   it('defaults to the serve command with open enabled', () => {
     const parsed = parseCliArgs([]);
     expect(parsed.command).toBe('serve');
-    expect(parsed.flags).toEqual({
-      port: undefined,
-      db: undefined,
-      open: true,
-      help: false,
-      version: false,
-      live: false,
-      out: undefined,
-      install: false,
-      write: false,
-    });
+    expect(parsed.flags).toEqual(defaultFlags());
     expect(parsed.errors).toEqual([]);
   });
 

@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseEnvelopeJson } from '@graphmind-ai/schema';
 import { describe, expect, it } from 'vitest';
-import type { CliFlags, ParsedCli } from '../src/args.js';
+import { defaultFlags, type CliFlags, type ParsedCli } from '../src/args.js';
 import { runRecord } from '../src/commands/record.js';
 import { FakeApp, startTestServer, waitUntil } from './helpers.js';
 
@@ -15,18 +15,7 @@ function parsedCli(positionals: string[], flags: Partial<CliFlags>): ParsedCli {
   return {
     command: 'record',
     positionals,
-    flags: {
-      port: undefined,
-      db: undefined,
-      open: true,
-      help: false,
-      version: false,
-      live: false,
-      out: undefined,
-      install: false,
-      write: false,
-      ...flags,
-    },
+    flags: { ...defaultFlags(), ...flags },
     errors: [],
   };
 }

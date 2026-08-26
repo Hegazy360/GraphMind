@@ -20,6 +20,18 @@ export interface CliFlags {
   install: boolean;
   /** `graphmind init --write`: write a graphmind.example.ts snippet file. */
   write: boolean;
+  /** `graphmind runs --prune`: apply the retention policy. */
+  prune: boolean;
+  /** `graphmind runs --clear`: delete everything (needs --yes). */
+  clear: boolean;
+  /** Confirmation for destructive commands. */
+  yes: boolean;
+  /** `graphmind runs --keep <n>`: retention count / list length. */
+  keep: number | undefined;
+  /** `graphmind runs --days <n>`: retention window in days. */
+  days: number | undefined;
+  /** `graphmind runs --rm <runId>`: delete one run. */
+  rm: string | undefined;
 }
 
 export interface ParsedCli {
@@ -35,8 +47,9 @@ function splitInline(token: string): [string, string | undefined] {
   return [token.slice(0, eq), token.slice(eq + 1)];
 }
 
-export function parseCliArgs(argv: string[]): ParsedCli {
-  const flags: CliFlags = {
+/** Fresh default flags. Exported so tests and callers never re-list them. */
+export function defaultFlags(): CliFlags {
+  return {
     port: undefined,
     db: undefined,
     open: true,
@@ -46,7 +59,17 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     out: undefined,
     install: false,
     write: false,
-  };
+    prune: false,
+    clear: false,
+    yes: false,
+    keep: undefined,
+    days: undefined,
+    rm: undefined,
+  };;
+}
+
+export function parseCliArgs(argv: string[]): ParsedCli {
+  const flags: CliFlags = defaultFlags();
   const positionals: string[] = [];
   const errors: string[] = [];
 
@@ -107,6 +130,37 @@ export function parseCliArgs(argv: string[]): ParsedCli {
       case '--write':
         flags.write = true;
         break;
+      case '--prune':
+        flags.prune = true;
+        break;
+      case '--clear':
+        flags.clear = true;
+        break;
+      case '--yes':
+      case '-y':
+        flags.yes = true;
+        break;
+      case '--keep': {
+        const raw = takeValue('--keep', inline, next);
+        if (raw === undefined) break;
+        const n = Number(raw);
+        if (!Number.isInteger(n) || n < 0) errors.push(`--keep must be a non-negative integer (got "${raw}")`);
+        else flags.keep = n;
+        break;
+      }
+      case '--days': {
+        const raw = takeValue('--days', inline, next);
+        if (raw === undefined) break;
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n < 0) errors.push(`--days must be a non-negative number (got "${raw}")`);
+        else flags.days = n;
+        break;
+      }
+      case '--rm': {
+        const raw = takeValue('--rm', inline, next);
+        if (raw !== undefined) flags.rm = raw;
+        break;
+      }
       case '--out': {
         const raw = takeValue('--out', inline, next);
         if (raw !== undefined) flags.out = raw;

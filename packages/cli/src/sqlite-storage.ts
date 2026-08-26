@@ -7,14 +7,18 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import type { RunStatus } from '@graphmind-ai/schema';
-import type {
-  EventPage,
-  EventQuery,
-  RunLifecycleStatus,
-  RunSource,
-  RunSummary,
-  Storage,
-  StoredEvent,
+import {
+  DEFAULT_RETENTION,
+  serializePayload,
+  type EventPage,
+  type EventQuery,
+  type PruneResult,
+  type RetentionPolicy,
+  type RunLifecycleStatus,
+  type RunSource,
+  type RunSummary,
+  type Storage,
+  type StoredEvent,
 } from './storage.js';
 
 const DDL = `
@@ -109,6 +113,9 @@ export class SqliteStorage implements Storage {
   private readonly stmtListRuns: StatementSync;
   private readonly stmtListEvents: StatementSync;
   private readonly stmtCountEvents: StatementSync;
+  private readonly stmtDeleteRun: StatementSync;
+  private readonly stmtDeleteRunEvents: StatementSync;
+  private readonly stmtPrunableRuns: StatementSync;
 
   constructor(public readonly path: string) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
@@ -138,6 +145,19 @@ export class SqliteStorage implements Storage {
        WHERE run_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?`,
     );
     this.stmtCountEvents = this.db.prepare(`SELECT COUNT(*) AS n FROM events WHERE run_id = ?`);
+    this.stmtDeleteRun = this.db.prepare(`DELETE FROM runs WHERE id = ?`);
+    this.stmtDeleteRunEvents = this.db.prepare(`DELETE FROM events WHERE run_id = ?`);
+    // Prunable = outside the keep-window by position OR older than the cutoff,
+    // except runs still streaming (finished_at IS NULL) inside the cutoff.
+    this.stmtPrunableRuns = this.db.prepare(
+      `SELECT id FROM (
+         SELECT id, started_at, finished_at,
+                ROW_NUMBER() OVER (ORDER BY started_at DESC, id DESC) AS rn
+         FROM runs
+       )
+       WHERE (rn > ? OR started_at < ?)
+         AND NOT (finished_at IS NULL AND started_at >= ?)`,
+    );
   }
 
   ensureRun(run: {
@@ -165,9 +185,46 @@ export class SqliteStorage implements Storage {
       event.ts,
       event.type,
       event.nodeId,
-      JSON.stringify(event.payload) ?? 'null',
+      serializePayload(event.payload).json,
     );
     return result.changes > 0;
+  }
+
+  deleteRun(id: string): boolean {
+    this.stmtDeleteRunEvents.run(id);
+    return this.stmtDeleteRun.run(id).changes > 0;
+  }
+
+  prune(policy: RetentionPolicy = {}): PruneResult {
+    const keepRuns = policy.keepRuns ?? DEFAULT_RETENTION.keepRuns;
+    const keepDays = policy.keepDays ?? DEFAULT_RETENTION.keepDays;
+    const now = policy.now ?? Date.now();
+    const cutoff = now - keepDays * 24 * 60 * 60 * 1000;
+
+    const rows = this.stmtPrunableRuns.all(keepRuns, cutoff, cutoff) as unknown as { id: string }[];
+    if (rows.length === 0) return { runsDeleted: 0, eventsDeleted: 0 };
+
+    let eventsDeleted = 0;
+    this.db.exec('BEGIN');
+    try {
+      for (const { id } of rows) {
+        eventsDeleted += Number(this.stmtDeleteRunEvents.run(id).changes);
+        this.stmtDeleteRun.run(id);
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return { runsDeleted: rows.length, eventsDeleted };
+  }
+
+  vacuum(): void {
+    try {
+      this.db.exec('VACUUM;');
+    } catch {
+      // best-effort: a busy database simply keeps its pages
+    }
   }
 
   getRun(id: string): RunSummary | undefined {

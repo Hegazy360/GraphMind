@@ -22,7 +22,7 @@ import { openBrowser } from './open-browser.js';
 import { DEFAULT_PORT, resolveDbPath, resolveViewerDist, type EnvLike } from './paths.js';
 import { SqliteStorage } from './sqlite-storage.js';
 import { serveViewer } from './static-site.js';
-import type { Storage, StoredEvent } from './storage.js';
+import { DEFAULT_RETENTION, type Storage, type StoredEvent } from './storage.js';
 import type { WireEnvelope } from './ui-protocol.js';
 import { VERSION } from './version.js';
 
@@ -85,6 +85,25 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
   const log = options.log ?? ((message: string) => console.log(message));
 
   const storage = options.storage ?? new SqliteStorage(dbPath);
+
+  // Keep the local database from growing without bound. Opt out with
+  // GRAPHMIND_RETENTION=off; tune with GRAPHMIND_KEEP_RUNS / _KEEP_DAYS.
+  if (options.storage === undefined && (env['GRAPHMIND_RETENTION'] ?? '').toLowerCase() !== 'off') {
+    try {
+      const keepRuns = Number(env['GRAPHMIND_KEEP_RUNS'] ?? DEFAULT_RETENTION.keepRuns);
+      const keepDays = Number(env['GRAPHMIND_KEEP_DAYS'] ?? DEFAULT_RETENTION.keepDays);
+      const pruned = storage.prune({
+        keepRuns: Number.isFinite(keepRuns) ? keepRuns : DEFAULT_RETENTION.keepRuns,
+        keepDays: Number.isFinite(keepDays) ? keepDays : DEFAULT_RETENTION.keepDays,
+      });
+      if (pruned.runsDeleted > 0) {
+        log(`Pruned ${pruned.runsDeleted} old run(s), ${pruned.eventsDeleted} event(s).`);
+      }
+    } catch {
+      // retention is housekeeping: never block startup on it
+    }
+  }
+
   const hub = new Hub(storage, log);
 
   const app = new Hono();
