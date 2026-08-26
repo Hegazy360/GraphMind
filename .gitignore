@@ -1,0 +1,18 @@
+# deps / build
+node_modules/
+dist/
+*.tsbuildinfo
+
+# env & secrets
+.env
+.env.*
+*.local
+
+# vercel
+.vercel/
+
+# internal strategy docs — never published
+internal/
+
+# os / editor
+.DS_Store
