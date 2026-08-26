@@ -1,0 +1,21 @@
+{
+  "name": "e2e-smoke",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "e2e": "tsx src/e2e.ts"
+  },
+  "dependencies": {
+    "@graphmind/ai-sdk": "workspace:*",
+    "@graphmind/schema": "workspace:*",
+    "ai": "^7.0.79",
+    "ws": "^8.18.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "^3.0.0",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.5.0",
+    "tsx": "^4.19.0"
+  }
+}

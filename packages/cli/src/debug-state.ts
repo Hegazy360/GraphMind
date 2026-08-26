@@ -19,9 +19,21 @@ function canonicalKey(value: unknown): string {
   return `{${entries.join(',')}}`;
 }
 
+/**
+ * Pause-on-error is the product's headline mechanic, so a fresh debug
+ * session arms it by default; the viewer shows it as a removable breakpoint.
+ */
+const DEFAULT_BREAKPOINTS: BreakpointMatcher[] = [{ point: 'error' }];
+
 export class DebugState {
   private readonly matchers = new Map<string, BreakpointMatcher>();
   mode: RunMode = 'run';
+
+  constructor() {
+    for (const matcher of DEFAULT_BREAKPOINTS) {
+      this.matchers.set(canonicalKey(matcher), matcher);
+    }
+  }
 
   get breakpoints(): BreakpointMatcher[] {
     return [...this.matchers.values()];

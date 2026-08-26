@@ -1,0 +1,1428 @@
+[
+  {
+    "gm": 1,
+    "seq": 1,
+    "ts": 1787702400000,
+    "runId": "run-lisbon-7f2e",
+    "type": "run.started",
+    "payload": {
+      "app": "trip-planner",
+      "sdk": {
+        "name": "ai",
+        "version": "7.0.79"
+      },
+      "meta": {
+        "env": "dev",
+        "entry": "examples/trip-planner/main.ts"
+      }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 2,
+    "ts": 1787702400320,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "agent:trip-planner",
+      "kind": "agent",
+      "name": "trip-planner",
+      "instanceId": "run-lisbon-7f2e",
+      "input": {
+        "prompt": "Plan a 4-day trip to Lisbon in October for 2 people, budget €1,800."
+      }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 3,
+    "ts": 1787702400460,
+    "runId": "run-lisbon-7f2e",
+    "type": "graph.hint",
+    "payload": {
+      "nodes": [
+        {
+          "nodeId": "agent:trip-planner",
+          "kind": "agent",
+          "name": "trip-planner"
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "name": "llm step",
+          "parentId": "agent:trip-planner"
+        },
+        {
+          "nodeId": "tool:searchFlights",
+          "kind": "tool",
+          "name": "searchFlights",
+          "parentId": "llm:step"
+        },
+        {
+          "nodeId": "tool:searchHotels",
+          "kind": "tool",
+          "name": "searchHotels",
+          "parentId": "llm:step"
+        },
+        {
+          "nodeId": "tool:getWeather",
+          "kind": "tool",
+          "name": "getWeather",
+          "parentId": "llm:step"
+        },
+        {
+          "nodeId": "tool:currencyConvert",
+          "kind": "tool",
+          "name": "currencyConvert",
+          "parentId": "llm:step"
+        },
+        {
+          "nodeId": "tool:webSearch",
+          "kind": "tool",
+          "name": "webSearch",
+          "parentId": "llm:step",
+          "providerExecuted": true,
+          "ungated": true
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 4,
+    "ts": 1787702400480,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "llm:step",
+      "parentId": "agent:trip-planner",
+      "kind": "llm",
+      "name": "llm step",
+      "instanceId": "inv1:s1",
+      "input": {
+        "model": "claude-sonnet-4-5",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a meticulous travel planner. Use tools for live data."
+          },
+          {
+            "role": "user",
+            "content": "Plan a 4-day trip to Lisbon in October for 2 people, budget €1,800."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 5,
+    "ts": 1787702400560,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "reasoning",
+          "v": "Budget of €1,800 for two "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 6,
+    "ts": 1787702400630,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "reasoning",
+          "v": "over four days is workable "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 7,
+    "ts": 1787702400700,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "reasoning",
+          "v": "if flights stay under €500 "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 8,
+    "ts": 1787702400770,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "reasoning",
+          "v": "total. I should check flights "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 9,
+    "ts": 1787702400840,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "reasoning",
+          "v": "and hotels in parallel before "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 10,
+    "ts": 1787702400910,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "reasoning",
+          "v": "committing to a neighborhood. "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 11,
+    "ts": 1787702401040,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "I'll start by finding "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 12,
+    "ts": 1787702401125,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "flight options for October "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 13,
+    "ts": 1787702401210,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "8–12 and checking hotel "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 14,
+    "ts": 1787702401295,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "availability in Alfama and "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 15,
+    "ts": 1787702401380,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "Baixa in parallel."
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 16,
+    "ts": 1787702401585,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "llm:step",
+      "instanceId": "inv1:s1",
+      "output": {
+        "toolCalls": [
+          {
+            "tool": "searchFlights",
+            "args": {
+              "from": "VIE",
+              "to": "LIS",
+              "depart": "2026-10-08",
+              "return": "2026-10-12",
+              "pax": 2
+            }
+          },
+          {
+            "tool": "searchHotels",
+            "args": {
+              "city": "Lisbon",
+              "checkIn": "2026-10-08",
+              "nights": 4,
+              "guests": 2
+            }
+          }
+        ]
+      },
+      "usage": {
+        "inputTokens": 612,
+        "outputTokens": 187
+      },
+      "durationMs": 2450,
+      "status": "ok"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 17,
+    "ts": 1787702401665,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "tool:searchFlights",
+      "parentId": "llm:step",
+      "kind": "tool",
+      "name": "searchFlights",
+      "instanceId": "call_f1",
+      "input": {
+        "from": "VIE",
+        "to": "LIS",
+        "depart": "2026-10-08",
+        "return": "2026-10-12",
+        "pax": 2
+      }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 18,
+    "ts": 1787702401705,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "tool:searchHotels",
+      "parentId": "llm:step",
+      "kind": "tool",
+      "name": "searchHotels",
+      "instanceId": "call_h1",
+      "input": {
+        "city": "Lisbon",
+        "checkIn": "2026-10-08",
+        "nights": 4,
+        "guests": 2
+      }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 19,
+    "ts": 1787702403025,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "tool:searchFlights",
+      "instanceId": "call_f1",
+      "output": {
+        "options": [
+          {
+            "carrier": "TAP",
+            "flight": "TP1273",
+            "price": "€214 pp",
+            "stops": 0,
+            "depart": "07:05",
+            "arrive": "09:10"
+          },
+          {
+            "carrier": "Ryanair",
+            "flight": "FR7332",
+            "price": "€162 pp",
+            "stops": 0,
+            "depart": "16:40",
+            "arrive": "18:55"
+          }
+        ],
+        "currency": "EUR"
+      },
+      "durationMs": 1340,
+      "status": "ok"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 20,
+    "ts": 1787702403525,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "tool:searchHotels",
+      "instanceId": "call_h1",
+      "output": {
+        "hotels": [
+          {
+            "name": "Memmo Alfama",
+            "rating": 4.6,
+            "pricePerNight": "€138",
+            "neighborhood": "Alfama"
+          },
+          {
+            "name": "Hotel da Baixa",
+            "rating": 4.7,
+            "pricePerNight": "€152",
+            "neighborhood": "Baixa"
+          },
+          {
+            "name": "Casa Balthazar",
+            "rating": 4.8,
+            "pricePerNight": "€171",
+            "neighborhood": "Chiado"
+          }
+        ]
+      },
+      "durationMs": 1820,
+      "status": "ok"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 21,
+    "ts": 1787702403715,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "llm:step",
+      "parentId": "agent:trip-planner",
+      "kind": "llm",
+      "name": "llm step",
+      "instanceId": "inv1:s2",
+      "input": {
+        "model": "claude-sonnet-4-5",
+        "messages": "« 4 messages + 2 tool results »"
+      }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 22,
+    "ts": 1787702403805,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "TAP at €214 keeps flights "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 23,
+    "ts": 1787702403885,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "at €428 total; Memmo Alfama "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 24,
+    "ts": 1787702403965,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "fits the budget with €1,372 "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 25,
+    "ts": 1787702404045,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "(~76%) left over. Checking the "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 26,
+    "ts": 1787702404125,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "weather window, October events, and "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 27,
+    "ts": 1787702404205,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "converting the remaining budget for "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 28,
+    "ts": 1787702404285,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "the card that bills in "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 29,
+    "ts": 1787702404365,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "dollars."
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 30,
+    "ts": 1787702404545,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "llm:step",
+      "instanceId": "inv1:s2",
+      "output": {
+        "toolCalls": [
+          {
+            "tool": "getWeather",
+            "args": {
+              "city": "Lisbon",
+              "range": "Oct 8–12"
+            }
+          },
+          {
+            "tool": "getWeather",
+            "args": {
+              "city": "Sintra",
+              "range": "Oct 10"
+            }
+          },
+          {
+            "tool": "webSearch",
+            "args": {
+              "query": "Lisbon events October 2026"
+            }
+          },
+          {
+            "tool": "currencyConvert",
+            "args": {
+              "amount": 1372,
+              "from": "EUR",
+              "to": "USD"
+            }
+          }
+        ]
+      },
+      "usage": {
+        "inputTokens": 1418,
+        "outputTokens": 156
+      },
+      "durationMs": 1980,
+      "status": "ok"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 31,
+    "ts": 1787702404625,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "tool:getWeather",
+      "parentId": "llm:step",
+      "kind": "tool",
+      "name": "getWeather",
+      "instanceId": "call_w1",
+      "input": {
+        "city": "Lisbon",
+        "range": "Oct 8–12"
+      }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 32,
+    "ts": 1787702404675,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "tool:getWeather",
+      "parentId": "llm:step",
+      "kind": "tool",
+      "name": "getWeather",
+      "instanceId": "call_w2",
+      "input": {
+        "city": "Sintra",
+        "range": "Oct 10"
+      }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 33,
+    "ts": 1787702404695,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "tool:webSearch",
+      "parentId": "llm:step",
+      "kind": "tool",
+      "name": "webSearch",
+      "instanceId": "call_s1",
+      "input": {
+        "query": "Lisbon events October 2026"
+      },
+      "providerExecuted": true,
+      "ungated": true
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 34,
+    "ts": 1787702404715,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "tool:currencyConvert",
+      "parentId": "llm:step",
+      "kind": "tool",
+      "name": "currencyConvert",
+      "instanceId": "call_c1",
+      "input": {
+        "amount": 1372,
+        "from": "EUR",
+        "to": "USD"
+      }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 35,
+    "ts": 1787702404925,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "tool:webSearch",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "Feira da Ladra flea market "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 36,
+    "ts": 1787702405085,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "tool:webSearch",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "(Tue/Sat) · Festival Iminente, Oct "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 37,
+    "ts": 1787702405245,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "tool:webSearch",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "9–11 · Web Summit warm-up "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 38,
+    "ts": 1787702405405,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "tool:webSearch",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "talks…"
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 39,
+    "ts": 1787702405455,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "tool:getWeather",
+      "instanceId": "call_w2",
+      "output": {
+        "city": "Sintra",
+        "forecast": "mist then sun",
+        "highC": 21,
+        "lowC": 14,
+        "rainChance": 0.2
+      },
+      "durationMs": 760,
+      "status": "ok"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 40,
+    "ts": 1787702405685,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "tool:webSearch",
+      "instanceId": "call_s1",
+      "output": {
+        "results": [
+          {
+            "title": "Festival Iminente 2026",
+            "date": "Oct 9–11",
+            "area": "Marvila"
+          },
+          {
+            "title": "Feira da Ladra",
+            "date": "Tue & Sat",
+            "area": "Alfama"
+          }
+        ]
+      },
+      "durationMs": 980,
+      "status": "ok",
+      "providerExecuted": true,
+      "ungated": true,
+      "streaming": true,
+      "chunks": 4
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 41,
+    "ts": 1787702405755,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "tool:getWeather",
+      "instanceId": "call_w1",
+      "output": {
+        "city": "Lisbon",
+        "forecast": "sunny",
+        "highC": 24,
+        "lowC": 16,
+        "rainChance": 0.05
+      },
+      "durationMs": 1080,
+      "status": "ok"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 42,
+    "ts": 1787702406275,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.error",
+    "payload": {
+      "nodeId": "tool:currencyConvert",
+      "error": {
+        "name": "RateLimitError",
+        "message": "fx.live quota exceeded (HTTP 429) — retry after 30s",
+        "stack": "RateLimitError: fx.live quota exceeded (HTTP 429) — retry after 30s\n    at FxClient.request (src/lib/fx-client.ts:88:13)\n    at FxClient.convert (src/lib/fx-client.ts:41:22)\n    at Object.execute (src/tools/currency-convert.ts:19:28)\n    at async runToolCall (node_modules/ai/dist/index.mjs:2841:22)"
+      }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 43,
+    "ts": 1787702406335,
+    "runId": "run-lisbon-7f2e",
+    "type": "exec.paused",
+    "payload": {
+      "pauseId": "pause-8f31",
+      "nodeId": "tool:currencyConvert",
+      "point": "error"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 44,
+    "ts": 1787702406675,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "tool:currencyConvert",
+      "instanceId": "call_c1",
+      "output": null,
+      "durationMs": 1710,
+      "status": "error"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 45,
+    "ts": 1787702406855,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "tool:currencyConvert",
+      "parentId": "llm:step",
+      "kind": "tool",
+      "name": "currencyConvert",
+      "instanceId": "call_c2",
+      "input": {
+        "amount": 1372,
+        "from": "EUR",
+        "to": "USD"
+      }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 46,
+    "ts": 1787702407415,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "tool:currencyConvert",
+      "instanceId": "call_c2",
+      "output": {
+        "rate": 1.0834,
+        "converted": "$1,486.43",
+        "asOf": "2026-10-01T09:12:00Z"
+      },
+      "durationMs": 540,
+      "status": "ok"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 47,
+    "ts": 1787702407625,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "llm:step",
+      "parentId": "agent:trip-planner",
+      "kind": "llm",
+      "name": "llm step",
+      "instanceId": "inv1:s3",
+      "input": {
+        "model": "claude-sonnet-4-5",
+        "messages": "« 8 messages + 6 tool results »"
+      }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 48,
+    "ts": 1787702407735,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "Here is your 4-day "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 49,
+    "ts": 1787702407810,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "Lisbon plan. Fly TAP "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 50,
+    "ts": 1787702407885,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "TP1273 on Oct 8 "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 51,
+    "ts": 1787702407960,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "(€428 for two), stay "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 52,
+    "ts": 1787702408035,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "at Memmo Alfama (€552 "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 53,
+    "ts": 1787702408110,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "for 4 nights). Day "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 54,
+    "ts": 1787702408185,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "1 — Alfama: castle "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 55,
+    "ts": 1787702408260,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "at opening time, miradouros "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 56,
+    "ts": 1787702408335,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "at dusk, fado at "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 57,
+    "ts": 1787702408410,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "Tasca do Chico. Day "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 58,
+    "ts": 1787702408485,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "2 — Belém: pastéis "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 59,
+    "ts": 1787702408560,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "warm from the oven, "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 60,
+    "ts": 1787702408635,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "MAAT, sunset by the "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 61,
+    "ts": 1787702408710,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "river. Day 3 — "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 62,
+    "ts": 1787702408785,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "Sintra day trip: morning "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 63,
+    "ts": 1787702408860,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "mist burns off by "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 64,
+    "ts": 1787702408935,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "noon; Pena then Quinta "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 65,
+    "ts": 1787702409010,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "da Regaleira. Day 4 "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 66,
+    "ts": 1787702409085,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "— Baixa & Chiado: "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 67,
+    "ts": 1787702409160,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "Time Out Market lunch, "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 68,
+    "ts": 1787702409235,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "Tram 28 loop, Festival "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 69,
+    "ts": 1787702409310,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "Iminente in Marvila. Weather "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 70,
+    "ts": 1787702409385,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "holds at 21–24°C with "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 71,
+    "ts": 1787702409460,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "almost no rain. Remaining "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 72,
+    "ts": 1787702409535,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "budget converts to $1,486.43 "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 73,
+    "ts": 1787702409610,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "for the USD card. "
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 74,
+    "ts": 1787702409685,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.token",
+    "payload": {
+      "nodeId": "llm:step",
+      "deltas": [
+        {
+          "t": "text",
+          "v": "Boa viagem!"
+        }
+      ]
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 75,
+    "ts": 1787702409890,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "llm:step",
+      "instanceId": "inv1:s3",
+      "output": {
+        "finishReason": "stop",
+        "text": "« itinerary · 121 words »"
+      },
+      "usage": {
+        "inputTokens": 2034,
+        "outputTokens": 412
+      },
+      "durationMs": 5320,
+      "status": "ok"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 76,
+    "ts": 1787702410060,
+    "runId": "run-lisbon-7f2e",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "agent:trip-planner",
+      "instanceId": "run-lisbon-7f2e",
+      "output": {
+        "steps": 3,
+        "toolCalls": 7,
+        "result": "4-day Lisbon itinerary within €1,800 budget"
+      },
+      "usage": {
+        "inputTokens": 4064,
+        "outputTokens": 755
+      },
+      "durationMs": 10060,
+      "status": "ok"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 77,
+    "ts": 1787702410120,
+    "runId": "run-lisbon-7f2e",
+    "type": "run.finished",
+    "payload": {
+      "status": "ok"
+    }
+  }
+]

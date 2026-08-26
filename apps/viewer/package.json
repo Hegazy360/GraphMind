@@ -1,0 +1,39 @@
+{
+  "name": "viewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GraphMind debugger UI — live React Flow canvas for agent runs.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "gen:fixture": "node ./scripts/gen-fixture.mjs"
+  },
+  "dependencies": {
+    "@graphmind/schema": "workspace:*",
+    "@xyflow/react": "^12.8.6",
+    "elkjs": "^0.11.0",
+    "match-sorter": "^8.1.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/node": "^26.3.0",
+    "@types/react": "^19.2.4",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.4",
+    "tailwindcss": "^4.1.18",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.4",
+    "vitest": "^4.1.11"
+  }
+}

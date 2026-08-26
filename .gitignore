@@ -16,3 +16,6 @@ internal/
 
 # os / editor
 .DS_Store
+
+# viewer build artifact copied into cli for serving
+packages/cli/viewer-dist/

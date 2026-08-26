@@ -32,7 +32,7 @@ describe('handshake', () => {
     const app = await FakeApp.connect(port, { app: 'demo-app' });
     expect(app.ack).toBeDefined();
     expect(app.ack?.versions.protocol).toBe(1);
-    expect(app.ack?.breakpoints).toEqual([]);
+    expect(app.ack?.breakpoints).toEqual([{ point: 'error' }]);
     expect(app.ack?.mode).toBe('run');
     expect(app.ack?.capabilities).toEqual(['pause', 'step']);
     await app.close();
@@ -47,7 +47,7 @@ describe('handshake', () => {
     await ui.next((m) => m.type === 'state' && m.mode === 'step', 'state after mode.set');
 
     const app = await FakeApp.connect(port);
-    expect(app.ack?.breakpoints).toEqual([{ kind: 'tool', name: 'searchFlights' }]);
+    expect(app.ack?.breakpoints).toEqual([{ point: 'error' }, { kind: 'tool', name: 'searchFlights' }]);
     expect(app.ack?.mode).toBe('step');
     await app.close();
     await ui.close();
@@ -338,7 +338,7 @@ describe('control relay', () => {
     const set = await app.nextControl((e) => e.type === 'breakpoint.set');
     expect(set.payload).toEqual({ matcher: { name: 'searchFlights' } });
     const state1 = await observer.next((m) => m.type === 'state', 'state broadcast');
-    expect(state1.type === 'state' && state1.breakpoints).toEqual([{ name: 'searchFlights' }]);
+    expect(state1.type === 'state' && state1.breakpoints).toEqual([{ point: 'error' }, { name: 'searchFlights' }]);
 
     ui.control('mode.set', '*', { mode: 'step' });
     const mode = await app.nextControl((e) => e.type === 'mode.set');
@@ -352,10 +352,10 @@ describe('control relay', () => {
     ui.control('breakpoint.clear', '*', { matcher: { name: 'searchFlights' } });
     await app.nextControl((e) => e.type === 'breakpoint.clear');
     const state3 = await observer.next(
-      (m) => m.type === 'state' && m.breakpoints.length === 0,
+      (m) => m.type === 'state' && m.breakpoints.length === 1,
       'cleared state broadcast',
     );
-    expect(state3.type === 'state' && state3.breakpoints).toEqual([]);
+    expect(state3.type === 'state' && state3.breakpoints).toEqual([{ point: 'error' }]);
 
     await app.close();
     await ui.close();

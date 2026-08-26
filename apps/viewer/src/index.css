@@ -1,0 +1,839 @@
+@import 'tailwindcss';
+@import '@xyflow/react/dist/style.css';
+
+/* ── design tokens (dark-first, light via prefers-color-scheme) ─────────── */
+:root {
+  color-scheme: dark;
+  --bg: #0b0d11;
+  --bg-canvas: #0d1015;
+  --surface: #131722;
+  --surface-2: #1a1f2b;
+  --surface-3: #222836;
+  --border: #222836;
+  --border-strong: #313949;
+  --text: #e8ebf1;
+  --text-dim: #98a0b3;
+  --text-faint: #5d6678;
+  --accent: #6ca0ff;
+  --accent-strong: #86b3ff;
+  --accent-soft: rgba(108, 160, 255, 0.13);
+  --ok: #44bd7c;
+  --ok-soft: rgba(68, 189, 124, 0.13);
+  --err: #f25a6e;
+  --err-soft: rgba(242, 90, 110, 0.12);
+  --amber: #efb544;
+  --amber-soft: rgba(239, 181, 68, 0.13);
+  --ghost: #38404f;
+  --edge: #333b4c;
+  --edge-done: #47526a;
+  --grid-dot: #1c212c;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 4px 10px rgba(0, 0, 0, 0.4), 0 24px 48px -16px rgba(0, 0, 0, 0.55);
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, 'Cascadia Code', monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f7f8fa;
+    --bg-canvas: #f2f4f7;
+    --surface: #ffffff;
+    --surface-2: #f4f5f8;
+    --surface-3: #e9ecf1;
+    --border: #e3e6ec;
+    --border-strong: #ccd2dd;
+    --text: #1b202b;
+    --text-dim: #5d6577;
+    --text-faint: #98a0b0;
+    --accent: #3a72e0;
+    --accent-strong: #2d5fc4;
+    --accent-soft: rgba(58, 114, 224, 0.1);
+    --ok: #1d9e5f;
+    --ok-soft: rgba(29, 158, 95, 0.1);
+    --err: #d63d55;
+    --err-soft: rgba(214, 61, 85, 0.09);
+    --amber: #c98a12;
+    --amber-soft: rgba(201, 138, 18, 0.12);
+    --ghost: #c3c9d4;
+    --edge: #c8cedb;
+    --edge-done: #a8b1c2;
+    --grid-dot: #dde1e8;
+    --shadow: 0 1px 2px rgba(23, 30, 45, 0.06), 0 8px 24px -12px rgba(23, 30, 45, 0.12);
+    --shadow-pop: 0 4px 10px rgba(23, 30, 45, 0.08), 0 24px 48px -16px rgba(23, 30, 45, 0.18);
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* ── scrollbars ─────────────────────────────────────────────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ── React Flow chrome ──────────────────────────────────────────────────── */
+.react-flow {
+  background: var(--bg-canvas);
+}
+.react-flow__attribution {
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 9px;
+}
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+  min-width: 0;
+  min-height: 0;
+  border: none;
+}
+/* Animate layout moves (ELK re-arranges) — panning moves the viewport, not
+   nodes, so this only fires on structural change. */
+.react-flow__node {
+  transition: transform 480ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.react-flow__node.dragging {
+  transition: none;
+}
+
+/* ── edges ──────────────────────────────────────────────────────────────── */
+.react-flow__edge-path {
+  stroke: var(--edge);
+  stroke-width: 1.5;
+  transition: stroke 300ms ease;
+}
+.gm-edge-done .react-flow__edge-path {
+  stroke: var(--edge-done);
+}
+.gm-edge-ghost .react-flow__edge-path {
+  stroke: var(--edge);
+  stroke-dasharray: 4 5;
+  opacity: 0.6;
+}
+.gm-edge-active .react-flow__edge-path {
+  stroke: var(--accent);
+  stroke-width: 1.8;
+  stroke-dasharray: 6 8;
+  animation: gm-edge-flow 700ms linear infinite;
+}
+.gm-edge-paused .react-flow__edge-path {
+  stroke: var(--amber);
+  stroke-width: 1.8;
+}
+.gm-edge-error .react-flow__edge-path {
+  stroke: var(--err);
+  stroke-width: 1.8;
+}
+@keyframes gm-edge-flow {
+  to {
+    stroke-dashoffset: -14;
+  }
+}
+
+/* ── node cards ─────────────────────────────────────────────────────────── */
+.gm-node {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 10px 12px;
+  cursor: pointer;
+  position: relative;
+  transition:
+    border-color 250ms ease,
+    box-shadow 250ms ease,
+    opacity 250ms ease;
+}
+.gm-node:hover {
+  border-color: var(--border-strong);
+}
+
+.gm-node--ghost {
+  background: color-mix(in srgb, var(--surface) 40%, transparent);
+  border-style: dashed;
+  border-color: var(--ghost);
+  box-shadow: none;
+}
+.gm-node--ghost .gm-node-title,
+.gm-node--ghost .gm-node-kind {
+  color: var(--text-faint);
+}
+
+.gm-node--running {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  animation: gm-node-pulse 2.2s ease-in-out infinite;
+}
+.gm-node--ok {
+  border-color: var(--border);
+}
+.gm-node--error {
+  border-color: color-mix(in srgb, var(--err) 65%, var(--border));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--err) 45%, transparent),
+    var(--shadow);
+}
+.gm-node--paused {
+  border-color: color-mix(in srgb, var(--amber) 65%, var(--border));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--amber) 45%, transparent),
+    var(--shadow);
+}
+.gm-node--selected,
+.gm-node--selected:hover {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--accent),
+    var(--shadow);
+}
+
+@keyframes gm-node-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
+      0 0 18px -2px color-mix(in srgb, var(--accent) 30%, transparent),
+      var(--shadow);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 15%, transparent),
+      0 0 6px -2px color-mix(in srgb, var(--accent) 10%, transparent),
+      var(--shadow);
+  }
+}
+
+.gm-node-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.gm-node-kind {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+.gm-node-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.gm-node-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* status dot */
+.gm-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--ghost);
+}
+.gm-dot--running {
+  background: var(--accent);
+  animation: gm-dot-blink 1.4s ease-in-out infinite;
+}
+.gm-dot--ok {
+  background: var(--ok);
+}
+.gm-dot--error {
+  background: var(--err);
+}
+.gm-dot--paused {
+  background: var(--amber);
+}
+@keyframes gm-dot-blink {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* status pill (tool nodes) */
+.gm-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 99px;
+  text-transform: uppercase;
+}
+.gm-pill--idle {
+  color: var(--text-faint);
+  background: var(--surface-2);
+}
+.gm-pill--running {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+.gm-pill--ok {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+.gm-pill--error {
+  color: var(--err);
+  background: var(--err-soft);
+}
+.gm-pill--paused {
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+
+.gm-pill--injected {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* ungated (provider-executed) affordance — replaces the breakpoint dot */
+.gm-ungated {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-faint);
+  border: 1.5px dashed var(--text-faint);
+  flex-shrink: 0;
+  cursor: help;
+}
+
+/* instance count badge */
+.gm-badge-count {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: var(--surface-3);
+  border-radius: 99px;
+  padding: 1px 7px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* breakpoint dot toggle */
+.gm-bp {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-faint);
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    transform 150ms ease;
+}
+.gm-bp:hover {
+  border-color: var(--err);
+  transform: scale(1.15);
+}
+.gm-bp--set {
+  background: var(--err);
+  border-color: var(--err);
+}
+
+/* token tail (llm nodes) */
+.gm-token-tail {
+  flex: 1;
+  min-height: 0;
+  margin-top: 8px;
+  padding: 7px 9px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  white-space: pre-wrap;
+  word-break: break-word;
+  mask-image: linear-gradient(to bottom, transparent 0, black 14px);
+}
+.gm-token-tail--reasoning {
+  font-style: italic;
+  color: var(--text-faint);
+}
+.gm-caret {
+  display: inline-block;
+  width: 6px;
+  height: 11px;
+  margin-left: 2px;
+  vertical-align: -1px;
+  background: var(--accent);
+  animation: gm-caret 1s steps(2) infinite;
+}
+@keyframes gm-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* pause banner + actions */
+.gm-pause-banner {
+  margin-top: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--amber) 30%, var(--border));
+  padding-top: 8px;
+}
+.gm-pause-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--amber);
+  letter-spacing: 0.03em;
+  margin-bottom: 7px;
+}
+.gm-pause-error {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--err);
+  background: var(--err-soft);
+  border-radius: 5px;
+  padding: 4px 7px;
+  margin-bottom: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gm-actions {
+  display: flex;
+  gap: 5px;
+}
+.gm-action {
+  flex: 1;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 4px 0;
+  cursor: pointer;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+  color: var(--text-dim);
+}
+.gm-action:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+  background: var(--surface-3);
+}
+.gm-action--primary {
+  color: var(--amber);
+  border-color: color-mix(in srgb, var(--amber) 45%, var(--border-strong));
+}
+.gm-action--primary:hover {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-color: var(--amber);
+}
+.gm-action--danger:hover {
+  color: var(--err);
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+
+/* inject editor popover */
+.gm-inject {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 40;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  box-shadow: var(--shadow-pop);
+  padding: 10px;
+}
+.gm-inject textarea {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+  background: var(--bg-canvas);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 7px 8px;
+  outline: none;
+}
+.gm-inject textarea:focus {
+  border-color: var(--accent);
+}
+.gm-inject textarea.gm-invalid {
+  border-color: var(--err);
+}
+
+/* ── chrome: panels, rails, bars ────────────────────────────────────────── */
+.gm-rail {
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+}
+.gm-panel {
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-pop);
+}
+.gm-runbar {
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(14px);
+  border-top: 1px solid var(--border);
+}
+
+.gm-run-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  background: transparent;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease;
+}
+.gm-run-item:hover {
+  background: var(--surface);
+}
+.gm-run-item--selected {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+.gm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 2.5px 9px;
+  white-space: nowrap;
+}
+.gm-chip button {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-faint);
+  line-height: 1;
+  font-size: 12px;
+}
+.gm-chip button:hover {
+  color: var(--err);
+}
+
+.gm-seg {
+  display: inline-flex;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 2px;
+  gap: 2px;
+}
+.gm-seg button {
+  border: none;
+  background: transparent;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 12px;
+  cursor: pointer;
+  color: var(--text-faint);
+  transition:
+    background 150ms ease,
+    color 150ms ease;
+}
+.gm-seg button.gm-seg--on {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.gm-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    background 150ms ease,
+    color 150ms ease,
+    border-color 150ms ease;
+}
+.gm-iconbtn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.gm-iconbtn--on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* canvas floating controls */
+.gm-canvas-controls {
+  position: absolute;
+  bottom: 14px;
+  left: 14px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  box-shadow: var(--shadow);
+  padding: 3px;
+}
+
+/* search overlay */
+.gm-search-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  justify-content: center;
+  padding-top: 11vh;
+  background: color-mix(in srgb, var(--bg) 45%, transparent);
+  backdrop-filter: blur(2px);
+}
+.gm-search {
+  width: 460px;
+  max-width: calc(100% - 48px);
+  align-self: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+.gm-search input {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  padding: 13px 16px;
+}
+.gm-search input::placeholder {
+  color: var(--text-faint);
+}
+.gm-search-results {
+  max-height: 300px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  padding: 5px;
+}
+.gm-search-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  border-radius: 7px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.gm-search-item:hover,
+.gm-search-item--active {
+  background: var(--surface-2);
+}
+
+/* JSON tree */
+.gm-json {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.gm-json-key {
+  color: var(--accent-strong);
+}
+.gm-json-string {
+  color: var(--ok);
+}
+.gm-json-num {
+  color: var(--amber);
+}
+.gm-json-bool {
+  color: var(--err);
+}
+.gm-json-null {
+  color: var(--text-faint);
+  font-style: italic;
+}
+.gm-json-toggle {
+  border: none;
+  background: none;
+  padding: 0 3px 0 0;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.gm-json-toggle:hover {
+  color: var(--text);
+}
+
+/* inspector sections */
+.gm-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.gm-copy {
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 600;
+}
+.gm-copy:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+/* connection status dot */
+.gm-conn {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.gm-conn--live {
+  background: var(--ok);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 60%, transparent);
+}
+.gm-conn--connecting {
+  background: var(--amber);
+  animation: gm-dot-blink 1.2s ease-in-out infinite;
+}
+.gm-conn--detached,
+.gm-conn--off {
+  background: var(--text-faint);
+}
+.gm-conn--replaying {
+  background: var(--accent);
+  animation: gm-dot-blink 1.6s ease-in-out infinite;
+}
+
+/* keyboard hint */
+.gm-kbd {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 5px;
+  line-height: 1.6;
+}
+
+/* empty state */
+.gm-empty-logo {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gm-node--running,
+  .gm-dot--running,
+  .gm-conn--connecting,
+  .gm-conn--replaying,
+  .gm-caret,
+  .gm-edge-active .react-flow__edge-path {
+    animation: none;
+  }
+  .react-flow__node {
+    transition: none;
+  }
+}
