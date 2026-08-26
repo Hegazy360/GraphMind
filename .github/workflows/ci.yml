@@ -1,0 +1,193 @@
+# CI for the GraphMind monorepo.
+#
+# Everything before this workflow existed ran only on macOS; the matrix is
+# here to catch Windows/Linux breakage in node:sqlite storage, the WebSocket
+# stack, path handling, and process lifecycle before users do.
+#
+# Every run step uses `shell: bash` (set via defaults) — bash exists on all
+# three hosted runner images, so one script works everywhere.
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Belt and braces: telemetry already auto-disables when CI is set, but be
+  # explicit so a runner-image quirk can never phone home.
+  GRAPHMIND_TELEMETRY: '0'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ['22.x', '24.x'] # engines floor is 22.13; 22.x resolves well past it
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm (corepack, pinned by packageManager)
+        run: |
+          corepack enable
+          corepack prepare --activate
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Packages must be built before typecheck/tests: apps/viewer resolves
+      # @graphmind-ai/schema through its published dist (no src alias), so a
+      # fresh checkout fails `pnpm typecheck` until schema is built.
+      - name: Build packages
+        run: pnpm -r --filter './packages/**' run build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test packages
+        run: pnpm test
+
+      - name: Test viewer
+        run: pnpm --filter viewer run test
+
+      - name: Test web
+        run: pnpm --filter web test
+
+      - name: Build viewer (and bundle into CLI)
+        run: pnpm build:viewer
+
+      - name: Full-stack E2E smoke
+        run: |
+          set -euo pipefail
+
+          PORT=4977
+          DB="$RUNNER_TEMP/graphmind-e2e.db"
+
+          node packages/cli/dist/cli.js serve --no-open --port "$PORT" --db "$DB" &
+          SERVER_PID=$!
+
+          ready=""
+          for _ in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          if [ -z "$ready" ]; then
+            echo "::error::GraphMind server never became healthy on port $PORT"
+            kill "$SERVER_PID" 2>/dev/null || true
+            exit 1
+          fi
+
+          status=0
+          GM_HTTP="http://127.0.0.1:$PORT" \
+          GM_WS="ws://127.0.0.1:$PORT/ws/ui" \
+          GRAPHMIND_URL="ws://127.0.0.1:$PORT/ingest" \
+            pnpm --filter e2e-smoke e2e || status=$?
+
+          kill "$SERVER_PID" 2>/dev/null || true
+          wait "$SERVER_PID" 2>/dev/null || true
+          exit "$status"
+
+  # What a fresh `npm install graphmind-ai` user gets: pack all four
+  # publishable packages, install the tarballs into an empty project outside
+  # the repo, run the binary, and make sure `graphmind demo` actually ingests
+  # a run. Skipped on macOS to keep matrix cost down (macOS is covered by the
+  # test job, and this job is about npm packaging, not the OS).
+  cold-package-smoke:
+    name: cold-package smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm (corepack, pinned by packageManager)
+        run: |
+          corepack enable
+          corepack prepare --activate
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x' # validate on the engines floor line
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm -r --filter './packages/**' run build
+
+      - name: Build viewer (and bundle into CLI)
+        run: pnpm build:viewer
+
+      - name: Pack, cold-install, and smoke the CLI
+        run: |
+          set -euo pipefail
+
+          PORT=4978
+          # Normalize RUNNER_TEMP for bash on Windows (D:\a\_temp -> /d/a/_temp)
+          # so globs below work; native tools get the path translated back.
+          TMP="$RUNNER_TEMP"
+          if command -v cygpath >/dev/null 2>&1; then TMP="$(cygpath -u "$TMP")"; fi
+          PKG_DIR="$TMP/graphmind-tarballs"
+          APP_DIR="$TMP/graphmind-cold-app"
+          rm -rf "$PKG_DIR" "$APP_DIR"
+          mkdir -p "$PKG_DIR" "$APP_DIR"
+
+          # pnpm pack (not npm pack): it rewrites workspace:* deps to real
+          # versions, exactly as `pnpm publish` would.
+          for dir in packages/schema packages/client packages/ai-sdk packages/cli; do
+            pnpm --filter "./$dir" pack --pack-destination "$PKG_DIR"
+          done
+          ls -l "$PKG_DIR"
+
+          cd "$APP_DIR"
+          npm init -y >/dev/null
+          # Install all four tarballs together so graphmind-ai's
+          # @graphmind-ai/* deps resolve to the local tarballs, not the
+          # registry (only third-party deps come from npm).
+          npm install --no-audit --no-fund "$PKG_DIR"/*.tgz
+
+          npx --no-install graphmind --version
+
+          # Bounded demo smoke: the bundled replay must produce a run with
+          # source 'demo' through the real ingest pipeline, on a cold install.
+          npx --no-install graphmind demo --no-open --port "$PORT" --db ./cold-smoke.db &
+          DEMO_PID=$!
+
+          found=""
+          for _ in $(seq 1 60); do
+            if curl -fsS "http://127.0.0.1:$PORT/api/runs" 2>/dev/null | grep -q '"source":"demo"'; then
+              found=1
+              break
+            fi
+            sleep 1
+          done
+
+          kill "$DEMO_PID" 2>/dev/null || true
+          wait "$DEMO_PID" 2>/dev/null || true
+
+          if [ -z "$found" ]; then
+            echo "::error::demo run never appeared in /api/runs on port $PORT"
+            exit 1
+          fi
+          echo "cold-package smoke: demo run ingested OK"
