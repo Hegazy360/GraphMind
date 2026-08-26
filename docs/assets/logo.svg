@@ -1,0 +1,6 @@
+<svg width="96" height="96" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="GraphMind logo">
+  <path d="M6 17 L12 6 M12 6 L19 14 M6 17 L19 14" stroke="#8b949e" stroke-width="1.4" fill="none"/>
+  <circle cx="6" cy="17" r="2.6" fill="#8b949e"/>
+  <circle cx="12" cy="6" r="2.6" fill="#4ade80"/>
+  <circle cx="19" cy="14" r="2.6" fill="#8b949e"/>
+</svg>
