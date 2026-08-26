@@ -70,15 +70,9 @@ code location; executions light it up.
 </tr>
 </table>
 
-## What you get
+## Debug it live
 
-<table>
-<tr>
-<td width="50%" valign="top">
-
-### Debug it live
-
-<img alt="GraphMind paused at a planted bug: the checkBudget tool threw, the run is held, and Continue / Step / Retry / Inject / Abort are offered on the node" src="./docs/assets/debugger-paused.png">
+<img alt="GraphMind paused at a planted bug: the checkBudget tool threw, the run is held, and Continue / Step / Retry / Inject / Abort are offered on the node" src="./docs/assets/debugger-paused.png" width="100%">
 
 - **Live execution graph** — agents, LLM steps, and tool calls render as one
   graph while the run executes, with streamed token previews on the active
@@ -93,12 +87,9 @@ code location; executions light it up.
   the run (cooperative cancellation via `AbortSignal`, so SDK retry logic
   doesn't fight you).
 
-</td>
-<td width="50%" valign="top">
+## Inspect and keep everything
 
-### Inspect and keep everything
-
-<img alt="The inspector panel on the paused node: full error with stack trace, and the exact input the tool received" src="./docs/assets/inspector-open.png">
+<img alt="The inspector panel on the paused node: full error with stack trace, and the exact input the tool received" src="./docs/assets/inspector-open.png" width="100%">
 
 - **Every run is kept** — history persists in SQLite; reopen any past run and
   inspect each node's inputs, outputs, errors, timings, and token usage.
@@ -112,10 +103,6 @@ code location; executions light it up.
   test suite asserts sub-millisecond gate overhead); the adapter never
   throws into your app; `NODE_ENV=production` disables it unless you opt in
   with `GRAPHMIND=1`, and `GRAPHMIND_DISABLED=1` always wins.
-
-</td>
-</tr>
-</table>
 
 ## Quick start
 
