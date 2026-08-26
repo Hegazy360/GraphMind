@@ -762,3 +762,41 @@ p code, li code {
 @media (prefers-color-scheme: light) {
   .trynow-cmd { color: #15803d; }
 }
+
+/* --- frameworks + teams (v0.2 launch) --- */
+.frameworks { padding: 72px 0 24px; }
+.frameworks h2, .teams h2 { font-size: clamp(1.6rem, 3vw, 2.1rem); letter-spacing: -0.02em; margin: 6px 0 26px; }
+.fw-grid {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+.fw-grid li {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 16px 18px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--bg-card);
+}
+.fw-grid .fw-name { font-weight: 600; font-size: 0.98rem; color: var(--text); }
+.fw-grid code {
+  font-family: "SFMono-Regular", ui-monospace, Menlo, monospace;
+  font-size: 0.83rem; color: var(--accent);
+  background: var(--bg-inset); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 10px; align-self: flex-start;
+  max-width: 100%; overflow-wrap: anywhere; white-space: normal;
+}
+.fw-note { margin-top: 18px; color: var(--text-3); font-size: 0.92rem; }
+.fw-note code { font-family: "SFMono-Regular", ui-monospace, Menlo, monospace; color: var(--text-2); }
+
+.teams { padding: 56px 0 84px; }
+.teams-inner {
+  border: 1px solid var(--border); border-radius: 16px;
+  background: linear-gradient(180deg, var(--bg-card), var(--bg-soft));
+  padding: 32px 34px; max-width: 760px;
+}
+.teams-inner p { color: var(--text-2); max-width: 62ch; }
+.teams-cta { margin-bottom: 0; }
+.teams-cta a { color: var(--accent); }
+@media (prefers-color-scheme: light) {
+  .fw-grid code { color: #15803d; }
+  .teams-cta a { color: #15803d; }
+}

@@ -43,6 +43,7 @@
       <span class="brand-name">GraphMind</span>
     </a>
     <nav class="site-nav" aria-label="Site">
+      <a class="nav-link" href="https://docs.graphmind.ai">Docs</a>
       <a class="nav-link" href="https://github.com/Hegazy360/GraphMind" rel="noopener">GitHub<span class="nav-arrow" aria-hidden="true">&#8599;</span></a>
     </nav>
   </header>
@@ -191,15 +192,15 @@
           OpenInference trace import.
         </p>
         <ol class="steps">
-          <li><code>npx graphmind-ai</code> — start the local debugger.</li>
-          <li>Wrap your model and tools with <code>@graphmind-ai/sdk</code>.</li>
-          <li>Run your agent. The graph lights up — breakpoints, stepping, and live state included.</li>
+          <li><code>npx graphmind-ai init</code> detects your framework and prints the two lines to add.</li>
+          <li><code>npx graphmind-ai</code> starts the local debugger.</li>
+          <li>Run your agent. The graph lights up: breakpoints, stepping, inject-and-resume, live state.</li>
         </ol>
       </div>
       <div class="how-code">
         <figure class="code-card">
           <figcaption class="code-head">
-            <span class="code-pill">Planned API</span>
+            <span class="code-pill">Vercel AI SDK</span>
             <span class="code-file">agent.ts</span>
           </figcaption>
           <pre><code><span class="tok-kw">import</span> { graphmind } <span class="tok-kw">from</span> <span class="tok-str">'@graphmind-ai/sdk'</span>;
@@ -212,13 +213,45 @@
         <p class="how-note"><code>npx graphmind-ai</code> runs everything locally — your prompts, outputs, and traces never leave your machine.</p>
       </div>
     </section>
+    <section class="frameworks container" aria-labelledby="fw-title">
+      <p class="eyebrow">Works with your stack</p>
+      <h2 id="fw-title">Instrument what you already wrote.</h2>
+      <ul class="fw-grid">
+        <li><span class="fw-name">Vercel AI SDK</span><code>@graphmind-ai/sdk</code></li>
+        <li><span class="fw-name">Anthropic SDK</span><code>@graphmind-ai/anthropic</code></li>
+        <li><span class="fw-name">OpenAI SDK</span><code>@graphmind-ai/openai</code></li>
+        <li><span class="fw-name">LangGraph &middot; LangChain</span><code>@graphmind-ai/langgraph</code></li>
+        <li><span class="fw-name">Python</span><code>pip install graphmind-ai</code></li>
+        <li><span class="fw-name">Everything else</span><code>graphmind import trace.json</code></li>
+      </ul>
+      <p class="fw-note">Not sure which you need? <code>npx graphmind-ai init</code> reads your project and tells you.</p>
+    </section>
+
+    <section class="teams container" aria-labelledby="teams-title">
+      <div class="teams-inner">
+        <p class="eyebrow">For teams</p>
+        <h2 id="teams-title">The debugger is free forever. Teams get more.</h2>
+        <p>
+          A self-hosted Team edition is in the works: shared run history, workspaces,
+          and SSO, running entirely on your own infrastructure with flat annual pricing.
+          No per-seat metering, no traces leaving your network.
+        </p>
+        <p class="teams-cta">
+          Want it early, or want to shape it? Email
+          <a href="mailto:hello@graphmind.ai?subject=GraphMind%20for%20teams">hello@graphmind.ai</a>
+          &mdash; design partners get it first, at a permanent discount.
+        </p>
+      </div>
+    </section>
   </main>
 
   <footer class="site-footer">
     <div class="container footer-row">
       <p class="footer-left">&copy; 2026 GraphMind &middot; MIT License</p>
       <nav class="footer-links" aria-label="Footer">
+        <a href="https://docs.graphmind.ai">Docs</a>
         <a href="https://github.com/Hegazy360/GraphMind" rel="noopener">GitHub</a>
+        <a href="https://www.npmjs.com/package/graphmind-ai" rel="noopener">npm</a>
         <a href="mailto:hello@graphmind.ai">hello@graphmind.ai</a>
       </nav>
     </div>
