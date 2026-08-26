@@ -26,7 +26,7 @@
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PROTOCOL_VERSION, parseEnvelope } from '@graphmind/schema';
 import { startServer, type StoredEvent } from 'graphmind-ai';
@@ -220,7 +220,13 @@ async function main(): Promise<void> {
     }
   }
 
-  const ndjson = lines.map((line) => JSON.stringify(line)).join('\n') + '\n';
+  // Scrub the recording machine's filesystem paths out of stack traces —
+  // the fixture ships in the npm package and must not leak local paths.
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const ndjson =
+    lines
+      .map((line) => JSON.stringify(line).replaceAll(repoRoot, '/graphmind'))
+      .join('\n') + '\n';
   writeFileSync(join(OUT_DIR, 'demo-run.ndjson'), ndjson);
   writeFileSync(
     join(OUT_DIR, 'fixture-data.ts'),

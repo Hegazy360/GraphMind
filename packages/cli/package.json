@@ -2,8 +2,35 @@
   "name": "graphmind-ai",
   "version": "0.0.1",
   "private": true,
-  "description": "GraphMind — local server + CLI for the GraphMind live agent debugger. Instrumented apps stream execution events in; the viewer watches live, replays history, and sends control commands.",
+  "description": "GraphMind \u2014 local server + CLI for the GraphMind live agent debugger. Instrumented apps stream execution events in; the viewer watches live, replays history, and sends control commands.",
   "license": "MIT",
+  "author": "Mohamed Hegazy",
+  "homepage": "https://graphmind.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hegazy360/GraphMind.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/Hegazy360/GraphMind/issues"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "debugger",
+    "devtools",
+    "observability",
+    "tracing",
+    "vercel-ai-sdk",
+    "ai-sdk",
+    "mcp",
+    "langgraph",
+    "opentelemetry",
+    "openinference",
+    "llm",
+    "breakpoints",
+    "local-first"
+  ],
   "type": "module",
   "sideEffects": false,
   "engines": {
@@ -21,7 +48,9 @@
   "files": [
     "dist",
     "viewer-dist",
-    "README.md"
+    "README.md",
+    "TELEMETRY.md",
+    "LICENSE"
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",

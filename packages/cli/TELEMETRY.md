@@ -71,6 +71,7 @@ rm ~/.graphmind/telemetry-id
   only in aggregate: per-day event counts, unique installs, and returning
   installs.
 - The implementation is small and open — see
-  [`src/telemetry.ts`](./src/telemetry.ts) for the client and the
-  `apps/web/api/telemetry.ts` function in this repository for the receiving
-  end.
+  [`packages/cli/src/telemetry.ts`](https://github.com/Hegazy360/graphmind/blob/master/packages/cli/src/telemetry.ts)
+  for the client and
+  [`apps/web/api/telemetry.ts`](https://github.com/Hegazy360/graphmind/blob/master/apps/web/api/telemetry.ts)
+  for the receiving end.
