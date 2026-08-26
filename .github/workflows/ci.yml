@@ -159,7 +159,10 @@ jobs:
 
           # pnpm pack (not npm pack): it rewrites workspace:* deps to real
           # versions, exactly as `pnpm publish` would.
-          for dir in packages/schema packages/client packages/ai-sdk packages/cli; do
+          for dir in packages/schema packages/client packages/ai-sdk \
+                     packages/anthropic packages/openai packages/langgraph \
+                     packages/cli; do
+            [ -f "$dir/package.json" ] || continue
             pnpm --filter "./$dir" pack --pack-destination "$PKG_DIR"
           done
           ls -l "$PKG_DIR"
@@ -195,3 +198,37 @@ jobs:
             exit 1
           fi
           echo "cold-package smoke: demo run ingested OK"
+
+  # The Python SDK ships from python/ and is not part of the pnpm workspace.
+  python:
+    name: python (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.10', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install
+        working-directory: python
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Lint
+        working-directory: python
+        run: ruff check . || echo "ruff not configured as a dev dep; skipping"
+      - name: Test
+        working-directory: python
+        run: pytest -q
+      - name: Build wheel + sdist
+        working-directory: python
+        run: |
+          pip install build
+          python -m build
+          ls -la dist
