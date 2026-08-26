@@ -2,7 +2,7 @@
 
 The GraphMind demo: a Vercel AI SDK **trip planner** (tools: `searchFlights`,
 `getWeather`, `convertCurrency`, `checkBudget`) instrumented with
-`@graphmind/ai-sdk`.
+`@graphmind-ai/sdk`.
 
 ## The planted bug
 

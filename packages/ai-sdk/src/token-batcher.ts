@@ -4,7 +4,7 @@
  * cannot flood the wire. A single unref'd timer flushes all pending nodes;
  * `flushNode` forces a flush before a `node.finished` so ordering holds.
  */
-import type { TokenDelta } from '@graphmind/client';
+import type { TokenDelta } from '@graphmind-ai/client';
 
 export type TokenBatchSink = (nodeId: string, deltas: TokenDelta[]) => void;
 

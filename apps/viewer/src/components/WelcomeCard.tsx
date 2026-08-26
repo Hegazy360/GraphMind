@@ -151,7 +151,7 @@ export function WelcomeCard() {
           lineHeight: 1.6,
         }}
       >
-        <code style={{ fontFamily: 'var(--font-mono)' }}>@graphmind/ai-sdk</code> wraps your
+        <code style={{ fontFamily: 'var(--font-mono)' }}>@graphmind-ai/sdk</code> wraps your
         Vercel AI SDK model + tools; runs stream here automatically.
       </div>
     </div>

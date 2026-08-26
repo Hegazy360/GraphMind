@@ -1,4 +1,4 @@
-# @graphmind/schema
+# @graphmind-ai/schema
 
 The versioned wire contract of the **GraphMind live agent debugger**: Zod
 schemas + inferred TypeScript types for every message that crosses the
@@ -91,7 +91,7 @@ rejected.
 - Anything structurally broken → `invalid` (with `reason` + `issues`).
 
 ```ts
-import { parseEnvelopeJson } from '@graphmind/schema';
+import { parseEnvelopeJson } from '@graphmind-ai/schema';
 
 const result = parseEnvelopeJson(frame); // never throws
 switch (result.kind) {
@@ -105,7 +105,7 @@ switch (result.kind) {
 Sending side:
 
 ```ts
-import { createEnvelope, serializeEnvelope } from '@graphmind/schema';
+import { createEnvelope, serializeEnvelope } from '@graphmind-ai/schema';
 
 ws.send(serializeEnvelope(createEnvelope({
   type: 'node.token',

@@ -9,7 +9,7 @@
  * the store is touched, so the reducer treats them as a no-op. This keeps the
  * React Flow state referentially stable on the streaming hot path.
  */
-import type { EventEnvelope, EventPayloadMap, GraphNodeHint } from '@graphmind/schema';
+import type { EventEnvelope, EventPayloadMap, GraphNodeHint } from '@graphmind-ai/schema';
 import type { NodeState, RunSource, RunState } from './types.js';
 
 export type RunsMap = Record<string, RunState>;

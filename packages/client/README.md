@@ -1,4 +1,4 @@
-# @graphmind/client
+# @graphmind-ai/client
 
 Adapter-agnostic runtime for the **GraphMind live agent debugger**. This
 package owns the session (WebSocket transport + event buffer), the run
@@ -10,12 +10,12 @@ package) are separate packages that translate SDK callbacks/middleware into
 `session.emit(...)` and `await session.gate(...)`.
 
 > **Publishing note:** private until the npm scope question is settled (the
-> `@graphmind` scope is taken); see `@graphmind/schema`'s README.
+> `@graphmind` scope is taken); see `@graphmind-ai/schema`'s README.
 
 ## Quick start (what an adapter does)
 
 ```ts
-import { createSession } from '@graphmind/client';
+import { createSession } from '@graphmind-ai/client';
 
 const session = createSession({
   appName: 'trip-planner',
@@ -166,5 +166,5 @@ seq}` for diagnostics.
   independence, disconnect fail-open < 100ms, detached overhead < 1ms,
   ring-buffer replay + overflow, handshake + version-mismatch detachment,
   kill switches, host-crash immunity
-- `pnpm build` — emit `dist/` (ESM + `.d.ts`; requires `@graphmind/schema`
+- `pnpm build` — emit `dist/` (ESM + `.d.ts`; requires `@graphmind-ai/schema`
   built first, which pnpm's topological ordering does for you)

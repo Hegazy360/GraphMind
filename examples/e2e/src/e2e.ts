@@ -1,5 +1,5 @@
 /**
- * Full-stack smoke test: real adapter -> real @graphmind/client transport ->
+ * Full-stack smoke test: real adapter -> real @graphmind-ai/client transport ->
  * real graphmind-ai CLI server -> real UI-socket protocol -> control relay
  * back into the running agent.
  *
@@ -14,8 +14,8 @@ import { WebSocket } from 'ws';
 import { simulateReadableStream, stepCountIs, streamText, tool } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import { z } from 'zod';
-import { graphmind } from '@graphmind/ai-sdk';
-import { PROTOCOL_VERSION } from '@graphmind/schema';
+import { graphmind } from '@graphmind-ai/sdk';
+import { PROTOCOL_VERSION } from '@graphmind-ai/schema';
 
 const HTTP = process.env.GM_HTTP ?? 'http://127.0.0.1:4747';
 const WS_UI = process.env.GM_WS ?? 'ws://127.0.0.1:4747/ws/ui';

@@ -6,7 +6,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
-import type { RunStatus } from '@graphmind/schema';
+import type { RunStatus } from '@graphmind-ai/schema';
 import type {
   EventPage,
   EventQuery,

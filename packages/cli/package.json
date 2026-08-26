@@ -1,7 +1,6 @@
 {
   "name": "graphmind-ai",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
   "description": "GraphMind \u2014 local server + CLI for the GraphMind live agent debugger. Instrumented apps stream execution events in; the viewer watches live, replays history, and sends control commands.",
   "license": "MIT",
   "author": "Mohamed Hegazy",
@@ -58,7 +57,7 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@graphmind/schema": "workspace:*",
+    "@graphmind-ai/schema": "workspace:*",
     "@hono/node-server": "^1.13.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "hono": "^4.6.0",

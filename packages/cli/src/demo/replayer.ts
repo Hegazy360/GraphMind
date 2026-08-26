@@ -31,7 +31,7 @@ import {
   WILDCARD_RUN_ID,
   parseEnvelopeJson,
   type BreakpointMatcher,
-} from '@graphmind/schema';
+} from '@graphmind-ai/schema';
 import WebSocket from 'ws';
 import { VERSION } from '../version.js';
 import type { DemoFixture, DemoFixtureEvent } from './fixture.js';

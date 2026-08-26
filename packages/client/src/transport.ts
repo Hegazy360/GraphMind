@@ -13,7 +13,7 @@ import {
   parseEnvelopeJson,
   type KnownEnvelope,
   type MessagePayloadMap,
-} from '@graphmind/schema';
+} from '@graphmind-ai/schema';
 import type { RateLimitedWarner } from './safe.js';
 
 /** Minimal structural WebSocket contract (browser-style API). */

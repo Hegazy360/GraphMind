@@ -26,7 +26,7 @@ import {
   type ResumeAction,
   type RunStatus,
   type SdkInfo,
-} from '@graphmind/schema';
+} from '@graphmind-ai/schema';
 import { resolveEnabled, resolveUrl, type EnvLike } from './env.js';
 import { GraphMindAbortError, isAbortError, toErrorInfo } from './errors.js';
 import {

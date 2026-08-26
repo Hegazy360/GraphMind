@@ -19,7 +19,7 @@ npx graphmind-ai         # start the debugger for your own agent
 ```
 
 Apps instrumented with a GraphMind adapter (currently: the Vercel AI SDK
-adapter, `@graphmind/ai-sdk` in the [GraphMind repo](https://github.com/Hegazy360/graphmind))
+adapter, `@graphmind-ai/sdk` in the [GraphMind repo](https://github.com/Hegazy360/graphmind))
 stream execution events to this server; the viewer connects to watch live,
 replay history, and send control commands (pause / resume / breakpoints /
 inject). Other frameworks get in via `graphmind import` (OTel / OpenInference

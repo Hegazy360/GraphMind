@@ -2,7 +2,7 @@
  * The viewer <-> server subprotocol on `WS /ws/ui`.
  *
  * Every frame is one JSON object with a `type` discriminant. Schema wire
- * envelopes (@graphmind/schema) are never sent bare on this socket — they
+ * envelopes (@graphmind-ai/schema) are never sent bare on this socket — they
  * ride inside `event` (server -> viewer) and `control` (viewer -> server)
  * messages, keeping the UI protocol independently extensible.
  *
@@ -28,7 +28,7 @@
  * Dedup rule (internal/decisions.md #5): replayed envelopes keep their
  * original `seq`; viewers dedupe on `(runId, seq)`.
  */
-import type { BreakpointMatcher, RunMode } from '@graphmind/schema';
+import type { BreakpointMatcher, RunMode } from '@graphmind-ai/schema';
 import type { RunSummary } from './storage.js';
 
 /** The wire envelope as fanned out to viewers (payload is opaque here). */

@@ -5,7 +5,7 @@
  * version that changes JSON Schema emission). That may be intentional — then
  * regenerate the golden with:
  *
- *   pnpm --filter @graphmind/schema run build \
+ *   pnpm --filter @graphmind-ai/schema run build \
  *     && cp schema.json test/fixtures/schema.golden.json
  *
  * ...and treat the diff as a contract review, not noise.

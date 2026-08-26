@@ -17,7 +17,7 @@
     "gen:fixture": "node ./scripts/gen-fixture.mjs"
   },
   "dependencies": {
-    "@graphmind/schema": "workspace:*",
+    "@graphmind-ai/schema": "workspace:*",
     "@xyflow/react": "^12.8.6",
     "elkjs": "^0.11.0",
     "match-sorter": "^8.1.0",

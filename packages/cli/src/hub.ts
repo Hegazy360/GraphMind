@@ -23,7 +23,7 @@ import {
   type Envelope,
   type MessagePayloadMap,
   type MessageType,
-} from '@graphmind/schema';
+} from '@graphmind-ai/schema';
 import type { WebSocket } from 'ws';
 import { DebugState } from './debug-state.js';
 import type { RunSource, Storage, StoredEvent } from './storage.js';

@@ -101,7 +101,7 @@ export function listRuns(ctx: ToolContext, args: Record<string, unknown>) {
     total: all.length,
     runs: all.slice(0, limit).map((run) => runSummaryJson(run, ctx.viewerBaseUrl)),
     ...(all.length === 0
-      ? { note: 'no runs recorded yet — instrument the app with @graphmind/ai-sdk and run it while `graphmind` is serving' }
+      ? { note: 'no runs recorded yet — instrument the app with @graphmind-ai/sdk and run it while `graphmind` is serving' }
       : {}),
   };
 }

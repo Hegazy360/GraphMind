@@ -12,7 +12,7 @@
  *    step 2 → …)
  *  - tools hang off whatever `node.started` named as their parent
  */
-import type { NodeKind } from '@graphmind/schema';
+import type { NodeKind } from '@graphmind-ai/schema';
 import { nodeStatus, type NodeState, type RunState } from './types.js';
 
 export type FlowNodeType = 'invocation' | 'llmStep' | 'tool';

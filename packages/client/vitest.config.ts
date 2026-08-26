@@ -7,7 +7,7 @@ export default defineConfig({
       // Tests (and typecheck) run against the schema package's source so the
       // client can be tested without building schema first. The emitted build
       // resolves the real workspace dependency instead.
-      '@graphmind/schema': fileURLToPath(new URL('../schema/src/index.ts', import.meta.url)),
+      '@graphmind-ai/schema': fileURLToPath(new URL('../schema/src/index.ts', import.meta.url)),
     },
   },
   test: {

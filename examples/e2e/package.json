@@ -6,8 +6,8 @@
     "e2e": "tsx src/e2e.ts"
   },
   "dependencies": {
-    "@graphmind/ai-sdk": "workspace:*",
-    "@graphmind/schema": "workspace:*",
+    "@graphmind-ai/sdk": "workspace:*",
+    "@graphmind-ai/schema": "workspace:*",
     "ai": "^7.0.79",
     "ws": "^8.18.0",
     "zod": "^4.0.0"

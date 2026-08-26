@@ -14,7 +14,7 @@
  * to dotted keys), and pandas-dataframe records with top-level
  * `attributes.*` columns.
  */
-import type { ErrorInfo } from '@graphmind/schema';
+import type { ErrorInfo } from '@graphmind-ai/schema';
 import { flattenAttrs, type RawSpan } from './types.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {

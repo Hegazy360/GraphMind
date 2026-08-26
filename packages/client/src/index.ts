@@ -1,5 +1,5 @@
 /**
- * @graphmind/client — adapter-agnostic runtime for the GraphMind live agent
+ * @graphmind-ai/client — adapter-agnostic runtime for the GraphMind live agent
  * debugger. No dependency on any AI SDK; adapters (e.g. for the `ai`
  * package) build on `createSession` + `session.gate` + `session.emit`.
  */
@@ -28,7 +28,7 @@ export { DEFAULT_URL, resolveEnabled, resolveUrl, type EnvLike } from './env.js'
 export type { WebSocketLike, WebSocketConstructor } from './transport.js';
 
 // Re-export the wire-contract types adapters typically need, so most
-// adapters can depend on @graphmind/client alone.
+// adapters can depend on @graphmind-ai/client alone.
 export type {
   BreakpointMatcher,
   Capability,
@@ -44,4 +44,4 @@ export type {
   SdkInfo,
   TokenDelta,
   TokenUsage,
-} from '@graphmind/schema';
+} from '@graphmind-ai/schema';

@@ -22,7 +22,7 @@
  * Provider-executed tools have no local `execute`; they pass through
  * untouched and are observed from the stream tee instead.
  */
-import { isAbortError, type GateNode, type RunStatus } from '@graphmind/client';
+import { isAbortError, type GateNode, type RunStatus } from '@graphmind-ai/client';
 import type { ToolSet } from 'ai';
 import type { AdapterCore } from './core.js';
 import { LLM_NODE_ID, nextId, toolNodeId } from './ids.js';

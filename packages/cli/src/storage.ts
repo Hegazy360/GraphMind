@@ -11,7 +11,7 @@
  * is the hedge named in internal/decisions.md: if `node:sqlite` misbehaves,
  * a JSONL-backed implementation can replace it without touching the server.
  */
-import type { RunStatus } from '@graphmind/schema';
+import type { RunStatus } from '@graphmind-ai/schema';
 
 /** Where a run's events came from. */
 export type RunSource = 'live' | 'import' | 'demo';

@@ -16,7 +16,7 @@ import {
 import { VERSION } from '../version.js';
 import { findErrors, getNode, getRun, listRuns, ToolError, type ToolContext } from './tools.js';
 
-const INSTRUCTIONS = `GraphMind is a local live debugger for AI agents: apps instrumented with @graphmind/ai-sdk record every run (agent, LLM step, and tool call) into a local SQLite database, and the GraphMind viewer renders those runs as a live execution graph.
+const INSTRUCTIONS = `GraphMind is a local live debugger for AI agents: apps instrumented with @graphmind-ai/sdk record every run (agent, LLM step, and tool call) into a local SQLite database, and the GraphMind viewer renders those runs as a live execution graph.
 
 This server reads that database directly, so it works even while the GraphMind server/viewer is closed. Reach for it whenever the user asks why an agent run failed, what a run actually did, what a tool or LLM call received/returned, or how long steps took.
 

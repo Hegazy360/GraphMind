@@ -16,12 +16,12 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.42",
     "@ai-sdk/openai": "^4.0.47",
-    "@graphmind/ai-sdk": "workspace:*",
+    "@graphmind-ai/sdk": "workspace:*",
     "ai": "^7.0.79",
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "@graphmind/schema": "workspace:*",
+    "@graphmind-ai/schema": "workspace:*",
     "@types/node": "^26.3.0",
     "@types/ws": "^8.18.1",
     "graphmind-ai": "workspace:*",

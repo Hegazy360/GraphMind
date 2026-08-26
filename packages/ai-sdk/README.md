@@ -1,4 +1,4 @@
-# @graphmind/ai-sdk
+# @graphmind-ai/sdk
 
 Vercel AI SDK adapter for the GraphMind live agent debugger. Wrap your model
 and tools; your app streams execution events to a local viewer, and the
@@ -13,7 +13,7 @@ plus tool-`execute` decoration. No fork, no monkey-patching.
 ## Usage
 
 ```ts
-import { graphmind } from '@graphmind/ai-sdk';
+import { graphmind } from '@graphmind-ai/sdk';
 import { streamText } from 'ai';
 
 const gm = graphmind({ app: 'support-agent' });
@@ -31,7 +31,7 @@ await gm.run('handle-ticket', () =>
 await gm.dispose();
 ```
 
-`graphmind()` accepts all `@graphmind/client` session options (`url`,
+`graphmind()` accepts all `@graphmind-ai/client` session options (`url`,
 `enabled`, `meta`, timeouts, ...) plus `app`, `sdk`, `tokenFlushIntervalMs`
 and `waitForAttach`. Kill switches: `GRAPHMIND_DISABLED=1` always
 disables; `NODE_ENV=production` disables unless `GRAPHMIND=1`.

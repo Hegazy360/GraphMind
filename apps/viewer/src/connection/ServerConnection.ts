@@ -8,7 +8,7 @@ import {
   WILDCARD_RUN_ID,
   type ControlType,
   type MessagePayloadMap,
-} from '@graphmind/schema';
+} from '@graphmind-ai/schema';
 import type { RunSource } from '../store/types.js';
 
 export interface ServerConnection {

@@ -13,7 +13,7 @@
  *  3. The observer emits batched `node.token` deltas and `node.finished`
  *     with usage on the finish part.
  */
-import { isAbortError, type GateNode } from '@graphmind/client';
+import { isAbortError, type GateNode } from '@graphmind-ai/client';
 import type { LanguageModelMiddleware } from 'ai';
 import type { AdapterCore } from './core.js';
 import { LLM_NODE_ID, LLM_NODE_NAME, agentNodeId } from './ids.js';

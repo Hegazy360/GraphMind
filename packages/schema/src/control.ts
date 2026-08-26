@@ -53,7 +53,7 @@ export const HandshakePayloadSchemas = {
     versions: z.looseObject({
       /** Must equal the envelope `gm`; duplicated here for log friendliness. */
       protocol: z.number().int(),
-      /** Version of the @graphmind/client package (or compatible impl). */
+      /** Version of the @graphmind-ai/client package (or compatible impl). */
       client: z.string(),
     }),
     capabilities: z.array(z.string()),

@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { parseEnvelope } from '@graphmind/schema';
+import { parseEnvelope } from '@graphmind-ai/schema';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DEMO_FIXTURE_NDJSON } from '../src/demo/fixture-data.js';
 import { loadBundledFixture, parseDemoFixture } from '../src/demo/fixture.js';
@@ -23,7 +23,7 @@ function isEventOf(message: UiServerMessage, type: string): message is EventFram
 }
 
 describe('demo fixture', () => {
-  it('every line validates against @graphmind/schema and the shape is complete', () => {
+  it('every line validates against @graphmind-ai/schema and the shape is complete', () => {
     const lines = DEMO_FIXTURE_NDJSON.split('\n').filter((l) => l.trim() !== '');
     expect(lines.length).toBeGreaterThan(30);
     for (const line of lines) {

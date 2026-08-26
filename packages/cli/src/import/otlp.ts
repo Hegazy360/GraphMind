@@ -5,7 +5,7 @@
  * snake_case field names are tolerated. Attribute values arrive as OTLP
  * `AnyValue` objects and are converted to plain JS values.
  */
-import type { ErrorInfo } from '@graphmind/schema';
+import type { ErrorInfo } from '@graphmind-ai/schema';
 import type { RawSpan } from './types.js';
 
 interface OtlpParsed {

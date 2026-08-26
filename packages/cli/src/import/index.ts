@@ -4,7 +4,7 @@
  * ids) so tests can golden-match the exact output; the CLI command wraps it
  * with file reading, id generation, and storage insertion.
  */
-import type { SdkInfo } from '@graphmind/schema';
+import type { SdkInfo } from '@graphmind-ai/schema';
 import { classifySpan } from './classify.js';
 import { buildEnvelopes, type ConvertResult } from './convert.js';
 import { parseFlatSpans } from './flat.js';

@@ -1,5 +1,5 @@
 /**
- * @graphmind/schema — the versioned wire contract of the GraphMind live
+ * @graphmind-ai/schema — the versioned wire contract of the GraphMind live
  * agent debugger. See README.md for the full protocol description.
  */
 export {

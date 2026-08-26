@@ -54,7 +54,7 @@ npx graphmind-ai
 Instrument your app — wrap the model and tools, nothing else changes:
 
 ```ts
-import { graphmind } from '@graphmind/ai-sdk';
+import { graphmind } from '@graphmind-ai/sdk';
 
 const gm = graphmind({ app: 'support-agent' });
 await gm.ready(); // optional: wait for the debugger to attach (fails open on timeout)
@@ -72,7 +72,7 @@ tool-`execute` decoration) — no fork, no monkey-patching. See
 neutralization).
 
 > The adapter currently lives in this repo under the workspace name
-> `@graphmind/ai-sdk`; its public npm name is being finalized for the first
+> `@graphmind-ai/sdk`; its public npm name is being finalized for the first
 > release.
 
 ### 3. Import traces from any other framework

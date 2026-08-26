@@ -1,5 +1,5 @@
 /**
- * The public entry point of @graphmind/ai-sdk.
+ * The public entry point of @graphmind-ai/sdk.
  *
  *   const gm = graphmind({ app: 'support-agent' });
  *   const model = gm.wrapModel(anyLanguageModel);
@@ -7,7 +7,7 @@
  *   await gm.run('handle-ticket', () => streamText({ model, tools, ... }));
  *   gm.dispose();
  *
- * Fail-open invariants (inherited from @graphmind/client and enforced at
+ * Fail-open invariants (inherited from @graphmind-ai/client and enforced at
  * this layer too): a disabled session makes wrapModel/wrapTools identity
  * functions; a detached session adds only buffered events and fast-path
  * gates; the adapter never throws into the host app; a debugger that
@@ -23,7 +23,7 @@ import {
   type SdkInfo,
   type Session,
   type SessionOptions,
-} from '@graphmind/client';
+} from '@graphmind-ai/client';
 import { wrapLanguageModel, type ToolSet } from 'ai';
 import { AdapterCore } from './core.js';
 import { agentNodeId } from './ids.js';
@@ -97,7 +97,7 @@ function detectAiVersion(): string {
 
 /**
  * Create a GraphMind adapter instance. Never throws; misconfiguration
- * degrades to a disabled session (see @graphmind/client `createSession`).
+ * degrades to a disabled session (see @graphmind-ai/client `createSession`).
  */
 export function graphmind(options: GraphmindOptions = {}): Graphmind {
   const { app, sdk, tokenFlushIntervalMs, waitForAttach, ...sessionOptions } = options;

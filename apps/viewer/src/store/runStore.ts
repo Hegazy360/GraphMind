@@ -4,7 +4,7 @@
  * the same code path via `ingest()`.
  */
 import { create } from 'zustand';
-import type { EventEnvelope } from '@graphmind/schema';
+import type { EventEnvelope } from '@graphmind-ai/schema';
 import type { RunInfo } from '../connection/protocol.js';
 import { applyEvent, type RunsMap } from './applyEvent.js';
 import type { RunSource, RunState } from './types.js';

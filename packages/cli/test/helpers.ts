@@ -1,6 +1,6 @@
 /**
  * Test doubles: a fake instrumented app (raw `ws` speaking schema envelopes,
- * like @graphmind/client would) and a fake viewer speaking the UI
+ * like @graphmind-ai/client would) and a fake viewer speaking the UI
  * subprotocol. Both queue incoming messages for predicate-based awaiting.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -12,7 +12,7 @@ import {
   serializeEnvelope,
   type MessagePayloadMap,
   type MessageType,
-} from '@graphmind/schema';
+} from '@graphmind-ai/schema';
 import WebSocket from 'ws';
 import { startServer, type GraphMindServer, type ServerOptions } from '../src/server.js';
 import type { UiServerMessage, WireEnvelope } from '../src/ui-protocol.js';

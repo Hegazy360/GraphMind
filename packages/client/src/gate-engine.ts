@@ -12,7 +12,7 @@
  *  - An optional per-gate pause timeout auto-continues a gate nobody resumes.
  *  - Timers are unref'd so held bookkeeping never keeps the process alive.
  */
-import type { BreakpointMatcher, NodeKind, PausePoint, ResumeAction, RunMode } from '@graphmind/schema';
+import type { BreakpointMatcher, NodeKind, PausePoint, ResumeAction, RunMode } from '@graphmind-ai/schema';
 
 export interface GateNode {
   nodeId: string;

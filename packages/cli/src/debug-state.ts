@@ -6,7 +6,7 @@
  * state up in one message. Held in memory only: a server restart starts
  * clean, matching a fresh debugging session.
  */
-import type { BreakpointMatcher, RunMode } from '@graphmind/schema';
+import type { BreakpointMatcher, RunMode } from '@graphmind-ai/schema';
 
 /** Stable stringify (sorted keys, recursive) for exact-field-equality dedup. */
 function canonicalKey(value: unknown): string {

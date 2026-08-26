@@ -1,4 +1,4 @@
-import { createEnvelope, type EventEnvelope, type EventType, type MessagePayloadMap } from '@graphmind/schema';
+import { createEnvelope, type EventEnvelope, type EventType, type MessagePayloadMap } from '@graphmind-ai/schema';
 
 export const RUN = 'run-test-1';
 

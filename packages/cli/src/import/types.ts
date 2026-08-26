@@ -7,7 +7,7 @@
  * finally synthesizes a schema-valid envelope sequence (convert.ts).
  * Assumptions are documented in README.md next to this file.
  */
-import type { ErrorInfo, NodeKind, TokenUsage } from '@graphmind/schema';
+import type { ErrorInfo, NodeKind, TokenUsage } from '@graphmind-ai/schema';
 
 /** A user-facing import failure. `message` must say WHAT was unrecognized. */
 export class ImportError extends Error {

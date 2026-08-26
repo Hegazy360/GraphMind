@@ -4,7 +4,7 @@
  * hello.ack contract), and connection status.
  */
 import { create } from 'zustand';
-import type { BreakpointMatcher, RunMode } from '@graphmind/schema';
+import type { BreakpointMatcher, RunMode } from '@graphmind-ai/schema';
 
 export type ConnectionStatus = 'connecting' | 'live' | 'detached' | 'replaying' | 'off';
 

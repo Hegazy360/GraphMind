@@ -3,7 +3,7 @@
  * fixture replay. Routes `node.token` to the buffer registry (hot path,
  * store untouched) and everything else through the reducer.
  */
-import { isEventType, parseEnvelope, type EventEnvelope, type KnownEnvelope } from '@graphmind/schema';
+import { isEventType, parseEnvelope, type EventEnvelope, type KnownEnvelope } from '@graphmind-ai/schema';
 import { tokenBuffers } from '../store/tokenBuffers.js';
 import { useRunStore } from '../store/runStore.js';
 import type { RunSource } from '../store/types.js';

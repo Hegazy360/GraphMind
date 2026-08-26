@@ -11,7 +11,7 @@
  * output and skips the recorded retry.
  */
 import { useEffect, useMemo, useRef } from 'react';
-import type { ControlType, MessagePayloadMap } from '@graphmind/schema';
+import type { ControlType, MessagePayloadMap } from '@graphmind-ai/schema';
 import { useRunStore } from '../store/runStore.js';
 import { tokenBuffers } from '../store/tokenBuffers.js';
 import { useUiStore } from '../store/uiStore.js';

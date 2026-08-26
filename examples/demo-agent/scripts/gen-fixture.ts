@@ -28,7 +28,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PROTOCOL_VERSION, parseEnvelope } from '@graphmind/schema';
+import { PROTOCOL_VERSION, parseEnvelope } from '@graphmind-ai/schema';
 import { startServer, type StoredEvent } from 'graphmind-ai';
 import WebSocket from 'ws';
 import { runTripPlanner } from '../src/agent.js';
@@ -179,7 +179,7 @@ async function main(): Promise<void> {
   const instanceA = (a.head[startedIdx]?.payload as Record<string, unknown>)['instanceId'];
 
   // (The schema once dropped agent-node and error-path envelopes as invalid —
-  // fixed by making input/output optional in @graphmind/schema; everything
+  // fixed by making input/output optional in @graphmind-ai/schema; everything
   // below is captured from the real pipeline, nothing synthesized.)
   // Sanity: the inject branch really is the happy path, continue the sad one.
   const lastTextOf = (events: StoredEvent[]): string =>

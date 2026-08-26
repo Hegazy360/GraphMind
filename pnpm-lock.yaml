@@ -10,7 +10,7 @@ importers:
 
   apps/viewer:
     dependencies:
-      '@graphmind/schema':
+      '@graphmind-ai/schema':
         specifier: workspace:*
         version: link:../../packages/schema
       '@xyflow/react':
@@ -77,7 +77,7 @@ importers:
       '@ai-sdk/openai':
         specifier: ^4.0.47
         version: 4.0.47(zod@4.4.3)
-      '@graphmind/ai-sdk':
+      '@graphmind-ai/sdk':
         specifier: workspace:*
         version: link:../../packages/ai-sdk
       ai:
@@ -87,7 +87,7 @@ importers:
         specifier: ^4.0.0
         version: 4.4.3
     devDependencies:
-      '@graphmind/schema':
+      '@graphmind-ai/schema':
         specifier: workspace:*
         version: link:../../packages/schema
       '@types/node':
@@ -111,12 +111,12 @@ importers:
 
   examples/e2e:
     dependencies:
-      '@graphmind/ai-sdk':
-        specifier: workspace:*
-        version: link:../../packages/ai-sdk
-      '@graphmind/schema':
+      '@graphmind-ai/schema':
         specifier: workspace:*
         version: link:../../packages/schema
+      '@graphmind-ai/sdk':
+        specifier: workspace:*
+        version: link:../../packages/ai-sdk
       ai:
         specifier: ^7.0.79
         version: 7.0.79(zod@4.4.3)
@@ -170,10 +170,10 @@ importers:
 
   packages/ai-sdk:
     dependencies:
-      '@graphmind/client':
+      '@graphmind-ai/client':
         specifier: workspace:*
         version: link:../client
-      '@graphmind/schema':
+      '@graphmind-ai/schema':
         specifier: workspace:*
         version: link:../schema
     devDependencies:
@@ -204,7 +204,7 @@ importers:
 
   packages/cli:
     dependencies:
-      '@graphmind/schema':
+      '@graphmind-ai/schema':
         specifier: workspace:*
         version: link:../schema
       '@hono/node-server':
@@ -235,7 +235,7 @@ importers:
 
   packages/client:
     dependencies:
-      '@graphmind/schema':
+      '@graphmind-ai/schema':
         specifier: workspace:*
         version: link:../schema
     devDependencies:

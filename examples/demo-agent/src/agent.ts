@@ -1,6 +1,6 @@
 /**
  * The GraphMind demo agent: a Vercel AI SDK trip planner instrumented with
- * @graphmind/ai-sdk. Two modes:
+ * @graphmind-ai/sdk. Two modes:
  *
  *  - 'mock' (default): the scripted MockLanguageModelV4 — deterministic,
  *    keyless, streams tokens. This is what the bundled demo fixture records.
@@ -17,7 +17,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { anthropic } from '@ai-sdk/anthropic';
 import { openai } from '@ai-sdk/openai';
-import { graphmind, isAbortError, type WrapModelInput } from '@graphmind/ai-sdk';
+import { graphmind, isAbortError, type WrapModelInput } from '@graphmind-ai/sdk';
 import { stepCountIs, streamText } from 'ai';
 import { makeMockTripPlannerModel } from './mock-model.js';
 import { demoTools } from './tools.js';

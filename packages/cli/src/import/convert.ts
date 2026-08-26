@@ -18,7 +18,7 @@ import {
   type NodeKind,
   type RunStatus,
   type SdkInfo,
-} from '@graphmind/schema';
+} from '@graphmind-ai/schema';
 import type { ImportedNode, RawSpan } from './types.js';
 
 export interface ConvertOptions {

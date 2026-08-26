@@ -6,8 +6,8 @@
     "declaration": false,
     "sourceMap": false,
     "paths": {
-      "@graphmind/schema": ["../schema/src/index.ts"],
-      "@graphmind/client": ["../client/src/index.ts"]
+      "@graphmind-ai/schema": ["../schema/src/index.ts"],
+      "@graphmind-ai/client": ["../client/src/index.ts"]
     }
   },
   "include": ["src", "test", "vitest.config.ts"]

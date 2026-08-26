@@ -24,7 +24,7 @@
  *    `breakpoint.set/clear`, `mode.set`); the server re-mints `seq`.
  *    `exec.resume` must carry the owning run's `runId`.
  */
-import type { BreakpointMatcher, RunMode } from '@graphmind/schema';
+import type { BreakpointMatcher, RunMode } from '@graphmind-ai/schema';
 
 export interface RunInfo {
   id: string;

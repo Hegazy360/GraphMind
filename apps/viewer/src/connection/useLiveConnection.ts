@@ -12,7 +12,7 @@ import {
   WILDCARD_RUN_ID,
   type ControlType,
   type MessagePayloadMap,
-} from '@graphmind/schema';
+} from '@graphmind-ai/schema';
 import useWebSocketWithRetry from '../hooks/useWebSocketWithRetry.js';
 import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';

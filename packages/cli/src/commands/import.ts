@@ -8,7 +8,7 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
-import { PROTOCOL_VERSION } from '@graphmind/schema';
+import { PROTOCOL_VERSION } from '@graphmind-ai/schema';
 import type { ParsedCli } from '../args.js';
 import { convertTraceText, ImportError } from '../import/index.js';
 import { DEFAULT_PORT, resolveDbPath } from '../paths.js';

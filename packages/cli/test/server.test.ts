@@ -1,6 +1,6 @@
 /** End-to-end server behavior over real sockets on an ephemeral port. */
 import { afterEach, describe, expect, it } from 'vitest';
-import type { MessagePayloadMap } from '@graphmind/schema';
+import type { MessagePayloadMap } from '@graphmind-ai/schema';
 import { FakeApp, FakeUI, fetchJson, startTestServer, waitUntil, type TestServer } from './helpers.js';
 import type { UiServerMessage, WireEnvelope } from '../src/ui-protocol.js';
 

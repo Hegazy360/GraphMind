@@ -13,7 +13,7 @@ import {
   type NodeKind,
   type RunStatus,
   type TokenUsage,
-} from '@graphmind/schema';
+} from '@graphmind-ai/schema';
 import type { StoredEvent } from '../storage.js';
 
 export interface NodeInstanceModel {

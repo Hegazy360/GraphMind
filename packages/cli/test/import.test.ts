@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseEnvelope } from '@graphmind/schema';
+import { parseEnvelope } from '@graphmind-ai/schema';
 import { describe, expect, it } from 'vitest';
 import type { ParsedCli } from '../src/args.js';
 import { runImport, type ImportIo } from '../src/commands/import.js';

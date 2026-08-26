@@ -1,5 +1,5 @@
 /**
- * @graphmind/ai-sdk — Vercel AI SDK adapter for the GraphMind live agent
+ * @graphmind-ai/sdk — Vercel AI SDK adapter for the GraphMind live agent
  * debugger. See README.md.
  */
 export {
@@ -18,4 +18,4 @@ export {
   type RunContext,
   type Session,
   type SessionStats,
-} from '@graphmind/client';
+} from '@graphmind-ai/client';

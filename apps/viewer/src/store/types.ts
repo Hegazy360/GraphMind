@@ -11,7 +11,7 @@ import type {
   RunStatus,
   SdkInfo,
   TokenUsage,
-} from '@graphmind/schema';
+} from '@graphmind-ai/schema';
 
 /** Where a run's events came from. */
 export type RunSource = 'live' | 'fixture';

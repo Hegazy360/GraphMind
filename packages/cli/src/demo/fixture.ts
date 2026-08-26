@@ -2,7 +2,7 @@
  * The bundled demo fixture: a real trip-planner run (examples/demo-agent,
  * mock mode) captured through a real server, stored as NDJSON.
  *
- * Format — one JSON object per line. Every line is a valid @graphmind/schema
+ * Format — one JSON object per line. Every line is a valid @graphmind-ai/schema
  * envelope (the schema is loose, so the two extra bookkeeping fields ride
  * along on the wire shape without breaking validation):
  *
@@ -23,7 +23,7 @@
  * Regenerate with `pnpm gen:fixture` in examples/demo-agent (see the
  * generator script there for the capture procedure).
  */
-import { parseEnvelope } from '@graphmind/schema';
+import { parseEnvelope } from '@graphmind-ai/schema';
 
 /** Which stream segment a fixture event belongs to. */
 export type DemoBranch = 'base' | 'inject' | 'continue';

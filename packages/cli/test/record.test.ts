@@ -5,7 +5,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseEnvelopeJson } from '@graphmind/schema';
+import { parseEnvelopeJson } from '@graphmind-ai/schema';
 import { describe, expect, it } from 'vitest';
 import type { CliFlags, ParsedCli } from '../src/args.js';
 import { runRecord } from '../src/commands/record.js';

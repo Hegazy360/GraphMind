@@ -1,7 +1,6 @@
 {
-  "name": "@graphmind/client",
+  "name": "@graphmind-ai/client",
   "version": "0.1.0",
-  "private": true,
   "description": "Adapter-agnostic runtime for the GraphMind live agent debugger: session, event transport, and the cooperative gate engine (pause / step / breakpoints / resume).",
   "license": "MIT",
   "type": "module",
@@ -17,7 +16,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
@@ -25,7 +25,7 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@graphmind/schema": "workspace:*"
+    "@graphmind-ai/schema": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",
@@ -33,5 +33,14 @@
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
     "ws": "^8.21.3"
-  }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hegazy360/GraphMind.git",
+    "directory": "packages/client"
+  },
+  "homepage": "https://graphmind.ai"
 }

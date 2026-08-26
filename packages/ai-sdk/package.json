@@ -1,7 +1,6 @@
 {
-  "name": "@graphmind/ai-sdk",
+  "name": "@graphmind-ai/sdk",
   "version": "0.1.0",
-  "private": true,
   "description": "Vercel AI SDK adapter for the GraphMind live agent debugger: wrap models and tools to stream execution events and honour pause / step / inject / retry / abort gates.",
   "license": "MIT",
   "type": "module",
@@ -17,7 +16,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
@@ -25,8 +25,8 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@graphmind/client": "workspace:*",
-    "@graphmind/schema": "workspace:*"
+    "@graphmind-ai/client": "workspace:*",
+    "@graphmind-ai/schema": "workspace:*"
   },
   "peerDependencies": {
     "ai": ">=6 <8"
@@ -40,5 +40,14 @@
     "vitest": "^4.1.11",
     "ws": "^8.21.3",
     "zod": "^4.4.3"
-  }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hegazy360/GraphMind.git",
+    "directory": "packages/ai-sdk"
+  },
+  "homepage": "https://graphmind.ai"
 }

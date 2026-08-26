@@ -3,7 +3,7 @@
  * session, token batching, invocation tracking, one-shot warnings, and the
  * emit helpers used by both the model middleware and the tool wrapper.
  *
- * Invariant (inherited from @graphmind/client, re-enforced here): nothing in
+ * Invariant (inherited from @graphmind-ai/client, re-enforced here): nothing in
  * this class may throw into the host app. `session.emit` / `session.gate`
  * already guard internally; the helpers here guard their own bookkeeping.
  */
@@ -17,7 +17,7 @@ import {
   type Session,
   type TokenDelta,
   type TokenUsage,
-} from '@graphmind/client';
+} from '@graphmind-ai/client';
 import { LLM_NODE_ID, LLM_NODE_NAME, agentNodeId, toolNodeId } from './ids.js';
 import { InvocationTracker } from './invocation.js';
 import { chainAbortSignals } from './signals.js';

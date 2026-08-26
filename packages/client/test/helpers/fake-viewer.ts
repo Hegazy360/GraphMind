@@ -11,7 +11,7 @@ import {
   type BreakpointMatcher,
   type ResumeAction,
   type RunMode,
-} from '@graphmind/schema';
+} from '@graphmind-ai/schema';
 
 export interface ReceivedFrame {
   gm: number;
