@@ -8,7 +8,9 @@
 import { z } from 'zod';
 
 /** What kind of graph node an event refers to. */
-export const NodeKindSchema = z.enum(['agent', 'llm', 'tool', 'custom']).meta({ id: 'NodeKind' });
+export const NodeKindSchema = z
+  .enum(['agent', 'llm', 'tool', 'chain', 'retriever', 'custom'])
+  .meta({ id: 'NodeKind' });
 export type NodeKind = z.infer<typeof NodeKindSchema>;
 
 /** Terminal status of a run or node. */

@@ -363,6 +363,8 @@
         "agent",
         "llm",
         "tool",
+        "chain",
+        "retriever",
         "custom"
       ]
     },
@@ -618,6 +620,9 @@
         "nodeId": {
           "type": "string"
         },
+        "instanceId": {
+          "type": "string"
+        },
         "output": {},
         "usage": {
           "$ref": "#/$defs/TokenUsage"
@@ -724,6 +729,9 @@
       "type": "object",
       "properties": {
         "nodeId": {
+          "type": "string"
+        },
+        "instanceId": {
           "type": "string"
         },
         "error": {

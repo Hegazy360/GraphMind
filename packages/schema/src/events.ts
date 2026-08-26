@@ -56,6 +56,13 @@ export const EventPayloadSchemas = {
   /** A node finished. */
   'node.finished': z.looseObject({
     nodeId: z.string(),
+    /**
+     * The execution this completion belongs to. Optional for backwards
+     * compatibility; senders SHOULD set it — without it a receiver has to
+     * attribute the result to the most recent open instance, which
+     * mis-attributes when the same logical node runs concurrently.
+     */
+    instanceId: z.string().optional(),
     output: z.unknown().optional(),
     usage: TokenUsageSchema.optional(),
     durationMs: z.number().nonnegative(),
@@ -65,6 +72,8 @@ export const EventPayloadSchemas = {
   /** A node threw. Emitted in addition to `node.finished` bookkeeping. */
   'node.error': z.looseObject({
     nodeId: z.string(),
+    /** See `node.finished.instanceId`. */
+    instanceId: z.string().optional(),
     error: ErrorInfoSchema,
   }),
 
