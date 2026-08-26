@@ -10,16 +10,12 @@ importers:
 
   apps/web:
     dependencies:
-      '@vercel/blob':
-        specifier: ^2.8.0
-        version: 2.8.0
-    devDependencies:
       '@types/node':
         specifier: ^24.13.3
         version: 24.13.3
-      typescript:
-        specifier: ^7.0.2
-        version: 7.0.2
+      '@vercel/blob':
+        specifier: ^2.8.0
+        version: 2.8.0
 
   examples/spike:
     dependencies:

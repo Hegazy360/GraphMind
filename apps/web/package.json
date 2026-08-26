@@ -2,15 +2,12 @@
   "name": "web",
   "private": true,
   "type": "module",
-  "description": "graphmind.ai — static landing page + waitlist function",
+  "description": "graphmind.ai \u2014 static landing page + waitlist function",
   "scripts": {
     "test": "node --experimental-test-module-mocks --test test/waitlist.test.mjs"
   },
   "dependencies": {
-    "@vercel/blob": "^2.8.0"
-  },
-  "devDependencies": {
-    "@types/node": "^24.13.3",
-    "typescript": "^7.0.2"
+    "@vercel/blob": "^2.8.0",
+    "@types/node": "^24.13.3"
   }
 }
