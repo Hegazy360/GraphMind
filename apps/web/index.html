@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GraphMind — The debugger for AI agents</title>
+  <meta name="description" content="GraphMind is an open-source, local-first debugger for AI agents. Attach to a live run: pause on error, set breakpoints, step through, inspect every input and output, inject a fix, and resume. MIT licensed.">
+  <link rel="canonical" href="https://graphmind.ai/">
+  <link rel="icon" type="image/png" href="/graphmind.png">
+  <link rel="apple-touch-icon" href="/graphmind.png">
+  <meta name="theme-color" content="#0a0a0c" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#fbfbfc" media="(prefers-color-scheme: light)">
+
+  <meta property="og:title" content="GraphMind — The debugger for AI agents">
+  <meta property="og:description" content="Attaches while it's happening. Pause on error, set breakpoints, step through, inspect and inject, resume. Local-first, open source, MIT.">
+  <meta property="og:url" content="https://graphmind.ai/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="GraphMind">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="GraphMind — The debugger for AI agents">
+  <meta name="twitter:description" content="Attaches while it's happening. Pause on error, set breakpoints, step through, inspect and inject, resume. Local-first, open source, MIT.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <div class="notice">
+    <p><span class="notice-dot" aria-hidden="true"></span>GraphMind v2 is under construction. The previous product has been retired.</p>
+  </div>
+
+  <header class="site-header container">
+    <a class="brand" href="/" aria-label="GraphMind home">
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M6 17 L12 6 M12 6 L19 14 M6 17 L19 14" class="brand-edge"/>
+        <circle cx="6" cy="17" r="2.6" class="brand-node"/>
+        <circle cx="12" cy="6" r="2.6" class="brand-node brand-node-accent"/>
+        <circle cx="19" cy="14" r="2.6" class="brand-node"/>
+      </svg>
+      <span class="brand-name">GraphMind</span>
+    </a>
+    <nav class="site-nav" aria-label="Site">
+      <a class="nav-link" href="https://github.com/Hegazy360" rel="noopener">GitHub<span class="nav-arrow" aria-hidden="true">&#8599;</span></a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero container">
+      <div class="hero-copy">
+        <p class="eyebrow">Open source &middot; MIT &middot; Local-first</p>
+        <h1>The debugger for AI&nbsp;agents.</h1>
+        <p class="tagline">Attaches while it&rsquo;s happening.</p>
+        <p class="lede">
+          Your traces shouldn&rsquo;t be a post-mortem. GraphMind attaches to the run itself:
+          watch your agent execute as a live graph, pause on error, set breakpoints,
+          step through every input and output, inject a fix, and resume.
+        </p>
+
+        <form class="waitlist" id="waitlist-form" method="post" action="/api/waitlist" novalidate>
+          <div class="waitlist-row">
+            <label class="sr-only" for="email">Email address</label>
+            <input class="waitlist-input" type="email" id="email" name="email"
+                   placeholder="you@company.com" autocomplete="email" inputmode="email"
+                   spellcheck="false" required>
+            <button class="waitlist-button" id="waitlist-submit" type="submit">Join the waitlist</button>
+          </div>
+          <div class="hp" aria-hidden="true">
+            <label for="company">Company</label>
+            <input type="text" id="company" name="company" tabindex="-1" autocomplete="off">
+          </div>
+          <p class="form-status" id="form-status" role="status" aria-live="polite"></p>
+          <p class="form-note">Get notified at launch, plus early access to the first builds.</p>
+          <noscript>
+            <p class="form-note form-noscript">JavaScript is off in your browser, so this form won&rsquo;t submit —
+            email <a href="mailto:hello@graphmind.ai?subject=Waitlist">hello@graphmind.ai</a> and we&rsquo;ll add you by hand.</p>
+          </noscript>
+        </form>
+      </div>
+
+      <div class="hero-visual" aria-hidden="false">
+        <div class="panel">
+          <div class="panel-chrome" aria-hidden="true">
+            <span class="chrome-dots"><i></i><i></i><i></i></span>
+            <span class="chrome-title">graphmind &mdash; support-agent</span>
+            <span class="chrome-live"><span class="live-dot"></span>attached</span>
+          </div>
+          <svg class="graph" viewBox="0 0 560 372" role="img"
+               aria-label="A live agent workflow shown as a graph. Execution is flowing from node to node; one tool node is paused on an error with a breakpoint set.">
+            <!-- edges -->
+            <path class="edge edge-done" d="M70,205 C110,235 140,275 185,300"/>
+            <path class="edge edge-done" d="M185,300 C195,245 195,185 190,142"/>
+            <path class="edge edge-dim"  d="M185,300 C235,306 285,312 330,318"/>
+            <path class="edge edge-dim"  d="M330,62 C385,95 430,160 475,205"/>
+            <path class="edge edge-dim"  d="M335,195 C385,198 430,202 475,205"/>
+            <path class="edge edge-dim"  d="M330,318 C385,290 430,245 475,205"/>
+            <path class="edge edge-flow" d="M70,205 C115,195 145,160 190,130"/>
+            <path class="edge edge-flow" d="M190,130 C240,105 280,80 330,62"/>
+            <path class="edge edge-err"  d="M190,130 C245,150 285,175 335,195"/>
+
+            <!-- traveling pulse (hidden when offset-path is unsupported or motion is reduced) -->
+            <circle class="gm-dot" r="3.5"/>
+
+            <!-- nodes -->
+            <circle class="node node-done" cx="70"  cy="205" r="9"/>
+            <circle class="node node-done" cx="185" cy="300" r="9"/>
+            <circle class="node node-done" cx="330" cy="62"  r="10"/>
+            <circle class="node node-dim"  cx="330" cy="318" r="10"/>
+            <circle class="node node-dim"  cx="475" cy="205" r="10"/>
+
+            <!-- live node -->
+            <circle class="gm-ring"        cx="190" cy="130" r="12"/>
+            <circle class="gm-ring ring-2" cx="190" cy="130" r="12"/>
+            <circle class="node node-live" cx="190" cy="130" r="12"/>
+
+            <!-- error node, paused, with breakpoint -->
+            <circle class="gm-err-ring" cx="335" cy="195" r="17"/>
+            <circle class="node node-err" cx="335" cy="195" r="11"/>
+            <circle class="gm-bp" cx="317" cy="180" r="3.5"/>
+
+            <!-- labels -->
+            <text class="gm-label" x="190" y="160" text-anchor="middle">agent</text>
+            <text class="gm-label" x="330" y="88"  text-anchor="middle">searchFlights</text>
+            <text class="gm-label" x="335" y="226" text-anchor="middle">checkBudget</text>
+
+            <!-- paused badge -->
+            <g class="gm-badge">
+              <rect x="354" y="152" width="116" height="24" rx="6"/>
+              <circle cx="367" cy="164" r="3"/>
+              <text x="376" y="168">paused on error</text>
+            </g>
+          </svg>
+          <div class="panel-toolbar" aria-hidden="true">
+            <span class="tb-note">breakpoint &middot; checkBudget</span>
+            <span class="tb-chips">
+              <span class="tb-chip tb-chip-accent">resume</span>
+              <span class="tb-chip">step</span>
+              <span class="tb-chip">inspect state</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="features container" aria-labelledby="features-title">
+      <p class="eyebrow" id="features-title">What it does</p>
+      <div class="feature-grid">
+        <article class="feature">
+          <p class="feature-index">01</p>
+          <h2>Live attach</h2>
+          <p>Attach to a running workflow and watch it execute as a graph — every node,
+             edge, and tool call, while it happens. Not a trace viewer for afterwards.</p>
+        </article>
+        <article class="feature">
+          <p class="feature-index">02</p>
+          <h2>Pause &amp; step</h2>
+          <p>Set breakpoints on any node. Pause automatically on error. Step through
+             the run the way you step through code.</p>
+        </article>
+        <article class="feature">
+          <p class="feature-index">03</p>
+          <h2>Inspect &amp; inject</h2>
+          <p>Open any node and read its exact inputs and outputs. Edit state, inject
+             a fix, and resume — no restart, no replay.</p>
+        </article>
+        <article class="feature">
+          <p class="feature-index">04</p>
+          <h2>Local-first, MIT</h2>
+          <p><code>npx graphmind-ai</code> and you&rsquo;re debugging. Your data never leaves
+             your machine. MIT licensed and open source.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="how container" aria-labelledby="how-title">
+      <div class="how-copy">
+        <p class="eyebrow">How it works</p>
+        <h2 id="how-title">The graph is your code.</h2>
+        <p>
+          GraphMind never authors your workflow — the graph is a projection of the code
+          you already wrote. Wrap your model and tools, run your agent, and the debugger
+          attaches. First integration: the Vercel AI SDK, plus generic OpenTelemetry and
+          OpenInference trace import.
+        </p>
+        <ol class="steps">
+          <li><code>npx graphmind-ai</code> — start the local debugger.</li>
+          <li>Wrap your model and tools with <code>@graphmind/ai-sdk</code>.</li>
+          <li>Run your agent. The graph lights up — breakpoints, stepping, and live state included.</li>
+        </ol>
+      </div>
+      <div class="how-code">
+        <figure class="code-card">
+          <figcaption class="code-head">
+            <span class="code-pill">Planned API</span>
+            <span class="code-file">agent.ts</span>
+          </figcaption>
+          <pre><code><span class="tok-kw">import</span> { graphmind } <span class="tok-kw">from</span> <span class="tok-str">'@graphmind/ai-sdk'</span>;
+
+<span class="tok-kw">const</span> gm = <span class="tok-fn">graphmind</span>({ app: <span class="tok-str">'support-agent'</span> });
+
+<span class="tok-kw">const</span> model = gm.<span class="tok-fn">wrapModel</span>(<span class="tok-fn">anthropic</span>(<span class="tok-str">'claude-sonnet-4-5'</span>));
+<span class="tok-kw">const</span> tools = gm.<span class="tok-fn">wrapTools</span>({ searchFlights, checkBudget });</code></pre>
+        </figure>
+        <p class="how-note"><code>npx graphmind-ai</code> runs everything locally — your prompts, outputs, and traces never leave your machine.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-row">
+      <p class="footer-left">&copy; 2026 GraphMind &middot; MIT License</p>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="https://github.com/Hegazy360" rel="noopener">GitHub</a>
+        <a href="mailto:hello@graphmind.ai">hello@graphmind.ai</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      var form = document.getElementById('waitlist-form');
+      if (!form) return;
+      var email = document.getElementById('email');
+      var button = document.getElementById('waitlist-submit');
+      var status = document.getElementById('form-status');
+      var honeypot = document.getElementById('company');
+      var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+      function setStatus(message, kind) {
+        status.textContent = message;
+        status.className = 'form-status' + (kind ? ' is-' + kind : '');
+      }
+
+      form.addEventListener('submit', async function (event) {
+        event.preventDefault();
+        var value = (email.value || '').trim();
+
+        if (honeypot && honeypot.value) {
+          form.classList.add('is-done');
+          setStatus('You’re on the list — watch your inbox.', 'ok');
+          return;
+        }
+        if (!EMAIL_RE.test(value) || value.length > 254) {
+          setStatus('That email doesn’t look right — check it and try again.', 'error');
+          email.focus();
+          return;
+        }
+
+        var label = button.textContent;
+        button.disabled = true;
+        button.textContent = 'Joining…';
+        setStatus('', null);
+
+        try {
+          var res = await fetch('/api/waitlist', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: value })
+          });
+          if (res.ok) {
+            form.classList.add('is-done');
+            setStatus('You’re on the list — watch your inbox.', 'ok');
+          } else if (res.status === 400) {
+            setStatus('That email doesn’t look right — check it and try again.', 'error');
+          } else {
+            setStatus('Something went wrong on our end — email hello@graphmind.ai and we’ll add you.', 'error');
+          }
+        } catch (err) {
+          setStatus('Network hiccup — try again, or email hello@graphmind.ai.', 'error');
+        } finally {
+          button.disabled = false;
+          button.textContent = label;
+        }
+      });
+    })();
+  </script>
+  <script defer src="/_vercel/insights/script.js"></script>
+</body>
+</html>

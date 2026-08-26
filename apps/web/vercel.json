@@ -1,0 +1,10 @@
+{
+  "cleanUrls": true,
+  "redirects": [
+    { "source": "/login", "destination": "/", "permanent": true },
+    { "source": "/signup", "destination": "/", "permanent": true },
+    { "source": "/graphs", "destination": "/", "permanent": true },
+    { "source": "/graphs/:path*", "destination": "/", "permanent": true },
+    { "source": "/subscriptions", "destination": "/", "permanent": true }
+  ]
+}
