@@ -68,6 +68,10 @@ jobs:
         run: pnpm --filter viewer run test
 
       - name: Test web
+        # apps/web runs on Vercel's Node 24 runtime, and its tests import .ts
+        # files via type stripping (default-on only in Node >= 23.6) — so this
+        # suite is meaningful and runnable only on the Node 24 matrix cells.
+        if: matrix.node == '24.x'
         run: pnpm --filter web test
 
       - name: Build viewer (and bundle into CLI)
