@@ -16,6 +16,10 @@ export interface CliFlags {
   live: boolean;
   /** `graphmind record --out <file>`: output path override. */
   out: string | undefined;
+  /** `graphmind init --install`: run the package-manager install. */
+  install: boolean;
+  /** `graphmind init --write`: write a graphmind.example.ts snippet file. */
+  write: boolean;
 }
 
 export interface ParsedCli {
@@ -40,6 +44,8 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     version: false,
     live: false,
     out: undefined,
+    install: false,
+    write: false,
   };
   const positionals: string[] = [];
   const errors: string[] = [];
@@ -94,6 +100,12 @@ export function parseCliArgs(argv: string[]): ParsedCli {
         break;
       case '--live':
         flags.live = true;
+        break;
+      case '--install':
+        flags.install = true;
+        break;
+      case '--write':
+        flags.write = true;
         break;
       case '--out': {
         const raw = takeValue('--out', inline, next);

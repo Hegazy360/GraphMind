@@ -7,6 +7,7 @@
 import { parseCliArgs, type ParsedCli } from './args.js';
 import { runDemo } from './commands/demo.js';
 import { runImport } from './commands/import.js';
+import { runInit } from './commands/init.js';
 import { runMcp } from './commands/mcp.js';
 import { runRecord } from './commands/record.js';
 import { openBrowser } from './open-browser.js';
@@ -28,6 +29,10 @@ const commands: Record<string, CommandDef> = {
   demo: {
     summary: 'Replay the bundled demo debug session (--live runs it for real)',
     run: runDemo,
+  },
+  init: {
+    summary: 'Detect this project\'s agent framework and print the setup steps',
+    run: runInit,
   },
   import: {
     summary: 'Import an OTel/OpenInference trace file as a run (best-effort)',
@@ -58,6 +63,8 @@ function printHelp(): void {
     '                 or GRAPHMIND_DB)',
     '  --no-open      Do not open the viewer in a browser',
     '  --live         (demo) run the real demo agent with your API key',
+    '  --install      (init) run the package-manager install',
+    '  --write        (init) write a graphmind.example.ts snippet file',
     '  --out <file>   (record) output NDJSON path',
     '  -v, --version  Print the version and exit',
     '  -h, --help     Show this help',

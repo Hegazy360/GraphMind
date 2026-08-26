@@ -23,6 +23,8 @@ function parsedCli(positionals: string[], flags: Partial<CliFlags>): ParsedCli {
       version: false,
       live: false,
       out: undefined,
+      install: false,
+      write: false,
       ...flags,
     },
     errors: [],
