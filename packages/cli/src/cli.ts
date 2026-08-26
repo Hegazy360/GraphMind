@@ -5,9 +5,14 @@
  * the command table below.
  */
 import { parseCliArgs, type ParsedCli } from './args.js';
+import { runDemo } from './commands/demo.js';
+import { runImport } from './commands/import.js';
+import { runMcp } from './commands/mcp.js';
+import { runRecord } from './commands/record.js';
 import { openBrowser } from './open-browser.js';
 import { DEFAULT_PORT } from './paths.js';
 import { startServer } from './server.js';
+import { recordTelemetry } from './telemetry.js';
 import { VERSION } from './version.js';
 
 interface CommandDef {
@@ -20,9 +25,22 @@ const commands: Record<string, CommandDef> = {
     summary: 'Start the GraphMind server (the default command)',
     run: runServe,
   },
-  // Future: import (load a recorded run), mcp (expose runs over MCP),
-  // record (capture a run headlessly). Add entries here — nothing else
-  // needs to change.
+  demo: {
+    summary: 'Replay the bundled demo debug session (--live runs it for real)',
+    run: runDemo,
+  },
+  import: {
+    summary: 'Import an OTel/OpenInference trace file as a run (best-effort)',
+    run: runImport,
+  },
+  mcp: {
+    summary: 'Serve runs to MCP clients (Claude Code, Cursor) over stdio',
+    run: runMcp,
+  },
+  record: {
+    summary: 'Capture a run to a replayable NDJSON fixture',
+    run: runRecord,
+  },
 };
 
 function printHelp(): void {
@@ -62,6 +80,7 @@ async function runServe(parsed: ParsedCli): Promise<number> {
     return 1;
   }
 
+  recordTelemetry('serve');
   console.log(`GraphMind v${VERSION} listening on ${server.url}`);
   console.log(`  viewer   ${server.url}`);
   console.log(`  ingest   ws://127.0.0.1:${server.port}/ingest`);
