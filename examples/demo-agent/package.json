@@ -1,0 +1,32 @@
+{
+  "name": "demo-agent",
+  "private": true,
+  "description": "GraphMind demo agent: a Vercel AI SDK trip planner with a planted currency-conversion bug. Mock mode is deterministic and keyless; live mode uses ANTHROPIC_API_KEY or OPENAI_API_KEY.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "start:live": "tsx src/main.ts --live",
+    "typecheck": "tsc -p tsconfig.json",
+    "gen:fixture": "tsx scripts/gen-fixture.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.42",
+    "@ai-sdk/openai": "^4.0.47",
+    "@graphmind/ai-sdk": "workspace:*",
+    "ai": "^7.0.79",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@graphmind/schema": "workspace:*",
+    "@types/node": "^26.3.0",
+    "@types/ws": "^8.18.1",
+    "graphmind-ai": "workspace:*",
+    "tsx": "^4.19.0",
+    "typescript": "^7.0.2",
+    "ws": "^8.21.3"
+  }
+}

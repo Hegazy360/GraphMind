@@ -10,9 +10,19 @@ import { InspectorPanel } from './components/InspectorPanel.js';
 import { RunBar } from './components/RunBar.js';
 import { RunCanvas } from './components/RunCanvas.js';
 import { GraphMindMark, RunsList } from './components/RunsList.js';
+import { WelcomeCard } from './components/WelcomeCard.js';
+import { shouldShowWelcome } from './lib/firstRun.js';
 
-function EmptyState({ fixtureAvailable }: { fixtureAvailable: boolean }) {
+function EmptyState({ fixtureAvailable, runCount }: { fixtureAvailable: boolean; runCount: number }) {
   const connection = useUiStore((s) => s.connection);
+  // First run: connected, zero runs → the crafted welcome card.
+  if (fixtureAvailable && shouldShowWelcome(connection, runCount)) {
+    return (
+      <div className="absolute inset-0 flex flex-col items-center justify-center" style={{ background: 'var(--bg-canvas)' }}>
+        <WelcomeCard />
+      </div>
+    );
+  }
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center" style={{ gap: 14, background: 'var(--bg-canvas)' }}>
       <GraphMindMark size={40} />
@@ -54,6 +64,7 @@ export default function App() {
     const ids = Object.keys(s.runs);
     return ids[0];
   });
+  const runCount = useRunStore((s) => Object.keys(s.runs).length);
 
   // hash → state (deep links)
   useEffect(() => {
@@ -121,7 +132,7 @@ export default function App() {
             {selectedRunId !== undefined && runExists ? (
               <RunCanvas runId={selectedRunId} />
             ) : (
-              <EmptyState fixtureAvailable={!demoRequested && !fixtureParam} />
+              <EmptyState fixtureAvailable={!demoRequested && !fixtureParam} runCount={runCount} />
             )}
           </ReactFlowProvider>
           <InspectorPanel />

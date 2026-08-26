@@ -92,6 +92,8 @@ async function instrumentStream<R extends StreamResultLike>(
   model: ModelLike,
   doStream: () => PromiseLike<R>,
 ): Promise<R> {
+  const attachWait = core.maybeWaitForAttach(); // waitForAttach: first-call gate
+  if (attachWait !== undefined) await attachWait;
   const ctx = core.session.currentRun();
   // A run the debugger aborted must not start new steps (terminal, no retries).
   if (ctx?.signal.aborted === true) throw core.abortError(ctx);
@@ -236,6 +238,8 @@ async function instrumentGenerate<R extends GenerateResultLike>(
   model: ModelLike,
   doGenerate: () => PromiseLike<R>,
 ): Promise<R> {
+  const attachWait = core.maybeWaitForAttach(); // waitForAttach: first-call gate
+  if (attachWait !== undefined) await attachWait;
   const ctx = core.session.currentRun();
   if (ctx?.signal.aborted === true) throw core.abortError(ctx);
 

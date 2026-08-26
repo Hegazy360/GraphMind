@@ -7,6 +7,7 @@
  *   GET /health              liveness + version
  *   GET /api/runs            all runs (with counts + live flag)
  *   GET /api/runs/:id/events paginated events of one run
+ *   POST /api/demo/start     replay the bundled demo run (in-process client)
  *   GET /*                   built viewer (or placeholder page)
  *
  * Local-first: binds 127.0.0.1 only, no auth. Never expose this port.
@@ -15,6 +16,7 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { WebSocketServer } from 'ws';
+import { startBundledDemoReplay, type DemoReplay } from './demo/replayer.js';
 import { Hub, type LogFn } from './hub.js';
 import { openBrowser } from './open-browser.js';
 import { DEFAULT_PORT, resolveDbPath, resolveViewerDist, type EnvLike } from './paths.js';
@@ -108,6 +110,28 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
       nextAfterSeq: page.hasMore && lastSeq !== undefined ? lastSeq : null,
     });
   });
+  // The viewer's first-run card posts here: replay the bundled demo run
+  // through this server's own ingest pipeline (the replayer is a normal
+  // ingest client living in this process). One replay at a time.
+  let activeDemo: DemoReplay | undefined;
+  let boundPort = requestedPort; // reassigned once the listener is up
+  app.post('/api/demo/start', async (c) => {
+    if (activeDemo !== undefined && !activeDemo.finished) {
+      return c.json({ ok: true, runId: activeDemo.runId, alreadyRunning: true });
+    }
+    try {
+      activeDemo = await startBundledDemoReplay({
+        url: `ws://${host}:${boundPort}/ingest`,
+        log,
+      });
+    } catch (error) {
+      return c.json(
+        { ok: false, error: error instanceof Error ? error.message : String(error) },
+        500,
+      );
+    }
+    return c.json({ ok: true, runId: activeDemo.runId });
+  });
   app.get('/*', (c) => serveViewer(c.req.url, viewerDist));
 
   let httpServer: HttpServer;
@@ -133,6 +157,7 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
 
   const address = httpServer.address();
   const port = typeof address === 'object' && address !== null ? address.port : requestedPort;
+  boundPort = port;
   const url = `http://${host}:${port}`;
 
   const ingestWss = new WebSocketServer({ noServer: true });
@@ -163,6 +188,7 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
     if (closed) return;
     closed = true;
     clearInterval(pingTimer);
+    activeDemo?.stop();
     await hub.closeAll(500);
     ingestWss.close();
     uiWss.close();

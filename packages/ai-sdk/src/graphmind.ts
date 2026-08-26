@@ -18,6 +18,7 @@ import {
   createSession,
   isAbortError,
   toErrorInfo,
+  type ReadyOptions,
   type RunContext,
   type SdkInfo,
   type Session,
@@ -41,11 +42,28 @@ export interface GraphmindOptions extends Omit<SessionOptions, 'appName' | 'sdk'
   sdk?: SdkInfo;
   /** node.token batching interval per node in ms. Default 34 (~30/sec). */
   tokenFlushIntervalMs?: number;
+  /**
+   * Attach guarantee for the first execution: when `true` (default timeout,
+   * 2000ms) or a number (timeout in ms), the first `gm.run()` / first wrapped
+   * model step / first wrapped tool call awaits `gm.ready()` before
+   * proceeding, so the debugger's gates are armed from the very first event.
+   * Still fail-open: on timeout execution continues detached. Later calls are
+   * unaffected. Equivalent to calling `await gm.ready(...)` up front.
+   */
+  waitForAttach?: boolean | number;
 }
 
 export interface Graphmind {
   /** The underlying GraphMind session (advanced: stats, custom events). */
   readonly session: Session;
+  /**
+   * Attach guarantee: force the lazy transport to connect now and resolve
+   * `true` once the handshake completes (gates armed), `false` on timeout
+   * (default 2000ms) or when GraphMind is disabled. Never throws; concurrent
+   * calls share one attempt; resolves instantly when already attached; works
+   * again after a disconnect. `false` means "continue detached", not an error.
+   */
+  ready(opts?: ReadyOptions): Promise<boolean>;
   /**
    * Wrap a language model with the debug middleware (via the SDK's public
    * `wrapLanguageModel`). Identity when GraphMind is disabled.
@@ -82,17 +100,21 @@ function detectAiVersion(): string {
  * degrades to a disabled session (see @graphmind/client `createSession`).
  */
 export function graphmind(options: GraphmindOptions = {}): Graphmind {
-  const { app, sdk, tokenFlushIntervalMs, ...sessionOptions } = options;
+  const { app, sdk, tokenFlushIntervalMs, waitForAttach, ...sessionOptions } = options;
   const session = createSession({
     ...sessionOptions,
     appName: app ?? 'ai-app',
     sdk: sdk ?? { name: 'ai', version: detectAiVersion() },
   });
-  const core = new AdapterCore(session, options.logger, tokenFlushIntervalMs);
+  const core = new AdapterCore(session, options.logger, tokenFlushIntervalMs, waitForAttach);
   const middleware = createDebugMiddleware(core);
 
   return {
     session,
+
+    ready(opts?: ReadyOptions): Promise<boolean> {
+      return session.ready(opts);
+    },
 
     wrapModel(model: WrapModelInput): WrappedLanguageModel {
       // Disabled = identity: zero overhead, zero surface. (The SDK accepts
@@ -127,6 +149,8 @@ export function graphmind(options: GraphmindOptions = {}): Graphmind {
     },
 
     async run<T>(name: string, fn: (ctx: RunContext) => T | Promise<T>): Promise<T> {
+      const attachWait = core.maybeWaitForAttach(); // waitForAttach: first-run gate
+      if (attachWait !== undefined) await attachWait;
       return session.run(name, async (ctx) => {
         const nodeId = agentNodeId(name);
         const startedAt = Date.now();

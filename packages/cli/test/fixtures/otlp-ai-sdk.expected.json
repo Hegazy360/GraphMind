@@ -1,0 +1,160 @@
+[
+  {
+    "gm": 1,
+    "seq": 0,
+    "ts": 1700000000000,
+    "runId": "run_golden",
+    "type": "run.started",
+    "payload": {
+      "app": "flight-booker",
+      "sdk": { "name": "graphmind-import", "version": "test" },
+      "meta": { "source": "import", "format": "otlp/ai-sdk", "file": "otlp-ai-sdk.json" }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 1,
+    "ts": 1700000000000,
+    "runId": "run_golden",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "agent:searchFlights-agent",
+      "kind": "agent",
+      "name": "searchFlights-agent",
+      "instanceId": "a1a1a1a1a1a1a1a1",
+      "input": { "prompt": "Find me a flight from SFO to JFK" },
+      "model": "gpt-4o"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 2,
+    "ts": 1700000000100,
+    "runId": "run_golden",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "llm:step",
+      "parentId": "agent:searchFlights-agent",
+      "kind": "llm",
+      "name": "step",
+      "instanceId": "b2b2b2b2b2b2b2b2",
+      "input": [
+        {
+          "role": "user",
+          "content": [{ "type": "text", "text": "Find me a flight from SFO to JFK" }]
+        }
+      ],
+      "model": "gpt-4o-2024-08-06"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 3,
+    "ts": 1700000001500,
+    "runId": "run_golden",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "llm:step",
+      "output": [
+        {
+          "toolCallType": "function",
+          "toolCallId": "call_1",
+          "toolName": "searchFlights",
+          "args": "{\"from\":\"SFO\",\"to\":\"JFK\"}"
+        }
+      ],
+      "usage": { "inputTokens": 180, "outputTokens": 25 },
+      "durationMs": 1400,
+      "status": "ok",
+      "instanceId": "b2b2b2b2b2b2b2b2"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 4,
+    "ts": 1700000001600,
+    "runId": "run_golden",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "tool:searchFlights",
+      "parentId": "llm:step",
+      "kind": "tool",
+      "name": "searchFlights",
+      "instanceId": "call_1",
+      "input": { "from": "SFO", "to": "JFK" }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 5,
+    "ts": 1700000002400,
+    "runId": "run_golden",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "tool:searchFlights",
+      "output": { "flights": [{ "no": "UA123", "departs": "09:05" }] },
+      "durationMs": 800,
+      "status": "ok",
+      "instanceId": "call_1"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 6,
+    "ts": 1700000002500,
+    "runId": "run_golden",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "llm:step",
+      "parentId": "agent:searchFlights-agent",
+      "kind": "llm",
+      "name": "step",
+      "instanceId": "d4d4d4d4d4d4d4d4",
+      "input": [
+        {
+          "role": "tool",
+          "content": [{ "type": "tool-result", "toolCallId": "call_1" }]
+        }
+      ],
+      "model": "gpt-4o-2024-08-06"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 7,
+    "ts": 1700000003900,
+    "runId": "run_golden",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "llm:step",
+      "output": "Booked UA123 departing 9:05am.",
+      "usage": { "inputTokens": 240, "outputTokens": 40 },
+      "durationMs": 1400,
+      "status": "ok",
+      "instanceId": "d4d4d4d4d4d4d4d4"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 8,
+    "ts": 1700000004000,
+    "runId": "run_golden",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "agent:searchFlights-agent",
+      "output": "Booked UA123 departing 9:05am.",
+      "usage": { "inputTokens": 420, "outputTokens": 65 },
+      "durationMs": 4000,
+      "status": "ok",
+      "instanceId": "a1a1a1a1a1a1a1a1"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 9,
+    "ts": 1700000004000,
+    "runId": "run_golden",
+    "type": "run.finished",
+    "payload": { "status": "ok" }
+  }
+]

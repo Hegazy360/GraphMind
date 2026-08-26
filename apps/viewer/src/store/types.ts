@@ -79,6 +79,12 @@ export interface RunMeta {
   status: 'pending' | 'running' | RunStatus;
   error?: ErrorInfo;
   source: RunSource;
+  /**
+   * The server's registered origin for the run (`RunInfo.source`: 'live' |
+   * 'import' | 'demo'), when known. Drives the run-list badge — a 'demo'
+   * run shows as a recorded session.
+   */
+  serverSource?: string;
 }
 
 export interface RunState {

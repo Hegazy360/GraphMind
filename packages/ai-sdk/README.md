@@ -32,9 +32,43 @@ await gm.dispose();
 ```
 
 `graphmind()` accepts all `@graphmind/client` session options (`url`,
-`enabled`, `meta`, timeouts, ...) plus `app`, `sdk` and
-`tokenFlushIntervalMs`. Kill switches: `GRAPHMIND_DISABLED=1` always
+`enabled`, `meta`, timeouts, ...) plus `app`, `sdk`, `tokenFlushIntervalMs`
+and `waitForAttach`. Kill switches: `GRAPHMIND_DISABLED=1` always
 disables; `NODE_ENV=production` disables unless `GRAPHMIND=1`.
+
+## Attach guarantee: `gm.ready()` / `waitForAttach`
+
+The transport is lazy and fails open, so an agent that starts immediately can
+run past its first gates before the debugger's handshake lands. When you want
+pause guarantees from the very first event, either await attachment
+explicitly:
+
+```ts
+const gm = graphmind({ app: 'support-agent' });
+const attached = await gm.ready();                 // default timeout 2000ms
+const attached = await gm.ready({ timeoutMs: 500 });
+```
+
+or let the adapter do it on first use:
+
+```ts
+const gm = graphmind({ app: 'support-agent', waitForAttach: true });  // 2000ms
+const gm = graphmind({ app: 'support-agent', waitForAttach: 500 });   // 500ms
+```
+
+`gm.ready()` force-starts the connection immediately and resolves `true` once
+the handshake completes — the viewer's breakpoints/mode are armed *before* it
+resolves — or `false` on timeout / when GraphMind is disabled. It never
+throws; concurrent calls share one connection attempt; a call after
+attachment resolves `true` instantly; and it works again after a disconnect
+(a new call kicks an immediate reconnect instead of waiting out the
+background retry interval). `false` is not an error — it means "continue
+detached", preserving the fail-open contract.
+
+With `waitForAttach` set, the **first** `gm.run()` / first wrapped model step
+/ first wrapped tool call awaits `gm.ready()` (a number is the timeout in ms)
+before proceeding. Still fail-open: on timeout the app continues detached,
+and later calls never wait. Disabled sessions skip the wait entirely.
 
 ## What it does
 

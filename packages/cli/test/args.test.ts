@@ -12,6 +12,8 @@ describe('parseCliArgs', () => {
       open: true,
       help: false,
       version: false,
+      live: false,
+      out: undefined,
     });
     expect(parsed.errors).toEqual([]);
   });

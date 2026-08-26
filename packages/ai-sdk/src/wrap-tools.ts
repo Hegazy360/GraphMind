@@ -22,8 +22,7 @@
  * Provider-executed tools have no local `execute`; they pass through
  * untouched and are observed from the stream tee instead.
  */
-import { isAbortError, type GateNode } from '@graphmind/client';
-import type { RunStatus } from '@graphmind/schema';
+import { isAbortError, type GateNode, type RunStatus } from '@graphmind/client';
 import type { ToolSet } from 'ai';
 import type { AdapterCore } from './core.js';
 import { LLM_NODE_ID, nextId, toolNodeId } from './ids.js';
@@ -71,6 +70,8 @@ function safeChunkPreview(chunk: unknown): string {
 
 function makeExecute(core: AdapterCore, toolName: string, original: ExecuteFn): ExecuteFn {
   return async (input: unknown, options: unknown): Promise<unknown> => {
+    const attachWait = core.maybeWaitForAttach(); // waitForAttach: first-call gate
+    if (attachWait !== undefined) await attachWait;
     const node: GateNode = { nodeId: toolNodeId(toolName), kind: 'tool', name: toolName };
     const ctx = core.session.currentRun();
     const instanceId = instanceIdOf(options);
@@ -166,6 +167,8 @@ function makeStreamingExecute(core: AdapterCore, toolName: string, original: Exe
   // AsyncIterable sniffing sees it on the direct return value.
   return (input: unknown, options: unknown): AsyncGenerator<unknown> => {
     async function* run(): AsyncGenerator<unknown> {
+      const attachWait = core.maybeWaitForAttach(); // waitForAttach: first-call gate
+      if (attachWait !== undefined) await attachWait;
       const node: GateNode = { nodeId: toolNodeId(toolName), kind: 'tool', name: toolName };
       const ctx = core.session.currentRun();
       const instanceId = instanceIdOf(options);

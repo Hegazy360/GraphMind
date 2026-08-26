@@ -1,0 +1,81 @@
+{
+  "spans": [
+    {
+      "name": "weather-agent",
+      "context": { "trace_id": "trace0001", "span_id": "s_agent" },
+      "span_kind": "AGENT",
+      "parent_id": null,
+      "start_time": "2024-03-09T16:00:00.000Z",
+      "end_time": "2024-03-09T16:00:03.000Z",
+      "status_code": "OK",
+      "status_message": "",
+      "attributes": {
+        "openinference.span.kind": "AGENT",
+        "input.value": "What is the weather in Paris?",
+        "input.mime_type": "text/plain",
+        "output.value": "It is 18 C and sunny in Paris.",
+        "output.mime_type": "text/plain"
+      },
+      "events": []
+    },
+    {
+      "name": "ChatCompletion",
+      "context": { "trace_id": "trace0001", "span_id": "s_llm1" },
+      "span_kind": "LLM",
+      "parent_id": "s_agent",
+      "start_time": "2024-03-09T16:00:00.100Z",
+      "end_time": "2024-03-09T16:00:01.200Z",
+      "status_code": "OK",
+      "status_message": "",
+      "attributes": {
+        "openinference.span.kind": "LLM",
+        "llm.model_name": "gpt-4o-mini",
+        "llm.token_count.prompt": 96,
+        "llm.token_count.completion": 18,
+        "llm.token_count.total": 114,
+        "input.value": "{\"messages\":[{\"role\":\"user\",\"content\":\"What is the weather in Paris?\"}]}",
+        "input.mime_type": "application/json",
+        "output.value": "{\"tool_calls\":[{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Paris\\\"}\"}]}",
+        "output.mime_type": "application/json"
+      },
+      "events": []
+    },
+    {
+      "name": "get_weather",
+      "context": { "trace_id": "trace0001", "span_id": "s_tool1" },
+      "span_kind": "TOOL",
+      "parent_id": "s_agent",
+      "start_time": "2024-03-09T16:00:01.300Z",
+      "end_time": "2024-03-09T16:00:01.900Z",
+      "status_code": "OK",
+      "status_message": "",
+      "attributes": {
+        "openinference.span.kind": "TOOL",
+        "tool.name": "get_weather",
+        "input.value": "{\"city\":\"Paris\"}",
+        "input.mime_type": "application/json",
+        "output.value": "{\"temp_c\":18,\"condition\":\"sunny\"}",
+        "output.mime_type": "application/json"
+      },
+      "events": []
+    },
+    {
+      "name": "format-response",
+      "context": { "trace_id": "trace0001", "span_id": "s_chain" },
+      "span_kind": "CHAIN",
+      "parent_id": "s_agent",
+      "start_time": "2024-03-09T16:00:02.000Z",
+      "end_time": "2024-03-09T16:00:02.900Z",
+      "status_code": "OK",
+      "status_message": "",
+      "attributes": {
+        "openinference.span.kind": "CHAIN",
+        "input.value": "{\"temp_c\":18,\"condition\":\"sunny\"}",
+        "input.mime_type": "application/json",
+        "output.value": "It is 18 C and sunny in Paris.",
+        "output.mime_type": "text/plain"
+      },
+      "events": []
+    }
+  ]
+}

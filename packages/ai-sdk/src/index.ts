@@ -14,6 +14,7 @@ export {
 export {
   GraphMindAbortError,
   isAbortError,
+  type ReadyOptions,
   type RunContext,
   type Session,
   type SessionStats,

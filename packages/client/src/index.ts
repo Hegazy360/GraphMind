@@ -9,6 +9,7 @@ export {
   type Session,
   type SessionOptions,
   type SessionStats,
+  type ReadyOptions,
   type RunContext,
 } from './session.js';
 
@@ -34,6 +35,7 @@ export type {
   ErrorInfo,
   EventPayloadMap,
   EventType,
+  GraphNodeHint,
   NodeKind,
   PausePoint,
   ResumeAction,

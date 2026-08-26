@@ -10,10 +10,14 @@
 import {
   GraphMindAbortError,
   toErrorInfo,
+  type GraphNodeHint,
+  type NodeKind,
   type RunContext,
+  type RunStatus,
   type Session,
+  type TokenDelta,
+  type TokenUsage,
 } from '@graphmind/client';
-import type { GraphNodeHint, NodeKind, RunStatus, TokenDelta, TokenUsage } from '@graphmind/schema';
 import { LLM_NODE_ID, LLM_NODE_NAME, agentNodeId, toolNodeId } from './ids.js';
 import { InvocationTracker } from './invocation.js';
 import { chainAbortSignals } from './signals.js';
@@ -54,16 +58,49 @@ export class AdapterCore {
 
   private readonly providerToolStarts = new Map<string, number>();
 
+  /** Shared one-shot attach wait (the `waitForAttach` option). */
+  private attachWait: Promise<void> | undefined;
+  private attachWaitDone = false;
+
   constructor(
     readonly session: Session,
     logger?: WarnSink,
     tokenFlushIntervalMs?: number,
+    private readonly waitForAttach?: boolean | number,
   ) {
     this.warner = new OnceWarner(logger);
     this.batcher = new TokenBatcher(
       (nodeId, deltas) => this.session.emit('node.token', { nodeId, deltas }),
       tokenFlushIntervalMs,
     );
+  }
+
+  /**
+   * The `waitForAttach` gate: on the FIRST `gm.run()` / wrapped model step /
+   * wrapped tool call, await `session.ready()` so the handshake (and armed
+   * breakpoints) land before anything executes. One shared attempt; fail-open
+   * (a timeout just continues detached). Returns `undefined` on the fast path
+   * (option off, or the one-shot wait already settled) so steady-state calls
+   * cost a single boolean check.
+   */
+  maybeWaitForAttach(): Promise<void> | undefined {
+    if (this.attachWaitDone) return undefined;
+    const cfg = this.waitForAttach;
+    if (cfg === undefined || cfg === false) {
+      this.attachWaitDone = true;
+      return undefined;
+    }
+    if (this.attachWait === undefined) {
+      const done = (): void => {
+        this.attachWaitDone = true;
+      };
+      // session.ready() never rejects; the catch is belt-and-braces (the
+      // adapter must never throw into the host).
+      this.attachWait = this.session
+        .ready(typeof cfg === 'number' ? { timeoutMs: cfg } : {})
+        .then(done, done);
+    }
+    return this.attachWait;
   }
 
   // -- events ---------------------------------------------------------------

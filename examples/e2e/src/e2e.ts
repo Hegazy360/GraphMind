@@ -145,12 +145,16 @@ async function main(): Promise<void> {
 
   const gm = graphmind({ app: 'e2e-smoke' });
 
-  // Lazy transport: kick a connection with a warmup run, then wait for the
-  // handshake so error gates are armed before the real scenario runs.
-  // TODO(product): replace with a first-class `await gm.ready()` once added.
-  await gm.run('warmup', async () => {});
-  for (let i = 0; i < 40 && !gm.session.attached; i += 1) await delay(50);
-  check('session attached to CLI before scenario', gm.session.attached);
+  // Attach guarantee: force the lazy transport to connect and await the
+  // handshake, so error gates are armed before the real scenario runs.
+  const attached = await gm.ready();
+  check('gm.ready() attached to CLI before scenario', attached && gm.session.attached);
+
+  const readyAgain = Date.now();
+  check(
+    'gm.ready() after attach resolves true instantly',
+    (await gm.ready()) && Date.now() - readyAgain < 50,
+  );
 
   const model = gm.wrapModel(makeMockModel());
   const tools = gm.wrapTools({

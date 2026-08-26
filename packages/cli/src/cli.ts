@@ -57,6 +57,8 @@ function printHelp(): void {
     '  --db <path>    SQLite database file (default ~/.graphmind/graphmind.db,',
     '                 or GRAPHMIND_DB)',
     '  --no-open      Do not open the viewer in a browser',
+    '  --live         (demo) run the real demo agent with your API key',
+    '  --out <file>   (record) output NDJSON path',
     '  -v, --version  Print the version and exit',
     '  -h, --help     Show this help',
   ];

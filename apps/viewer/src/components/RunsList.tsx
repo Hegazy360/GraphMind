@@ -3,6 +3,7 @@
  * source badge.
  */
 import { useEffect, useMemo, useState } from 'react';
+import { runChipLabel } from '../lib/firstRun.js';
 import { fmtRelative } from '../lib/format.js';
 import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';
@@ -48,7 +49,7 @@ function RunItem({ run, now }: { run: RunState; now: number }) {
           {run.meta.app}
         </span>
         <span className="gm-chip" style={{ padding: '1px 7px' }}>
-          {run.meta.source === 'fixture' ? 'replay' : 'live'}
+          {runChipLabel(run.meta)}
         </span>
       </div>
       <div

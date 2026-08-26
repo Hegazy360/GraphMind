@@ -1,0 +1,5 @@
+{
+  "hello": "world",
+  "spans": 42,
+  "note": "neither OTLP resourceSpans nor a span array"
+}

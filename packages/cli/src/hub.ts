@@ -26,7 +26,7 @@ import {
 } from '@graphmind/schema';
 import type { WebSocket } from 'ws';
 import { DebugState } from './debug-state.js';
-import type { Storage, StoredEvent } from './storage.js';
+import type { RunSource, Storage, StoredEvent } from './storage.js';
 import type { RunInfo, UiServerMessage, WireEnvelope } from './ui-protocol.js';
 import { VERSION } from './version.js';
 
@@ -40,6 +40,12 @@ interface IngestConn {
   /** Server->app envelope sequence counter (per connection). */
   seq: number;
   appName: string | undefined;
+  /**
+   * How runs from this connection are registered. `'live'` for real apps;
+   * `'demo'` when the `hello` payload carries `source: 'demo'` (the CLI's
+   * bundled demo replayer announces itself that way).
+   */
+  runSource: RunSource;
   readonly ownedRuns: Set<string>;
 }
 
@@ -102,6 +108,7 @@ export class Hub {
       attached: false,
       seq: 0,
       appName: undefined,
+      runSource: 'live',
       ownedRuns: new Set(),
     };
     this.ingestConns.add(conn);
@@ -138,6 +145,9 @@ export class Hub {
       const hello = result.envelope.payload;
       conn.attached = true;
       if (typeof hello.app === 'string') conn.appName = hello.app;
+      // Loose-schema extension: the bundled demo replayer marks itself so its
+      // runs are registered (and badged in the viewer) as recorded sessions.
+      if ((hello as Record<string, unknown>)['source'] === 'demo') conn.runSource = 'demo';
       this.sendToIngest(
         conn,
         createEnvelope({
@@ -177,7 +187,7 @@ export class Hub {
       app: conn.appName ?? 'unknown',
       startedAt: envelope.ts,
       schemaVersion: envelope.gm,
-      source: 'live',
+      source: conn.runSource,
     });
 
     const inserted = this.storage.insertEvent({

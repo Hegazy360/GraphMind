@@ -42,6 +42,30 @@ export function buildUnsubscribeFrame(runId: string): string {
   return JSON.stringify({ type: 'unsubscribe', runId });
 }
 
+/**
+ * Resolve the server's HTTP base for REST calls (`/api/...`) from the same
+ * inputs as `resolveServerUrl`. Empty string = same origin.
+ */
+export function resolveHttpBase(search: string): string {
+  const params = new URLSearchParams(search);
+  const server = params.get('server');
+  if (server !== null && server !== '') return `http://${server}`;
+  const explicitWs = params.get('ws');
+  if (explicitWs !== null && explicitWs !== '') {
+    try {
+      const url = new URL(explicitWs);
+      return `${url.protocol === 'wss:' ? 'https:' : 'http:'}//${url.host}`;
+    } catch {
+      // fall through to the defaults below
+    }
+  }
+  const isDev = typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV);
+  if (!isDev && typeof location !== 'undefined' && location.protocol.startsWith('http')) {
+    return ''; // served by the CLI itself → same origin
+  }
+  return 'http://127.0.0.1:4747';
+}
+
 /** Resolve the websocket endpoint for this page. */
 export function resolveServerUrl(search: string): string {
   const params = new URLSearchParams(search);

@@ -56,7 +56,8 @@ await session.dispose();
   asserts average awaited-gate cost < 1ms (typical is microseconds; the
   spike measured 0.03ms worst-case).
 - **Lazy, resilient transport.** Nothing touches the network until the first
-  `run`/`emit`/`gate`. Connects get 300ms (`connectTimeoutMs`), the
+  `run`/`emit`/`gate` (or an explicit `ready()` — see the attach guarantee
+  below). Connects get 300ms (`connectTimeoutMs`), the
   handshake 1s, then the session stays detached and retries in the
   background every 10s (`retryIntervalMs`). All timers are unref'd — the
   session never keeps your process alive.
@@ -64,6 +65,27 @@ await session.dispose();
   2000, drop-oldest; `bufferSize`). On attach the whole buffer is replayed
   oldest-first with original `seq` numbers, so a viewer that attaches
   mid-run still renders history (and deduplicates by `seq` on reconnects).
+
+## Attach guarantee: `session.ready()`
+
+The transport is lazy, so a run that starts immediately after `createSession`
+can fail-open past its first gates before the handshake lands. When you need
+pause guarantees from the very first event:
+
+```ts
+const attached = await session.ready();            // default timeout 2000ms
+const attached = await session.ready({ timeoutMs: 500 });
+```
+
+`ready()` force-starts the connection immediately (even before any emit) and
+resolves `true` once the handshake completes — breakpoints/mode from the
+`hello.ack` are armed *before* it resolves. It resolves `false` on timeout,
+and immediately when the session is disabled or disposed. It never throws
+(and never rejects): `false` means "still detached — carry on", keeping the
+fail-open contract. Concurrent calls share one connection attempt; a call
+after attachment resolves `true` instantly; after a disconnect a new call
+re-arms (it kicks an immediate reconnect instead of waiting out
+`retryIntervalMs`).
 
 ## Kill switches
 

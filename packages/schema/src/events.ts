@@ -44,7 +44,7 @@ export const EventPayloadSchemas = {
     name: z.string(),
     /** Distinguishes repeated executions of the same logical node. */
     instanceId: z.string(),
-    input: z.unknown(),
+    input: z.unknown().optional(),
   }),
 
   /** Streamed deltas produced by a node (batched by the sender). */
@@ -56,7 +56,7 @@ export const EventPayloadSchemas = {
   /** A node finished. */
   'node.finished': z.looseObject({
     nodeId: z.string(),
-    output: z.unknown(),
+    output: z.unknown().optional(),
     usage: TokenUsageSchema.optional(),
     durationMs: z.number().nonnegative(),
     status: RunStatusSchema,

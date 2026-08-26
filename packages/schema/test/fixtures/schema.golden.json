@@ -451,8 +451,7 @@
         "nodeId",
         "kind",
         "name",
-        "instanceId",
-        "input"
+        "instanceId"
       ],
       "additionalProperties": {}
     },
@@ -633,7 +632,6 @@
       },
       "required": [
         "nodeId",
-        "output",
         "durationMs",
         "status"
       ],

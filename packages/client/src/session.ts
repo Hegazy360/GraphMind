@@ -88,6 +88,11 @@ export interface SessionOptions {
   warnIntervalMs?: number;
 }
 
+export interface ReadyOptions {
+  /** How long to wait for the handshake before resolving false. Default 2000ms. */
+  timeoutMs?: number;
+}
+
 export interface SessionStats {
   enabled: boolean;
   attached: boolean;
@@ -100,6 +105,18 @@ export interface SessionStats {
 export interface Session {
   readonly enabled: boolean;
   readonly attached: boolean;
+  /**
+   * Attach guarantee: force-start the lazy transport connection immediately
+   * (even before any emit) and resolve `true` once the handshake completes
+   * (attached), or `false` on timeout (default 2000ms). Resolves `false`
+   * immediately when the session is disabled or disposed; `true` instantly
+   * when already attached. Never throws (never rejects). Concurrent calls
+   * share one connection attempt, and after a disconnect a new call re-arms
+   * (kicking an immediate reconnect instead of waiting out the retry
+   * interval). Fail-open by design: a `false` result means "still detached —
+   * carry on"; it is never an error.
+   */
+  ready(opts?: ReadyOptions): Promise<boolean>;
   /**
    * Run `fn` inside a new run context (AsyncLocalStorage). Emits
    * `run.started` / `run.finished` around it. Errors from `fn` propagate.
@@ -127,6 +144,7 @@ const DEFAULTS = {
   handshakeTimeoutMs: 1000,
   retryIntervalMs: 10_000,
   bufferSize: 2000,
+  readyTimeoutMs: 2000,
 } as const;
 
 function defaultWebSocket(): WebSocketConstructor | undefined {
@@ -151,6 +169,8 @@ class SessionImpl implements Session {
   private started = false;
   private disposed = false;
   private implicitRun: RunContext | undefined;
+  /** Pending `ready()` settlers; each self-removes on settle. */
+  private readonly readyWaiters = new Set<(attached: boolean) => void>();
 
   constructor(options: SessionOptions) {
     const env = options.env ?? process.env;
@@ -198,6 +218,31 @@ class SessionImpl implements Session {
 
   currentRun(): RunContext | undefined {
     return this.als.getStore();
+  }
+
+  ready(opts: ReadyOptions = {}): Promise<boolean> {
+    try {
+      if (!this.active()) return Promise.resolve(false);
+      this.ensureStarted();
+      // Re-arm: if a previous attempt failed (or we got disconnected), don't
+      // sit out the retry interval — connect now. No-op mid-attempt/attached.
+      this.transport.kick();
+      if (this.transport.attached) return Promise.resolve(true);
+      const timeoutMs = opts.timeoutMs ?? DEFAULTS.readyTimeoutMs;
+      return new Promise<boolean>((resolve) => {
+        const settle = (attached: boolean): void => {
+          clearTimeout(timer);
+          this.readyWaiters.delete(settle);
+          resolve(attached);
+        };
+        const timer = setTimeout(() => settle(false), timeoutMs);
+        timer.unref?.();
+        this.readyWaiters.add(settle);
+      });
+    } catch (error) {
+      this.warner.warn('ready', 'internal error in ready(); resolving detached', error);
+      return Promise.resolve(false);
+    }
   }
 
   async run<T>(name: string, fn: (ctx: RunContext) => T | Promise<T>): Promise<T> {
@@ -296,6 +341,7 @@ class SessionImpl implements Session {
       }
       this.transport.dispose();
     });
+    this.settleReadyWaiters(false); // a disposed session can never attach
   }
 
   // -- internals ------------------------------------------------------------
@@ -389,6 +435,19 @@ class SessionImpl implements Session {
         if (!this.transport.send(json)) break;
       }
     });
+    // After arming: a resolved `ready()` guarantees gates can already pause.
+    this.settleReadyWaiters(true);
+  }
+
+  /** Resolve every pending `ready()` waiter (each self-removes). */
+  private settleReadyWaiters(attached: boolean): void {
+    for (const settle of [...this.readyWaiters]) {
+      try {
+        settle(attached);
+      } catch {
+        // never throw into transport callbacks
+      }
+    }
   }
 
   private handleDetached(): void {

@@ -79,6 +79,26 @@ export class Transport {
     this.connect();
   }
 
+  /**
+   * Force a connection attempt right now: lazily start if never started,
+   * or short-circuit a pending retry backoff after a failure/disconnect.
+   * No-op while connecting, attached, or disposed. Used by `session.ready()`
+   * so an explicit attach wait never sits out a long retry interval.
+   */
+  kick(): void {
+    if (this.state === 'disposed') return;
+    if (!this.started) {
+      this.start();
+      return;
+    }
+    if (this.state !== 'idle') return;
+    if (this.retryTimer !== undefined) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = undefined;
+    }
+    this.connect();
+  }
+
   /** Send a frame if attached. Returns false (and degrades) otherwise. */
   send(json: string): boolean {
     if (this.state !== 'attached' || this.ws === undefined) return false;

@@ -35,7 +35,9 @@ export const useRunStore = create<RunStoreState>((set, get) => ({
     set((state) => {
       const existing = state.runs[info.id];
       if (existing !== undefined) {
-        if (existing.meta.status !== 'pending') return state;
+        const needsMeta = existing.meta.status === 'pending';
+        const needsSource = existing.meta.serverSource !== info.source;
+        if (!needsMeta && !needsSource) return state;
         return {
           runs: {
             ...state.runs,
@@ -43,9 +45,10 @@ export const useRunStore = create<RunStoreState>((set, get) => ({
               ...existing,
               meta: {
                 ...existing.meta,
-                app: info.app,
-                startedTs: info.startedAt,
-                status: info.status,
+                ...(needsMeta
+                  ? { app: info.app, startedTs: info.startedAt, status: info.status }
+                  : {}),
+                serverSource: info.source,
               },
               statusVersion: existing.statusVersion + 1,
             },
@@ -61,6 +64,7 @@ export const useRunStore = create<RunStoreState>((set, get) => ({
           ...(info.finishedAt !== null ? { finishedTs: info.finishedAt } : {}),
           status: info.status,
           source,
+          serverSource: info.source,
         },
         nodes: {},
         order: [],

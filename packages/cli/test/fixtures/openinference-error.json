@@ -1,0 +1,43 @@
+[
+  {
+    "name": "weather-agent",
+    "context": { "trace_id": "trace0002", "span_id": "s_agent_err" },
+    "span_kind": "AGENT",
+    "parent_id": null,
+    "start_time": "2024-03-09T16:10:00.000Z",
+    "end_time": "2024-03-09T16:10:01.000Z",
+    "status_code": "ERROR",
+    "status_message": "tool get_weather failed",
+    "attributes": {
+      "openinference.span.kind": "AGENT",
+      "input.value": "What is the weather in Atlantis?"
+    },
+    "events": []
+  },
+  {
+    "name": "get_weather",
+    "context": { "trace_id": "trace0002", "span_id": "s_tool_err" },
+    "span_kind": "TOOL",
+    "parent_id": "s_agent_err",
+    "start_time": "2024-03-09T16:10:00.100Z",
+    "end_time": "2024-03-09T16:10:00.900Z",
+    "status_code": "ERROR",
+    "status_message": "ValueError: city not found",
+    "attributes": {
+      "openinference.span.kind": "TOOL",
+      "tool.name": "get_weather",
+      "input.value": "{\"city\":\"Atlantis\"}"
+    },
+    "events": [
+      {
+        "name": "exception",
+        "timestamp": "2024-03-09T16:10:00.900Z",
+        "attributes": {
+          "exception.type": "ValueError",
+          "exception.message": "city not found: Atlantis",
+          "exception.stacktrace": "Traceback (most recent call last):\n  File \"weather.py\", line 12, in get_weather\nValueError: city not found: Atlantis"
+        }
+      }
+    ]
+  }
+]

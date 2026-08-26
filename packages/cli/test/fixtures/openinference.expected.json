@@ -1,0 +1,143 @@
+[
+  {
+    "gm": 1,
+    "seq": 0,
+    "ts": 1710000000000,
+    "runId": "run_golden",
+    "type": "run.started",
+    "payload": {
+      "app": "weather-agent",
+      "sdk": { "name": "graphmind-import", "version": "test" },
+      "meta": { "source": "import", "format": "spans/openinference", "file": "openinference.json" }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 1,
+    "ts": 1710000000000,
+    "runId": "run_golden",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "agent:weather-agent",
+      "kind": "agent",
+      "name": "weather-agent",
+      "instanceId": "s_agent",
+      "input": "What is the weather in Paris?"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 2,
+    "ts": 1710000000100,
+    "runId": "run_golden",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "llm:step",
+      "parentId": "agent:weather-agent",
+      "kind": "llm",
+      "name": "step",
+      "instanceId": "s_llm1",
+      "input": {
+        "messages": [{ "role": "user", "content": "What is the weather in Paris?" }]
+      },
+      "model": "gpt-4o-mini"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 3,
+    "ts": 1710000001200,
+    "runId": "run_golden",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "llm:step",
+      "output": {
+        "tool_calls": [{ "name": "get_weather", "arguments": "{\"city\":\"Paris\"}" }]
+      },
+      "usage": { "inputTokens": 96, "outputTokens": 18 },
+      "durationMs": 1100,
+      "status": "ok",
+      "instanceId": "s_llm1"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 4,
+    "ts": 1710000001300,
+    "runId": "run_golden",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "tool:get_weather",
+      "parentId": "agent:weather-agent",
+      "kind": "tool",
+      "name": "get_weather",
+      "instanceId": "s_tool1",
+      "input": { "city": "Paris" }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 5,
+    "ts": 1710000001900,
+    "runId": "run_golden",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "tool:get_weather",
+      "output": { "temp_c": 18, "condition": "sunny" },
+      "durationMs": 600,
+      "status": "ok",
+      "instanceId": "s_tool1"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 6,
+    "ts": 1710000002000,
+    "runId": "run_golden",
+    "type": "node.started",
+    "payload": {
+      "nodeId": "custom:format-response",
+      "parentId": "agent:weather-agent",
+      "kind": "custom",
+      "name": "format-response",
+      "instanceId": "s_chain",
+      "input": { "temp_c": 18, "condition": "sunny" }
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 7,
+    "ts": 1710000002900,
+    "runId": "run_golden",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "custom:format-response",
+      "output": "It is 18 C and sunny in Paris.",
+      "durationMs": 900,
+      "status": "ok",
+      "instanceId": "s_chain"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 8,
+    "ts": 1710000003000,
+    "runId": "run_golden",
+    "type": "node.finished",
+    "payload": {
+      "nodeId": "agent:weather-agent",
+      "output": "It is 18 C and sunny in Paris.",
+      "durationMs": 3000,
+      "status": "ok",
+      "instanceId": "s_agent"
+    }
+  },
+  {
+    "gm": 1,
+    "seq": 9,
+    "ts": 1710000003000,
+    "runId": "run_golden",
+    "type": "run.finished",
+    "payload": { "status": "ok" }
+  }
+]

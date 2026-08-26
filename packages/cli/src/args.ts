@@ -12,6 +12,10 @@ export interface CliFlags {
   open: boolean;
   help: boolean;
   version: boolean;
+  /** `graphmind demo --live`: run the real demo agent instead of the replay. */
+  live: boolean;
+  /** `graphmind record --out <file>`: output path override. */
+  out: string | undefined;
 }
 
 export interface ParsedCli {
@@ -28,7 +32,15 @@ function splitInline(token: string): [string, string | undefined] {
 }
 
 export function parseCliArgs(argv: string[]): ParsedCli {
-  const flags: CliFlags = { port: undefined, db: undefined, open: true, help: false, version: false };
+  const flags: CliFlags = {
+    port: undefined,
+    db: undefined,
+    open: true,
+    help: false,
+    version: false,
+    live: false,
+    out: undefined,
+  };
   const positionals: string[] = [];
   const errors: string[] = [];
 
@@ -80,6 +92,14 @@ export function parseCliArgs(argv: string[]): ParsedCli {
       case '--no-open':
         flags.open = false;
         break;
+      case '--live':
+        flags.live = true;
+        break;
+      case '--out': {
+        const raw = takeValue('--out', inline, next);
+        if (raw !== undefined) flags.out = raw;
+        break;
+      }
       case '--open':
         flags.open = true;
         break;
