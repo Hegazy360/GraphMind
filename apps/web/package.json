@@ -4,7 +4,8 @@
   "type": "module",
   "description": "graphmind.ai \u2014 static landing page + waitlist function",
   "scripts": {
-    "test": "node --experimental-test-module-mocks --test test/waitlist.test.mjs"
+    "test": "node --experimental-test-module-mocks --test test/waitlist.test.mjs",
+    "waitlist": "node scripts/waitlist.mjs"
   },
   "dependencies": {
     "@vercel/blob": "^2.8.0",
