@@ -10,7 +10,7 @@
 
 **The live debugger for AI agents. Attaches while it's happening.**
 
-[graphmind.ai](https://graphmind.ai) · [Docs](https://graphmind.ai/docs) · [Quick start](#quick-start) · [How it compares](#how-it-compares) · [MCP](#use-it-from-claude-code-or-cursor) · [Telemetry](#telemetry)
+[graphmind.ai](https://graphmind.ai) · [Try in browser](https://graphmind.ai/try/?fixture=1) · [Docs](https://graphmind.ai/docs) · [Quick start](#quick-start) · [How it compares](#how-it-compares) · [MCP](#use-it-from-claude-code-or-cursor) · [Telemetry](#telemetry)
 
 [![npm version](https://img.shields.io/npm/v/graphmind-ai?label=npm&color=4ade80)](https://www.npmjs.com/package/graphmind-ai) [![CI](https://github.com/Hegazy360/GraphMind/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Hegazy360/GraphMind/actions/workflows/ci.yml) [![license](https://img.shields.io/npm/l/graphmind-ai)](./LICENSE) [![node](https://img.shields.io/node/v/graphmind-ai)](https://nodejs.org) [![PRs welcome](https://img.shields.io/badge/PRs-welcome-4ade80)](#contributing)
 <!-- Re-enable once npm's downloads API has data for the fresh package (shows a red error until then):
@@ -22,6 +22,8 @@
 <img alt="GraphMind demo: the execution graph lights up live, a planted bug pauses the run at the checkBudget tool, a corrected result is injected, and the agent resumes and finishes" src="./docs/assets/demo.gif" width="1000">
 
 <p><code>npx graphmind-ai demo</code></p>
+
+<p><a href="https://graphmind.ai/try/?fixture=1"><b>Or try it in your browser</b></a> — the real debugger, nothing to install.</p>
 
 <sub>The bundled demo: a planted bug pauses the run - inject a corrected result and the agent finishes. No API key needed.</sub>
 
