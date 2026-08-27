@@ -69,10 +69,22 @@ export interface SessionOptions {
   connectTimeoutMs?: number;
   /** hello -> hello.ack budget. Default 1000ms. */
   handshakeTimeoutMs?: number;
-  /** Background reconnect interval. Default 10s. */
+  /**
+   * Steady-state background reconnect interval. Default 10s. After an
+   * *established* attachment drops, the transport first retries fast
+   * (200/400/800ms, each clamped to this value) before settling here.
+   */
   retryIntervalMs?: number;
-  /** Ring buffer capacity (events retained for replay-on-attach). Default 2000. */
+  /** Ring buffer capacity (events retained for replay-on-attach). Default 5000. */
   bufferSize?: number;
+  /**
+   * Approximate memory ceiling for the ring buffer, in bytes. Default 8 MiB.
+   * Events are dropped oldest-first once serialized frames exceed it, so a
+   * host emitting multi-megabyte payloads cannot turn the replay buffer into
+   * `bufferSize` x payload-size of retained memory. Dropped events are
+   * reported exactly like capacity drops (gap marker + warning).
+   */
+  maxBufferBytes?: number;
   /** Auto-continue a held gate nobody resumes after this long. Default: hold forever. */
   pauseTimeoutMs?: number;
   /**
@@ -97,9 +109,39 @@ export interface SessionStats {
   enabled: boolean;
   attached: boolean;
   buffered: number;
+  /**
+   * Events evicted from the replay ring buffer since the session started.
+   * NOT the same as data loss: an event that was already delivered to the
+   * debugger is evicted the moment the buffer wraps, which is normal on any
+   * run longer than `bufferSize`. Use `lost` for the number that matters.
+   */
   dropped: number;
+  /**
+   * Events evicted **before they ever reached the debugger** — actual holes
+   * in the recorded run. Every one of these is announced: a gap marker on the
+   * next attach plus a rate-limited warning to the host's logs.
+   */
+  lost: number;
+  /** Runs with a gap marker still waiting for an attach to carry it. */
+  pendingGaps: number;
   heldGates: number;
   seq: number;
+}
+
+/** One contiguous hole in a run's event stream, as carried by a gap marker. */
+interface GapRecord {
+  droppedCount: number;
+  fromSeq: number;
+  toSeq: number;
+}
+
+/** A serialized envelope plus the bookkeeping the gap accounting needs. */
+interface BufferedEnvelope {
+  json: string;
+  seq: number;
+  runId: string;
+  /** True once the transport has accepted this frame for delivery. */
+  sent: boolean;
 }
 
 export interface Session {
@@ -143,9 +185,27 @@ const DEFAULTS = {
   connectTimeoutMs: 300,
   handshakeTimeoutMs: 1000,
   retryIntervalMs: 10_000,
-  bufferSize: 2000,
+  /**
+   * How much run a default session can lose the debugger for and still record
+   * completely. The soak baseline puts a comfortable live run at <= ~2,000
+   * events/s, and the transport's fast-reconnect burst puts a blip's dark
+   * window at ~0.2-0.5s (see transport.ts), so 5,000 frames is ~2.5s of
+   * headroom at the ceiling and ~25s at a more typical 200 events/s.
+   * Bounded in bytes as well — see `maxBufferBytes`.
+   */
+  bufferSize: 5000,
+  /** 8 MiB: ~46,000 frames at the soak baseline's 175 B/event. */
+  maxBufferBytes: 8 * 1024 * 1024,
   readyTimeoutMs: 2000,
 } as const;
+
+/**
+ * Cap on the number of distinct runs whose gaps are tracked between two
+ * attaches. Drops beyond it are still counted and warned about, they just
+ * lose their per-run attribution (there is no run to hang the marker on that
+ * would not itself be a guess).
+ */
+const MAX_TRACKED_GAP_RUNS = 64;
 
 function defaultWebSocket(): WebSocketConstructor | undefined {
   return (globalThis as { WebSocket?: WebSocketConstructor }).WebSocket;
@@ -157,7 +217,7 @@ class SessionImpl implements Session {
   private readonly warner: RateLimitedWarner;
   private readonly transport: Transport;
   private readonly engine: GateEngine;
-  private readonly buffer: RingBuffer<string>;
+  private readonly buffer: RingBuffer<BufferedEnvelope>;
   private readonly als = new AsyncLocalStorage<RunContext>();
   private readonly newPauseId = makeCounterIds('pause');
 
@@ -171,6 +231,12 @@ class SessionImpl implements Session {
   private implicitRun: RunContext | undefined;
   /** Pending `ready()` settlers; each self-removes on settle. */
   private readonly readyWaiters = new Set<(attached: boolean) => void>();
+  /** Holes waiting to be announced, keyed by the run they punched through. */
+  private readonly pendingGaps = new Map<string, GapRecord>();
+  /** Events evicted before delivery, ever (see SessionStats.lost). */
+  private lostTotal = 0;
+  /** Losses past MAX_TRACKED_GAP_RUNS: counted and warned, not attributed. */
+  private unattributedLost = 0;
 
   constructor(options: SessionOptions) {
     const env = options.env ?? process.env;
@@ -179,7 +245,12 @@ class SessionImpl implements Session {
     this.appName = options.appName ?? 'node';
     this.sdk = options.sdk ?? { name: 'custom', version: '0.0.0' };
     this.meta = options.meta;
-    this.buffer = new RingBuffer<string>(options.bufferSize ?? DEFAULTS.bufferSize);
+    this.buffer = new RingBuffer<BufferedEnvelope>({
+      capacity: options.bufferSize ?? DEFAULTS.bufferSize,
+      maxBytes: options.maxBufferBytes ?? DEFAULTS.maxBufferBytes,
+      sizeOf: (item) => item.json.length,
+      onEvict: (item) => this.recordEviction(item),
+    });
 
     this.engine = new GateEngine(
       {
@@ -325,6 +396,8 @@ class SessionImpl implements Session {
       attached: this.attached,
       buffered: this.buffer.size,
       dropped: this.buffer.dropped,
+      lost: this.lostTotal,
+      pendingGaps: this.pendingGaps.size,
       heldGates: this.engine.heldCount,
       seq: this.seq,
     };
@@ -401,13 +474,108 @@ class SessionImpl implements Session {
     payload: EventPayloadMap[T],
     runId: string,
   ): void {
+    const seq = this.nextSeq();
     const json = serializeEnvelope(
       // Instantiated at the EventType union: TS cannot relate the generic
       // indexed accesses EventPayloadMap[T] / MessagePayloadMap[T] directly.
-      createEnvelope<EventType>({ type, payload, seq: this.nextSeq(), runId }),
+      createEnvelope<EventType>({ type, payload, seq, runId }),
     );
-    this.buffer.push(json);
-    if (this.transport.attached) this.transport.send(json);
+    const item: BufferedEnvelope = { json, seq, runId, sent: false };
+    this.buffer.push(item);
+    if (this.transport.attached && this.transport.send(json)) item.sent = true;
+  }
+
+  /**
+   * The ring buffer evicted an event. Two very different meanings:
+   *  - it was already delivered  -> nothing happened; forget it.
+   *  - it never left the process -> a hole in the recorded run. Remember the
+   *    seq range so the next attach can mark it, and tell the developer.
+   */
+  private recordEviction(item: BufferedEnvelope): void {
+    if (item.sent) return;
+    this.lostTotal += 1;
+    const existing = this.pendingGaps.get(item.runId);
+    if (existing !== undefined) {
+      existing.droppedCount += 1;
+      if (item.seq < existing.fromSeq) existing.fromSeq = item.seq;
+      if (item.seq > existing.toSeq) existing.toSeq = item.seq;
+    } else if (this.pendingGaps.size < MAX_TRACKED_GAP_RUNS) {
+      this.pendingGaps.set(item.runId, {
+        droppedCount: 1,
+        fromSeq: item.seq,
+        toSeq: item.seq,
+      });
+    } else {
+      this.unattributedLost += 1;
+    }
+    this.warnLoss();
+  }
+
+  /**
+   * Requirement: loss must reach the developer even if the debugger never
+   * comes back to carry a gap marker. Rate-limited per key, so a 3,000-event
+   * overflow is one line, not 3,000.
+   */
+  private warnLoss(): void {
+    const unattributed =
+      this.unattributedLost > 0
+        ? `; ${this.unattributedLost} of them spread past ${MAX_TRACKED_GAP_RUNS} runs and are ` +
+          `counted but not marked`
+        : '';
+    this.warner.warn(
+      'buffer-overflow',
+      `dropped ${this.lostTotal} event${this.lostTotal === 1 ? '' : 's'} while the debugger ` +
+        `was unreachable; the recorded run is incomplete. Raise \`bufferSize\` ` +
+        `(currently ${this.buffer.capacity}) or reconnect the debugger sooner${unattributed}`,
+    );
+  }
+
+  /**
+   * Announce every hole punched while we were dark, one marker per affected
+   * run, before the surviving buffer is replayed (the lost events are older
+   * than everything still buffered).
+   *
+   * `packages/schema` has no `run.gap` type and is not ours to extend, so the
+   * marker rides a real, valid `graph.hint` envelope — `nodes: []`, which
+   * asserts nothing false about the graph — with the truth in a loose payload
+   * field. Loose fields are the protocol's forward-compatibility contract
+   * (see schema/primitives.ts) and already used this way elsewhere
+   * (`ungated`, `injected`, `source`). The server stores it, `GET
+   * /api/runs/:id/events` returns it, and a viewer can render the hole. See
+   * the open issue asking for a first-class `run.gap` event.
+   *
+   * Gap markers are deliberately NOT buffered: if the send fails the record
+   * goes back on the pending pile and the next attach tries again.
+   */
+  private flushGapMarkers(): void {
+    if (this.pendingGaps.size === 0) return;
+    const pending = [...this.pendingGaps];
+    this.pendingGaps.clear();
+    for (let i = 0; i < pending.length; i += 1) {
+      const entry = pending[i];
+      if (entry === undefined) continue;
+      const [runId, gap] = entry;
+      const payload = {
+        nodes: [],
+        gap: {
+          droppedCount: gap.droppedCount,
+          fromSeq: gap.fromSeq,
+          toSeq: gap.toSeq,
+          reason: 'buffer-overflow',
+        },
+      } satisfies EventPayloadMap['graph.hint'];
+      const json = serializeEnvelope(
+        createEnvelope<EventType>({ type: 'graph.hint', payload, seq: this.nextSeq(), runId }),
+      );
+      if (!this.transport.send(json)) {
+        // Socket died mid-flush: keep this and every remaining record.
+        for (let j = i; j < pending.length; j += 1) {
+          const rest = pending[j];
+          if (rest !== undefined) this.pendingGaps.set(rest[0], rest[1]);
+        }
+        return;
+      }
+    }
   }
 
   private nextSeq(): number {
@@ -429,10 +597,13 @@ class SessionImpl implements Session {
   private handleAttached(ack: MessagePayloadMap['hello.ack']): void {
     this.guard('attach', () => {
       this.engine.arm(ack.breakpoints, ack.mode);
+      // Holes first: what they describe is older than anything still buffered.
+      this.flushGapMarkers();
       // Replay-on-attach: everything still in the ring buffer, oldest first.
       // Envelopes keep their original seq, so viewers deduplicate replays.
-      for (const json of this.buffer.toArray()) {
-        if (!this.transport.send(json)) break;
+      for (const item of this.buffer.toArray()) {
+        if (!this.transport.send(item.json)) break;
+        item.sent = true;
       }
     });
     // After arming: a resolved `ready()` guarantees gates can already pause.

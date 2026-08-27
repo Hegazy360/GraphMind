@@ -48,6 +48,8 @@ export interface StepCtx {
   readonly startedAt: number;
   /** `chat.completions` or `responses`. */
   readonly api: string;
+  /** The run this request belongs to, if any (carries the abort signal). */
+  readonly run: RunContext | undefined;
 }
 
 /** What an observer uses to report on a step it is watching. */
@@ -56,6 +58,17 @@ export interface StepReporter {
   readonly core: AdapterCore;
   token(channel: 'text' | 'reasoning' | 'tool-args', value: string): void;
   error(error: unknown): void;
+  /**
+   * The status a *cleanly ended* stream should carry.
+   *
+   * Both Stainless SDKs deliberately swallow abort errors inside their stream
+   * iterators ("if the user calls `stream.controller.abort()`, we should exit
+   * without throwing" — core/streaming.mjs), so a request the debugger aborted
+   * mid stream looks exactly like one that ran to completion. Without this
+   * check the canvas would show an aborted step as a successful one carrying a
+   * truncated answer.
+   */
+  endStatus(): RunStatus;
   finish(
     output: unknown,
     status: RunStatus,
@@ -99,6 +112,9 @@ function makeReporter(core: AdapterCore, ctx: StepCtx): StepReporter {
     },
     error(error) {
       core.errorNode(LLM_NODE_ID, ctx.instanceId, error);
+    },
+    endStatus() {
+      return ctx.run?.signal.aborted === true ? 'aborted' : 'ok';
     },
     finish(output, status, usage, extra) {
       if (finished) return;
@@ -276,6 +292,7 @@ function beginStep(
       scopeId,
       startedAt: Date.now(),
       api: flavor.api,
+      run: ctx,
     });
   } catch {
     return undefined;

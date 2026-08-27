@@ -2,6 +2,17 @@
  * Model middleware, built ONLY on the public `wrapLanguageModel` contract
  * (LanguageModelMiddleware in ai@7 — spec V4 hooks; same hook names on v6).
  *
+ * Middleware spec version: the object declares `specificationVersion: 'v3'`.
+ * That is the only value both advertised peer majors accept —
+ *   - ai@6: `LanguageModelMiddleware = LanguageModelV3Middleware`, which
+ *     *requires* `readonly specificationVersion: 'v3'`;
+ *   - ai@7: `Omit<LanguageModelV4Middleware,'specificationVersion'> &
+ *     { readonly specificationVersion?: string }` — explicitly relaxed to
+ *     "any string (including 'v3')" so v3-era middleware keeps working.
+ * Neither major reads the field at runtime (`wrapLanguageModel`'s `doWrap`
+ * destructures the hooks only), and the hooks below are duck typed through
+ * ./sdk-types.js, so they are correct against both hook shapes.
+ *
  * Per model step:
  *  1. `transformParams` chains the debugger's abort signal into
  *     `params.abortSignal` (never replacing the user's) and neutralizes
@@ -28,13 +39,29 @@ import {
 
 const LLM_GATE_NODE: GateNode = { nodeId: LLM_NODE_ID, kind: 'llm', name: LLM_NODE_NAME };
 
+/**
+ * The one middleware spec version accepted by every peer major the package
+ * advertises (`ai >=6 <8`). See the module docblock.
+ */
+export const MIDDLEWARE_SPEC_VERSION = 'v3';
+
 interface ModelLike {
   modelId?: string;
   provider?: string;
 }
 
-export function createDebugMiddleware(core: AdapterCore): LanguageModelMiddleware {
+/**
+ * The declared return type pins `specificationVersion` to the literal ai@6
+ * requires. Under ai@7 the field is optional and `string`-typed, so without
+ * the intersection a regression that dropped it would only surface in a
+ * consumer's ai@6 tree — never in this package's own typecheck.
+ */
+export function createDebugMiddleware(
+  core: AdapterCore,
+): LanguageModelMiddleware & { readonly specificationVersion: typeof MIDDLEWARE_SPEC_VERSION } {
   return {
+    specificationVersion: MIDDLEWARE_SPEC_VERSION,
+
     transformParams: async ({ params }) => {
       try {
         if (!core.session.attached) return params;

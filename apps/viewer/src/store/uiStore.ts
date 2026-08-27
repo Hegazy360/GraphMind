@@ -14,6 +14,85 @@ import { loadTheme, type ThemeChoice } from '../lib/theme.js';
 
 export type ConnectionStatus = 'connecting' | 'live' | 'detached' | 'replaying' | 'off';
 
+/**
+ * What the connection indicator should say.
+ *
+ * A local replay is what you are actually looking at whenever the live
+ * socket is not attached — including while it retries in the background
+ * after the empty-state "Replay the bundled demo run" button, which left the
+ * socket configured and so reported `detached` over a replay that was
+ * happily playing. The server being gone is real, and the tooltip still says
+ * so; the *label* names what is on screen.
+ */
+export function indicatorStatus(
+  connection: ConnectionStatus,
+  fixtureActive: boolean,
+): ConnectionStatus {
+  return fixtureActive && connection !== 'live' ? 'replaying' : connection;
+}
+
+/**
+ * Whether the socket is showing you the present or the past.
+ *
+ * An open socket is not the same as a live tail. The server services a UI
+ * `subscribe` by replaying the run's whole history first (`replay.start` →
+ * events → `replay.end`) and only then tailing, so under ingest saturation a
+ * viewer can receive an entire run as catch-up and never reach the live tail
+ * at all — measured at 0 live / 72,144 replayed. That is a live debugger
+ * quietly becoming a log viewer, and the run bar has to say so.
+ *
+ *  - `tailing`     — attached and current; what "live" is supposed to mean.
+ *  - `catching-up` — a replay is in flight; the graph is history, not now.
+ *  - `behind`      — replay finished, but the events still arriving are old.
+ */
+export type StreamPhase = 'tailing' | 'catching-up' | 'behind';
+
+/** Events older than this mean the tail is behind, not live. */
+export const BEHIND_MS = 3_000;
+/** A lag sample older than this says nothing about now — a settled run is idle, not behind. */
+export const LAG_SAMPLE_TTL_MS = 10_000;
+
+export interface StreamHealth {
+  /** Per-run catch-up progress, while a `replay.start` is outstanding. */
+  catchUp: Record<string, { count: number; applied: number }>;
+  /** Wall-clock age of the newest envelope the live socket delivered, ms. */
+  lagMs: number;
+  /** When that sample was taken (`Date.now()`), so staleness is checkable. */
+  lagAt: number;
+}
+
+export const IDLE_STREAM: StreamHealth = Object.freeze({ catchUp: {}, lagMs: 0, lagAt: 0 });
+
+export interface StreamStatus {
+  phase: StreamPhase;
+  /** Events announced by the in-flight replays. */
+  backlog: number;
+  /** How many of those have been applied. */
+  applied: number;
+  /** Age of the newest event, when that is what makes the stream behind. */
+  lagMs: number;
+}
+
+/** Fold the raw counters into the one thing the UI renders. */
+export function streamStatus(stream: StreamHealth, now: number = Date.now()): StreamStatus {
+  let backlog = 0;
+  let applied = 0;
+  let replaying = false;
+  for (const runId of Object.keys(stream.catchUp)) {
+    const entry = stream.catchUp[runId];
+    if (entry === undefined) continue;
+    replaying = true;
+    backlog += entry.count;
+    applied += entry.applied;
+  }
+  if (replaying) return { phase: 'catching-up', backlog, applied, lagMs: stream.lagMs };
+  const fresh = stream.lagAt !== 0 && now - stream.lagAt <= LAG_SAMPLE_TTL_MS;
+  if (fresh && stream.lagMs > BEHIND_MS) {
+    return { phase: 'behind', backlog: 0, applied: 0, lagMs: stream.lagMs };
+  }
+  return { phase: 'tailing', backlog: 0, applied: 0, lagMs: 0 };
+}
+
 /** How much detail node cards render. Driven by zoom + graph size. */
 export type LodLevel = 'full' | 'compact' | 'dot';
 
@@ -40,6 +119,8 @@ interface UiState {
   mode: RunMode;
   breakpoints: BreakpointMatcher[];
   connection: ConnectionStatus;
+  /** Whether the live socket is tailing, catching up, or behind. */
+  stream: StreamHealth;
   fixtureActive: boolean;
   /** Set by the empty-state "load demo run" button. */
   demoRequested: boolean;
@@ -67,6 +148,7 @@ interface UiState {
   addBreakpoint: (matcher: BreakpointMatcher) => void;
   removeBreakpoint: (matcher: BreakpointMatcher) => void;
   setConnection: (status: ConnectionStatus) => void;
+  setStream: (stream: StreamHealth) => void;
   setFixtureActive: (active: boolean) => void;
   requestDemo: () => void;
   requestFocus: (nodeId: string) => void;
@@ -116,6 +198,7 @@ export const useUiStore = create<UiState>((set) => ({
   mode: 'run',
   breakpoints: [],
   connection: 'off',
+  stream: IDLE_STREAM,
   fixtureActive: false,
   demoRequested: false,
   focusRequest: undefined,
@@ -150,6 +233,7 @@ export const useUiStore = create<UiState>((set) => ({
       breakpoints: s.breakpoints.filter((m) => matcherKey(m) !== matcherKey(matcher)),
     })),
   setConnection: (status) => set({ connection: status }),
+  setStream: (stream) => set({ stream }),
   setFixtureActive: (active) => set({ fixtureActive: active }),
   requestDemo: () => set({ demoRequested: true }),
   requestFocus: (nodeId) => set({ focusRequest: { nodeId, nonce: ++focusNonce } }),

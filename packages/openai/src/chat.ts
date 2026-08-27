@@ -144,7 +144,7 @@ export const chatFlavor: LlmFlavor = {
           ...(observed.length > 0 ? { toolCalls: observed } : {}),
           finishReason,
         },
-        'ok',
+        reporter.endStatus(),
         usage,
         { streamed: true },
       );

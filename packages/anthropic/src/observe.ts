@@ -49,6 +49,20 @@ export class StepReporter {
     return this.settled;
   }
 
+  /**
+   * The status a *cleanly ended* step should carry.
+   *
+   * The Anthropic SDK swallows abort errors inside its stream iterator ("if
+   * the user calls `stream.controller.abort()`, we should exit without
+   * throwing" — core/streaming.mjs), so a request the debugger aborted mid
+   * stream looks exactly like one that finished. Without this check the
+   * canvas would show an aborted step as a successful one carrying a
+   * truncated answer.
+   */
+  endStatus(): RunStatus {
+    return this.ctx?.signal.aborted === true ? 'aborted' : 'ok';
+  }
+
   finish(
     output: unknown,
     usage: UsageLike | undefined,
@@ -278,13 +292,13 @@ async function* teeIterator(
       yield event;
     }
     if (streamError !== undefined) reporter.fail(streamError, { text, stopReason, model });
-    else reporter.finish({ text, stopReason, model }, usage, 'ok');
+    else reporter.finish({ text, stopReason, model }, usage, reporter.endStatus());
   } catch (error) {
     reporter.fail(error, { text, stopReason, model });
     throw error; // the host's own error — always propagates untouched
   } finally {
     // The host broke out early (or threw): the step is over either way.
-    if (!reporter.done) reporter.finish({ text, stopReason, model }, usage, 'ok');
+    if (!reporter.done) reporter.finish({ text, stopReason, model }, usage, reporter.endStatus());
     try {
       await inner.return?.(undefined);
     } catch {

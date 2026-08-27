@@ -91,8 +91,19 @@ and later calls never wait. Disabled sessions skip the wait entirely.
   `inject` swallows the error and returns the injected value as the tool
   result; `retry` re-invokes the original execute; `continue` rethrows the
   original error (the SDK serializes it as an error-text tool result and
-  keeps looping); `abort` aborts the run's AbortController and surfaces an
-  `AbortError` (terminal — AI SDK retry logic never retries abort errors).
+  keeps looping); `abort` aborts the run's AbortController and throws an
+  `AbortError`-named error out of `execute` (terminal — AI SDK retry logic
+  never retries abort errors).
+
+**What an abort looks like to your app.** The throw above is what the tool's
+*caller* sees — the SDK's tool-call machinery, or your own code if you invoke
+a wrapped `execute` directly. A host consuming the stream does **not** see an
+exception: `streamText` turns the abort into an `error` part on `fullStream`
+(also delivered to `onError`) and then **ends the stream cleanly** — a
+`for await` over it finishes normally instead of throwing, `result.text`
+resolves with whatever had already been produced, and `gm.run()` therefore
+resolves too. Detect an abort from `ctx.signal.aborted`, the `error` part, or
+`onError` — not from a `try/catch` around the loop.
 
 **Streaming tools** (`execute` declared as `async function*`): wrapped with a
 non-async delegate so the SDK still sees an AsyncIterable on the direct
@@ -155,9 +166,23 @@ tools `streaming: true` + `chunks`.
 
 ## Version support
 
-Primary target: `ai` v7 (provider spec V4; validated against 7.0.79). The
-peer range is `>=6 <8`; the SDK-surface-touching code is isolated in
-`src/sdk-types.ts` (duck-typed stream parts / params / usage shapes that also
-match v6's V3 spec) plus the single `wrapLanguageModel` runtime import, so a
-v6 compat shim stays small. **v6 is untested** — see the repo decisions log
-(`ai-v6` dist-tag CI matrix later).
+Peer range `ai >=6 <8`, and both majors are exercised: the package
+typechecks, builds and runs its test suite against **7.0.79** (primary
+target, provider spec V4) and **6.0.270** (spec V3).
+
+The SDK-surface-touching code is isolated in `src/sdk-types.ts` (duck-typed
+stream parts / params / usage shapes that match both specs) plus the single
+`wrapLanguageModel` runtime import. The debug middleware declares
+`specificationVersion: 'v3'` — the one value both majors accept (ai@6
+*requires* it; ai@7 relaxes it to any string for exactly this backward
+compatibility) and which neither reads at runtime.
+
+Two behaviours differ by major, because the SDK itself differs:
+
+- **Per-tool timeouts.** `timeout: { toolMs }` / `timeout: { tools }` are
+  ai@7 features; ai@6's `TimeoutConfiguration` is only
+  `{ totalMs, stepMs, chunkMs }`, so there is no tool-scoped timeout to
+  neutralize there.
+- **Mock model naming.** `ai/test` exports `MockLanguageModelV4` on v7 and
+  `MockLanguageModelV3` on v6 — relevant only if you write tests against the
+  adapter's fixtures.

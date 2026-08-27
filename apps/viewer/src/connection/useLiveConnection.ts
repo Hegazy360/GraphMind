@@ -17,6 +17,13 @@ import useWebSocketWithRetry from '../hooks/useWebSocketWithRetry.js';
 import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';
 import { ingestValue } from './ingest.js';
+import {
+  beginReplay,
+  endReplay,
+  noteEventAge,
+  noteReplayEvent,
+  resetStreamHealth,
+} from './streamHealth.js';
 import type { RunInfo, UiServerFrame } from './protocol.js';
 import {
   buildControlFrame,
@@ -38,6 +45,9 @@ export function useLiveConnection(url: string | null): ServerConnection {
   const ws = useWebSocketWithRetry(url, {
     onStatus: (status) => {
       if (url === null) return;
+      // A socket that went away owes no catch-up progress and its last lag
+      // sample describes a stream that no longer exists.
+      if (status !== 'open') resetStreamHealth();
       useUiStore
         .getState()
         .setConnection(status === 'open' ? 'live' : status === 'connecting' ? 'connecting' : 'detached');
@@ -87,12 +97,25 @@ export function useLiveConnection(url: string | null): ServerConnection {
         case 'run.update':
           noteRun(frame.run);
           break;
-        case 'event':
+        case 'event': {
           ingestValue(frame.envelope, 'live');
+          // Two facts about *when*, not what: how far through an open replay
+          // we are, and how old the newest envelope is. Both feed the run
+          // bar's "catching up / behind" readout — an open socket alone is
+          // not evidence that anything live is reaching this canvas.
+          noteReplayEvent(frame.runId);
+          const ts = (frame.envelope as { ts?: unknown } | null)?.ts;
+          if (typeof ts === 'number') noteEventAge(ts);
           break;
+        }
         case 'replay.start':
+          // Dedup on (runId, seq) makes the replay itself idempotent; what
+          // this frame adds is the size of the backlog we are behind by.
+          beginReplay(frame.runId, frame.count);
+          break;
         case 'replay.end':
-          break; // dedup on (runId, seq) makes replay idempotent
+          endReplay(frame.runId);
+          break;
         case 'error':
           console.warn('[graphmind] server error:', frame.message);
           break;

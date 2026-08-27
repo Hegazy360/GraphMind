@@ -222,7 +222,7 @@ export const responsesFlavor: LlmFlavor = {
         });
         return;
       }
-      reporter.finish({ text }, 'ok', usage, { streamed: true });
+      reporter.finish({ text }, reporter.endStatus(), usage, { streamed: true });
     } catch (error) {
       // The observer runs detached from the host: report, never rethrow.
       try {

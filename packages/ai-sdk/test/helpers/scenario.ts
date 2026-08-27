@@ -1,7 +1,8 @@
 /**
  * The agent under test (ported from examples/spike/src/agent.ts, driven
  * through the REAL public adapter API instead of the spike's gate engine):
- * `streamText` with a scripted MockLanguageModelV4.
+ * `streamText` with a scripted mock language model (whichever spec the
+ * installed `ai` major exports — see ./sdk-compat.ts).
  *
  * Scripted conversation:
  *   step 0: text intro + tool-call searchFlights(VIE->LIS)       [1 tool call]
@@ -10,16 +11,18 @@
  *           incoming prompt (so injected values provably reach the answer)
  */
 import { simulateReadableStream, stepCountIs, streamText, tool } from 'ai';
-import { MockLanguageModelV4 } from 'ai/test';
 import { z } from 'zod';
-import type {
-  LanguageModelV4CallOptions,
-  LanguageModelV4Prompt,
-  LanguageModelV4StreamPart,
-  LanguageModelV4Usage,
-} from '@ai-sdk/provider';
 import type { Graphmind } from '../../src/index.js';
 import { tick, waitUntil } from './fake-viewer.js';
+import {
+  MockLanguageModel,
+  type CallOptions,
+  type MockLanguageModel as MockLanguageModelInstance,
+  type Prompt,
+  type StreamPart,
+  type TimeoutOption,
+  type Usage,
+} from './sdk-compat.js';
 
 export interface Mark {
   name: string;
@@ -40,18 +43,18 @@ export class Marks {
   }
 }
 
-const usage: LanguageModelV4Usage = {
+const usage: Usage = {
   inputTokens: { total: 20, noCache: 20, cacheRead: undefined, cacheWrite: undefined },
   outputTokens: { total: 10, text: 10, reasoning: undefined },
 };
 
-const finish = (unified: 'stop' | 'tool-calls'): LanguageModelV4StreamPart => ({
+const finish = (unified: 'stop' | 'tool-calls'): StreamPart => ({
   type: 'finish',
   usage,
   finishReason: { unified, raw: unified },
 });
 
-function textParts(id: string, chunks: string[]): LanguageModelV4StreamPart[] {
+function textParts(id: string, chunks: string[]): StreamPart[] {
   return [
     { type: 'text-start', id },
     ...chunks.map((delta) => ({ type: 'text-delta', id, delta }) as const),
@@ -67,7 +70,7 @@ export function chunked(text: string, size = 17): string[] {
 }
 
 /** Pull every tool result out of an incoming provider prompt, by tool name. */
-export function collectToolResults(prompt: LanguageModelV4Prompt): Record<string, unknown> {
+export function collectToolResults(prompt: Prompt): Record<string, unknown> {
   const results: Record<string, unknown> = {};
   for (const message of prompt) {
     if (message.role !== 'tool') continue;
@@ -85,15 +88,15 @@ export function collectToolResults(prompt: LanguageModelV4Prompt): Record<string
   return results;
 }
 
-export function makeMockModel(marks: Marks): MockLanguageModelV4 {
+export function makeMockModel(marks: Marks): MockLanguageModelInstance {
   let call = 0;
 
-  return new MockLanguageModelV4({
-    doStream: async (options: LanguageModelV4CallOptions) => {
+  return new MockLanguageModel({
+    doStream: async (options: CallOptions) => {
       const index = call++;
       marks.mark('mock:doStream', { call: index });
 
-      let parts: LanguageModelV4StreamPart[];
+      let parts: StreamPart[];
       if (index === 0) {
         parts = [
           { type: 'stream-start', warnings: [] },
@@ -136,7 +139,7 @@ export function makeMockModel(marks: Marks): MockLanguageModelV4 {
       }
 
       return {
-        stream: simulateReadableStream<LanguageModelV4StreamPart>({
+        stream: simulateReadableStream<StreamPart>({
           chunks: parts,
           initialDelayInMs: 5,
           chunkDelayInMs: 2,
@@ -156,7 +159,7 @@ export interface ScenarioFlags {
   /** searchFlights body duration (default 25ms). */
   searchFlightsDelayMs?: number;
   /** streamText `timeout` configuration passthrough. */
-  timeout?: number | Record<string, unknown>;
+  timeout?: TimeoutOption;
   /** Skip the gm.run boundary (implicit run). */
   noRun?: boolean;
   runName?: string;

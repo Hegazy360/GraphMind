@@ -1,0 +1,132 @@
+# The soak scenarios that are too slow for a push.
+#
+# ci.yml runs the DEFAULT soak battery on every push: six scenarios, ~45s of
+# work locally, all of it bounded. It deliberately leaves out `longrun`,
+# which sits idle for 75 seconds at a time (three gaps, by default) — two full
+# server ping intervals — to prove that the hub's ping reaper does not silently
+# detach a live-but-quiet agent, that RSS and socket counts do not drift over
+# minutes, and that a gate still routes back into the app after long idleness.
+# Most of that time is spent deliberately doing nothing, which is exactly the
+# kind of thing a nightly is for and exactly the wrong thing on a push.
+#
+# WHAT IS ASSERTED HERE: only the harness's own correctness checks and the
+# fact that every requested scenario actually ran. Never a timing. Hosted
+# runners are noisy and their absolute numbers mean nothing next to a
+# laptop's; the numbers are uploaded as an artifact so a human can compare
+# nightly against nightly, and that is the only place they are interpreted.
+#
+# Scheduled runs only ever fire on the default branch — that is a GitHub
+# rule, not a choice here. `workflow_dispatch` exists so this is runnable on
+# demand (and so the job is never a job that can only trigger in theory).
+name: Nightly
+
+on:
+  schedule:
+    # 04:23 UTC daily. Deliberately not on the hour (hosted-runner queues
+    # spike there) and clear of sdk-compat.yml's Monday 06:17 canary.
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'soak --scenario= value (everything, all, longrun, or a comma-separated list)'
+        required: false
+        default: everything
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRAPHMIND_TELEMETRY: '0'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  soak-heavy:
+    name: soak (heavy scenarios)
+    runs-on: ubuntu-latest
+    # `everything` is the default battery (~45s locally, call it 4 min here)
+    # plus longrun's ~4 min of deliberate idling, and the runner is slower
+    # than a laptop across the board. 60 gives that a wide margin without
+    # letting a genuinely hung run burn an hour.
+    timeout-minutes: 60
+    env:
+      SCENARIO: ${{ github.event.inputs.scenario || 'everything' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm (corepack, pinned by packageManager)
+        run: |
+          corepack enable
+          corepack prepare --activate
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        # The harness spawns the real `startServer()` out of graphmind-ai's
+        # dist; build:viewer is not needed (nothing renders here).
+        run: pnpm -r --filter './packages/**' run build
+
+      - name: Soak
+        run: |
+          set -euo pipefail
+          echo "scenario: $SCENARIO"
+          pnpm --filter soak start --scenario="$SCENARIO" --json="$RUNNER_TEMP/soak-nightly.json" \
+            || { echo "::error::nightly soak failed — pnpm --filter soak start --scenario=$SCENARIO"; exit 1; }
+
+      - name: Guard against a silently-shrinking battery
+        env:
+          RESULT: ${{ runner.temp }}/soak-nightly.json
+          # The default battery's own floor. `everything` is a superset, so
+          # this is a floor for it too; the long-run assertion below is what
+          # actually proves the heavy half ran.
+          MIN_CHECKS: '33'
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const r = JSON.parse(fs.readFileSync(process.env.RESULT, "utf8"));
+            const min = Number(process.env.MIN_CHECKS);
+            const scenario = process.env.SCENARIO;
+            let passed = 0;
+            let failed = 0;
+            for (const s of r.sections) for (const c of s.checks) c.ok ? passed++ : failed++;
+            console.log("soak: " + r.sections.length + " scenario(s), " + passed + " check(s) passed, " + failed + " failed");
+            for (const s of r.sections) {
+              for (const c of s.checks) if (!c.ok) console.log("::error::soak [" + s.name + "] " + c.name + ": " + (c.detail || ""));
+            }
+            if (failed > 0) process.exit(1);
+            if (passed < min) {
+              console.log("::error::soak: only " + passed + " checks ran, expected at least " + min + " - a scenario dropped out, so this job proved less than it claims");
+              process.exit(1);
+            }
+            // The whole point of the nightly: if longrun was asked for, it has
+            // to have actually run. Its section is the one named "long run".
+            const wantedLongRun = scenario === "everything" || scenario.split(",").map((s) => s.trim()).includes("longrun");
+            if (wantedLongRun && !r.sections.some((s) => s.name.startsWith("long run"))) {
+              console.log("::error::soak: scenario \"" + scenario + "\" should have run `longrun`, but no long-run section is in the results - the nightly ran the same thing every push already runs");
+              process.exit(1);
+            }
+            // Machine-dependent, so: reported, never asserted.
+            const rows = r.sections.map((s) => "- **" + s.name + "** — " + s.checks.length + " check(s), " + (Number(s.data.durationMs) / 1000).toFixed(1) + "s");
+            console.log(rows.join("\n"));
+            const summary = process.env.GITHUB_STEP_SUMMARY;
+            if (summary) fs.appendFileSync(summary, rows.join("\n") + "\n");
+          '
+
+      - name: Upload the soak numbers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-nightly-results
+          path: ${{ runner.temp }}/soak-nightly.json
+          retention-days: 30
+          if-no-files-found: ignore

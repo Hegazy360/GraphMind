@@ -32,13 +32,16 @@ import type { AdapterCore } from './core.js';
 import { nodeIdFor } from './ids.js';
 import {
   compactMessages,
+  langgraphTaskKey,
   parseToolInput,
   resolveChainStartArgs,
   serializedName,
   textFromLLMResult,
+  toolArgsDeltas,
   unwrapToolOutput,
   usageFromLLMResult,
   type LLMResultLike,
+  type NewTokenFieldsLike,
   type SerializedLike,
 } from './lc-types.js';
 import { RunScope } from './run-scope.js';
@@ -138,12 +141,24 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       }
 
       const rootRunId = this.tree.rootFor(runId, parentRunId);
+      const task = langgraphTaskKey(metadata);
+      // LangGraph wraps a node body in an INNER run that inherits the task's
+      // metadata verbatim, so naming it from `langgraph_node` would emit a
+      // second chain node with the same nodeId as its parent — a self-loop on
+      // any viewer laying the run out as a DAG, and a doubled step count.
+      // It is one of "LangGraph's own internals" the `chains` policy already
+      // excludes; folding it into the task run keeps its children (the model
+      // call, nested tools) attached to the node they really belong to.
+      if (task !== undefined && this.tree.get(parentRunId)?.langgraphTask === task) {
+        this.passthrough(runId, rootRunId, parentRunId, task);
+        return;
+      }
       if (!this.shouldEmitChain(langgraphNode, tags)) {
-        this.passthrough(runId, rootRunId, parentRunId);
+        this.passthrough(runId, rootRunId, parentRunId, task);
         return;
       }
 
-      const record = this.open(runId, rootRunId, parentRunId, 'chain', name, runId);
+      const record = this.open(runId, rootRunId, parentRunId, 'chain', name, runId, task);
       const extra: Record<string, unknown> = {};
       if (langgraphNode !== undefined) extra['langgraphNode'] = langgraphNode;
       const step = metadata?.['langgraph_step'];
@@ -221,16 +236,25 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
     );
   }
 
-  override async handleLLMNewToken(token: string, _idx: unknown, runId: string): Promise<void> {
+  override async handleLLMNewToken(
+    token: string,
+    _idx: unknown,
+    runId: string,
+    _parentRunId?: string,
+    _tags?: string[],
+    // LangChain hands the whole streamed chunk here; `token` is only its text.
+    fields?: NewTokenFieldsLike,
+  ): Promise<void> {
     return this.guard('llm-token', async () => {
       const record = this.tree.get(runId);
-      if (record === undefined || !record.emitted || typeof token !== 'string') return;
-      this.core.pushToken(
-        record.nodeId,
-        'text',
-        token,
-        this.roots.get(record.rootRunId)?.tokenSink,
-      );
+      if (record === undefined || !record.emitted) return;
+      const sink = this.roots.get(record.rootRunId)?.tokenSink;
+      if (typeof token === 'string') this.core.pushToken(record.nodeId, 'text', token, sink);
+      // While a tool call streams, `token` is empty and the JSON arguments
+      // arrive as `tool_call_chunks[].args` substrings on the chunk's message.
+      for (const delta of toolArgsDeltas(fields)) {
+        this.core.pushToken(record.nodeId, 'tool-args', delta, sink);
+      }
     });
   }
 
@@ -439,6 +463,10 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
     this.core.openScope(runner);
     this.core.openHandlers.add(this);
     this.linkAbort(ambient ?? scope?.ctx);
+    // A `gm.hintGraph()` from before this run existed belongs to THIS run.
+    await this.inRoot(runId, () => {
+      this.core.replayGraphHint();
+    });
   }
 
   private async startRoot(
@@ -494,7 +522,12 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
   }
 
   /** Record a run we do not render, so its children keep correct parentage. */
-  private passthrough(runId: string, rootRunId: string, parentRunId: string | undefined): void {
+  private passthrough(
+    runId: string,
+    rootRunId: string,
+    parentRunId: string | undefined,
+    langgraphTask?: string | undefined,
+  ): void {
     const parent = this.tree.get(parentRunId);
     this.tree.set({
       runId,
@@ -507,6 +540,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       startedAt: Date.now(),
       emitted: false,
       gatedByWrapper: false,
+      langgraphTask: langgraphTask ?? parent?.langgraphTask,
     });
   }
 
@@ -517,6 +551,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
     kind: NodeKind,
     name: string,
     instanceId: string,
+    langgraphTask?: string | undefined,
   ): RunRecord {
     return this.tree.set({
       runId,
@@ -529,6 +564,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       startedAt: Date.now(),
       emitted: true,
       gatedByWrapper: false,
+      langgraphTask,
     });
   }
 

@@ -36,9 +36,44 @@ export interface LLMResultLike {
   llmOutput?: Record<string, unknown> | undefined;
 }
 
-/** A streamed chunk handed to `handleLLMNewToken` via `fields.chunk`. */
+/**
+ * A streamed chunk handed to `handleLLMNewToken` via `fields.chunk`
+ * (`GenerationChunk | ChatGenerationChunk`), reduced to what we read. Kept
+ * `unknown`-typed so the handler's override stays assignable to
+ * @langchain/core's own declaration across its supported range.
+ */
 export interface NewTokenFieldsLike {
-  chunk?: { message?: Record<string, unknown> | undefined; text?: unknown } | undefined;
+  chunk?: { message?: unknown; text?: unknown } | undefined;
+}
+
+/** One entry of `AIMessageChunk.tool_call_chunks`. */
+interface ToolCallChunkLike {
+  id?: unknown;
+  name?: unknown;
+  args?: unknown;
+  index?: unknown;
+}
+
+/**
+ * The tool-call argument deltas inside one `handleLLMNewToken` chunk.
+ *
+ * `token` (the first argument) only ever carries TEXT: while a model streams a
+ * tool call, `token` is empty and the JSON arrives as `args` substrings on
+ * `fields.chunk.message.tool_call_chunks` (`ToolCallChunk` in
+ * @langchain/core). Without reading them the `tool-args` delta channel stays
+ * empty here while the Anthropic / OpenAI / AI SDK adapters fill it.
+ */
+export function toolArgsDeltas(fields: NewTokenFieldsLike | undefined): string[] {
+  const message = fields?.chunk?.message;
+  if (message === null || typeof message !== 'object') return [];
+  const chunks = (message as { tool_call_chunks?: unknown }).tool_call_chunks;
+  if (!Array.isArray(chunks)) return [];
+  const out: string[] = [];
+  for (const chunk of chunks as ToolCallChunkLike[]) {
+    const args = chunk?.args;
+    if (typeof args === 'string' && args.length > 0) out.push(args);
+  }
+  return out;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -67,6 +102,38 @@ export function resolveChainStartArgs(
   // Declared order: arg4=runType, arg7=runName, arg8=parentRunId.
   if (isRunId(arg8)) return { parentRunId: arg8, runName: arg7, runType: arg4 };
   return { parentRunId: undefined, runName: arg8 ?? arg7, runType: arg4 };
+}
+
+/**
+ * Identity of the LangGraph *task* a run belongs to: its node name plus the
+ * checkpoint namespace of that particular task execution.
+ *
+ * LangGraph runs a node body inside an inner runnable (a `RunnableLambda`
+ * nested in the task's `RunnableSequence` — reproducible on any graph whose
+ * node has conditional edges), and that inner run inherits the task's
+ * metadata verbatim. Two runs sharing this key are therefore the SAME
+ * LangGraph node execution, not a node inside a node: a subgraph's node, or
+ * the same node on a later step, gets its own `langgraph_checkpoint_ns`.
+ *
+ * `undefined` for anything that is not a LangGraph node run (the compiled
+ * graph's own root run, plain LCEL chains).
+ */
+export function langgraphTaskKey(
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  const node = metadata?.['langgraph_node'];
+  if (typeof node !== 'string' || node.length === 0) return undefined;
+  const ns = metadata?.['langgraph_checkpoint_ns'] ?? metadata?.['checkpoint_ns'];
+  const step = metadata?.['langgraph_step'];
+  const scope =
+    typeof ns === 'string' && ns.length > 0
+      ? ns
+      : typeof step === 'number'
+        ? `step:${step}`
+        : '';
+  // Length-prefixed so a node name containing the separator cannot collide
+  // with a different node/namespace pair.
+  return `${node.length}:${node}:${scope}`;
 }
 
 /** Last meaningful segment of a serialized `lc_id` (e.g. `ChatAnthropic`). */

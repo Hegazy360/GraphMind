@@ -6,6 +6,27 @@
 #
 # Every run step uses `shell: bash` (set via defaults) — bash exists on all
 # three hosted runner images, so one script works everywhere.
+#
+# SHAPE OF THIS FILE
+#   test                  6 cells (3 OS x 2 Node) — the platform matrix
+#   cold-package-smoke    2 cells — what `npm install graphmind-ai` gets
+#   python                4 cells — the PyPI SDK
+#   ci-wiring             1 cell  — asserts the four below are still wired up
+#   viewer-e2e            1 cell  — Playwright, the built viewer in a browser
+#   security-audit        1 cell  — the secret-leak audit
+#   soak                  1 cell  — the default soak battery
+#   live-check            1 cell  — the real-provider harness, keyless
+#
+# The last five are deliberately SINGLE cells, not steps inside the matrix.
+# None of them exercises platform behaviour: they drive our own code through
+# a browser, a mock provider or a generator, so a sixfold run would cost
+# minutes (the Playwright suite alone is ~2 min x 6) and prove nothing the
+# first cell did not. They start in parallel with the matrix, so they cost
+# runner-minutes but essentially no wall-clock.
+#
+# See also .github/workflows/sdk-compat.yml (provider-SDK version ranges, its
+# own required matrix + a weekly advisory canary) and nightly.yml (the heavy
+# soak scenarios). No job name is shared across the three files.
 name: CI
 
 on:
@@ -61,14 +82,18 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test packages
+      - name: Test packages and viewer
+        # Root `test` is `packages/**` + `apps/viewer`, so this one step covers
+        # both — it used to be followed by a separate `pnpm --filter viewer run
+        # test`, which re-ran the entire viewer unit suite a second time in
+        # every cell. CONTRIBUTING pins `pnpm typecheck && pnpm test` as the
+        # contributor gate, so keep the viewer inside the root script rather
+        # than splitting it back out here; ci-wiring asserts it stays there.
+        #
         # Retries for timing-sensitive suites are configured per package in
         # vitest.config.ts, keyed off CI — a flag here would reach pnpm, not
         # vitest.
         run: pnpm test
-
-      - name: Test viewer
-        run: pnpm --filter viewer run test
 
       - name: Test web
         # apps/web runs on Vercel's Node 24 runtime, and its tests import .ts
@@ -235,3 +260,355 @@ jobs:
           pip install build
           python -m build
           ls -la dist
+
+  # =====================================================================
+  # Phase-4 safety nets.
+  #
+  # These four harnesses (apps/viewer/e2e, security/, examples/soak,
+  # examples/live-check) were written to be run by hand, which means they
+  # were run when somebody remembered. A check nobody runs is not a check,
+  # so each one gets a job here.
+  #
+  # Shared shape: every job asserts not just "the command exited 0" but
+  # "the command actually did the work" — a suite that silently stops
+  # covering anything is the failure mode these harnesses are most prone
+  # to, and it is invisible in an exit code. Timings are never asserted:
+  # hosted-runner numbers are machine-dependent, and the harnesses already
+  # assert correctness of their own accord.
+  # =====================================================================
+
+  # The check on the checks. Everything below this point can be un-wired by
+  # deleting a job, and the root scripts can be re-narrowed by editing one
+  # glob — neither of which fails anything on its own. This job asserts the
+  # wiring: every workflow parses, no two jobs share a name, no job is
+  # unreachable, every harness runs on push, and `pnpm typecheck` still
+  # reaches every workspace package that has a typecheck script.
+  #
+  # Cheapest job in the file (no pnpm install, no build), so it runs first.
+  ci-wiring:
+    name: ci wiring
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install PyYAML
+        # Explicit rather than trusting the runner image to keep shipping it:
+        # this job's whole job is to not be silently skippable.
+        run: pip install --quiet pyyaml
+
+      - name: Check the wiring
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/check-ci-wiring.py \
+            || { echo "::error::CI wiring check failed — python3 .github/scripts/check-ci-wiring.py"; exit 1; }
+
+  # 41 Playwright tests driving the BUILT viewer bundle (the same one
+  # `pnpm build:viewer` puts inside the CLI) in headless Chromium.
+  viewer-e2e:
+    name: viewer e2e (chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm (corepack, pinned by packageManager)
+        run: |
+          corepack enable
+          corepack prepare --activate
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve the pinned Playwright version
+        # The browser build is tied to the Playwright version, so that version
+        # — not the lockfile hash — is the cache key. Read it from the
+        # installed package rather than hardcoding it, so a dependency bump
+        # invalidates the cache on its own.
+        id: playwright
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./apps/viewer/node_modules/@playwright/test/package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Playwright $version"
+
+      - name: Cache the Chromium build
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
+
+      - name: Install Chromium and its system libraries
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter viewer exec playwright install --with-deps chromium
+
+      - name: Install Chromium's system libraries (browser came from cache)
+        # The cache holds ~/.cache/ms-playwright — the browser itself. The apt
+        # packages it links against live in the runner image and are NOT
+        # cached, so they have to be (re)installed on a cache hit too.
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter viewer exec playwright install-deps chromium
+
+      - name: Build the viewer's workspace dependencies
+        # `viewer^...` is "everything viewer depends on, excluding viewer" —
+        # today just @graphmind-ai/schema. The viewer's own build is run by
+        # playwright.config.ts's webServer, which insists on a fresh one.
+        run: pnpm --filter 'viewer^...' run build
+
+      - name: E2E
+        run: |
+          set -euo pipefail
+          pnpm --filter viewer test:e2e \
+            || { echo "::error::viewer e2e failed — pnpm --filter viewer test:e2e"; exit 1; }
+
+      - name: Upload the Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            apps/viewer/playwright-report
+            apps/viewer/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # 71 tests proving no credential reaches the database, the HTTP API, the
+  # WebSocket, the HTML/NDJSON exports or telemetry. Cheap (~8s of tests)
+  # and about as high-value as a check gets, so it runs on every push.
+  security-audit:
+    name: security audit (secret-leak)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm (corepack, pinned by packageManager)
+        run: |
+          corepack enable
+          corepack prepare --activate
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        # The audit imports the adapters and the CLI through their PUBLISHED
+        # entry points (dist/), not src/, because the question it asks is what
+        # the thing on npm does. Without a build it would audit nothing.
+        run: pnpm -r --filter './packages/**' run build
+
+      - name: Build viewer (and bundle into CLI)
+        # Not for serving: `graphmind record --html` hard-fails when
+        # packages/cli/viewer-dist is missing (commands/record.ts), and
+        # tests/export-hardening.test.ts audits the file that command writes.
+        # `pnpm build` alone is not enough — it is build:viewer that copies
+        # apps/viewer/dist into packages/cli/viewer-dist.
+        run: pnpm build:viewer
+
+      - name: Audit
+        # Extra reporters are appended to the package's own `test` script.
+        # Note the absence of `--`: `pnpm --filter x test -- --reporter=json`
+        # forwards a literal `--` to vitest, which then ignores every flag
+        # after it and writes no JSON — the guard below would read a stale
+        # file or none at all.
+        run: |
+          set -euo pipefail
+          pnpm --filter security-audit test \
+            --reporter=default --reporter=json \
+            --outputFile.json="$RUNNER_TEMP/security-audit.json" \
+            || { echo "::error::security audit failed — pnpm --filter security-audit test"; exit 1; }
+
+      - name: Guard against a silently-shrinking audit
+        # 71 = the audit's size when it was written (67 plain + 4 test.fails,
+        # which vitest counts as passing). Deleting a canary or a whole spec
+        # file would otherwise leave the job green.
+        env:
+          RESULT: ${{ runner.temp }}/security-audit.json
+          MIN_TESTS: '71'
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const r = JSON.parse(fs.readFileSync(process.env.RESULT, "utf8"));
+            const min = Number(process.env.MIN_TESTS);
+            console.log("security audit: " + r.numPassedTests + " passed, " + r.numFailedTests + " failed, " + r.numTotalTests + " total");
+            if (r.numFailedTests > 0) {
+              console.log("::error::security audit: " + r.numFailedTests + " failing test(s) - a credential reached an artifact, or a guarantee changed");
+              process.exit(1);
+            }
+            if (r.numPassedTests < min) {
+              console.log("::error::security audit: only " + r.numPassedTests + " tests ran, expected at least " + min + " - the suite shrank, so this job proved less than it claims");
+              process.exit(1);
+            }
+          '
+
+  # The default soak battery: a real server in its own process, a real client
+  # over a real WebSocket, a headless viewer on the real /ws/ui subprotocol.
+  # 33 correctness checks (exactly-once, ordering, replay-on-attach,
+  # fail-open) alongside numbers that are only ever printed, never asserted.
+  soak:
+    name: soak (default battery)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm (corepack, pinned by packageManager)
+        run: |
+          corepack enable
+          corepack prepare --activate
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        # The harness spawns the real `startServer()` from graphmind-ai's
+        # dist. It does NOT need build:viewer: it imports the viewer's
+        # reducer and layout from apps/viewer/src through tsx, and the server
+        # it starts serves a placeholder when viewer-dist is absent.
+        run: pnpm -r --filter './packages/**' run build
+
+      - name: Soak
+        # The DEFAULT battery only (six scenarios, ~45s locally). Explicitly
+        # not `--scenario=everything`: that adds `longrun`, which costs
+        # wall-clock minutes and belongs in nightly.yml.
+        run: |
+          set -euo pipefail
+          pnpm --filter soak start --json="$RUNNER_TEMP/soak.json" \
+            || { echo "::error::soak failed — pnpm --filter soak start"; exit 1; }
+
+      - name: Guard against a silently-shrinking battery
+        # The harness already exits non-zero on a failed check. This catches
+        # the other failure: scenarios quietly dropping out, which looks
+        # identical to success from the outside. Only the CHECK COUNT is
+        # asserted — every timing the harness prints is machine-dependent and
+        # would be pure flake here.
+        env:
+          RESULT: ${{ runner.temp }}/soak.json
+          MIN_CHECKS: '33'
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const r = JSON.parse(fs.readFileSync(process.env.RESULT, "utf8"));
+            const min = Number(process.env.MIN_CHECKS);
+            let passed = 0;
+            let failed = 0;
+            for (const s of r.sections) for (const c of s.checks) c.ok ? passed++ : failed++;
+            console.log("soak: " + r.sections.length + " scenario(s), " + passed + " check(s) passed, " + failed + " failed");
+            for (const s of r.sections) {
+              for (const c of s.checks) if (!c.ok) console.log("::error::soak [" + s.name + "] " + c.name + ": " + (c.detail || ""));
+            }
+            if (failed > 0) process.exit(1);
+            if (passed < min) {
+              console.log("::error::soak: only " + passed + " checks ran, expected at least " + min + " - a scenario dropped out, so this job proved less than it claims");
+              process.exit(1);
+            }
+          '
+
+      - name: Upload the soak numbers
+        # Always: the interesting case is comparing a green run against the
+        # previous green run, not only reading a red one.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-results
+          path: ${{ runner.temp }}/soak.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # live-check drives every adapter against the REAL Anthropic and OpenAI
+  # APIs. CI has no keys and never will, and the harness exits 0 cleanly
+  # without them — so what this job actually tests is the harness: that it
+  # still installs, still boots under tsx, and still reaches its own skip
+  # decision instead of having rotted into a no-op.
+  #
+  # The other half of "live-check has not rotted" is the `pnpm typecheck`
+  # step in the matrix job: examples/live-check has a typecheck script, and
+  # the root script now reaches it, so tsc resolves every provider-SDK import
+  # in src/** on every push even though no suite is executed here.
+  live-check:
+    name: live-check (keyless harness smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm (corepack, pinned by packageManager)
+        run: |
+          corepack enable
+          corepack prepare --activate
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm -r --filter './packages/**' run build
+
+      - name: Live-check (no keys — must skip loudly, not silently)
+        # `--no-env-file` stops the harness reading a repo-root .env.local, so
+        # this cell is keyless by construction and not merely by accident of
+        # what is on disk.
+        run: |
+          set -euo pipefail
+
+          log="$RUNNER_TEMP/live-check.log"
+          status=0
+          pnpm --filter live-check start --no-env-file 2>&1 | tee "$log" || status=$?
+
+          if [ "$status" -ne 0 ]; then
+            echo "::error::live-check exited $status — with no API keys it must exit 0 (pnpm --filter live-check start --no-env-file)"
+            exit 1
+          fi
+
+          # It booted at all: every provider SDK import resolved and the fetch
+          # probe installed. This is the assertion that fails when the harness
+          # rots.
+          if ! grep -q 'graphmind live-check' "$log"; then
+            echo "::error::live-check produced no banner — the harness did not start (see the log above)"
+            exit 1
+          fi
+
+          if grep -q 'SKIPPING the whole live-check suite' "$log"; then
+            echo "::notice title=live-check::Harness booted and SKIPPED — no ANTHROPIC_API_KEY / OPENAI_API_KEY on CI, which is expected. Run it locally with keys to exercise real providers."
+            {
+              echo '- **live-check** — harness booted, then **skipped: no provider API keys** (expected on CI).'
+              echo '  Real-provider coverage only happens locally: `set -a; . ./.env.local; set +a && pnpm live-check`.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Keys were present after all (a fork, or someone wired secrets in).
+          # Then it really ran, and its own exit code above already gated it.
+          if grep -qE 'check\(s\) passed|real provider HTTP requests issued' "$log"; then
+            echo "::notice title=live-check::Keys were present — the real-provider suites actually ran and passed."
+            echo '- **live-check** — ran against REAL providers and passed.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "::error::live-check exited 0 but printed neither a skip notice nor a report — it has become a no-op"
+          exit 1

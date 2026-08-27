@@ -26,7 +26,7 @@ import {
 } from '@graphmind-ai/schema';
 import type { WebSocket } from 'ws';
 import { DebugState } from './debug-state.js';
-import type { RunSource, Storage, StoredEvent } from './storage.js';
+import { serializePayload, type RunSource, type Storage, type StoredEvent } from './storage.js';
 import type { RunInfo, UiServerMessage, WireEnvelope } from './ui-protocol.js';
 import { VERSION } from './version.js';
 
@@ -190,13 +190,26 @@ export class Hub {
       source: conn.runSource,
     });
 
+    // Apply the payload guard HERE, so the fan-out relays exactly what storage
+    // keeps. Doing it only inside storage meant a 32MB tool result was still
+    // pushed in full to every attached viewer (server RSS 95MB -> 303MB in the
+    // soak repro), and a live view then disagreed with the same run on reload.
+    //
+    // `serializePayload` is idempotent, so storage re-applying it to the value
+    // below is a no-op; the cost is one extra `JSON.stringify` of an
+    // already-in-budget payload, measured at 0.29µs/event (~0.6% of one core
+    // at 20k events/s) — cheap enough to prefer over widening the Storage
+    // interface just to hand the JSON down.
+    const stored = serializePayload(envelope.payload);
     const inserted = this.storage.insertEvent({
       runId: envelope.runId,
       seq: envelope.seq,
       ts: envelope.ts,
-      type: envelope.type,
+      // Denormalized from the ORIGINAL payload: `nodeId` is an index column,
+      // and it must survive even when the payload itself could not be trimmed.
       nodeId: extractNodeId(envelope.payload),
-      payload: envelope.payload,
+      type: envelope.type,
+      payload: stored.payload,
     });
     if (!inserted) {
       // Duplicate `(runId, seq)` — a replayed envelope (decisions.md #5).
@@ -223,7 +236,7 @@ export class Hub {
       this.pushRunUpdate(envelope.runId);
     }
 
-    this.fanout(envelope);
+    this.fanout(stored.truncated ? { ...envelope, payload: stored.payload } : envelope);
   }
 
   private removeIngest(conn: IngestConn): void {

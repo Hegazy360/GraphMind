@@ -31,6 +31,12 @@ export interface RunRecord {
   emitted: boolean;
   /** True when a tool wrapper owns this run's gates (see wrap-tools.ts). */
   gatedByWrapper: boolean;
+  /**
+   * `langgraphTaskKey(metadata)` for this run: which LangGraph node execution
+   * it belongs to. A child run carrying the SAME key is LangGraph's own inner
+   * wrapper around the node body, not a nested node.
+   */
+  langgraphTask?: string | undefined;
 }
 
 const DEFAULT_MAX_RUNS = 5000;

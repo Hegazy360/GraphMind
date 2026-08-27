@@ -194,9 +194,16 @@ describe('buffering and replay', () => {
     await viewer.waitForType('node.token');
     await tick(100);
 
+    // A gap marker leads the replay (the hole is older than what survived),
+    // then the three surviving tokens.
     const replayed = viewer.received.filter((f) => f.type !== 'hello');
-    expect(replayed.map((f) => f.type)).toEqual(['node.token', 'node.token', 'node.token']);
-    expect(replayed.map((f) => (f.payload['deltas'] as { v: string }[])[0]?.v)).toEqual([
+    expect(replayed.map((f) => f.type)).toEqual([
+      'graph.hint',
+      'node.token',
+      'node.token',
+      'node.token',
+    ]);
+    expect(replayed.slice(1).map((f) => (f.payload['deltas'] as { v: string }[])[0]?.v)).toEqual([
       'tok-2',
       'tok-3',
       'tok-4',

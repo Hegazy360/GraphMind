@@ -1,0 +1,456 @@
+# SDK compatibility matrix for the four provider adapters.
+#
+# WHY THIS EXISTS
+# Each adapter advertises a wide `peerDependencies` range, but the monorepo
+# only ever installs ONE version of each SDK (its devDependency). Everything
+# between the advertised floor and that one version was never executed, so a
+# user on an older-but-"supported" major could hit a broken adapter and we
+# would not know. This workflow pins each SDK to the measured floor and
+# ceiling of its advertised range and runs that adapter's own suite against
+# both, so a range we publish is a range we actually exercise.
+#
+# MEASURED SUPPORT MATRIX (established 2026-08-27; package.json cannot carry
+# comments, so the evidence for every advertised range lives here)
+#
+#   @graphmind-ai/sdk        peer  ai >=6 <8                    UNCHANGED
+#     ai@6.0.0    39/41  runtime OK; the 2 failures are `timeout: {toolMs}`,
+#                        which does not exist in ai v6 at all (v6's
+#                        TimeoutConfiguration is totalMs|stepMs|chunkMs).
+#     ai@6.0.270  39/41  same two, same reason.
+#     ai@7.0.0    41/41
+#     ai@7.0.83   41/41
+#     A consumer compiled against ai@6.0.270 typechecks cleanly on the
+#     published (ai@7-built) .d.ts, so the >=6 claim holds for users.
+#     Two defects block a FULL v6 cell here — see "PARTIAL CELL" below.
+#
+#   @graphmind-ai/anthropic  peer  @anthropic-ai/sdk >=0.60.0 <1  UNCHANGED
+#     0.60.0 / 0.71.0 / 0.100.0 / 0.121.0 -> 53/53 every time. The whole
+#     advertised range is genuinely supported; nothing to correct.
+#
+#   @graphmind-ai/openai     peer  openai >=5 <7  ->  >=5 <8      WIDENED
+#     5.0.0 .. 6.44.0  57/59; the 2 failures are an upstream gap, NOT ours:
+#                      a RAW, unwrapped `new OpenAI()` at 6.9.0 also returns
+#                      `responses.stream().finalResponse().output_text ===
+#                      undefined`. First version that populates it: 6.45.0.
+#     6.45.0 .. 6.49.0 59/59
+#     7.0.0 / 7.7.0    59/59  <- the reason `<7` became `<8`. openai@7 has
+#                      been the default `npm i openai` since 2026-07-27, so
+#                      the old ceiling was producing unmet-peer warnings for
+#                      an SDK major the adapter fully supports.
+#
+#   @graphmind-ai/langgraph  peers                                NARROWED
+#     @langchain/core      >=0.3 <2  ->  >=0.3.40 <2
+#     @langchain/langgraph >=0.2 <2  ->  >=0.3 <2
+#     core@0.3.0  + lg@0.3.0   29/68  hard failure: @langchain/core@0.3.0 has
+#                                     no `isToolMessage` export, which
+#                                     @langchain/langgraph imports.
+#     core@0.3.0  + lg@0.2.74  29/68  same. Worse, langgraph 0.2.x declares
+#                                     `@langchain/core >=0.2.31 <0.3.0`, which
+#                                     is DISJOINT from our own core floor of
+#                                     >=0.3 — the pair we advertised could
+#                                     never be installed at all.
+#     core@0.3.40 + lg@0.3.0   68/68  <- the real floor.
+#     core@0.3.78 + lg@0.4.0   68/68
+#     core@1.0.1  + lg@1.0.0   68/68  (with langgraph-checkpoint 1.0.4/1.1.0)
+#     core@1.2.9  + lg@1.4.13  68/68
+#
+# PARTIAL CELL (ai@6): the ai-sdk suite cannot run in full on ai v6 because
+# `test/helpers/scenario.ts` and `test/observe.test.ts` import
+# `MockLanguageModelV4` from `ai/test` by name, and ai v6 exports that class
+# as `MockLanguageModelV3` — a module-load SyntaxError that kills three of the
+# four files outright. Renaming it locally proves the adapter itself is fine
+# (39/41). Until that fixture feature-detects the class, the v6 cell runs the
+# one suite that does not construct a model. It is still a real guard: it is
+# pinned, it names the version, and it fails the build.
+#
+# ONE OS, ONE NODE on purpose: these cells are about dependency resolution,
+# not platform behaviour — ci.yml already covers Linux/Windows/macOS x 22/24.
+name: SDK compatibility
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly canary (Mondays 06:17 UTC) — see the `canary` job.
+    - cron: '17 6 * * 1'
+
+concurrency:
+  group: sdk-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRAPHMIND_TELEMETRY: '0'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Required. Pinned versions only, so a red cell always means OUR change
+  # broke a version we promise — never that upstream shipped something new
+  # (that is the canary's job). continue-on-error is explicitly false.
+  # ---------------------------------------------------------------------
+  range:
+    name: ${{ matrix.label }}
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # --- @graphmind-ai/sdk (peer: ai >=6 <8) ---
+          - label: 'ai-sdk / ai@6.0.270 (floor, partial)'
+            pkg: '@graphmind-ai/sdk'
+            dir: packages/ai-sdk
+            pins: 'ai=6.0.270 @ai-sdk/provider=3.0.15'
+            args: 'test/units.test.ts'
+            min_tests: 17
+          - label: 'ai-sdk / ai@7.0.0'
+            pkg: '@graphmind-ai/sdk'
+            dir: packages/ai-sdk
+            pins: 'ai=7.0.0 @ai-sdk/provider=4.0.0'
+            args: ''
+            min_tests: 41
+          - label: 'ai-sdk / ai@7.0.83 (ceiling)'
+            pkg: '@graphmind-ai/sdk'
+            dir: packages/ai-sdk
+            pins: 'ai=7.0.83 @ai-sdk/provider=4.0.8'
+            args: ''
+            min_tests: 41
+
+          # --- @graphmind-ai/anthropic (peer: @anthropic-ai/sdk >=0.60.0 <1) ---
+          - label: 'anthropic / sdk@0.60.0 (floor)'
+            pkg: '@graphmind-ai/anthropic'
+            dir: packages/anthropic
+            pins: '@anthropic-ai/sdk=0.60.0'
+            args: ''
+            min_tests: 53
+          - label: 'anthropic / sdk@0.121.0 (ceiling)'
+            pkg: '@graphmind-ai/anthropic'
+            dir: packages/anthropic
+            pins: '@anthropic-ai/sdk=0.121.0'
+            args: ''
+            min_tests: 53
+
+          # --- @graphmind-ai/openai (peer: openai >=5 <8) ---
+          # The floor cell skips the two `responses.stream()` tests whose final
+          # assertion is `finalResponse().output_text`: the OpenAI SDK itself
+          # does not populate that field before 6.45.0 (verified against a raw,
+          # unwrapped client), so they assert an SDK feature, not ours. The
+          # gate/tee behaviour they cover is exercised again at the 6.45.0 and
+          # 7.7.0 cells. The min_tests guard below turns a typo'd pattern into
+          # a failure instead of a silently-skipped suite.
+          - label: 'openai / openai@5.0.0 (floor, 2 SDK-gap tests skipped)'
+            pkg: '@graphmind-ai/openai'
+            dir: packages/openai
+            pins: 'openai=5.0.0'
+            args: '--testNamePattern=^(?!.*responses\.stream\(\)).*$'
+            min_tests: 57
+          - label: 'openai / openai@6.45.0 (first fully-green)'
+            pkg: '@graphmind-ai/openai'
+            dir: packages/openai
+            pins: 'openai=6.45.0'
+            args: ''
+            min_tests: 59
+          - label: 'openai / openai@7.7.0 (ceiling)'
+            pkg: '@graphmind-ai/openai'
+            dir: packages/openai
+            pins: 'openai=7.7.0'
+            args: ''
+            min_tests: 59
+
+          # --- @graphmind-ai/langgraph (peers: core >=0.3.40 <2, langgraph >=0.3 <2) ---
+          - label: 'langgraph / core@0.3.40 + langgraph@0.3.0 (floor)'
+            pkg: '@graphmind-ai/langgraph'
+            dir: packages/langgraph
+            pins: '@langchain/core=0.3.40 @langchain/langgraph=0.3.0'
+            args: ''
+            min_tests: 68
+          - label: 'langgraph / core@1.2.9 + langgraph@1.4.13 (ceiling)'
+            pkg: '@graphmind-ai/langgraph'
+            dir: packages/langgraph
+            pins: '@langchain/core=1.2.9 @langchain/langgraph=1.4.13'
+            args: ''
+            min_tests: 68
+
+    env:
+      PINS: ${{ matrix.pins }}
+      PKG: ${{ matrix.pkg }}
+      DIR: ${{ matrix.dir }}
+      VITEST_ARGS: ${{ matrix.args }}
+      MIN_TESTS: ${{ matrix.min_tests }}
+      LABEL: ${{ matrix.label }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm (corepack, pinned by packageManager)
+        run: |
+          corepack enable
+          corepack prepare --activate
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: pnpm
+
+      - name: Pin SDK versions via pnpm overrides
+        # pnpm 11 reads `overrides` from pnpm-workspace.yaml (it is no longer
+        # honoured under package.json's "pnpm" key), so append a block there.
+        # Refuses rather than duplicates if the repo ever grows its own
+        # `overrides:` — a duplicate YAML key would silently drop one of them.
+        #
+        # It also sets `minimumReleaseAge: 0`. pnpm 11 defaults that to one
+        # day and re-resolves the WHOLE tree here (--no-frozen-lockfile), so
+        # any transitive dependency published in the last 24h would otherwise
+        # abort the install and turn this matrix red for a reason that has
+        # nothing to do with SDK compatibility. These cells are ephemeral and
+        # publish nothing; ci.yml keeps the default policy for the real build.
+        run: |
+          set -euo pipefail
+          python3 - $PINS <<'PY'
+          import sys
+          path = 'pnpm-workspace.yaml'
+          src = open(path).read()
+          lines = src.splitlines()
+          if any(l.startswith('overrides:') for l in lines):
+              sys.exit('pnpm-workspace.yaml already declares overrides: - merge, do not append')
+          out = src.rstrip('\n') + '\n\n'
+          if not any(l.startswith('minimumReleaseAge:') for l in lines):
+              out += 'minimumReleaseAge: 0\n'
+          out += 'overrides:\n'
+          for pin in sys.argv[1:]:
+              name, sep, version = pin.rpartition('=')
+              if not name or not sep or not version:
+                  sys.exit('bad pin %r; expected name=version' % pin)
+              out += '  "%s": "%s"\n' % (name, version)
+          open(path, 'w').write(out)
+          print('pinned:', ' '.join(sys.argv[1:]))
+          PY
+          echo '--- pnpm-workspace.yaml (tail) ---'
+          tail -n 12 pnpm-workspace.yaml
+
+      - name: Install
+        # --no-frozen-lockfile: the overrides above deliberately move
+        # resolutions off the lockfile. Peer conflicts are expected at the
+        # floor (e.g. openai@5 wants zod ^3 while the suite uses zod ^4) and
+        # must warn, not abort — the whole point of the cell is to find out
+        # whether the ADAPTER still works there.
+        run: pnpm install --no-frozen-lockfile --config.strict-peer-dependencies=false
+
+      - name: Assert the pinned versions are what actually resolved
+        # Without this, a typo in `pins` silently tests the default version
+        # and the cell goes green for the wrong reason.
+        run: |
+          set -uo pipefail
+          fail=0
+          for pin in $PINS; do
+            name="${pin%=*}"
+            want="${pin#*=}"
+            file="$PWD/$DIR/node_modules/$name/package.json"
+            if [ ! -f "$file" ]; then
+              echo "::error::$DIR has no installed $name (expected $want)"
+              fail=1
+              continue
+            fi
+            got="$(node -p "require('$file').version")"
+            if [ "$got" != "$want" ]; then
+              echo "::error::$DIR: expected $name@$want but resolved $name@$got"
+              fail=1
+            else
+              echo "ok  $name@$got"
+            fi
+          done
+          exit "$fail"
+
+      - name: Test
+        id: run-tests
+        run: |
+          set -euo pipefail
+          echo "::group::$LABEL"
+          if [ -n "$VITEST_ARGS" ]; then
+            pnpm --filter "$PKG" exec vitest run "$VITEST_ARGS" \
+              --reporter=default --reporter=json \
+              --outputFile.json="$RUNNER_TEMP/vitest-compat.json"
+          else
+            pnpm --filter "$PKG" exec vitest run \
+              --reporter=default --reporter=json \
+              --outputFile.json="$RUNNER_TEMP/vitest-compat.json"
+          fi
+          echo "::endgroup::"
+
+      - name: Guard against a silently-empty run
+        id: guard
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const r = JSON.parse(fs.readFileSync(process.env.RESULT, "utf8"));
+            const min = Number(process.env.MIN_TESTS);
+            const label = process.env.LABEL;
+            console.log(label + ": " + r.numPassedTests + " passed, " + r.numFailedTests + " failed, " + r.numTotalTests + " total");
+            if (r.numFailedTests > 0) {
+              console.log("::error::" + label + ": " + r.numFailedTests + " failing test(s)");
+              process.exit(1);
+            }
+            if (r.numPassedTests < min) {
+              console.log("::error::" + label + ": only " + r.numPassedTests + " tests ran, expected at least " + min + " - the filter or the suite changed, so this cell proved nothing");
+              process.exit(1);
+            }
+          '
+        env:
+          RESULT: ${{ runner.temp }}/vitest-compat.json
+
+      - name: Summarise (always, so the pinned versions are visible either way)
+        if: always()
+        env:
+          TESTS_OUTCOME: ${{ steps.run-tests.outcome }}
+          GUARD_OUTCOME: ${{ steps.guard.outcome }}
+        run: |
+          if [ "$TESTS_OUTCOME" = 'success' ] && [ "$GUARD_OUTCOME" = 'success' ]; then
+            status='PASS'
+          else
+            status='**FAILED**'
+            echo "::error title=SDK compatibility::$LABEL failed with pins: $PINS"
+          fi
+          echo "- **$LABEL** — pinned \`$PINS\` — $status" >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------
+  # Weekly canary. Installs whatever is `latest` on npm today and runs the
+  # adapter suites, so an upstream release that breaks us shows up as a red
+  # (advisory) build instead of as a user's bug report. This is the ONE job
+  # allowed to be advisory: it can go red for reasons outside this repo, so
+  # blocking merges on it would train people to ignore it.
+  # ---------------------------------------------------------------------
+  canary:
+    name: canary / ${{ matrix.pkg }} @ latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `ai` only. @ai-sdk/provider stays on the devDependency pin: it is
+          # imported for types only (erased at runtime), and forcing its latest
+          # would also replace the copy `ai@latest` nests for itself, turning a
+          # mismatched pair we created into canary noise.
+          - pkg: '@graphmind-ai/sdk'
+            dir: packages/ai-sdk
+            sdks: 'ai'
+            min_tests: 41
+          - pkg: '@graphmind-ai/anthropic'
+            dir: packages/anthropic
+            sdks: '@anthropic-ai/sdk'
+            min_tests: 53
+          - pkg: '@graphmind-ai/openai'
+            dir: packages/openai
+            sdks: 'openai'
+            min_tests: 59
+          - pkg: '@graphmind-ai/langgraph'
+            dir: packages/langgraph
+            sdks: '@langchain/core @langchain/langgraph'
+            min_tests: 68
+
+    env:
+      PKG: ${{ matrix.pkg }}
+      SDKS: ${{ matrix.sdks }}
+      MIN_TESTS: ${{ matrix.min_tests }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm (corepack, pinned by packageManager)
+        run: |
+          corepack enable
+          corepack prepare --activate
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: pnpm
+
+      - name: Resolve today's latest and pin it
+        id: latest
+        run: |
+          set -euo pipefail
+          pins=''
+          for name in $SDKS; do
+            v="$(npm view "$name" version)"
+            echo "latest $name = $v"
+            pins="$pins $name=$v"
+          done
+          pins="${pins# }"
+          echo "pins=$pins" >> "$GITHUB_OUTPUT"
+          # The pin writer also sets `minimumReleaseAge: 0`; without it pnpm
+          # can refuse a release published in the last day or two, which is
+          # exactly what a canary exists to test.
+          python3 - $pins <<'PY'
+          import sys
+          path = 'pnpm-workspace.yaml'
+          src = open(path).read()
+          lines = src.splitlines()
+          if any(l.startswith('overrides:') for l in lines):
+              sys.exit('pnpm-workspace.yaml already declares overrides: - merge, do not append')
+          out = src.rstrip('\n') + '\n\n'
+          if not any(l.startswith('minimumReleaseAge:') for l in lines):
+              out += 'minimumReleaseAge: 0\n'
+          out += 'overrides:\n'
+          for pin in sys.argv[1:]:
+              name, sep, version = pin.rpartition('=')
+              if not name or not sep or not version:
+                  sys.exit('bad pin %r; expected name=version' % pin)
+              out += '  "%s": "%s"\n' % (name, version)
+          open(path, 'w').write(out)
+          print('pinned:', ' '.join(sys.argv[1:]))
+          PY
+          tail -n 12 pnpm-workspace.yaml
+
+      - name: Install
+        run: pnpm install --no-frozen-lockfile --config.strict-peer-dependencies=false
+
+      - name: Test against latest
+        id: run-tests
+        run: |
+          set -euo pipefail
+          pnpm --filter "$PKG" exec vitest run \
+            --reporter=default --reporter=json \
+            --outputFile.json="$RUNNER_TEMP/vitest-canary.json"
+
+      - name: Guard against a silently-empty run
+        id: guard
+        env:
+          RESULT: ${{ runner.temp }}/vitest-canary.json
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const r = JSON.parse(fs.readFileSync(process.env.RESULT, "utf8"));
+            const min = Number(process.env.MIN_TESTS);
+            if (r.numFailedTests > 0 || r.numPassedTests < min) {
+              console.log("::error::canary " + process.env.PKG + ": " + r.numPassedTests + " passed / " + r.numFailedTests + " failed (expected >= " + min + " passing)");
+              process.exit(1);
+            }
+            console.log("canary " + process.env.PKG + ": " + r.numPassedTests + " passed");
+          '
+
+      - name: Summarise (always, so the versions are visible either way)
+        if: always()
+        env:
+          PINS: ${{ steps.latest.outputs.pins }}
+          TESTS_OUTCOME: ${{ steps.run-tests.outcome }}
+          GUARD_OUTCOME: ${{ steps.guard.outcome }}
+        run: |
+          if [ "$TESTS_OUTCOME" = 'success' ] && [ "$GUARD_OUTCOME" = 'success' ]; then
+            status='PASS'
+          else
+            status='**FAILED (advisory)**'
+            echo "::warning title=SDK canary::$PKG failed against latest: $PINS"
+          fi
+          echo "- canary **$PKG** — latest \`$PINS\` — $status" >> "$GITHUB_STEP_SUMMARY"

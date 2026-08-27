@@ -5,6 +5,7 @@
 import { memo } from 'react';
 import type { NodeProps, Node } from '@xyflow/react';
 import type { FlowNodeData } from '../../store/runStateToFlow.js';
+import { isExportedRun } from '../../connection/FixtureConnection.js';
 import { broadcastControl } from '../../connection/ServerConnection.js';
 import { fmtDuration } from '../../lib/format.js';
 import { latestExecution } from '../../store/types.js';
@@ -21,12 +22,23 @@ import {
 } from './nodeParts.js';
 import { PauseBanner } from './PauseBanner.js';
 
+/**
+ * The gutter dot that arms a breakpoint on this tool.
+ *
+ * In a run exported by `graphmind record --html` there is no server to arm
+ * it on and nothing left to break before: the recording already happened.
+ * The dot stays — it is part of how the card reads — but it is disabled and
+ * says why, rather than lighting up red on a control the FixtureConnection
+ * silently drops.
+ */
 function BreakpointDot({ name }: { name: string }) {
   const matcher = { kind: 'tool' as const, name };
   const key = matcherKey(matcher);
   const isSet = useUiStore((s) => s.breakpoints.some((m) => matcherKey(m) === key));
+  const recorded = isExportedRun();
   const toggle = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (recorded) return;
     const ui = useUiStore.getState();
     if (isSet) {
       ui.removeBreakpoint(matcher);
@@ -36,6 +48,15 @@ function BreakpointDot({ name }: { name: string }) {
       broadcastControl('breakpoint.set', { matcher });
     }
   };
+  if (recorded) {
+    return (
+      <span
+        className="gm-bp gm-bp--dead"
+        title={`This is a recorded run — ${name} already ran, and there is no server to set a breakpoint on.`}
+        aria-label={`Breakpoints unavailable in a recorded run`}
+      />
+    );
+  }
   return (
     <button
       className={`gm-bp nodrag${isSet ? ' gm-bp--set' : ''}`}

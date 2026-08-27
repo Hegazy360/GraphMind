@@ -1,0 +1,5 @@
+# Playwright browser-suite output (traces, screenshots, HTML report)
+test-results/
+playwright-report/
+blob-report/
+.playwright/

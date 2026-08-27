@@ -1,0 +1,23 @@
+{
+  "name": "soak",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Production-scale soak harness for GraphMind: real server, real client session, real WebSocket, mock model.",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@graphmind-ai/client": "workspace:*",
+    "@graphmind-ai/schema": "workspace:*",
+    "graphmind-ai": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.0",
+    "typescript": "^7.0.2"
+  }
+}

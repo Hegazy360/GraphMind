@@ -9,5 +9,5 @@
     "sourceMap": false,
     "types": ["vite/client"]
   },
-  "include": ["src", "test", "vite.config.ts", "vitest.config.ts"]
+  "include": ["src", "test", "e2e", "vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
 }

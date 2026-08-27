@@ -81,6 +81,7 @@ export interface ToolRunLink {
 }
 
 const MAX_TOOL_ANNOTATIONS = 1000;
+const MAX_HINTED_RUNS = 1000;
 
 export class AdapterCore {
   readonly warner: OnceWarner;
@@ -112,6 +113,47 @@ export class AdapterCore {
    * accumulate them; `gm.dispose()` closes whatever is left.
    */
   readonly openHandlers = new Set<{ close: () => Promise<void> }>();
+
+  /**
+   * The last `gm.hintGraph()` roster, replayed into every run a handler opens.
+   *
+   * `hintGraph()` is documented to be called BEFORE `graph.invoke(...)`, which
+   * means there is no run open yet: emitting at call time would put the hint in
+   * the session's IMPLICIT run — which `session.emit` opens (and announces with
+   * a `run.started`) on the spot, so the viewer's run list gains an empty
+   * placeholder beside the real run, and the run the graph actually opens still
+   * never sees the hint. Storing the roster and emitting it as the first event
+   * of each run instead is what makes the documented order work; the hint still
+   * lands before any node executes, because a handler opens its run from the
+   * root `handleChainStart`, ahead of every node body.
+   */
+  private graphHintNodes: { nodeId: string; kind: 'chain'; name: string }[] | undefined;
+
+  /** Runs this roster has already been emitted into (see `replayGraphHint`). */
+  private readonly graphHintRuns = new Set<string>();
+
+  /** Remember a `hintGraph()` roster so new runs can be pre-rendered too. */
+  setGraphHint(nodes: { nodeId: string; kind: 'chain'; name: string }[]): void {
+    this.graphHintNodes = nodes.length > 0 ? nodes : undefined;
+    this.graphHintRuns.clear(); // a new roster deserves re-announcing
+  }
+
+  /**
+   * Emit the stored roster into the run that is currently open. Never emits
+   * outside a run: that is what used to conjure the empty implicit run. At most
+   * once per run, so a `hintGraph()` called inside `gm.run(...)` and the replay
+   * at run open do not announce the same roster twice.
+   */
+  replayGraphHint(): void {
+    const nodes = this.graphHintNodes;
+    if (nodes === undefined) return;
+    const runId = this.session.currentRun()?.runId;
+    if (runId === undefined) return;
+    if (this.graphHintRuns.has(runId)) return;
+    if (this.graphHintRuns.size >= MAX_HINTED_RUNS) this.graphHintRuns.clear();
+    this.graphHintRuns.add(runId);
+    this.session.emit('graph.hint', { nodes });
+  }
 
   /**
    * Errors already gated once. A LangGraph failure surfaces as

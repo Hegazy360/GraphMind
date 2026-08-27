@@ -203,16 +203,54 @@ describe('options', () => {
 });
 
 describe('hintGraph', () => {
-  it('pre-announces a compiled graph"s nodes', async () => {
+  it("pre-announces a compiled graph's nodes into the graph's OWN run", async () => {
     const { viewer, gm } = await setup();
     await attach(gm);
 
     const { graph } = buildGraph(gm);
+    // The documented order: hint first, then invoke.
     gm.hintGraph(graph);
-    const hint = await viewer.waitForType('graph.hint');
-    const names = (hint.payload['nodes'] as { name: string }[]).map((n) => n.name);
+
+    // Nothing is emitted yet — emitting here would open the session's implicit
+    // run and leave an empty placeholder run in the viewer's run list.
+    expect(viewer.ofType('graph.hint')).toHaveLength(0);
+    expect(viewer.ofType('run.started')).toHaveLength(0);
+
+    await graph.invoke({ topic: 'LIS' }, gm.config());
+    await waitUntil(() => viewer.ofType('run.finished').length >= 1, 8000, 'run.finished');
+
+    // Exactly one run, and the hint is inside it, ahead of every node.
+    const runs = viewer.ofType('run.started');
+    expect(runs).toHaveLength(1);
+    const hints = viewer.ofType('graph.hint');
+    expect(hints).toHaveLength(1);
+    expect(hints[0]!.runId).toBe(runs[0]!.runId);
+    const firstNode = viewer.ofType('node.started')[0];
+    expect(firstNode).toBeDefined();
+    expect(hints[0]!.seq).toBeLessThan(firstNode!.seq);
+
+    const names = (hints[0]!.payload['nodes'] as { name: string }[]).map((n) => n.name);
     expect(names).toEqual(expect.arrayContaining(['plan', 'flights', 'budget', 'report']));
     expect(names).not.toContain('__start__');
+  });
+
+  it('called INSIDE gm.run() announces immediately, and only once for that run', async () => {
+    const { viewer, gm } = await setup();
+    await attach(gm);
+
+    const { graph } = buildGraph(gm);
+    await gm.run('trip', async () => {
+      gm.hintGraph(graph);
+      // Already inside a run: the roster ships straight away, no implicit run.
+      await waitUntil(() => viewer.ofType('graph.hint').length >= 1, 8000, 'graph.hint');
+      await graph.invoke({ topic: 'LIS' }, gm.config());
+    });
+    await waitUntil(() => viewer.ofType('run.finished').length >= 1, 8000, 'run.finished');
+
+    expect(viewer.ofType('run.started')).toHaveLength(1);
+    // The handler replays the roster when it adopts the run; that must not
+    // announce the same graph twice.
+    expect(viewer.ofType('graph.hint')).toHaveLength(1);
   });
 
   it('is a silent no-op for something that is not a compiled graph', async () => {

@@ -7,10 +7,14 @@
   },
   "packageManager": "pnpm@11.24.0",
   "scripts": {
-    "typecheck": "pnpm -r --filter './packages/**' --filter './apps/**' run typecheck",
+    "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r --filter './packages/**' --filter './apps/viewer' run test",
+    "test:security": "pnpm --filter security-audit run test",
+    "test:e2e": "pnpm --filter viewer run test:e2e",
+    "test:all": "pnpm test && pnpm --filter web test",
+    "soak": "pnpm --filter soak run start",
+    "live-check": "pnpm --filter live-check run start",
     "build": "pnpm -r --filter './packages/**' --filter './apps/**' run build",
-    "build:viewer": "pnpm --filter viewer run build && node scripts/copy-viewer-dist.mjs",
-    "test:all": "pnpm test && pnpm --filter web test"
+    "build:viewer": "pnpm --filter viewer run build && node scripts/copy-viewer-dist.mjs"
   }
 }

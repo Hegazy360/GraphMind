@@ -7,6 +7,17 @@
  * The transport never throws into callers: every failure degrades to
  * "detached" plus a rate-limited warning, and a background retry keeps
  * trying every `retryIntervalMs`.
+ *
+ * Reconnect timing has two regimes, because the two situations are not the
+ * same problem:
+ *  - **never attached** (no debugger running): retry every `retryIntervalMs`
+ *    from the first attempt. Nothing is being lost; being patient is right.
+ *  - **lost an established attachment** (a blip): the debugger demonstrably
+ *    existed milliseconds ago, and every millisecond dark is events pushed
+ *    through a finite ring buffer. Retry fast first — `FAST_RETRY_STEPS` —
+ *    then fall back to `retryIntervalMs` once the burst is spent.
+ * Each fast step is clamped to `retryIntervalMs`, so a caller that asks for a
+ * shorter interval than the burst still gets exactly what it asked for.
  */
 import {
   PROTOCOL_VERSION,
@@ -48,6 +59,15 @@ export interface TransportHooks {
 
 type TransportState = 'idle' | 'connecting' | 'attached' | 'disposed';
 
+/**
+ * Delays (ms) used for the first reconnect attempts after an *established*
+ * attachment drops. 200 + 400 + 800 = 1.4s of eager retrying before the
+ * steady-state `retryIntervalMs` takes over, which covers a socket blip
+ * (where the debugger is still listening) without busy-looping against a
+ * debugger that has really gone away.
+ */
+export const FAST_RETRY_STEPS: readonly number[] = [200, 400, 800];
+
 function coerceFrameText(data: unknown): string | undefined {
   if (typeof data === 'string') return data;
   if (typeof Buffer !== 'undefined' && Buffer.isBuffer(data)) return data.toString('utf8');
@@ -62,6 +82,8 @@ export class Transport {
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private openTimer: ReturnType<typeof setTimeout> | undefined;
   private ackTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Index into FAST_RETRY_STEPS; >= length means "use retryIntervalMs". */
+  private fastRetryStep = FAST_RETRY_STEPS.length;
 
   constructor(
     private readonly options: TransportOptions,
@@ -251,8 +273,22 @@ export class Transport {
     this.clearAttemptTimers();
     this.ws = undefined;
     this.state = 'idle';
-    if (wasAttached) this.hooks.onDetached();
+    // Losing a live attachment arms the fast-reconnect burst: the debugger
+    // was there a moment ago, and everything emitted meanwhile is eating the
+    // ring buffer. A connection that never attached keeps the calm interval.
+    if (wasAttached) {
+      this.fastRetryStep = 0;
+      this.hooks.onDetached();
+    }
     this.scheduleRetry();
+  }
+
+  /** Next backoff delay, consuming one fast step if the burst is armed. */
+  private nextRetryDelay(): number {
+    const step = FAST_RETRY_STEPS[this.fastRetryStep];
+    if (step === undefined) return this.options.retryIntervalMs;
+    this.fastRetryStep += 1;
+    return Math.min(step, this.options.retryIntervalMs);
   }
 
   private scheduleRetry(): void {
@@ -260,7 +296,7 @@ export class Transport {
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined;
       this.connect();
-    }, this.options.retryIntervalMs);
+    }, this.nextRetryDelay());
     this.retryTimer.unref?.();
   }
 

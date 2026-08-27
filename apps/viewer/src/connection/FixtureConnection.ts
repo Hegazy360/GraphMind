@@ -31,6 +31,24 @@ export function embeddedRun(): RawFixtureEnvelope[] | null {
   return raw as RawFixtureEnvelope[];
 }
 
+/**
+ * True when this page *is* an exported run rather than a live (or paced
+ * replay) session.
+ *
+ * It matters for anything that offers to change execution: an exported run
+ * is a frozen record, so a gate it captured can never be released. Nothing
+ * is executing, and there is nowhere for a control to go — the UI must say
+ * so rather than render a button that silently does nothing.
+ *
+ * Computed once: the inline `window.__GRAPHMIND_RUN__` script cannot change
+ * after load.
+ */
+let exported: boolean | undefined;
+export function isExportedRun(): boolean {
+  exported ??= embeddedRun() !== null;
+  return exported;
+}
+
 interface RawFixtureEnvelope {
   gm: number;
   seq: number;

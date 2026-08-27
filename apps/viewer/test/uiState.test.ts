@@ -3,7 +3,7 @@
  * three-state theme choice.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { collapsedFor, useUiStore } from '../src/store/uiStore.js';
+import { collapsedFor, indicatorStatus, useUiStore } from '../src/store/uiStore.js';
 import { EMPTY_FILTER } from '../src/store/filters.js';
 import { isThemeChoice, nextTheme, themeLabel } from '../src/lib/theme.js';
 
@@ -108,5 +108,31 @@ describe('theme', () => {
   it('labels every state', () => {
     expect(themeLabel('system')).toContain('System');
     expect(themeLabel('light')).toContain('Light');
+  });
+});
+
+describe('connection indicator', () => {
+  it('names the live socket when there is one', () => {
+    expect(indicatorStatus('live', false)).toBe('live');
+    expect(indicatorStatus('connecting', false)).toBe('connecting');
+    expect(indicatorStatus('detached', false)).toBe('detached');
+    expect(indicatorStatus('off', false)).toBe('off');
+  });
+
+  /**
+   * The empty-state "Replay the bundled demo run" button does not tear the
+   * live socket down, so it keeps retrying in the background. The label used
+   * to key off `connection === 'off'` alone and therefore read "detached"
+   * over a replay that was visibly playing.
+   */
+  it('says "replaying" whenever a local replay is what is on screen', () => {
+    expect(indicatorStatus('off', true)).toBe('replaying');
+    expect(indicatorStatus('detached', true)).toBe('replaying');
+    expect(indicatorStatus('connecting', true)).toBe('replaying');
+  });
+
+  it('still defers to a real attachment', () => {
+    // A server that is genuinely there is not hidden by a replay.
+    expect(indicatorStatus('live', true)).toBe('live');
   });
 });

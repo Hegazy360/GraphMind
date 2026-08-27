@@ -206,7 +206,15 @@ export interface TestServer {
   cleanup(): Promise<void>;
 }
 
-/** Ephemeral port, tmp-dir DB, silent logs. */
+/**
+ * Ephemeral port, tmp-dir DB, silent logs.
+ *
+ * Retention is off by default: it now runs on a timer just after the port
+ * binds (so a big backlog cannot stall startup), which means a test that
+ * writes an old-dated run right after boot would be racing a background
+ * sweep. Suites that are *about* retention pass their own
+ * `env: { GRAPHMIND_RETENTION: 'on', ... }` and await `server.retentionDone`.
+ */
 export async function startTestServer(options: ServerOptions = {}): Promise<TestServer> {
   const dir = mkdtempSync(join(tmpdir(), 'graphmind-cli-test-'));
   const dbPath = join(dir, 'graphmind.db');
@@ -216,6 +224,7 @@ export async function startTestServer(options: ServerOptions = {}): Promise<Test
     log: () => {},
     viewerDist: join(dir, 'no-viewer-here'),
     ...options,
+    env: { GRAPHMIND_RETENTION: 'off', ...options.env },
   });
   return {
     server,

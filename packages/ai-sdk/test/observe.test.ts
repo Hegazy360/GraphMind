@@ -4,16 +4,18 @@
  * and the detached / disabled fast paths.
  */
 import { simulateReadableStream, tool } from 'ai';
-import { MockLanguageModelV4 } from 'ai/test';
-import type {
-  LanguageModelV4CallOptions,
-  LanguageModelV4StreamPart,
-} from '@ai-sdk/provider';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { graphmind, type Graphmind, type GraphmindOptions } from '../src/index.js';
 import { FakeViewer, tick, waitUntil, type FakeViewerOptions } from './helpers/fake-viewer.js';
 import { attach, makeMockModel, makeTools, runScenario, Marks } from './helpers/scenario.js';
+import {
+  MockLanguageModel,
+  aiVersion,
+  supportsToolTimeout,
+  type CallOptions,
+  type StreamPart,
+} from './helpers/sdk-compat.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -132,7 +134,7 @@ describe('provider-executed tools', () => {
     });
     await attach(gm);
 
-    const parts: LanguageModelV4StreamPart[] = [
+    const parts: StreamPart[] = [
       { type: 'stream-start', warnings: [] },
       {
         type: 'tool-call',
@@ -156,13 +158,13 @@ describe('provider-executed tools', () => {
         finishReason: { unified: 'stop', raw: 'stop' },
       },
     ];
-    const mock = new MockLanguageModelV4({
+    const mock = new MockLanguageModel({
       doStream: async () => ({
-        stream: simulateReadableStream<LanguageModelV4StreamPart>({ chunks: parts }),
+        stream: simulateReadableStream<StreamPart>({ chunks: parts }),
       }),
     });
     const model = gm.wrapModel(mock);
-    const params: LanguageModelV4CallOptions = {
+    const params: CallOptions = {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'search lisbon' }] }],
       tools: [
         { type: 'function', name: 'searchFlights', inputSchema: { type: 'object' } },
@@ -260,7 +262,7 @@ describe('wrapGenerate (non-streaming)', () => {
     await attach(gm);
 
     let generateCalls = 0;
-    const mock = new MockLanguageModelV4({
+    const mock = new MockLanguageModel({
       doGenerate: async () => {
         generateCalls += 1;
         return {
@@ -299,55 +301,70 @@ describe('wrapGenerate (non-streaming)', () => {
   });
 });
 
-describe('timeout neutralization (decisions.md #3)', () => {
-  it('attached: warns once and strips timeout aborts so a hold does not kill the run', async () => {
-    const { viewer, gm, warnings } = await setup({
-      breakpoints: [{ kind: 'tool', name: 'searchFlights' }],
+/**
+ * Both cases below drive the SDK's *per-tool* timeout (`timeout: {toolMs}`),
+ * the only timeout that arms an abort around a tool body and therefore the
+ * only one a held tool gate can burn. ai@6 has no per-tool timeout at all
+ * (its `TimeoutConfiguration` is `{totalMs, stepMs, chunkMs}`), so on that
+ * major there is no signal to neutralize and nothing to assert — the suite
+ * skips rather than pretending. The neutralization primitive itself
+ * (`isTimeoutAbortReason` / `chainAbortSignals`) is covered on every major by
+ * the `signals` unit tests.
+ */
+describe.skipIf(!supportsToolTimeout)(
+  `timeout neutralization (decisions.md #3)${
+    supportsToolTimeout ? '' : ` [skipped: ai@${aiVersion} has no per-tool timeout]`
+  }`,
+  () => {
+    it('attached: warns once and strips timeout aborts so a hold does not kill the run', async () => {
+      const { viewer, gm, warnings } = await setup({
+        breakpoints: [{ kind: 'tool', name: 'searchFlights' }],
+      });
+      await attach(gm);
+
+      const marks = new Marks();
+      const promise = runScenario(
+        gm,
+        { timeout: { toolMs: 150 }, searchFlightsChecksSignal: true },
+        marks,
+      );
+      const paused = await viewer.waitFor(
+        (f) => f.type === 'exec.paused' && f.payload['nodeId'] === 'tool:searchFlights',
+      );
+      await tick(400); // burn far past toolMs while held
+      viewer.resume(paused.payload['pauseId'] as string, 'continue');
+
+      const result = await promise;
+      expect(result.runError).toBeUndefined();
+      expect(result.stepCount).toBe(3);
+      expect(result.text).toContain('TP1234'); // the tool really ran
+      const neutralized = warnings.filter((w) => w.includes('timeout abort was neutralized'));
+      expect(neutralized).toHaveLength(1); // warned once, not per swallowed abort
     });
-    await attach(gm);
 
-    const marks = new Marks();
-    const promise = runScenario(
-      gm,
-      { timeout: { toolMs: 150 }, searchFlightsChecksSignal: true },
-      marks,
-    );
-    const paused = await viewer.waitFor(
-      (f) => f.type === 'exec.paused' && f.payload['nodeId'] === 'tool:searchFlights',
-    );
-    await tick(400); // burn far past toolMs while held
-    viewer.resume(paused.payload['pauseId'] as string, 'continue');
+    it('detached: timeouts are untouched', async () => {
+      const warnings: string[] = [];
+      // Permanently detached session (no WebSocket implementation, no network).
+      const gm = graphmind({
+        enabled: true,
+        webSocket: undefined,
+        logger: (message) => warnings.push(message),
+      });
+      cleanups.push(() => gm.dispose());
 
-    const result = await promise;
-    expect(result.runError).toBeUndefined();
-    expect(result.stepCount).toBe(3);
-    expect(result.text).toContain('TP1234'); // the tool really ran
-    const neutralized = warnings.filter((w) => w.includes('timeout abort was neutralized'));
-    expect(neutralized).toHaveLength(1); // warned once, not per swallowed abort
-  });
-
-  it('detached: timeouts are untouched', async () => {
-    const warnings: string[] = [];
-    // Permanently detached session (no WebSocket implementation, no network).
-    const gm = graphmind({
-      enabled: true,
-      webSocket: undefined,
-      logger: (message) => warnings.push(message),
+      const result = await runScenario(gm, {
+        timeout: { toolMs: 100 },
+        searchFlightsChecksSignal: true,
+        searchFlightsDelayMs: 300,
+      });
+      // The tool honoured the SDK's own timeout signal and threw; the SDK turned
+      // it into an error-text tool result and the loop continued.
+      expect(result.stepCount).toBe(3);
+      expect(result.text.toLowerCase()).toContain('timeout');
+      expect(warnings.filter((w) => w.includes('neutralized'))).toHaveLength(0);
     });
-    cleanups.push(() => gm.dispose());
-
-    const result = await runScenario(gm, {
-      timeout: { toolMs: 100 },
-      searchFlightsChecksSignal: true,
-      searchFlightsDelayMs: 300,
-    });
-    // The tool honoured the SDK's own timeout signal and threw; the SDK turned
-    // it into an error-text tool result and the loop continued.
-    expect(result.stepCount).toBe(3);
-    expect(result.text.toLowerCase()).toContain('timeout');
-    expect(warnings.filter((w) => w.includes('neutralized'))).toHaveLength(0);
-  });
-});
+  },
+);
 
 describe('detached / disabled fast paths', () => {
   it('disabled: wrapModel and wrapTools are identity functions', async () => {

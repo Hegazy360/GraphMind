@@ -2,8 +2,13 @@
  * SQLite-backed storage using `node:sqlite` (built into Node >= 22.13,
  * zero native dependencies). WAL mode; dedup via the `(run_id, seq)`
  * primary key + INSERT OR IGNORE.
+ *
+ * This file holds the user's prompts, tool inputs and outputs, and error
+ * messages, so it is created owner-only (0600) inside an owner-only directory
+ * (0700). `node:sqlite` and `mkdir` would otherwise leave 0644/0755 behind on
+ * a shared machine.
  */
-import { mkdirSync } from 'node:fs';
+import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import type { RunStatus } from '@graphmind-ai/schema';
@@ -84,6 +89,28 @@ function toRunSummary(row: RunRow): RunSummary {
   };
 }
 
+/** Owner-only. POSIX modes are inert on Windows, where this is skipped. */
+const DIR_MODE = 0o700;
+const FILE_MODE = 0o600;
+const POSIX_MODES = process.platform !== 'win32';
+
+/**
+ * SQLite creates the `-wal` and `-shm` siblings itself, and they hold the same
+ * data as the database. It copies the database file's permissions when it
+ * makes them, so tightening the main file also fixes every later re-creation —
+ * but the pair that already exists in this session has to be chmod'ed too.
+ */
+function hardenDatabaseFiles(path: string): void {
+  if (!POSIX_MODES) return;
+  for (const file of [path, `${path}-wal`, `${path}-shm`]) {
+    try {
+      chmodSync(file, FILE_MODE);
+    } catch {
+      // absent (no WAL yet) or not ours: nothing to tighten
+    }
+  }
+}
+
 function toStoredEvent(row: EventRow): StoredEvent {
   let payload: unknown;
   try {
@@ -118,11 +145,27 @@ export class SqliteStorage implements Storage {
   private readonly stmtPrunableRuns: StatementSync;
 
   constructor(public readonly path: string) {
-    if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
+    const onDisk = path !== ':memory:';
+    if (onDisk) {
+      const dir = dirname(path);
+      // `mkdirSync` returns the first directory it created, or undefined when
+      // the directory was already there. Only a directory we just created is
+      // chmod'ed: `--db /tmp/x.db` must never turn /tmp into 0700. The mode
+      // passed to mkdir is masked by umask, so it is re-applied explicitly.
+      const created = mkdirSync(dir, { recursive: true, mode: DIR_MODE });
+      if (created !== undefined && POSIX_MODES) {
+        try {
+          chmodSync(dir, DIR_MODE);
+        } catch {
+          // best-effort: an unwritable mode is not worth failing a run over
+        }
+      }
+    }
     this.db = new DatabaseSync(path);
     this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec('PRAGMA synchronous = NORMAL;');
     this.db.exec(DDL);
+    if (onDisk) hardenDatabaseFiles(path);
 
     this.stmtEnsureRun = this.db.prepare(
       `INSERT OR IGNORE INTO runs (id, app, started_at, finished_at, status, schema_version, source)
@@ -219,12 +262,24 @@ export class SqliteStorage implements Storage {
     return { runsDeleted: rows.length, eventsDeleted };
   }
 
+  /**
+   * Reclaim the disk a prune freed.
+   *
+   * `VACUUM` alone does not do it in WAL mode: it rebuilds the database
+   * *through the WAL*, so the main file keeps its old size and the WAL grows
+   * to hold the whole rewritten copy — measurably worse than before (41MB ->
+   * 43MB in the reproduction). The file only shrinks once that WAL is
+   * checkpointed back and truncated, which is what the second statement does
+   * (41MB -> 2MB). Both are best-effort: a busy database keeps its pages.
+   */
   vacuum(): void {
     try {
       this.db.exec('VACUUM;');
+      this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
     } catch {
       // best-effort: a busy database simply keeps its pages
     }
+    if (this.path !== ':memory:') hardenDatabaseFiles(this.path);
   }
 
   getRun(id: string): RunSummary | undefined {

@@ -11,14 +11,22 @@
  *   GET /*                   built viewer (or placeholder page)
  *
  * Local-first: binds 127.0.0.1 only, no auth. Never expose this port.
+ *
+ * "Bound to loopback" is not by itself access control in a browser: a
+ * WebSocket upgrade is exempt from the same-origin policy, and DNS rebinding
+ * turns a foreign origin into a same-origin one. Every HTTP request and every
+ * upgrade therefore goes through origin-guard.ts, which requires a loopback
+ * `Host` and either no `Origin` (non-browser clients) or this server's own.
  */
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
+import type { Duplex } from 'node:stream';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { WebSocketServer } from 'ws';
 import { startBundledDemoReplay, type DemoReplay } from './demo/replayer.js';
 import { Hub, type LogFn } from './hub.js';
 import { openBrowser } from './open-browser.js';
+import { checkRequestHeaders, parseOriginPolicy, type Rejection } from './origin-guard.js';
 import { DEFAULT_PORT, resolveDbPath, resolveViewerDist, type EnvLike } from './paths.js';
 import { SqliteStorage } from './sqlite-storage.js';
 import { serveViewer } from './static-site.js';
@@ -51,6 +59,13 @@ export interface GraphMindServer {
   dbPath: string;
   storage: Storage;
   hub: Hub;
+  /**
+   * Resolves once startup retention has run (or been skipped). Retention is
+   * deliberately scheduled *after* the port is bound, so a large backlog can
+   * never delay a `graphmind serve` from answering; this handle exists so
+   * tests (and embedders) can still await it.
+   */
+  retentionDone: Promise<void>;
   close(): Promise<void>;
 }
 
@@ -74,6 +89,28 @@ function intQuery(value: string | undefined, fallback: number): number | undefin
   return Number.isSafeInteger(n) ? n : undefined;
 }
 
+/**
+ * Answer a refused WebSocket handshake with a real 403 rather than dropping
+ * the socket: `ws` surfaces "Unexpected server response: 403" to the caller,
+ * and a developer who hit this by accident gets told how to allow their setup.
+ */
+function rejectUpgrade(socket: Duplex, rejection: Rejection): void {
+  const body = `${rejection.message}\n`;
+  try {
+    socket.write(
+      'HTTP/1.1 403 Forbidden\r\n' +
+        'Content-Type: text/plain; charset=utf-8\r\n' +
+        `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+        'Connection: close\r\n' +
+        '\r\n' +
+        body,
+    );
+  } catch {
+    // the peer may already be gone; destroying below is enough
+  }
+  socket.destroy();
+}
+
 export async function startServer(options: ServerOptions = {}): Promise<GraphMindServer> {
   const env = options.env ?? (process.env as EnvLike);
   const requestedPort = options.port ?? DEFAULT_PORT;
@@ -86,9 +123,17 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
 
   const storage = options.storage ?? new SqliteStorage(dbPath);
 
-  // Keep the local database from growing without bound. Opt out with
-  // GRAPHMIND_RETENTION=off; tune with GRAPHMIND_KEEP_RUNS / _KEEP_DAYS.
-  if (options.storage === undefined && (env['GRAPHMIND_RETENTION'] ?? '').toLowerCase() !== 'off') {
+  /**
+   * Keep the local database from growing without bound. Opt out with
+   * GRAPHMIND_RETENTION=off; tune with GRAPHMIND_KEEP_RUNS / _KEEP_DAYS.
+   *
+   * Deleting rows is not the same as reclaiming disk: in WAL mode the deletes
+   * land in the WAL and the freed pages stay in the file, so a prune that
+   * actually removed something is followed by a vacuum.
+   */
+  const runStartupRetention = (): void => {
+    if (options.storage !== undefined) return; // caller owns the storage
+    if ((env['GRAPHMIND_RETENTION'] ?? '').toLowerCase() === 'off') return;
     try {
       const keepRuns = Number(env['GRAPHMIND_KEEP_RUNS'] ?? DEFAULT_RETENTION.keepRuns);
       const keepDays = Number(env['GRAPHMIND_KEEP_DAYS'] ?? DEFAULT_RETENTION.keepDays);
@@ -98,15 +143,35 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
       });
       if (pruned.runsDeleted > 0) {
         log(`Pruned ${pruned.runsDeleted} old run(s), ${pruned.eventsDeleted} event(s).`);
+        storage.vacuum();
       }
     } catch {
-      // retention is housekeeping: never block startup on it
+      // retention is housekeeping: never take the server down over it
     }
-  }
+  };
 
   const hub = new Hub(storage, log);
+  const originPolicy = parseOriginPolicy(env);
+
+  let boundPort = requestedPort; // reassigned once the listener is up
 
   const app = new Hono();
+  /**
+   * Access control, ahead of every route. A loopback bind is not a boundary
+   * once a browser is involved (see origin-guard.ts) — this is.
+   */
+  app.use('*', async (c, next) => {
+    const rejection = checkRequestHeaders(
+      { origin: c.req.header('origin'), host: c.req.header('host') },
+      boundPort,
+      originPolicy,
+    );
+    if (rejection !== undefined) {
+      log(`refused ${rejection.kind} "${rejection.value}" on ${c.req.path}`);
+      return c.text(`${rejection.message}\n`, 403);
+    }
+    return next();
+  });
   app.get('/health', (c) => c.json({ ok: true, name: 'graphmind-ai', version: VERSION }));
   app.get('/api/runs', (c) => c.json({ runs: hub.listRunInfos() }));
   app.get('/api/runs/:id/events', (c) => {
@@ -133,7 +198,6 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
   // through this server's own ingest pipeline (the replayer is a normal
   // ingest client living in this process). One replay at a time.
   let activeDemo: DemoReplay | undefined;
-  let boundPort = requestedPort; // reassigned once the listener is up
   app.post('/api/demo/start', async (c) => {
     if (activeDemo !== undefined && !activeDemo.finished) {
       return c.json({ ok: true, runId: activeDemo.runId, alreadyRunning: true });
@@ -184,16 +248,30 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
   ingestWss.on('connection', (ws) => hub.addIngestSocket(ws));
   uiWss.on('connection', (ws) => hub.addUiSocket(ws));
 
-  httpServer.on('upgrade', (request: IncomingMessage, socket, head) => {
+  httpServer.on('upgrade', (request: IncomingMessage, socket: Duplex, head) => {
     const pathname = new URL(request.url ?? '/', url).pathname;
+    if (pathname !== '/ingest' && pathname !== '/ws/ui') {
+      socket.destroy();
+      return;
+    }
+    // The handshake is a plain HTTP request and the same-origin policy does
+    // not cover it, so this is the only place a hostile page can be stopped.
+    const rejection = checkRequestHeaders(
+      { origin: request.headers.origin, host: request.headers.host },
+      port,
+      originPolicy,
+    );
+    if (rejection !== undefined) {
+      log(`refused ${rejection.kind} "${rejection.value}" on ${pathname} (websocket upgrade)`);
+      rejectUpgrade(socket, rejection);
+      return;
+    }
     if (pathname === '/ingest') {
       ingestWss.handleUpgrade(request, socket, head, (ws) =>
         ingestWss.emit('connection', ws, request),
       );
-    } else if (pathname === '/ws/ui') {
-      uiWss.handleUpgrade(request, socket, head, (ws) => uiWss.emit('connection', ws, request));
     } else {
-      socket.destroy();
+      uiWss.handleUpgrade(request, socket, head, (ws) => uiWss.emit('connection', ws, request));
     }
   });
 
@@ -203,9 +281,30 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
   if (options.openBrowser === true) openBrowser(url);
 
   let closed = false;
+
+  // Retention runs AFTER the port is bound. Pruning (and vacuuming) a large
+  // backlog is seconds of synchronous SQLite work; doing it before `listen`
+  // is a startup stall the user reads as "graphmind is broken".
+  let retentionTimer: NodeJS.Timeout | undefined;
+  let settleRetention = (): void => {};
+  const retentionDone = new Promise<void>((resolve) => {
+    settleRetention = resolve;
+  });
+  retentionTimer = setTimeout(() => {
+    retentionTimer = undefined;
+    if (!closed) runStartupRetention();
+    settleRetention();
+  }, 0);
+  retentionTimer.unref();
+
   const close = async (): Promise<void> => {
     if (closed) return;
     closed = true;
+    if (retentionTimer !== undefined) {
+      clearTimeout(retentionTimer);
+      retentionTimer = undefined;
+      settleRetention(); // a closed server never prunes, but the handle settles
+    }
     clearInterval(pingTimer);
     activeDemo?.stop();
     await hub.closeAll(500);
@@ -219,5 +318,5 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
     storage.close(); // WAL checkpoint happens here
   };
 
-  return { port, url, dbPath, storage, hub, close };
+  return { port, url, dbPath, storage, hub, retentionDone, close };
 }

@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { graphmind } from '../src/index.js';
 import { FakeViewer, tick } from './helpers/fake-viewer.js';
 import { runScenario } from './helpers/scenario.js';
+import { toolExecutionOptions } from './helpers/sdk-compat.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -119,7 +120,7 @@ describe('waitForAttach option', () => {
     });
     const result = (await tools.probe.execute?.(
       {},
-      { toolCallId: 'call-probe-1', messages: [], context: undefined },
+      toolExecutionOptions('call-probe-1'),
     )) as { attached: boolean };
     expect(result.attached).toBe(true);
   });

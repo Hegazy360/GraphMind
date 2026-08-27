@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "graphmind-ai"
-version = "0.2.2"
+version = "0.3.0"
 description = "Live debugger for AI agents — attach to a running Python agent, watch it as a graph, and pause/resume/inject at LLM and tool boundaries."
 readme = "README.md"
 license = { text = "MIT" }

@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MessagePayloadMap } from '@graphmind-ai/schema';
 import { FakeApp, FakeUI, fetchJson, startTestServer, waitUntil, type TestServer } from './helpers.js';
+import { MAX_PAYLOAD_BYTES, isTruncatedPayload } from '../src/storage.js';
 import type { UiServerMessage, WireEnvelope } from '../src/ui-protocol.js';
 
 let ts: TestServer;
@@ -138,6 +139,75 @@ describe('ingest -> persist -> fanout', () => {
         payload: { intensity: 11, nodeId: 'warp:core' },
       },
     ]);
+    await app.close();
+    await ui.close();
+  });
+
+  /**
+   * The 512KB payload guard used to be applied only inside storage, while
+   * `fanout` relayed the ORIGINAL envelope. A single 32MB tool result was
+   * therefore pushed in full to every attached viewer (95MB -> 303MB of server
+   * RSS in the soak repro), and the live view of a run disagreed with the same
+   * run on reload. The socket must carry exactly what the database keeps.
+   */
+  it('fans out the trimmed payload, so live and replay agree', async () => {
+    const { port } = await boot();
+    const ui = await FakeUI.connect(port);
+    ui.subscribe('run_big');
+    await ui.next((m) => m.type === 'replay.end', 'replay end');
+
+    const app = await FakeApp.connect(port, { app: 'demo-app' });
+    const huge = 'x'.repeat(4 * 1024 * 1024);
+    app.send('node.finished', 'run_big', {
+      nodeId: 'tool:scrape',
+      output: { body: huge },
+      durationMs: 12,
+      status: 'ok',
+    });
+
+    const live = await ui.next(isEvent, 'the oversized live event');
+    if (!isEvent(live)) throw new Error('expected an event');
+    const liveBytes = Buffer.byteLength(JSON.stringify(live.envelope.payload));
+    expect(liveBytes).toBeLessThan(MAX_PAYLOAD_BYTES);
+
+    const events = await fetchJson(port, '/api/runs/run_big/events');
+    const replayed = events.body.events[0] as WireEnvelope;
+    // Byte-for-byte identical, not merely "both truncated somehow".
+    expect(live.envelope.payload).toEqual(replayed.payload);
+
+    // Degraded, not lost: the canvas still learns which node finished and how.
+    const payload = replayed.payload as Record<string, unknown>;
+    expect(payload['nodeId']).toBe('tool:scrape');
+    expect(payload['status']).toBe('ok');
+    expect(payload['durationMs']).toBe(12);
+    expect(isTruncatedPayload(payload)).toBe(true);
+
+    await app.close();
+    await ui.close();
+  });
+
+  it('leaves an ordinary payload identical on the wire', async () => {
+    const { port } = await boot();
+    const ui = await FakeUI.connect(port);
+    ui.subscribe('run_small');
+    await ui.next((m) => m.type === 'replay.end', 'replay end');
+
+    const app = await FakeApp.connect(port);
+    const output = { hits: 3, rows: [{ a: 1 }, { a: 2 }] };
+    app.send('node.finished', 'run_small', {
+      nodeId: 'tool:search',
+      output,
+      durationMs: 4,
+      status: 'ok',
+    });
+    const live = await ui.next(isEvent, 'the live event');
+    if (isEvent(live)) {
+      expect((live.envelope.payload as { output: unknown }).output).toEqual(output);
+    }
+    const events = await fetchJson(port, '/api/runs/run_small/events');
+    expect((events.body.events[0] as WireEnvelope).payload).toEqual(
+      isEvent(live) ? live.envelope.payload : undefined,
+    );
     await app.close();
     await ui.close();
   });

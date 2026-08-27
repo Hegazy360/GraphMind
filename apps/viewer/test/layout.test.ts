@@ -29,6 +29,48 @@ function edge(source: string, target: string): FlowEdgeSpec {
   return { id: `e:${source}->${target}`, source, target };
 }
 
+/**
+ * A laid-out canvas of `size` nodes plus the graph it came from, ready to
+ * have more nodes appended onto it — the state a streaming run is in.
+ */
+function canvasOf(size: number): {
+  prev: Map<string, Placed>;
+  nodes: FlowNodeSpec[];
+  edges: FlowEdgeSpec[];
+} {
+  const nodes: FlowNodeSpec[] = [node('agent', 264, 104)];
+  const edges: FlowEdgeSpec[] = [];
+  let previous = 'agent';
+  for (let step = 0; nodes.length < size; step++) {
+    const id = `llm:step-${step}`;
+    nodes.push(node(id, 300, 164));
+    edges.push(edge(previous, id));
+    previous = id;
+    for (let t = 0; t < 3 && nodes.length < size; t++) {
+      nodes.push(node(`tool:t${step}-${t}`));
+      edges.push(edge(id, `tool:t${step}-${t}`));
+    }
+  }
+  const prev = new Map<string, Placed>(
+    layoutGraph(nodes, edges).map((n) => [
+      n.id,
+      { id: n.id, position: n.position, width: n.width, height: n.height },
+    ]),
+  );
+  return { prev, nodes: [...nodes], edges: [...edges] };
+}
+
+/** A single chain `depth` nodes long — the shape an llm-step chain produces. */
+function chain(depth: number): FlowGraph {
+  const nodes: FlowNodeSpec[] = [];
+  const edges: FlowEdgeSpec[] = [];
+  for (let i = 0; i < depth; i++) {
+    nodes.push(node(`llm:step-${i}`, 300, 164));
+    if (i > 0) edges.push(edge(`llm:step-${i - 1}`, `llm:step-${i}`));
+  }
+  return { nodes, edges };
+}
+
 /** root → `children` leaves. */
 function star(children: number): FlowGraph {
   const nodes = [node('root')];
@@ -132,6 +174,51 @@ describe('tidyTreeLayout', () => {
     expect(laid[59]?.position.y).toBeGreaterThan(laid[0]?.position.y ?? 0);
   });
 
+  /**
+   * `runStateToFlow` chains consecutive `llm` siblings, so a run whose
+   * instrumentation mints a nodeId per step produces a tree whose DEPTH is
+   * the node count. Measure and place used to recurse, and the canvas
+   * rendered *nothing at all* past ~4–6k: a RangeError from inside layout.
+   */
+  it('lays out a 20,000-deep chain without overflowing the stack', () => {
+    const { nodes, edges } = chain(20_000);
+    const laid = layoutGraph(nodes, edges);
+    expect(laid).toHaveLength(20_000);
+    // Every step sits one layer below the one before it, all the way down.
+    expect(laid[19_999]?.position.y).toBeGreaterThan(laid[0]?.position.y ?? 0);
+    expect(laid.every((n) => Number.isFinite(n.position.x) && Number.isFinite(n.position.y))).toBe(
+      true,
+    );
+  });
+
+  /**
+   * Depth used to cost quadratic time: the cycle-break pass walked every
+   * node's ancestor chain to the root, so 4x the depth was ~16x the work
+   * (8.7ms → 138ms measured). A ratio, not a budget, so a slow machine
+   * fails this for the right reason or not at all.
+   */
+  it('stays linear as the tree gets deeper', () => {
+    const time = (depth: number): number => {
+      const { nodes, edges } = chain(depth);
+      layoutGraph(nodes, edges); // warm, so both sizes are measured JITted
+      let best = Infinity;
+      for (let i = 0; i < 5; i++) {
+        const started = performance.now();
+        layoutGraph(nodes, edges);
+        best = Math.min(best, performance.now() - started);
+      }
+      return best;
+    };
+    // Both samples are milliseconds, not microseconds, so timer noise cannot
+    // manufacture the ratio.
+    const shallow = time(1000);
+    const deep = time(4000);
+    // 4x the depth. Linear is ~4x (measured ~3.5x); the old ancestor-walk
+    // cycle check was ~15x, when it did not blow the stack first. 8x is
+    // comfortably between the two.
+    expect(deep / Math.max(shallow, 0.05)).toBeLessThan(8);
+  });
+
   it('lays out 300 nodes well inside one animation frame', () => {
     // 50 sub-agents, each with a step and four tools — the stress shape.
     const nodes = [node('root')];
@@ -229,6 +316,54 @@ describe('appendLayout', () => {
     };
     const laid = appendLayout(prev, next);
     expect(overlapping(laid.map((n) => ({ position: n.position, width: n.width, height: n.height })))).toEqual([]);
+  });
+
+  it('never overlaps an existing card, at any burst size', () => {
+    const { prev, nodes, edges } = canvasOf(600);
+    // A step calling forty tools: every arrival anchors on the same parent.
+    const parent = nodes[nodes.length - 1] as FlowNodeSpec;
+    for (let i = 0; i < 40; i++) {
+      nodes.push(node(`fan${i}`));
+      edges.push(edge(parent.id, `fan${i}`));
+    }
+    const laid = appendLayout(prev, { nodes, edges });
+    expect(laid).toHaveLength(nodes.length);
+    expect(overlapping(laid)).toEqual([]);
+    // Nothing that was on screen moved.
+    for (const [id, before] of prev) {
+      expect(laid.find((n) => n.id === id)?.position).toEqual(before.position);
+    }
+  });
+
+  /**
+   * A burst used to cost O(new × placed): every arrival re-scanned every
+   * placed rectangle for each collision probe, and re-derived the bounding
+   * box on top. Forty tools fanning out under one step on a 3,000-node
+   * canvas was ~8x the cost of a single arrival (4.4ms vs 0.55ms); it is now
+   * one pass plus a constant per arrival. A ratio, not a budget, so machine
+   * speed cancels out.
+   */
+  it('a whole burst costs about what one arrival costs', () => {
+    const measure = (burst: number): number => {
+      const { prev, nodes, edges } = canvasOf(3000);
+      const parent = nodes[nodes.length - 1] as FlowNodeSpec;
+      for (let i = 0; i < burst; i++) {
+        nodes.push(node(`fan${i}`));
+        edges.push(edge(parent.id, `fan${i}`));
+      }
+      const next = { nodes, edges };
+      appendLayout(prev, next); // warm
+      let best = Infinity;
+      for (let i = 0; i < 5; i++) {
+        const started = performance.now();
+        appendLayout(prev, next);
+        best = Math.min(best, performance.now() - started);
+      }
+      return best;
+    };
+    const one = measure(1);
+    const forty = measure(40);
+    expect(forty / Math.max(one, 0.02)).toBeLessThan(4);
   });
 });
 

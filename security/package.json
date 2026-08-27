@@ -1,0 +1,30 @@
+{
+  "name": "security-audit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Adversarial secret-leak audit for GraphMind. Runs real instrumented agents against mock providers with fake credentials, then greps every recorded artifact for them.",
+  "license": "MIT",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "4.0.8",
+    "@anthropic-ai/sdk": "^0.121.0",
+    "@graphmind-ai/anthropic": "workspace:*",
+    "@graphmind-ai/client": "workspace:*",
+    "@graphmind-ai/openai": "workspace:*",
+    "@graphmind-ai/schema": "workspace:*",
+    "@graphmind-ai/sdk": "workspace:*",
+    "@types/node": "^26.3.0",
+    "@types/ws": "^8.18.1",
+    "ai": "^7.0.79",
+    "graphmind-ai": "workspace:*",
+    "openai": "^6.9.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "ws": "^8.21.3",
+    "zod": "^4.4.3"
+  }
+}

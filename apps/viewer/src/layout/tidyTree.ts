@@ -18,6 +18,18 @@
  *     a layer 6,000px wide. Childless siblings are packed into a compact grid
  *     instead, and the layer's band grows to fit it — so a wide fan-out reads
  *     as a block you can take in at a glance.
+ *
+ * Both traversals are **iterative**, over explicit stacks. That is not a
+ * micro-optimisation: `runStateToFlow` chains consecutive `llm` siblings, so
+ * the tree's depth is the number of distinct llm nodes in the run. The
+ * shipped adapters mint one stable `llm:step` node (depth 1), but any
+ * instrumentation that mints a nodeId per step makes depth ≈ node count, and
+ * a recursive measure/place blew the JS stack at ~6,000 — the canvas
+ * rendering nothing at all.
+ *
+ * Cycle breaking is likewise O(n): the previous pass walked every node's
+ * ancestor chain to the root, which is O(n·depth) — the entire reason layout
+ * measured ~O(n²) (188ms at 3,200 nodes, of which 187ms was this loop).
  */
 import type { FlowEdgeSpec, FlowNodeSpec } from '../store/runStateToFlow.js';
 
@@ -115,26 +127,39 @@ export function tidyTreeLayout(
     if (list === undefined) childrenOf.set(edge.source, [edge.target]);
     else list.push(edge.target);
   }
-  // Break any accidental cycle: a node that is its own ancestor becomes a
-  // root. Both maps have to be cut, or the recursive measure below never
-  // terminates.
-  for (const id of [...parentOf.keys()]) {
-    const seen = new Set<string>([id]);
-    let current = parentOf.get(id);
-    for (let hops = 0; current !== undefined && hops <= nodes.length; hops++) {
-      if (!seen.has(current)) {
-        seen.add(current);
-        current = parentOf.get(current);
-        continue;
-      }
-      const parent = parentOf.get(id);
-      parentOf.delete(id);
-      if (parent !== undefined) {
-        const siblings = childrenOf.get(parent);
-        if (siblings !== undefined) childrenOf.set(parent, siblings.filter((s) => s !== id));
-      }
-      break;
+  /** Cut a node loose from its parent, in both directions. */
+  const detach = (id: string): void => {
+    const parent = parentOf.get(id);
+    if (parent === undefined) return;
+    parentOf.delete(id);
+    const siblings = childrenOf.get(parent);
+    if (siblings !== undefined) childrenOf.set(parent, siblings.filter((s) => s !== id));
+  };
+
+  // Break any accidental cycle: the node that closes the loop becomes a root,
+  // so the whole ring stays reachable from somewhere. Both maps have to be
+  // cut, or the traversal below never terminates.
+  //
+  // One amortised pass, not one ancestor-walk per node: every node is pushed
+  // onto `path` at most once across the whole loop, because anything already
+  // settled stops the walk immediately.
+  const UNSEEN = 0;
+  const ON_PATH = 1;
+  const SETTLED = 2;
+  const cycleState = new Map<string, number>();
+  const path: string[] = [];
+  for (const node of nodes) {
+    path.length = 0;
+    let current: string | undefined = node.id;
+    while (current !== undefined && (cycleState.get(current) ?? UNSEEN) === UNSEEN) {
+      cycleState.set(current, ON_PATH);
+      path.push(current);
+      current = parentOf.get(current);
     }
+    // Walked back into the chain we are standing on → that node is its own
+    // ancestor. Cutting the edge above it breaks exactly one link.
+    if (current !== undefined && cycleState.get(current) === ON_PATH) detach(current);
+    for (const id of path) cycleState.set(id, SETTLED);
   }
 
   const roots = nodes.filter((node) => !parentOf.has(node.id));
@@ -146,51 +171,79 @@ export function tidyTreeLayout(
 
   /** Belt and braces: even a cycle the pass above missed can only be walked once. */
   const measured = new Set<string>();
-  const measure = (node: FlowNodeSpec, depth: number): Measured => {
+
+  /**
+   * Pass 1 — pre-order walk over the branch nodes, over an explicit stack.
+   * Classifies each node's children into packed leaves and child branches,
+   * and notes the layer heights. Subtree widths need children first, so they
+   * are filled in by pass 2 below.
+   */
+  const entries: Measured[] = [];
+  const openEntry = (node: FlowNodeSpec, depth: number): Measured => {
     noteLayer(depth, node.height);
     measured.add(node.id);
-    const childIds = childrenOf.get(node.id) ?? [];
-    const branches: Measured[] = [];
-    const leaves: FlowNodeSpec[] = [];
-    for (const childId of childIds) {
-      const child = byId.get(childId);
-      if (child === undefined || measured.has(childId)) continue;
-      if ((childrenOf.get(childId) ?? []).length > 0) branches.push(measure(child, depth + 1));
-      else leaves.push(child);
-    }
-
-    const leafColumns = leafColumnsFor(leaves.length, maxLeafColumns);
-    const leafRows = leafColumns === 0 ? 0 : Math.ceil(leaves.length / leafColumns);
-    const leafWidth = leaves.reduce((max, leaf) => Math.max(max, leaf.width), 0);
-    const leafHeight = leaves.reduce((max, leaf) => Math.max(max, leaf.height), 0);
-    const leafBlockWidth =
-      leafColumns === 0 ? 0 : leafColumns * leafWidth + (leafColumns - 1) * siblingGap;
-    if (leafRows > 0) {
-      noteLayer(depth + 1, leafRows * leafHeight + (leafRows - 1) * leafRowGap);
-    }
-
-    const blocks: number[] = [];
-    if (leafBlockWidth > 0) blocks.push(leafBlockWidth);
-    for (const branch of branches) blocks.push(branch.width);
-    const childrenWidth =
-      blocks.length === 0
-        ? 0
-        : blocks.reduce((sum, w) => sum + w, 0) + (blocks.length - 1) * siblingGap;
-
     return {
       id: node.id,
       node,
       depth,
-      branches,
-      leaves,
-      leafColumns,
-      leafRows,
-      leafBlockWidth,
-      width: Math.max(node.width, childrenWidth),
+      branches: [],
+      leaves: [],
+      leafColumns: 0,
+      leafRows: 0,
+      leafBlockWidth: 0,
+      width: node.width,
     };
   };
 
-  const measuredRoots = roots.map((root) => measure(root, 0));
+  const measuredRoots = roots.map((root) => openEntry(root, 0));
+  const stack: Measured[] = [...measuredRoots];
+  while (stack.length > 0) {
+    const entry = stack.pop() as Measured;
+    entries.push(entry);
+    const childIds = childrenOf.get(entry.id) ?? [];
+    for (const childId of childIds) {
+      const child = byId.get(childId);
+      if (child === undefined || measured.has(childId)) continue;
+      if ((childrenOf.get(childId) ?? []).length > 0) {
+        const branch = openEntry(child, entry.depth + 1);
+        entry.branches.push(branch);
+        stack.push(branch);
+      } else {
+        entry.leaves.push(child);
+      }
+    }
+
+    const leaves = entry.leaves;
+    const leafColumns = leafColumnsFor(leaves.length, maxLeafColumns);
+    entry.leafColumns = leafColumns;
+    entry.leafRows = leafColumns === 0 ? 0 : Math.ceil(leaves.length / leafColumns);
+    let leafWidth = 0;
+    let leafHeight = 0;
+    for (const leaf of leaves) {
+      if (leaf.width > leafWidth) leafWidth = leaf.width;
+      if (leaf.height > leafHeight) leafHeight = leaf.height;
+    }
+    entry.leafBlockWidth =
+      leafColumns === 0 ? 0 : leafColumns * leafWidth + (leafColumns - 1) * siblingGap;
+    if (entry.leafRows > 0) {
+      noteLayer(entry.depth + 1, entry.leafRows * leafHeight + (entry.leafRows - 1) * leafRowGap);
+    }
+  }
+
+  // Pass 2 — subtree widths. `entries` is in pre-order, so every descendant
+  // sits after its ancestor: walking it backwards visits children first,
+  // which is exactly the post-order the recursive version got for free.
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i] as Measured;
+    let childrenWidth = entry.leafBlockWidth;
+    let blocks = entry.leafBlockWidth > 0 ? 1 : 0;
+    for (const branch of entry.branches) {
+      childrenWidth += branch.width;
+      blocks += 1;
+    }
+    if (blocks > 1) childrenWidth += (blocks - 1) * siblingGap;
+    entry.width = Math.max(entry.node.width, childrenWidth);
+  }
 
   // Layer bands, top-down.
   const layerY: number[] = [];
@@ -200,8 +253,18 @@ export function tidyTreeLayout(
     y += (layerHeight[depth] ?? 0) + layerGap;
   }
 
+  // Pass 3 — placement, pre-order over an explicit stack. Each frame carries
+  // the left edge its subtree owns, so siblings can be pushed in any order.
   const positions = new Map<string, { x: number; y: number }>();
-  const place = (entry: Measured, left: number): void => {
+  const placeStack: { entry: Measured; left: number }[] = [];
+  let rootLeft = 0;
+  for (const entry of measuredRoots) {
+    placeStack.push({ entry, left: rootLeft });
+    rootLeft += entry.width + siblingGap * 2;
+  }
+
+  while (placeStack.length > 0) {
+    const { entry, left } = placeStack.pop() as { entry: Measured; left: number };
     const nodeY = layerY[entry.depth] ?? 0;
     positions.set(entry.id, {
       x: left + (entry.width - entry.node.width) / 2,
@@ -210,8 +273,12 @@ export function tidyTreeLayout(
 
     let cursor = left;
     if (entry.leafColumns > 0) {
-      const leafWidth = entry.leaves.reduce((max, leaf) => Math.max(max, leaf.width), 0);
-      const leafHeight = entry.leaves.reduce((max, leaf) => Math.max(max, leaf.height), 0);
+      let leafWidth = 0;
+      let leafHeight = 0;
+      for (const leaf of entry.leaves) {
+        if (leaf.width > leafWidth) leafWidth = leaf.width;
+        if (leaf.height > leafHeight) leafHeight = leaf.height;
+      }
       const childY = layerY[entry.depth + 1] ?? nodeY + entry.node.height + layerGap;
       entry.leaves.forEach((leaf, index) => {
         const column = index % entry.leafColumns;
@@ -228,15 +295,9 @@ export function tidyTreeLayout(
       cursor += entry.leafBlockWidth + siblingGap;
     }
     for (const branch of entry.branches) {
-      place(branch, cursor);
+      placeStack.push({ entry: branch, left: cursor });
       cursor += branch.width + siblingGap;
     }
-  };
-
-  let rootLeft = 0;
-  for (const entry of measuredRoots) {
-    place(entry, rootLeft);
-    rootLeft += entry.width + siblingGap * 2;
   }
 
   return nodes.map((node) => ({

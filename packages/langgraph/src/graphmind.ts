@@ -139,7 +139,11 @@ export interface Graphmind {
   run<T>(name: string, fn: (ctx: RunContext) => T | Promise<T>): Promise<T>;
   /**
    * Pre-announce a compiled LangGraph's nodes so the viewer can render the
-   * whole graph before anything executes. Safe to skip; safe to call twice.
+   * whole graph before anything executes. Call it BEFORE `graph.invoke(...)`:
+   * the roster is remembered and emitted as the first event of every run this
+   * adapter opens afterwards, so it still lands ahead of any node without
+   * opening a run of its own to carry it. Called inside `gm.run(...)` it ships
+   * into that run immediately (once). Safe to skip; safe to call twice.
    */
   hintGraph(graph: unknown): void;
   /** Release held gates, flush pending events, close the socket. Idempotent. */
@@ -313,7 +317,17 @@ export function graphmind(options: GraphmindOptions = {}): Graphmind {
       if (!session.enabled) return;
       try {
         const nodes = readGraphNodes(graph);
-        if (nodes.length > 0) session.emit('graph.hint', { nodes });
+        if (nodes.length === 0) return;
+        // Remembered so every run this adapter opens later is pre-rendered:
+        // the documented call order is hintGraph() *before* graph.invoke(),
+        // when no run exists yet (see AdapterCore.setGraphHint).
+        core.setGraphHint(nodes);
+        // Emits only when a run is already open (inside gm.run(...), or after
+        // the graph has started). Outside one, `session.emit` would open the
+        // session's implicit run just to carry the hint, which shows up in the
+        // viewer as an empty placeholder run next to the real one; the roster
+        // is delivered as the first event of the graph's own run instead.
+        core.replayGraphHint();
       } catch (error) {
         core.warner.warn(
           'hint-graph-failed',

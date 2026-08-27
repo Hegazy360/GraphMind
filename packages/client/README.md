@@ -57,14 +57,28 @@ await session.dispose();
   spike measured 0.03ms worst-case).
 - **Lazy, resilient transport.** Nothing touches the network until the first
   `run`/`emit`/`gate` (or an explicit `ready()` — see the attach guarantee
-  below). Connects get 300ms (`connectTimeoutMs`), the
-  handshake 1s, then the session stays detached and retries in the
-  background every 10s (`retryIntervalMs`). All timers are unref'd — the
-  session never keeps your process alive.
-- **Replay-on-attach.** Events are kept in a bounded ring buffer (default
-  2000, drop-oldest; `bufferSize`). On attach the whole buffer is replayed
-  oldest-first with original `seq` numbers, so a viewer that attaches
-  mid-run still renders history (and deduplicates by `seq` on reconnects).
+  below). Connects get 300ms (`connectTimeoutMs`), the handshake 1s, then the
+  session stays detached and retries in the background every 10s
+  (`retryIntervalMs`). Losing an *established* attachment is treated as the
+  urgent case it is: the first reconnects happen after 200ms, 400ms and 800ms
+  before the steady-state interval takes over, because every millisecond dark
+  is events being pushed through a finite buffer. (Measured with the soak
+  harness: a blip costs **206ms** dark, where the flat 10s interval cost
+  **9.99s**.) All timers are unref'd — the session never keeps your process
+  alive.
+- **Replay-on-attach.** Events are kept in a bounded ring buffer (default 5000
+  frames or 8 MiB, whichever binds first, drop-oldest; `bufferSize` /
+  `maxBufferBytes`). On attach the whole buffer is replayed oldest-first with
+  original `seq` numbers, so a viewer that attaches mid-run still renders
+  history (and deduplicates by `seq` on reconnects).
+- **Loss is never silent.** If the debugger is unreachable for longer than the
+  buffer holds, the events that never made it are counted with their `seq`
+  range and announced two ways: a **gap marker** on the next attach — a real
+  `graph.hint` envelope carrying `payload.gap = {droppedCount, fromSeq, toSeq,
+  reason}`, which the server stores and the viewer can render — and a
+  rate-limited warning in your own logs. `session.stats().lost` is the honest
+  count (`dropped` also counts frames that were delivered and then aged out of
+  the replay buffer, which is not loss).
 
 ## Attach guarantee: `session.ready()`
 
@@ -148,23 +162,28 @@ createSession({
   enabled,             // override kill-switch logic (GRAPHMIND_DISABLED still wins)
   connectTimeoutMs,    // 300
   handshakeTimeoutMs,  // 1000
-  retryIntervalMs,     // 10_000
-  bufferSize,          // 2000 events, drop-oldest
+  retryIntervalMs,     // 10_000 steady state (200/400/800ms burst after a blip)
+  bufferSize,          // 5000 events, drop-oldest
+  maxBufferBytes,      // 8 MiB — second, byte-wise bound on the same buffer
   pauseTimeoutMs,      // auto-continue held gates after N ms (default: hold forever)
   webSocket,           // WebSocket constructor override (default: global WebSocket, Node >= 22)
   logger, warnIntervalMs, env, // testing / embedding hooks
 })
 ```
 
-`session.stats()` returns `{enabled, attached, buffered, dropped, heldGates,
-seq}` for diagnostics.
+`session.stats()` returns `{enabled, attached, buffered, dropped, lost,
+pendingGaps, heldGates, seq}` for diagnostics. `lost` counts events that were
+evicted **before ever reaching the debugger** — real holes in the recorded
+run; `dropped` is the blunter lifetime eviction count and includes frames that
+were delivered first.
 
 ## Scripts
 
 - `pnpm typecheck` — `tsc` over src + tests (schema resolved from source)
 - `pnpm test` — vitest: gate hold/resume/inject/retry/abort, parallel
   independence, disconnect fail-open < 100ms, detached overhead < 1ms,
-  ring-buffer replay + overflow, handshake + version-mismatch detachment,
-  kill switches, host-crash immunity
+  ring-buffer replay + overflow, gap markers + loss accounting + fast
+  reconnect, handshake + version-mismatch detachment, kill switches,
+  host-crash immunity
 - `pnpm build` — emit `dist/` (ESM + `.d.ts`; requires `@graphmind-ai/schema`
   built first, which pnpm's topological ordering does for you)

@@ -8,8 +8,13 @@
  *              -> gather         (two tools, run in PARALLEL branches)
  *              -> report         (joins the branch results)
  */
-import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
+import { Annotation, END, MessagesAnnotation, START, StateGraph } from '@langchain/langgraph';
+import { ToolNode } from '@langchain/langgraph/prebuilt';
 import { FakeListChatModel } from '@langchain/core/utils/testing';
+import { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
+import { AIMessageChunk, type BaseMessage } from '@langchain/core/messages';
+import { ChatGenerationChunk, type ChatResult } from '@langchain/core/outputs';
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import type { Graphmind } from '../../src/index.js';
@@ -180,4 +185,117 @@ export function buildGraph(gm: Graphmind, flags: ScenarioFlags = {}, marks = new
 export async function attach(gm: Graphmind): Promise<void> {
   await gm.ready({ timeoutMs: 8000 });
   await waitUntil(() => gm.session.attached, 8000, 'session attach');
+}
+
+/* -- the agent loop: conditional edges + a streaming tool-calling model ----- */
+
+/**
+ * A chat model that streams a scripted sequence of `AIMessageChunk`s per turn,
+ * including tool-call argument deltas.
+ *
+ * `FakeStreamingChatModel` cannot be used for this: it rebuilds every chunk
+ * from `content` / `tool_calls` / `additional_kwargs` only, so
+ * `tool_call_chunks` never reach `handleLLMNewToken` — exactly the channel
+ * under test. Everything else here is real LangChain: `.stream()` drives the
+ * real callback manager, which invokes the handler the same way a provider
+ * model does.
+ */
+export class ScriptedStreamingChatModel extends BaseChatModel {
+  private turn = 0;
+
+  constructor(private readonly turns: AIMessageChunk[][]) {
+    super({});
+  }
+
+  _llmType(): string {
+    return 'scripted-streaming';
+  }
+
+  async _generate(): Promise<ChatResult> {
+    throw new Error('ScriptedStreamingChatModel is streaming-only');
+  }
+
+  async *_streamResponseChunks(
+    _messages: BaseMessage[],
+    _options: this['ParsedCallOptions'],
+    runManager?: CallbackManagerForLLMRun,
+  ): AsyncGenerator<ChatGenerationChunk> {
+    const script = this.turns[this.turn] ?? [];
+    this.turn += 1;
+    for (const message of script) {
+      const text = typeof message.content === 'string' ? message.content : '';
+      const chunk = new ChatGenerationChunk({ message, text });
+      yield chunk;
+      await runManager?.handleLLMNewToken(text, undefined, undefined, undefined, undefined, {
+        chunk,
+      });
+    }
+  }
+}
+
+export const AGENT_LOOP_TOOL_ARGS: [string, string] = ['{"city":', '"Lisbon"}'];
+
+/**
+ * The classic LangGraph agent loop — `think` (streaming model) with a
+ * conditional edge into a `ToolNode`, looping back. Its `think` node is the
+ * shape that makes LangGraph wrap the node body in an inner run carrying the
+ * node's own metadata (see `langgraphTaskKey`).
+ */
+export function buildAgentLoopGraph() {
+  const model = new ScriptedStreamingChatModel([
+    [
+      new AIMessageChunk({ content: 'Checking the weather. ' }),
+      new AIMessageChunk({
+        content: '',
+        tool_call_chunks: [
+          { type: 'tool_call_chunk', id: 'call_1', name: 'getWeather', args: '', index: 0 },
+        ],
+      }),
+      new AIMessageChunk({
+        content: '',
+        tool_call_chunks: [
+          { type: 'tool_call_chunk', args: AGENT_LOOP_TOOL_ARGS[0], index: 0 },
+        ],
+      }),
+      new AIMessageChunk({
+        content: '',
+        tool_call_chunks: [
+          { type: 'tool_call_chunk', args: AGENT_LOOP_TOOL_ARGS[1], index: 0 },
+        ],
+      }),
+    ],
+    [new AIMessageChunk({ content: 'It is 31C in Lisbon.' })],
+  ]);
+
+  const getWeather = tool(
+    async ({ city }: { city: string }) => JSON.stringify({ city, tempC: 31 }),
+    {
+      name: 'getWeather',
+      description: 'Weather for a city',
+      schema: z.object({ city: z.string() }),
+    },
+  );
+
+  const graph = new StateGraph(MessagesAnnotation)
+    .addNode('think', async (state) => {
+      let accumulated: AIMessageChunk | undefined;
+      for await (const chunk of await model.stream(state.messages)) {
+        accumulated = accumulated === undefined ? chunk : accumulated.concat(chunk);
+      }
+      return { messages: accumulated === undefined ? [] : [accumulated] };
+    })
+    .addNode('tools', new ToolNode([getWeather]))
+    .addEdge(START, 'think')
+    .addConditionalEdges(
+      'think',
+      (state) => {
+        const last = state.messages[state.messages.length - 1] as AIMessageChunk | undefined;
+        return (last?.tool_calls?.length ?? 0) > 0 ? 'tools' : END;
+      },
+      { tools: 'tools', [END]: END },
+    )
+    .addEdge('tools', 'think')
+    .compile();
+
+  return { graph, getWeather };
 }

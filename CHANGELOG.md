@@ -5,6 +5,69 @@ this repo (`graphmind-ai`, `@graphmind-ai/sdk`, `@graphmind-ai/client`,
 `@graphmind-ai/schema`, `@graphmind-ai/anthropic`, `@graphmind-ai/openai`,
 `@graphmind-ai/langgraph`, and the Python `graphmind-ai` distribution).
 
+## 0.3.0
+
+A hardening release. An adversarial pass — a credential-leak audit, real
+provider calls, a production-scale soak, browser tests, and an SDK version
+matrix — found real defects. These are the fixes.
+
+### Security (please upgrade)
+
+- **The local server accepted WebSocket connections from any origin.** A
+  WebSocket handshake is exempt from the same-origin policy, so while
+  `graphmind serve` was running, any web page you visited could open
+  `/ws/ui`, read every recorded run (prompts, tool payloads, errors), *and*
+  send control frames — including resuming a paused run with an injected tool
+  result. Every HTTP request and every upgrade is now origin-checked:
+  no `Origin` (the SDK, curl, tests) and this server's own origin are allowed,
+  everything else gets a 403. `GRAPHMIND_ALLOWED_ORIGINS` opens it explicitly.
+- **DNS rebinding could reach the HTTP API** despite the loopback bind. `Host`
+  must now be a loopback name; SSH tunnels still work.
+- **The database was created world-readable.** `~/.graphmind` is now 0700 and
+  `graphmind.db` (with its `-wal`/`-shm` siblings) 0600. A database an older
+  version left at 0644 is tightened on next open. No-op on Windows.
+
+### Correctness
+
+- Aborting a run mid-stream was reported as success on real providers: both
+  the Anthropic and OpenAI SDKs deliberately swallow `AbortError` inside their
+  stream iterators, so the adapters saw a clean end. Only real API calls could
+  have shown this.
+- Events dropped while the debugger was unreachable are no longer silent — the
+  recorded run says so instead of quietly missing a third of itself.
+- Oversized payloads are trimmed field by field rather than replaced wholesale,
+  so a truncated event still satisfies its own schema and still renders; the
+  server also fans out exactly what it stored, so live and replay agree and one
+  huge tool result can no longer inflate the server.
+- `graphmind record --html` picked the JS bundle by extension and could inline
+  the wrong one now that the viewer build emits two; it reads the real entry
+  point from the built index.html.
+- Exported runs no longer show live-looking debugger controls that do nothing.
+- The agent node emitted `node.finished` without an `instanceId` in the Vercel
+  AI SDK adapter, mis-attributing concurrent executions.
+- LangGraph: inner wrapper runs made a chain node its own parent (a self-loop
+  in the graph); tool-call argument tokens are now mapped.
+- Retention deleted rows but never reclaimed disk, and startup retention
+  delayed the server binding its port.
+
+### Version support, measured rather than assumed
+
+- `@graphmind-ai/langgraph` advertised a `langgraph`/`core` pair that is
+  mathematically impossible to install; the floors are now the real ones.
+- `@graphmind-ai/openai` excluded `openai@7`, the current default install,
+  despite passing its whole suite there.
+- The Vercel AI SDK adapter now typechecks against `ai@6`, its own floor.
+- A CI matrix pins the floor and ceiling of every range, plus a weekly canary
+  against the latest SDKs.
+
+### Testing
+
+830+ tests: a credential-leak audit (71) proving no API key, header or token
+reaches the database, API, WebSocket, HTML/NDJSON export or telemetry; 54
+browser tests; a live-provider suite (183 assertions against real Anthropic and
+OpenAI); and a soak battery with a published baseline. Viewer layout went from
+10.8ms to 0.6ms at 800 nodes and no longer overflows the stack on deep graphs.
+
 ## 0.2.2
 
 - The Python package reported `__version__ = "0.1.0"` while shipping as 0.2.1:

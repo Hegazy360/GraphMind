@@ -2,8 +2,15 @@
  * The resume-action bar rendered inside a paused node: Continue / Step /
  * Retry / Inject / Abort. Inject opens a small JSON editor prefilled from
  * the paused call's output (or input, as the shape hint).
+ *
+ * In an exported run (`graphmind record --html`) the same `exec.paused`
+ * event is a historical fact, not a live hold: nothing is executing and no
+ * control can reach anything. There the banner degrades to a past-tense
+ * marker — offering Continue/Abort buttons that silently do nothing would
+ * be worse than offering none.
  */
 import { useMemo, useState } from 'react';
+import { isExportedRun } from '../../connection/FixtureConnection.js';
 import { sendControl } from '../../connection/ServerConnection.js';
 import { useRunStore } from '../../store/runStore.js';
 import { useUiStore } from '../../store/uiStore.js';
@@ -70,14 +77,19 @@ function PauseBannerInner({ runId, node, pause }: PauseBannerProps & { pause: Pa
     setInjecting(false);
   };
 
-  const pointLabel =
-    pause.point === 'error' ? 'Paused on error' : pause.point === 'before' ? 'Paused before call' : 'Paused after call';
+  const replayed = isExportedRun();
+  const where = pause.point === 'error' ? 'on error' : pause.point === 'before' ? 'before call' : 'after call';
+  const pointLabel = replayed ? `Was held ${where}` : `Paused ${where}`;
 
   return (
     <div className="gm-pause-banner nodrag" onClick={(e) => e.stopPropagation()}>
       <div
         className="gm-pause-label"
-        title="Held by the debugger. Note: user-configured totalMs/stepMs/chunkMs timeouts can still abort a run during a long hold (per-tool toolMs is neutralized)."
+        title={
+          replayed
+            ? 'This gate held execution while the run was recorded. An exported run is a frozen record — there is nothing left to resume.'
+            : 'Held by the debugger. Note: user-configured totalMs/stepMs/chunkMs timeouts can still abort a run during a long hold (per-tool toolMs is neutralized).'
+        }
       >
         <span className="gm-dot gm-dot--paused" />
         {pointLabel}
@@ -87,23 +99,37 @@ function PauseBannerInner({ runId, node, pause }: PauseBannerProps & { pause: Pa
           {error.name}: {error.message}
         </div>
       )}
-      <div className="gm-actions">
-        <button className="gm-action gm-action--primary" onClick={() => resume('continue')} title="Release this gate (c)">
-          Continue
-        </button>
-        <button className="gm-action" onClick={step} title="Resume and pause at the next gate">
-          Step
-        </button>
-        <button className="gm-action" onClick={() => resume('retry')} title="Run this call again">
-          Retry
-        </button>
-        <button className="gm-action" onClick={openInject} title="Substitute a result and continue">
-          Inject…
-        </button>
-        <button className="gm-action gm-action--danger" onClick={() => resume('abort')} title="Abort the run">
-          Abort
-        </button>
-      </div>
+      {replayed ? (
+        <div className="gm-pause-note">
+          Recorded hold — an exported run cannot be resumed.
+        </div>
+      ) : (
+        <div className="gm-actions">
+          <button
+            className="gm-action gm-action--primary"
+            onClick={() => resume('continue')}
+            title="Release this gate (c)"
+          >
+            Continue
+          </button>
+          <button className="gm-action" onClick={step} title="Resume and pause at the next gate">
+            Step
+          </button>
+          <button className="gm-action" onClick={() => resume('retry')} title="Run this call again">
+            Retry
+          </button>
+          <button className="gm-action" onClick={openInject} title="Substitute a result and continue">
+            Inject…
+          </button>
+          <button
+            className="gm-action gm-action--danger"
+            onClick={() => resume('abort')}
+            title="Abort the run"
+          >
+            Abort
+          </button>
+        </div>
+      )}
 
       {injecting && (
         <div className="gm-inject nowheel" onClick={(e) => e.stopPropagation()}>

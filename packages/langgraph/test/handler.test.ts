@@ -6,7 +6,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { graphmind, type Graphmind, type GraphmindOptions } from '../src/index.js';
 import { FakeViewer, tick, waitUntil, type FakeViewerOptions } from './helpers/fake-viewer.js';
-import { attach, buildGraph, Marks, type ScenarioFlags } from './helpers/graph.js';
+import {
+  AGENT_LOOP_TOOL_ARGS,
+  attach,
+  buildAgentLoopGraph,
+  buildGraph,
+  Marks,
+  type ScenarioFlags,
+} from './helpers/graph.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -473,5 +480,80 @@ describe('fail-open', () => {
     expect(result.reportText).toContain('TP1234');
     expect(marks.count('tool:body-start')).toBe(2);
     expect(warnings.some((w) => w.includes('internal error in the LangChain callback'))).toBe(true);
+  });
+});
+
+/**
+ * A LangGraph node whose outgoing edge is conditional is compiled into a
+ * `RunnableSequence` whose first step is a `RunnableLambda` around the node
+ * body — and that inner run inherits the task's `langgraph_node` /
+ * `langgraph_checkpoint_ns` metadata verbatim. Naming it from
+ * `langgraph_node` produced a SECOND `chain:think` node whose parent was
+ * `chain:think`: a self-loop for any viewer laying the run out as a DAG, and
+ * two chain executions per logical step.
+ */
+describe('LangGraph node body wrapper (chains: "all")', () => {
+  it('never emits a node parented to itself, and one chain execution per step', async () => {
+    const { viewer, gm } = await setup();
+    await attach(gm);
+
+    const { graph } = buildAgentLoopGraph();
+    const result = await graph.invoke(
+      { messages: [{ role: 'user', content: 'weather in Lisbon?' }] },
+      gm.config(),
+    );
+    await waitUntil(() => viewer.ofType('run.finished').length >= 1, 8000, 'run.finished');
+
+    const starts = viewer.ofType('node.started').map((f) => f.payload);
+    const selfParented = starts.filter((n) => n['parentId'] === n['nodeId']);
+    expect(selfParented).toEqual([]);
+
+    // `think` really ran twice (tool call, then the answer) — once per step,
+    // not twice per step.
+    const thinkStarts = starts.filter((n) => n['nodeId'] === 'chain:think');
+    expect(thinkStarts).toHaveLength(2);
+    expect(thinkStarts.every((n) => n['parentId'] === 'agent:LangGraph')).toBe(true);
+    expect(new Set(thinkStarts.map((n) => n['instanceId'])).size).toBe(2);
+
+    // The model call inside the node still hangs off the node it belongs to.
+    const llmStarts = starts.filter((n) => n['kind'] === 'llm');
+    expect(llmStarts).toHaveLength(2);
+    expect(llmStarts.every((n) => n['parentId'] === 'chain:think')).toBe(true);
+
+    // Every started node closes, and the graph itself worked.
+    const finishes = viewer.ofType('node.finished').map((f) => f.payload);
+    const open = starts.filter(
+      (s) => !finishes.some((f) => f['nodeId'] === s['nodeId'] && f['instanceId'] === s['instanceId']),
+    );
+    expect(open).toEqual([]);
+    const last = result.messages[result.messages.length - 1] as { content: unknown };
+    expect(String(last.content)).toContain('31C');
+  });
+
+  it('maps tool-call argument deltas into the tool-args token channel', async () => {
+    const { viewer, gm } = await setup();
+    await attach(gm);
+
+    const { graph } = buildAgentLoopGraph();
+    await graph.invoke(
+      { messages: [{ role: 'user', content: 'weather in Lisbon?' }] },
+      gm.config(),
+    );
+    await waitUntil(() => viewer.ofType('run.finished').length >= 1, 8000, 'run.finished');
+
+    const deltas = viewer
+      .ofType('node.token')
+      .flatMap((f) => f.payload['deltas'] as { t: string; v: string }[]);
+    const toolArgs = deltas.filter((d) => d.t === 'tool-args').map((d) => d.v);
+    // LangChain streams the arguments as JSON substrings; concatenated they
+    // are the arguments the model really produced.
+    expect(toolArgs.join('')).toBe(AGENT_LOOP_TOOL_ARGS.join(''));
+    // The text channel is unaffected.
+    expect(
+      deltas
+        .filter((d) => d.t === 'text')
+        .map((d) => d.v)
+        .join(''),
+    ).toContain('Checking the weather.');
   });
 });

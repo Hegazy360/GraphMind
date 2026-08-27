@@ -148,7 +148,15 @@ wrapper emits its own node events, so a wrapped tool is useful on its own.
 One logical node per code location; executions light it up (decisions.md #1).
 Parentage follows LangChain's `parentRunId`. LangGraph's hidden internals
 (anything tagged `langsmith:hidden`, such as `__start__`) are skipped, and
-their children re-attach to the nearest visible ancestor.
+their children re-attach to the nearest visible ancestor. So is LangGraph's
+own wrapper around a node body — a node with a conditional edge is compiled
+into a `RunnableSequence` whose inner `RunnableLambda` run inherits the same
+`langgraph_node` metadata, and rendering it would give you a second
+`chain:<node>` parented to `chain:<node>` (a self-loop, and two chain
+executions per step). It is folded into the node run, so its children still
+hang off the node they belong to. Genuine nesting is unaffected: a subgraph's
+node, or the same node on a later step, has its own
+`langgraph_checkpoint_ns`.
 
 Payloads carry extra fields the wire schema preserves: `langgraphNode`,
 `langgraphStep`, `threadId`, `tags`, `toolCallId`, `provider`, `modelId`,
@@ -157,8 +165,13 @@ Payloads carry extra fields the wire schema preserves: `langgraphNode`,
 
 Streamed tokens (`handleLLMNewToken`) are batched into `node.token` — one batch
 per node per ~34ms (~30/sec), so a fast provider stream cannot flood the wire.
-Usage is read from `usage_metadata`, `llmOutput.tokenUsage`, `llmOutput.usage`
-or `generationInfo.usage`, whichever your provider fills in.
+Text goes to the `text` channel; while the model streams a tool call the
+`token` argument is empty and the JSON arguments arrive as
+`tool_call_chunks[].args` substrings on the chunk, which are forwarded on the
+`tool-args` channel (the same channel the Anthropic / OpenAI / AI SDK adapters
+use). Usage is read from `usage_metadata`, `llmOutput.tokenUsage`,
+`llmOutput.usage` or `generationInfo.usage`, whichever your provider fills
+in.
 
 ### Options that shape the graph
 
@@ -180,8 +193,16 @@ degrade instead of throwing, and anything over `maxPayloadChars` is replaced by
 Optionally pre-render the whole graph grey before anything executes:
 
 ```ts
-gm.hintGraph(compiledGraph); // reads compiledGraph.getGraph().nodes
+gm.hintGraph(compiledGraph);   // reads compiledGraph.getGraph().nodes
+await graph.invoke(input, gm.config());
 ```
+
+Call it **before** `graph.invoke(...)`. The roster is remembered and shipped
+as the first event of every run this adapter opens afterwards, ahead of any
+node — so the viewer still pre-renders, and the call does not conjure a run of
+its own just to carry the hint. (Called from inside `gm.run(...)`, where a run
+already exists, it ships immediately into that run — once, not twice.) Safe to
+skip, safe to call twice; a later call replaces the roster.
 
 ## Runs
 
@@ -241,8 +262,8 @@ detached".
 - Aborting through a callback logs one `Error in handler GraphMindCallbackHandler…`
   line from LangChain itself (its manager logs before rethrowing). That is
   LangChain's message, not a GraphMind failure.
-- `handleLLMNewToken` tokens are reported on the `text` channel; reasoning
-  deltas are not separated yet.
+- `handleLLMNewToken` tokens are reported on the `text` and `tool-args`
+  channels; reasoning deltas are not separated yet.
 - Node inputs and outputs are whatever LangChain hands the callback — for a
   LangGraph node that is the channel update, not the full state.
 - A plain `gm.tool()` function called *outside* `gm.run` while several graphs

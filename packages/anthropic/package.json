@@ -1,6 +1,6 @@
 {
   "name": "@graphmind-ai/anthropic",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Anthropic TypeScript SDK adapter for the GraphMind live agent debugger: wrap the client and your tool functions to stream execution events and honour pause / step / inject / retry / abort gates.",
   "license": "MIT",
   "type": "module",

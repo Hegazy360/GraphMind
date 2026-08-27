@@ -147,6 +147,8 @@ export interface TruncatedPayload {
   __graphmindTruncated: true;
   bytes: number;
   preview: string;
+  /** Payload fields that were dropped, when only part of it was too big. */
+  fields?: string[];
 }
 
 export function isTruncatedPayload(value: unknown): value is TruncatedPayload {
@@ -157,10 +159,95 @@ export function isTruncatedPayload(value: unknown): value is TruncatedPayload {
   );
 }
 
+/** Length of the JSON prefix kept in a truncation marker. */
+const PREVIEW_CHARS = 2000;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function safeStringify(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value) ?? 'null';
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Trim the offending FIELDS of an oversized object payload instead of
+ * discarding the whole thing.
+ *
+ * This matters more than it looks: payload schemas are per message type
+ * (`node.finished` needs `nodeId`, `durationMs`, `status`), and a payload
+ * replaced wholesale by a marker no longer satisfies its own schema — the
+ * viewer's parser rejects the replayed envelope and the node is stuck
+ * "running" forever on reload. Keeping the small structural fields and
+ * marking only the huge ones keeps the stored envelope valid, which is what
+ * makes an oversized tool result *degrade* rather than disappear.
+ *
+ * Returns undefined when the payload cannot be trimmed into budget this way
+ * (not an object, or still too big) — the caller then falls back to the
+ * whole-payload marker.
+ */
+function truncateFields(
+  payload: Record<string, unknown>,
+  maxBytes: number,
+  totalBytes: number,
+  json: string,
+): { json: string; payload: unknown } | undefined {
+  const sizes: { key: string; bytes: number }[] = [];
+  for (const key of Object.keys(payload)) {
+    const encoded = safeStringify(payload[key]);
+    sizes.push({ key, bytes: encoded === undefined ? Number.MAX_SAFE_INTEGER : encoded.length });
+  }
+  // Biggest first: drop as few fields as possible to get under budget.
+  sizes.sort((a, b) => b.bytes - a.bytes);
+
+  const trimmed: Record<string, unknown> = { ...payload };
+  const dropped: string[] = [];
+  let remaining = totalBytes;
+  for (const { key, bytes } of sizes) {
+    if (remaining <= maxBytes / 2) break; // leave room for the marker itself
+    const value = payload[key];
+    // An array field keeps its type (an empty array still satisfies
+    // `z.array(...)`); anything else becomes a nested marker.
+    const encoded = safeStringify(value);
+    trimmed[key] = Array.isArray(value)
+      ? []
+      : ({
+          __graphmindTruncated: true,
+          bytes,
+          preview: encoded === undefined ? '[unserializable field]' : encoded.slice(0, PREVIEW_CHARS),
+        } satisfies TruncatedPayload);
+    dropped.push(key);
+    remaining -= bytes;
+  }
+  if (dropped.length === 0) return undefined;
+
+  // The top-level marker fields stay, so `isTruncatedPayload` still reports
+  // true for a partially truncated payload and every consumer keeps working.
+  const marker: TruncatedPayload = {
+    __graphmindTruncated: true,
+    bytes: totalBytes,
+    preview: json.slice(0, PREVIEW_CHARS),
+    fields: dropped,
+  };
+  const result = { ...trimmed, ...marker };
+  const encoded = safeStringify(result);
+  if (encoded === undefined || Buffer.byteLength(encoded) > maxBytes) return undefined;
+  return { json: encoded, payload: result };
+}
+
 /**
  * Serialize a payload, replacing it with a truncation marker when it exceeds
  * `MAX_PAYLOAD_BYTES`. Returns the JSON text to store plus the effective
  * payload, so callers can fan out exactly what was persisted.
+ *
+ * An oversized *object* payload keeps its small fields and marks only the
+ * large ones (see `truncateFields`); anything else — a giant bare string, a
+ * cyclic value — is replaced whole. Either way the result carries the
+ * `__graphmindTruncated` marker fields at the top level.
  */
 export function serializePayload(
   payload: unknown,
@@ -180,10 +267,18 @@ export function serializePayload(
   }
   const bytes = Buffer.byteLength(json);
   if (bytes <= maxBytes) return { json, payload, truncated: false };
+
+  if (isPlainObject(payload)) {
+    const trimmed = truncateFields(payload, maxBytes, bytes, json);
+    if (trimmed !== undefined) {
+      return { json: trimmed.json, payload: trimmed.payload, truncated: true };
+    }
+  }
+
   const marker: TruncatedPayload = {
     __graphmindTruncated: true,
     bytes,
-    preview: json.slice(0, 2000),
+    preview: json.slice(0, PREVIEW_CHARS),
   };
   return { json: JSON.stringify(marker), payload: marker, truncated: true };
 }

@@ -168,18 +168,27 @@ export function graphmind(options: GraphmindOptions = {}): Graphmind {
             output: undefined,
             durationMs: Date.now() - startedAt,
             status: ctx.signal.aborted ? 'aborted' : 'ok',
+            // The agent node's execution id, so a viewer can close the
+            // execution it opened in node.started (every other adapter sets
+            // it; without it the agent node never settles).
+            extra: { instanceId: ctx.runId },
           });
           return result;
         } catch (error) {
           const aborted = ctx.signal.aborted || isAbortError(error);
           if (!aborted) {
-            core.session.emit('node.error', { nodeId, error: toErrorInfo(error) });
+            core.session.emit('node.error', {
+              nodeId,
+              instanceId: ctx.runId,
+              error: toErrorInfo(error),
+            });
           }
           core.finishNode({
             nodeId,
             output: undefined,
             durationMs: Date.now() - startedAt,
             status: aborted ? 'aborted' : 'error',
+            extra: { instanceId: ctx.runId },
           });
           throw error; // the host's own error — always propagates
         }
