@@ -443,7 +443,11 @@ jobs:
           set -euo pipefail
           node -e '
             const fs = require("node:fs");
-            const r = JSON.parse(fs.readFileSync(process.env.RESULT, "utf8"));
+            if (!fs.existsSync(process.env.RESULT)) {
+            console.log("::error::soak crashed before writing results - see the Soak step output");
+            process.exit(1);
+          }
+          const r = JSON.parse(fs.readFileSync(process.env.RESULT, "utf8"));
             const min = Number(process.env.MIN_TESTS);
             console.log("security audit: " + r.numPassedTests + " passed, " + r.numFailedTests + " failed, " + r.numTotalTests + " total");
             if (r.numFailedTests > 0) {
@@ -488,15 +492,16 @@ jobs:
         run: pnpm -r --filter './packages/**' run build
 
       - name: Soak
-        # The DEFAULT battery only (six scenarios, ~45s locally). Explicitly
-        # not `--scenario=everything`: that adds `longrun`, which costs
-        # wall-clock minutes and belongs in nightly.yml.
+        # Deliberately does NOT fail the job here: the guard step below reads
+        # the JSON and annotates the exact check that failed. Failing here
+        # told us only "exit code 1" the first time this job went red.
+        continue-on-error: true
         run: |
-          set -euo pipefail
-          pnpm --filter soak start --json="$RUNNER_TEMP/soak.json" \
-            || { echo "::error::soak failed — pnpm --filter soak start"; exit 1; }
+          pnpm --filter soak start --json="$RUNNER_TEMP/soak.json" 2>&1 | tee "$RUNNER_TEMP/soak.log"
+          exit "${PIPESTATUS[0]}"
 
       - name: Guard against a silently-shrinking battery
+        if: always()   # this is where a soak failure gets diagnosed
         # The harness already exits non-zero on a failed check. This catches
         # the other failure: scenarios quietly dropping out, which looks
         # identical to success from the outside. Only the CHECK COUNT is
