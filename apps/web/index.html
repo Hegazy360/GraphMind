@@ -93,64 +93,129 @@
         </form>
       </div>
 
-      <div class="hero-visual" aria-hidden="false">
+      <div class="hero-visual">
         <div class="panel">
           <div class="panel-chrome" aria-hidden="true">
             <span class="chrome-dots"><i></i><i></i><i></i></span>
             <span class="chrome-title">graphmind &mdash; support-agent</span>
             <span class="chrome-live"><span class="live-dot"></span>attached</span>
           </div>
-          <svg class="graph" viewBox="0 0 560 372" role="img"
-               aria-label="A live agent workflow shown as a graph. Execution is flowing from node to node; one tool node is paused on an error with a breakpoint set.">
-            <!-- edges -->
-            <path class="edge edge-done" d="M70,205 C110,235 140,275 185,300"/>
-            <path class="edge edge-done" d="M185,300 C195,245 195,185 190,142"/>
-            <path class="edge edge-dim"  d="M185,300 C235,306 285,312 330,318"/>
-            <path class="edge edge-dim"  d="M330,62 C385,95 430,160 475,205"/>
-            <path class="edge edge-dim"  d="M335,195 C385,198 430,202 475,205"/>
-            <path class="edge edge-dim"  d="M330,318 C385,290 430,245 475,205"/>
-            <path class="edge edge-flow" d="M70,205 C115,195 145,160 190,130"/>
-            <path class="edge edge-flow" d="M190,130 C240,105 280,80 330,62"/>
-            <path class="edge edge-err"  d="M190,130 C245,150 285,175 335,195"/>
 
-            <!-- traveling pulse (hidden when offset-path is unsupported or motion is reduced) -->
-            <circle class="gm-dot" r="3.5"/>
+          <div class="panel-stage">
+            <svg class="graph" viewBox="0 0 440 288" role="img"
+                 aria-label="The GraphMind debugger attached to a running agent. support-agent has called an LLM step, which fanned out to three tools: searchFlights and getWeather returned, while checkBudget threw a BudgetExceededError. A breakpoint caught it and the run is paused there.">
+              <defs>
+                <linearGradient id="gmCard" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" class="g-top"/>
+                  <stop offset="100%" class="g-bot"/>
+                </linearGradient>
+              </defs>
 
-            <!-- nodes -->
-            <circle class="node node-done" cx="70"  cy="205" r="9"/>
-            <circle class="node node-done" cx="185" cy="300" r="9"/>
-            <circle class="node node-done" cx="330" cy="62"  r="10"/>
-            <circle class="node node-dim"  cx="330" cy="318" r="10"/>
-            <circle class="node node-dim"  cx="475" cy="205" r="10"/>
+              <!-- edges -->
+              <path class="ed" d="M220,52 L220,92"/>
+              <path class="ed" d="M180,170 C180,185 72.5,185 72.5,200"/>
+              <path class="ed" d="M220,170 C220,185 202.5,185 202.5,200"/>
+              <path class="ed" d="M260,170 C260,185 350,185 350,200"/>
+              <path class="ed ed-err st-err" d="M260,170 C260,185 350,185 350,200"/>
 
-            <!-- live node -->
-            <circle class="gm-ring"        cx="190" cy="130" r="12"/>
-            <circle class="gm-ring ring-2" cx="190" cy="130" r="12"/>
-            <circle class="node node-live" cx="190" cy="130" r="12"/>
+              <!-- execution travelling along each edge -->
+              <path class="cm cm1" pathLength="100" d="M220,52 L220,92"/>
+              <path class="cm cm2" pathLength="100" d="M180,170 C180,185 72.5,185 72.5,200"/>
+              <path class="cm cm3" pathLength="100" d="M220,170 C220,185 202.5,185 202.5,200"/>
+              <path class="cm cm4" pathLength="100" d="M260,170 C260,185 350,185 350,200"/>
 
-            <!-- error node, paused, with breakpoint -->
-            <circle class="gm-err-ring" cx="335" cy="195" r="17"/>
-            <circle class="node node-err" cx="335" cy="195" r="11"/>
-            <circle class="gm-bp" cx="317" cy="180" r="3.5"/>
+              <!-- arrival pulses, behind the cards -->
+              <rect class="ring ring-live"    x="124" y="92"  width="192" height="78" rx="11"/>
+              <rect class="ring ring-live rb" x="124" y="92"  width="192" height="78" rx="11"/>
+              <rect class="ring ring-err"     x="275" y="200" width="150" height="72" rx="11"/>
+              <rect class="ring ring-err rb"  x="275" y="200" width="150" height="72" rx="11"/>
 
-            <!-- labels -->
-            <text class="gm-label" x="190" y="160" text-anchor="middle">agent</text>
-            <text class="gm-label" x="330" y="88"  text-anchor="middle">searchFlights</text>
-            <text class="gm-label" x="335" y="226" text-anchor="middle">checkBudget</text>
+              <!-- the agent -->
+              <g>
+                <rect class="card-bg" x="132" y="12" width="176" height="40" rx="9"/>
+                <circle class="dot" cx="148" cy="32" r="3.5"/>
+                <text class="c-name" x="160" y="36.5">support-agent</text>
+                <text class="c-type" x="294" y="35.5" text-anchor="end">AGENT</text>
+              </g>
 
-            <!-- paused badge -->
-            <g class="gm-badge">
-              <rect x="354" y="152" width="116" height="24" rx="6"/>
-              <circle cx="367" cy="164" r="3"/>
-              <text x="376" y="168">paused on error</text>
-            </g>
-          </svg>
+              <!-- the model call, live -->
+              <g>
+                <rect class="card-bg grow-step" x="124" y="92" width="192" height="78" rx="10"/>
+                <rect class="card-tint tint-live st-live grow-step" x="124" y="92" width="192" height="78" rx="10"/>
+                <rect class="card-line line-live st-live grow-step" x="124" y="92" width="192" height="78" rx="10"/>
+                <circle class="dot" cx="140" cy="112" r="3.5"/>
+                <circle class="dot dot-live st-live" cx="140" cy="112" r="3.5"/>
+                <text class="c-name" x="152" y="116.5">step</text>
+                <g class="c-chip">
+                  <rect x="184" y="105" width="23" height="15" rx="4"/>
+                  <text x="195.5" y="115.5">&#215;3</text>
+                </g>
+                <text class="c-type" x="302" y="115.5" text-anchor="end">LLM</text>
+                <g class="st-body">
+                  <rect class="c-inset" x="138" y="125" width="164" height="28" rx="6"/>
+                  <text class="c-code" x="146" y="136.5">Converts to $60,000,000.</text>
+                  <text class="c-code" x="146" y="147.5">Checking against budget.</text>
+                  <text class="c-meta" x="138" y="164">184 &#8594; 52 tok</text>
+                  <text class="c-meta" x="302" y="164" text-anchor="end">581ms</text>
+                </g>
+              </g>
+
+              <!-- tool: returned -->
+              <g>
+                <rect class="card-bg" x="15" y="200" width="115" height="50" rx="9"/>
+                <rect class="card-line line-done st-a-flash" x="15" y="200" width="115" height="50" rx="9"/>
+                <circle class="dot" cx="30" cy="216" r="3.5"/>
+                <text class="c-name c-name-sm" x="41" y="220.5">searchFlights</text>
+                <g class="st-a">
+                  <g class="c-badge">
+                    <rect x="29" y="228" width="35" height="14" rx="4"/>
+                    <text x="46.5" y="238.5">DONE</text>
+                  </g>
+                  <text class="c-meta" x="116" y="238.5" text-anchor="end">312ms</text>
+                </g>
+              </g>
+
+              <!-- tool: returned -->
+              <g>
+                <rect class="card-bg" x="145" y="200" width="115" height="50" rx="9"/>
+                <rect class="card-line line-done st-b-flash" x="145" y="200" width="115" height="50" rx="9"/>
+                <circle class="dot" cx="160" cy="216" r="3.5"/>
+                <text class="c-name c-name-sm" x="171" y="220.5">getWeather</text>
+                <g class="st-b">
+                  <g class="c-badge">
+                    <rect x="159" y="228" width="35" height="14" rx="4"/>
+                    <text x="176.5" y="238.5">DONE</text>
+                  </g>
+                  <text class="c-meta" x="246" y="238.5" text-anchor="end">88ms</text>
+                </g>
+              </g>
+
+              <!-- tool: threw, breakpoint caught it, run is paused here -->
+              <g>
+                <rect class="card-bg grow-err" x="275" y="200" width="150" height="72" rx="10"/>
+                <rect class="card-tint tint-err st-err grow-err" x="275" y="200" width="150" height="72" rx="10"/>
+                <rect class="card-line line-err st-err grow-err" x="275" y="200" width="150" height="72" rx="10"/>
+                <circle class="dot" cx="291" cy="216" r="3.5"/>
+                <circle class="dot dot-err st-err" cx="291" cy="216" r="3.5"/>
+                <text class="c-name" x="303" y="220.5">checkBudget</text>
+                <text class="c-type" x="411" y="219.5" text-anchor="end">TOOL</text>
+                <g class="st-err2">
+                  <rect class="c-err-strip" x="291" y="230" width="120" height="19" rx="5"/>
+                  <text class="c-err-msg" x="298" y="243">BudgetExceededError</text>
+                  <circle class="c-err-dot" cx="295" cy="258.5" r="2.5"/>
+                  <text class="c-err-note" x="303" y="262">paused on error</text>
+                </g>
+                <circle class="c-bp st-bp" cx="275" cy="239.5" r="4.5"/>
+              </g>
+            </svg>
+          </div>
+
           <div class="panel-toolbar" aria-hidden="true">
-            <span class="tb-note">breakpoint &middot; checkBudget</span>
+            <span class="tb-note"><i class="tb-bp"></i>breakpoint &middot; checkBudget</span>
             <span class="tb-chips">
-              <span class="tb-chip tb-chip-accent">resume</span>
-              <span class="tb-chip">step</span>
-              <span class="tb-chip">inspect state</span>
+              <span class="tb-chip tb-chip-accent">Continue</span>
+              <span class="tb-chip">Step</span>
+              <span class="tb-chip">Inject&hellip;</span>
             </span>
           </div>
         </div>
@@ -181,8 +246,8 @@
         <article class="feature">
           <p class="feature-index">04</p>
           <h2>Local-first, MIT</h2>
-          <p><code>npx graphmind-ai</code> and you&rsquo;re debugging. Your data never leaves
-             your machine. MIT licensed and open source.</p>
+          <p><code>npx graphmind-ai</code> and you&rsquo;re debugging. Loopback-only server,
+             keys kept out of the recording, run data that stays put. MIT licensed.</p>
         </article>
       </div>
     </section>
@@ -194,14 +259,18 @@
         <p>
           GraphMind never authors your workflow — the graph is a projection of the code
           you already wrote. Wrap your model and tools, run your agent, and the debugger
-          attaches. First integration: the Vercel AI SDK, plus generic OpenTelemetry and
-          OpenInference trace import.
+          attaches. There are adapters for the Vercel AI SDK, the Anthropic and OpenAI SDKs,
+          LangGraph/LangChain and Python, plus generic OpenTelemetry and OpenInference
+          trace import.
         </p>
         <ol class="steps">
-          <li><code>npx graphmind-ai init</code> detects your framework and prints the two lines to add.</li>
+          <li><code>npx graphmind-ai init</code> detects your framework and prints the snippet to add.</li>
           <li><code>npx graphmind-ai</code> starts the local debugger.</li>
           <li>Run your agent. The graph lights up: breakpoints, stepping, inject-and-resume, live state.</li>
         </ol>
+        <p class="how-share">Need to hand a bug to someone else?
+          <code>npx graphmind-ai record &lt;run&gt; --html</code> writes the whole run to a single
+          self-contained HTML file &mdash; it opens in any browser, with no server and no account.</p>
       </div>
       <div class="how-code">
         <figure class="code-card">
@@ -216,7 +285,13 @@
 <span class="tok-kw">const</span> model = gm.<span class="tok-fn">wrapModel</span>(<span class="tok-fn">anthropic</span>(<span class="tok-str">'claude-sonnet-4-5'</span>));
 <span class="tok-kw">const</span> tools = gm.<span class="tok-fn">wrapTools</span>({ searchFlights, checkBudget });</code></pre>
         </figure>
-        <p class="how-note"><code>npx graphmind-ai</code> runs everything locally — your prompts, outputs, and traces never leave your machine.</p>
+        <p class="how-note">Local-first, precisely: the server binds <code>127.0.0.1</code> only and
+          refuses connections from foreign browser origins. Your API keys never enter the recording &mdash;
+          a dedicated credential-leak audit asserts it on every build. Your prompts, outputs and traces
+          stay on your machine. The CLI does send one anonymous ping per command (its name, a random
+          install id, the version &mdash; never arguments, prompts or run data), which
+          <code>GRAPHMIND_TELEMETRY=0</code> turns off;
+          <a href="https://github.com/Hegazy360/GraphMind/blob/master/packages/cli/TELEMETRY.md" rel="noopener">here is exactly what it sends</a>.</p>
       </div>
     </section>
     <section class="frameworks container" aria-labelledby="fw-title">
@@ -228,7 +303,7 @@
         <li><span class="fw-name">OpenAI SDK</span><code>@graphmind-ai/openai</code></li>
         <li><span class="fw-name">LangGraph &middot; LangChain</span><code>@graphmind-ai/langgraph</code></li>
         <li><span class="fw-name">Python</span><code>pip install graphmind-ai</code></li>
-        <li><span class="fw-name">Everything else</span><code>graphmind import trace.json</code></li>
+        <li><span class="fw-name">Everything else</span><code>npx graphmind-ai import trace.json</code></li>
       </ul>
       <p class="fw-note">Not sure which you need? <code>npx graphmind-ai init</code> reads your project and tells you.</p>
     </section>

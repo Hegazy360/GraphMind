@@ -14,8 +14,10 @@
   --accent: #4ade80;
   --accent-dim: rgba(74, 222, 128, 0.14);
   --accent-glow: rgba(74, 222, 128, 0.07);
+  --accent-line: rgba(74, 222, 128, 0.3);
   --danger: #f87171;
   --danger-dim: rgba(248, 113, 113, 0.12);
+  --danger-line: rgba(248, 113, 113, 0.32);
   --btn-bg: #f2f2f4;
   --btn-bg-hover: #ffffff;
   --btn-text: #0a0a0c;
@@ -29,14 +31,41 @@
   --tok-str: #86efac;
   --tok-fn: #f0f0f2;
 
-  /* hero graph */
-  --gm-node: #1c1c22;
-  --gm-node-stroke: #45454f;
-  --gm-node-done: #26262e;
-  --gm-edge: #2b2b33;
-  --gm-edge-done: #3a3a44;
-  --gm-label: #85858f;
-  --gm-grid: rgba(255, 255, 255, 0.045);
+  /* hero panel — surface */
+  --panel-top: #15151c;
+  --panel-bg: #0e0e13;
+  --panel-border: #24242c;
+  --panel-line: #212129;
+  --panel-bar: linear-gradient(180deg, #18181f, #131319);
+  --panel-hi: rgba(255, 255, 255, 0.055);
+  --panel-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 18px 36px -18px rgba(0, 0, 0, 0.65),
+    0 50px 80px -44px rgba(0, 0, 0, 0.9);
+  --chrome-dot: #2d2d36;
+  --chrome-dot-hi: rgba(255, 255, 255, 0.07);
+  --chip-bg: linear-gradient(180deg, #1d1d25, #16161d);
+  --chip-border: #2e2e38;
+  --chip-hi: rgba(255, 255, 255, 0.05);
+  --chip-shadow: rgba(0, 0, 0, 0.28);
+
+  /* hero panel — graph */
+  --gm-cycle: 8.5s;
+  --gm-stage: #0a0a0e;
+  --stage-veil: rgba(255, 255, 255, 0.025);
+  --gm-grid: rgba(255, 255, 255, 0.05);
+  --gm-card-top: #1a1a22;
+  --gm-card-bot: #141419;
+  --gm-card-stroke: #2c2c36;
+  --gm-inset: #0e0e13;
+  --gm-inset-stroke: #24242c;
+  --gm-edge: #33333d;
+  --gm-dot: #4a4a56;
+  --gm-name: #ebebf0;
+  --gm-label: #9a9aa5;
+  --gm-type: #6d6d78;
+  --gm-tint-live: rgba(74, 222, 128, 0.055);
+  --gm-tint-err: rgba(248, 113, 113, 0.05);
 
   --radius: 10px;
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -57,20 +86,47 @@
     --accent: #059669;
     --accent-dim: rgba(5, 150, 105, 0.1);
     --accent-glow: rgba(5, 150, 105, 0.05);
+    --accent-line: rgba(5, 150, 105, 0.32);
     --danger: #dc2626;
-    --danger-dim: rgba(220, 38, 38, 0.08);
+    --danger-dim: rgba(220, 38, 38, 0.07);
+    --danger-line: rgba(220, 38, 38, 0.3);
     --btn-bg: #17171b;
     --btn-bg-hover: #000000;
     --btn-text: #ffffff;
     --focus: #059669;
 
-    --gm-node: #ffffff;
-    --gm-node-stroke: #b9b9c3;
-    --gm-node-done: #ececf0;
-    --gm-edge: #dcdce2;
-    --gm-edge-done: #c9c9d1;
-    --gm-label: #6e6e78;
-    --gm-grid: rgba(0, 0, 0, 0.05);
+    --panel-top: #ffffff;
+    --panel-bg: #ffffff;
+    --panel-border: #dcdce6;
+    --panel-line: #eaeaf0;
+    --panel-bar: linear-gradient(180deg, #ffffff, #f7f7f9);
+    --panel-hi: rgba(255, 255, 255, 0.9);
+    --panel-shadow:
+      0 1px 2px rgba(20, 20, 32, 0.06),
+      0 14px 28px -14px rgba(20, 20, 32, 0.18),
+      0 44px 68px -40px rgba(20, 20, 32, 0.26);
+    --chrome-dot: #dcdce4;
+    --chrome-dot-hi: rgba(255, 255, 255, 0.9);
+    --chip-bg: linear-gradient(180deg, #ffffff, #f4f4f7);
+    --chip-border: #dcdce4;
+    --chip-hi: rgba(255, 255, 255, 0.9);
+    --chip-shadow: rgba(20, 20, 32, 0.07);
+
+    --gm-stage: #f2f2f6;
+    --stage-veil: rgba(255, 255, 255, 0.85);
+    --gm-grid: rgba(20, 20, 45, 0.08);
+    --gm-card-top: #ffffff;
+    --gm-card-bot: #fbfbfd;
+    --gm-card-stroke: #d8d8e2;
+    --gm-inset: #f3f3f7;
+    --gm-inset-stroke: #e3e3eb;
+    --gm-edge: #c8c8d3;
+    --gm-dot: #b2b2be;
+    --gm-name: #17171b;
+    --gm-label: #5e5e69;
+    --gm-type: #8a8a95;
+    --gm-tint-live: rgba(5, 150, 105, 0.05);
+    --gm-tint-err: rgba(220, 38, 38, 0.04);
   }
 }
 
@@ -220,8 +276,8 @@ p code, li code {
 .hero {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 6fr) minmax(0, 5fr);
-  gap: 56px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 48px;
   align-items: center;
   padding-top: 72px;
   padding-bottom: 96px;
@@ -230,7 +286,7 @@ p code, li code {
 .hero::before {
   content: '';
   position: absolute;
-  inset: -140px -80px auto auto;
+  inset: -140px 0 auto auto;
   width: 640px;
   height: 520px;
   background: radial-gradient(closest-side, var(--accent-glow), transparent 75%);
@@ -330,180 +386,365 @@ p code, li code {
 .hero-visual { min-width: 0; }
 
 .panel {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  position: relative;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--panel-top), var(--panel-bg) 140px);
+  box-shadow: var(--panel-shadow);
   overflow: hidden;
-  box-shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.5);
 }
+
+/* inner top highlight — the light catching the top edge of a real surface */
+.panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: inset 0 1px 0 var(--panel-hi);
+}
+
+/* --- chrome bar --- */
 
 .panel-chrome {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-soft);
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--panel-line);
+  background: var(--panel-bar);
 }
-.chrome-dots { display: inline-flex; gap: 6px; }
+
+.chrome-dots { display: inline-flex; gap: 6px; flex: 0 0 auto; }
 .chrome-dots i {
-  width: 10px; height: 10px;
+  width: 9px; height: 9px;
   border-radius: 50%;
-  background: var(--border-strong);
+  background: var(--chrome-dot);
+  box-shadow: inset 0 1px 0 var(--chrome-dot-hi);
 }
+
 .chrome-title {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   font-family: var(--mono);
   font-size: 11.5px;
+  letter-spacing: 0.01em;
   color: var(--text-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 .chrome-live {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  padding: 3px 9px 3px 7px;
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  background: var(--accent-dim);
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
   color: var(--accent);
 }
 .live-dot {
   width: 6px; height: 6px;
   border-radius: 50%;
   background: var(--accent);
-  animation: gm-blink 2.2s ease-in-out infinite;
+  animation: gm-halo 2.6s ease-out infinite;
 }
 
-.graph {
-  display: block;
-  width: 100%;
-  height: auto;
-  background-image: radial-gradient(var(--gm-grid) 1px, transparent 1px);
-  background-size: 22px 22px;
+/* --- stage --- */
+
+.panel-stage {
+  background-color: var(--gm-stage);
+  background-image:
+    radial-gradient(120% 80% at 50% -12%, var(--stage-veil), transparent 62%),
+    radial-gradient(var(--gm-grid) 1px, transparent 1px);
+  background-size: 100% 100%, 18px 18px;
+  background-position: 0 0, 9px 9px;
 }
 
-/* edges */
-.edge {
+.graph { display: block; width: 100%; height: auto; }
+
+/* --- graph: paint --- */
+
+.g-top { stop-color: var(--gm-card-top); }
+.g-bot { stop-color: var(--gm-card-bot); }
+
+.ed {
   fill: none;
-  stroke-width: 1.5;
+  stroke: var(--gm-edge);
+  stroke-width: 1.4;
   stroke-linecap: round;
 }
-.edge-done { stroke: var(--gm-edge-done); }
-.edge-dim  { stroke: var(--gm-edge); stroke-dasharray: 2 6; opacity: 0.8; }
-.edge-err  { stroke: var(--danger); opacity: 0.55; }
-.edge-flow {
-  stroke: var(--accent);
-  opacity: 0.85;
-  stroke-dasharray: 3 9;
-  animation: gm-flow 1.1s linear infinite;
-}
+.ed-err { stroke: var(--danger); stroke-opacity: 0.5; }
 
-/* nodes */
-.node { stroke-width: 1.5; }
-.node-done { fill: var(--gm-node-done); stroke: var(--gm-node-stroke); }
-.node-dim  { fill: var(--gm-node); stroke: var(--gm-node-stroke); stroke-dasharray: 3 4; }
-.node-live {
-  fill: var(--accent-dim);
-  stroke: var(--accent);
-}
-.node-err {
-  fill: var(--danger-dim);
-  stroke: var(--danger);
-}
-
-.gm-ring {
+.cm {
   fill: none;
   stroke: var(--accent);
-  stroke-width: 1.5;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-dasharray: 15 100;
+  stroke-dashoffset: 15;
+  opacity: 0;
+}
+
+.ring {
+  fill: none;
+  stroke-width: 1.2;
+  opacity: 0;
   transform-box: fill-box;
   transform-origin: center;
-  animation: gm-ping 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
-.ring-2 { animation-delay: 1.2s; }
+.ring-live { stroke: var(--accent); }
+.ring-err  { stroke: var(--danger); }
 
-.gm-err-ring {
-  fill: none;
-  stroke: var(--danger);
+.card-bg {
+  fill: url(#gmCard);
+  stroke: var(--gm-card-stroke);
   stroke-width: 1;
-  opacity: 0.5;
-  animation: gm-blink 1.8s ease-in-out infinite;
+}
+.card-tint { stroke: none; }
+.tint-live { fill: var(--gm-tint-live); }
+.tint-err  { fill: var(--gm-tint-err); }
+
+.card-line { fill: none; stroke-width: 1; }
+.line-live { stroke: var(--accent); stroke-opacity: 0.6; }
+.line-done { stroke: var(--accent); stroke-opacity: 0.7; opacity: 0; }
+.line-err  { stroke: var(--danger); }
+
+.dot { fill: var(--gm-dot); }
+.dot-live { fill: var(--accent); }
+.dot-err  { fill: var(--danger); }
+
+.c-name {
+  font-family: var(--font);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  fill: var(--gm-name);
+}
+.c-name-sm { font-size: 10.5px; }
+
+.c-type {
+  font-family: var(--font);
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  fill: var(--gm-type);
 }
 
-.gm-bp { fill: var(--danger); }
-
-.gm-dot {
-  display: none;
-  fill: var(--accent);
-}
-@supports (offset-path: path('M0,0 L10,10')) {
-  .gm-dot {
-    display: block;
-    offset-path: path('M190,130 C240,105 280,80 330,62');
-    offset-rotate: 0deg;
-    animation: gm-travel 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  }
-}
-
-.gm-label {
+.c-chip rect { fill: var(--gm-inset); stroke: var(--gm-inset-stroke); stroke-width: 1; }
+.c-chip text {
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 8.5px;
   fill: var(--gm-label);
+  text-anchor: middle;
 }
 
-.gm-badge rect {
-  fill: var(--danger-dim);
-  stroke: var(--danger);
-  stroke-width: 1;
-  opacity: 0.95;
-}
-.gm-badge circle { fill: var(--danger); }
-.gm-badge text {
+.c-inset { fill: var(--gm-inset); stroke: var(--gm-inset-stroke); stroke-width: 1; }
+.c-code { font-family: var(--mono); font-size: 9px; fill: var(--gm-label); }
+.c-meta { font-family: var(--mono); font-size: 8.5px; fill: var(--gm-type); }
+
+.c-badge rect { fill: var(--accent-dim); stroke: var(--accent-line); stroke-width: 1; }
+.c-badge text {
   font-family: var(--mono);
-  font-size: 10.5px;
-  fill: var(--danger);
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+  fill: var(--accent);
+  text-anchor: middle;
 }
+
+.c-err-strip { fill: var(--danger-dim); stroke: var(--danger-line); stroke-width: 1; }
+.c-err-msg  { font-family: var(--mono); font-size: 8.5px; fill: var(--danger); }
+.c-err-dot  { fill: var(--danger); }
+.c-err-note { font-family: var(--mono); font-size: 8.5px; fill: var(--danger); }
+
+.c-bp {
+  fill: var(--danger);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* --- graph: the run, as one loop -----------------------------------------
+   The base styles above are the *settled* state — attached, paused on error,
+   the same frame the real debugger holds. Everything below only builds up to
+   it, so `prefers-reduced-motion` can switch every animation off and land on
+   a composed picture rather than an empty one.
+
+   0%  .. 12%  execution reaches the model call
+   11% .. 18%  that card goes live and grows around its streamed output
+   21% .. 37%  it fans out; searchFlights and getWeather return
+   39% .. 50%  the last call travels to checkBudget
+   50% .. 63%  it throws, the card opens on the error, the breakpoint catches
+   63% .. 92%  the run sits paused — the frame the eye rests on
+   92% ..100%  cleared, ready to run again
+   -------------------------------------------------------------------------- */
+
+.cm1 { animation: gm-cm1 var(--gm-cycle) linear infinite; }
+.cm2 { animation: gm-cm2 var(--gm-cycle) linear infinite; }
+.cm3 { animation: gm-cm3 var(--gm-cycle) linear infinite; }
+.cm4 { animation: gm-cm4 var(--gm-cycle) linear infinite; }
+
+.st-live    { animation: gm-live  var(--gm-cycle) linear infinite; }
+.st-body    { animation: gm-body  var(--gm-cycle) linear infinite; }
+.st-a       { animation: gm-a     var(--gm-cycle) linear infinite; }
+.st-a-flash { animation: gm-a-fl  var(--gm-cycle) linear infinite; }
+.st-b       { animation: gm-b     var(--gm-cycle) linear infinite; }
+.st-b-flash { animation: gm-b-fl  var(--gm-cycle) linear infinite; }
+.st-err     { animation: gm-err   var(--gm-cycle) linear infinite; }
+.st-err2    { animation: gm-err2  var(--gm-cycle) linear infinite; }
+.st-bp      { animation: gm-bp    var(--gm-cycle) cubic-bezier(0.2, 0.9, 0.3, 1.2) infinite; }
+
+/* a card is only as tall as it has something to say */
+.grow-step { animation: gm-grow-step var(--gm-cycle) cubic-bezier(0.22, 0.8, 0.3, 1) infinite; }
+.grow-err  { animation: gm-grow-err  var(--gm-cycle) cubic-bezier(0.22, 0.8, 0.3, 1) infinite; }
+.st-live.grow-step {
+  animation:
+    gm-live var(--gm-cycle) linear infinite,
+    gm-grow-step var(--gm-cycle) cubic-bezier(0.22, 0.8, 0.3, 1) infinite;
+}
+.st-err.grow-err {
+  animation:
+    gm-err var(--gm-cycle) linear infinite,
+    gm-grow-err var(--gm-cycle) cubic-bezier(0.22, 0.8, 0.3, 1) infinite;
+}
+
+.ring-live    { animation: gm-ping-live var(--gm-cycle) ease-out infinite; }
+.ring-live.rb { animation-name: gm-ping-live-b; }
+.ring-err     { animation: gm-ping-err  var(--gm-cycle) ease-out infinite; }
+.ring-err.rb  { animation-name: gm-ping-err-b; }
+
+@keyframes gm-cm1 {
+  0%, 2%    { stroke-dashoffset: 15; opacity: 0; }
+  4%        { opacity: 1; }
+  10%       { opacity: 1; }
+  12%, 100% { stroke-dashoffset: -100; opacity: 0; }
+}
+@keyframes gm-cm2 {
+  0%, 21%   { stroke-dashoffset: 15; opacity: 0; }
+  23%       { opacity: 1; }
+  29%       { opacity: 1; }
+  31%, 100% { stroke-dashoffset: -100; opacity: 0; }
+}
+@keyframes gm-cm3 {
+  0%, 25%   { stroke-dashoffset: 15; opacity: 0; }
+  27%       { opacity: 1; }
+  33%       { opacity: 1; }
+  35%, 100% { stroke-dashoffset: -100; opacity: 0; }
+}
+@keyframes gm-cm4 {
+  0%, 39%   { stroke-dashoffset: 15; opacity: 0; }
+  41%       { opacity: 1; }
+  48%       { opacity: 1; }
+  50%, 100% { stroke-dashoffset: -100; opacity: 0; }
+}
+
+@keyframes gm-live { 0%, 11% { opacity: 0; } 15%, 93% { opacity: 1; } 97%, 100% { opacity: 0; } }
+@keyframes gm-body { 0%, 13% { opacity: 0; } 18%, 92% { opacity: 1; } 95%, 100% { opacity: 0; } }
+@keyframes gm-a    { 0%, 30% { opacity: 0; } 33%, 92% { opacity: 1; } 95%, 100% { opacity: 0; } }
+@keyframes gm-b    { 0%, 34% { opacity: 0; } 37%, 92% { opacity: 1; } 95%, 100% { opacity: 0; } }
+@keyframes gm-err  { 0%, 49% { opacity: 0; } 53%, 93% { opacity: 1; } 97%, 100% { opacity: 0; } }
+@keyframes gm-err2 { 0%, 51% { opacity: 0; } 56%, 92% { opacity: 1; } 95%, 100% { opacity: 0; } }
+
+@keyframes gm-grow-step {
+  0%, 12%   { height: 50px; }
+  18%, 95%  { height: 78px; }
+  98%, 100% { height: 50px; }
+}
+@keyframes gm-grow-err {
+  0%, 50%   { height: 50px; }
+  56%, 95%  { height: 72px; }
+  98%, 100% { height: 50px; }
+}
+
+/* a brief accent confirmation as each tool returns, then back to neutral */
+@keyframes gm-a-fl { 0%, 30% { opacity: 0; } 33% { opacity: 1; } 42%, 100% { opacity: 0; } }
+@keyframes gm-b-fl { 0%, 34% { opacity: 0; } 37% { opacity: 1; } 46%, 100% { opacity: 0; } }
+
+@keyframes gm-bp {
+  0%, 54%   { opacity: 0; transform: scale(0.3); }
+  59%       { opacity: 1; transform: scale(1.35); }
+  63%, 92%  { opacity: 1; transform: scale(1); }
+  95%, 100% { opacity: 0; transform: scale(0.3); }
+}
+
+@keyframes gm-ping-live {
+  0%, 19%   { opacity: 0;   transform: scale(0.99); }
+  23%       { opacity: 0.6; }
+  37%, 100% { opacity: 0;   transform: scale(1.075); }
+}
+@keyframes gm-ping-live-b {
+  0%, 25%   { opacity: 0;    transform: scale(0.99); }
+  29%       { opacity: 0.35; }
+  43%, 100% { opacity: 0;    transform: scale(1.075); }
+}
+@keyframes gm-ping-err {
+  0%, 55%   { opacity: 0;    transform: scale(0.99); }
+  59%       { opacity: 0.65; }
+  74%, 100% { opacity: 0;    transform: scale(1.08); }
+}
+@keyframes gm-ping-err-b {
+  0%, 61%   { opacity: 0;    transform: scale(0.99); }
+  65%       { opacity: 0.35; }
+  80%, 100% { opacity: 0;    transform: scale(1.08); }
+}
+
+@keyframes gm-halo {
+  0%        { box-shadow: 0 0 0 0 var(--accent-line); }
+  70%, 100% { box-shadow: 0 0 0 5px transparent; }
+}
+
+/* --- toolbar --- */
 
 .panel-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 9px 14px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-soft);
+  padding: 9px 12px;
+  border-top: 1px solid var(--panel-line);
+  background: var(--panel-bar);
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 10.5px;
   color: var(--text-3);
 }
-.tb-note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tb-chips { display: inline-flex; gap: 6px; }
+
+.tb-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tb-bp {
+  flex: 0 0 auto;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-dim);
+}
+
+.tb-chips { display: inline-flex; gap: 6px; flex: 0 0 auto; }
 .tb-chip {
-  padding: 3px 9px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--chip-border);
+  border-radius: 7px;
+  background: var(--chip-bg);
+  box-shadow: inset 0 1px 0 var(--chip-hi), 0 1px 1.5px var(--chip-shadow);
+  color: var(--text-2);
   white-space: nowrap;
 }
-.tb-chip-accent { border-color: var(--accent); color: var(--accent); }
-
-@keyframes gm-flow { to { stroke-dashoffset: -12; } }
-
-@keyframes gm-ping {
-  0%   { transform: scale(0.7); opacity: 0.9; }
-  70%  { transform: scale(2.1); opacity: 0; }
-  100% { transform: scale(2.1); opacity: 0; }
-}
-
-@keyframes gm-blink {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.45; }
-}
-
-@keyframes gm-travel {
-  0%   { offset-distance: 0%;   opacity: 0; }
-  12%  { opacity: 1; }
-  82%  { opacity: 1; }
-  100% { offset-distance: 100%; opacity: 0; }
+.tb-chip-accent {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-dim);
+  box-shadow: inset 0 1px 0 var(--chip-hi);
 }
 
 /* ---------- features ---------- */
@@ -595,6 +836,14 @@ p code, li code {
   background: var(--bg-card);
 }
 
+.how-copy > p.how-share {
+  margin-top: 20px;
+  font-size: 14px;
+  color: var(--text-3);
+  max-width: 50ch;
+}
+.how-copy > p.how-share code { color: var(--text-2); }
+
 /* code card — deliberately dark in both themes */
 
 .code-card {
@@ -650,8 +899,10 @@ p code, li code {
 .how-note {
   margin-top: 14px;
   font-size: 13px;
+  line-height: 1.65;
   color: var(--text-3);
 }
+.how-note code { color: var(--text-2); }
 
 /* ---------- footer ---------- */
 
@@ -677,7 +928,8 @@ p code, li code {
 
 .footer-links {
   display: flex;
-  gap: 22px;
+  flex-wrap: wrap;
+  gap: 8px 22px;
 }
 .footer-links a {
   font-size: 13.5px;
@@ -690,31 +942,42 @@ p code, li code {
 
 @media (max-width: 920px) {
   .hero {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 44px;
     padding-top: 48px;
     padding-bottom: 72px;
   }
   .hero-visual { max-width: 560px; }
   .feature-grid { grid-template-columns: repeat(2, 1fr); }
-  .how { grid-template-columns: 1fr; gap: 40px; padding-bottom: 80px; }
+  .how { grid-template-columns: minmax(0, 1fr); gap: 40px; padding-bottom: 80px; }
 }
 
 @media (max-width: 520px) {
   .feature-grid { grid-template-columns: 1fr; }
   .waitlist-button { flex: 1 1 auto; }
-  .chrome-title { display: none; }
+  /* keep the window title readable instead of truncating it */
+  .panel-chrome { padding: 10px 11px; gap: 9px; }
+  .chrome-title { font-size: 10.5px; }
+  .chrome-live { font-size: 10px; padding: 3px 8px 3px 6px; }
+  .panel-toolbar { padding: 9px 11px; }
+  .panel-toolbar .tb-chip:last-child { display: none; }
 }
 
 /* ---------- reduced motion ---------- */
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
-  .edge-flow { animation: none; }
-  .gm-dot { display: none !important; }
-  .gm-ring { animation: none; opacity: 0.25; transform: scale(1.45); }
-  .gm-err-ring { animation: none; }
-  .live-dot { animation: none; }
+  /* Every animation off. The base styles already are the settled frame —
+     attached, streaming, two tools returned, paused on error — so the panel
+     lands composed rather than mid-build. */
+  .live-dot,
+  .cm, .ring,
+  .st-live, .st-body, .st-a, .st-a-flash, .st-b, .st-b-flash,
+  .st-err, .st-err2, .st-bp,
+  .grow-step, .grow-err,
+  .st-live.grow-step, .st-err.grow-err {
+    animation: none;
+  }
 }
 
 /* --- try-it-now command (added at v0.1 launch) --- */
