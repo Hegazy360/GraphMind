@@ -5,6 +5,18 @@ this repo (`graphmind-ai`, `@graphmind-ai/sdk`, `@graphmind-ai/client`,
 `@graphmind-ai/schema`, `@graphmind-ai/anthropic`, `@graphmind-ai/openai`,
 `@graphmind-ai/langgraph`, and the Python `graphmind-ai` distribution).
 
+## 0.2.1
+
+- `graphmind record --html` exports a run as a single self-contained HTML
+  file: the viewer and the run inlined, no server and no network. Attach it to
+  an issue or send it to a colleague and they see exactly what you saw. It
+  carries the run's prompts and payloads, so the command says so before you
+  share it.
+- Fixed two Python failures that only appeared on real 3.10/3.13: the test
+  harness now follows whichever httpx flavour the installed `anthropic`
+  expects, and a test that pinned since-changed LangChain context-propagation
+  behaviour now asserts what must hold either way.
+
 ## 0.2.0
 
 The release that makes GraphMind work with the way agents are actually

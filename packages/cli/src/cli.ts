@@ -48,7 +48,7 @@ const commands: Record<string, CommandDef> = {
     run: runRuns,
   },
   record: {
-    summary: 'Capture a run to a replayable NDJSON fixture',
+    summary: 'Export a run: NDJSON fixture, or --html to share it',
     run: runRecord,
   },
 };
@@ -70,7 +70,8 @@ function printHelp(): void {
     '  --live         (demo) run the real demo agent with your API key',
     '  --install      (init) run the package-manager install',
     '  --write        (init) write a graphmind.example.ts snippet file',
-    '  --out <file>   (record) output NDJSON path',
+    '  --out <file>   (record) output path',
+    '  --html         (record) export a shareable self-contained HTML page',
     '  --prune        (runs) apply the retention policy now',
     '  --keep <n>     (runs) keep/show the n newest runs',
     '  --days <n>     (runs) keep runs from the last n days',

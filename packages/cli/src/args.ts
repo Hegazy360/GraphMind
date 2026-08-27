@@ -32,6 +32,8 @@ export interface CliFlags {
   days: number | undefined;
   /** `graphmind runs --rm <runId>`: delete one run. */
   rm: string | undefined;
+  /** `graphmind record --html`: export a self-contained viewer page. */
+  html: boolean;
 }
 
 export interface ParsedCli {
@@ -65,6 +67,7 @@ export function defaultFlags(): CliFlags {
     keep: undefined,
     days: undefined,
     rm: undefined,
+    html: false,
   };;
 }
 
@@ -129,6 +132,9 @@ export function parseCliArgs(argv: string[]): ParsedCli {
         break;
       case '--write':
         flags.write = true;
+        break;
+      case '--html':
+        flags.html = true;
         break;
       case '--prune':
         flags.prune = true;

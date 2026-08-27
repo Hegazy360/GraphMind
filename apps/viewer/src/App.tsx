@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { useFixtureConnection } from './connection/FixtureConnection.js';
+import { embeddedRun, useFixtureConnection } from './connection/FixtureConnection.js';
 import { useLiveConnection } from './connection/useLiveConnection.js';
 import { resolveServerUrl } from './connection/ServerConnection.js';
 import { parseStressParams, useStressRun } from './connection/StressConnection.js';
@@ -72,9 +72,11 @@ export default function App() {
     };
   }, []);
   const demoRequested = useUiStore((s) => s.demoRequested);
+  // A run exported by `graphmind record --html` inlines itself into the page.
+  const hasEmbeddedRun = useMemo(() => embeddedRun() !== null, []);
 
-  useLiveConnection(fixtureParam || stress !== null ? null : serverUrl);
-  useFixtureConnection(fixtureParam || demoRequested);
+  useLiveConnection(fixtureParam || hasEmbeddedRun || stress !== null ? null : serverUrl);
+  useFixtureConnection(fixtureParam || demoRequested || hasEmbeddedRun);
   useStressRun(stress);
 
   const selectedRunId = useUiStore((s) => s.selectedRunId);

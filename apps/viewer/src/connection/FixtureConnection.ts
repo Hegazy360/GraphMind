@@ -19,6 +19,18 @@ import { ingestValue } from './ingest.js';
 import { registerConnection, type ServerConnection } from './ServerConnection.js';
 import demoRun from '../fixtures/demo-run.json';
 
+/**
+ * A run exported by `graphmind record --html` inlines its envelopes here, so
+ * the page is a complete, offline record of one run: no server, no fixture,
+ * nothing to install. Played back instantly rather than paced — it is
+ * evidence being read, not a demo being watched.
+ */
+export function embeddedRun(): RawFixtureEnvelope[] | null {
+  const raw = (globalThis as { __GRAPHMIND_RUN__?: unknown }).__GRAPHMIND_RUN__;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  return raw as RawFixtureEnvelope[];
+}
+
 interface RawFixtureEnvelope {
   gm: number;
   seq: number;
@@ -46,7 +58,10 @@ export class FixtureConnection implements ServerConnection {
 
   start(): void {
     this.disposed = false; // start() re-arms after a StrictMode dispose/restart
-    const recorded = (demoRun as unknown as RawFixtureEnvelope[]).map((e) => ({ ...e }));
+    const embedded = embeddedRun();
+    const recorded = (embedded ?? (demoRun as unknown as RawFixtureEnvelope[])).map((e) => ({
+      ...e,
+    }));
     this.events = recorded;
     this.index = 0;
     this.waitingPauseId = undefined;
@@ -54,6 +69,16 @@ export class FixtureConnection implements ServerConnection {
     const first = recorded[0];
     if (first === undefined) return;
     this.runId = first.runId;
+    if (embedded !== null) {
+      // Exported run: show the whole thing at once, timestamps as recorded.
+      this.tsOffset = 0;
+      while (!this.disposed && this.index < this.events.length) {
+        const event = this.events[this.index];
+        this.index += 1;
+        if (event !== undefined) ingestValue({ ...event }, 'fixture');
+      }
+      return;
+    }
     this.tsOffset = Date.now() - first.ts;
     this.scheduleNext(200);
   }
