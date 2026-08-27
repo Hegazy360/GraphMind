@@ -1,6 +1,6 @@
 {
   "name": "graphmind-ai",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "GraphMind — local server + CLI for the GraphMind live agent debugger. Instrumented apps stream execution events in; the viewer watches live, replays history, and sends control commands.",
   "license": "MIT",
   "author": "Mohamed Hegazy",

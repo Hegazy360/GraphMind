@@ -54,6 +54,8 @@ if (existsSync(pyproject)) {
   } else {
     console.warn('python/pyproject.toml: no top-level version field updated');
   }
+  // graphmind/_version.py derives from installed metadata, so there is no
+  // second constant to keep in step here — that is deliberate.
 }
 
 console.log(`\n${changed} package(s) set to ${version}.`);

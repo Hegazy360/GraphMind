@@ -5,6 +5,13 @@ this repo (`graphmind-ai`, `@graphmind-ai/sdk`, `@graphmind-ai/client`,
 `@graphmind-ai/schema`, `@graphmind-ai/anthropic`, `@graphmind-ai/openai`,
 `@graphmind-ai/langgraph`, and the Python `graphmind-ai` distribution).
 
+## 0.2.2
+
+- The Python package reported `__version__ = "0.1.0"` while shipping as 0.2.1:
+  a hardcoded constant had drifted from `pyproject.toml`. It now derives from
+  installed metadata, so the two cannot disagree again. The version travels on
+  the wire in `run.started.sdk`, so a stale one mislabelled every recorded run.
+
 ## 0.2.1
 
 - `graphmind record --html` exports a run as a single self-contained HTML
