@@ -23,6 +23,7 @@
 import type { RunStatus } from '@graphmind-ai/client';
 import { promptKey, type PromptKey } from './invocation.js';
 import type { LlmFlavor, ResultSummary, StepReporter } from './llm-step.js';
+import { isAbortLikeError } from './signals.js';
 import {
   isProviderExecutedItem,
   mapResponsesUsage,
@@ -225,7 +226,7 @@ export const responsesFlavor: LlmFlavor = {
     } catch (error) {
       // The observer runs detached from the host: report, never rethrow.
       try {
-        const aborted = isAbortLike(error);
+        const aborted = isAbortLikeError(error);
         if (!aborted) reporter.error(error);
         reporter.finish({ text }, aborted ? 'aborted' : 'error', usage, { streamed: true });
       } catch {
@@ -240,14 +241,3 @@ function streamEventError(event: ResponseEventLike): Error {
   error.name = typeof event.code === 'string' && event.code.length > 0 ? event.code : 'OpenAIError';
   return error;
 }
-
-function isAbortLike(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.name === 'AbortError' ||
-      error.name === 'APIUserAbortError' ||
-      error.name === 'GraphMindAbortError')
-  );
-}
-
-export type { ResponseOutputItemLike };

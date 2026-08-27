@@ -6,7 +6,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { resolveHttpBase } from '../connection/ServerConnection.js';
 import { INTEGRATION_SNIPPET } from '../lib/firstRun.js';
-import { GraphMindMark } from './RunsList.js';
+import { GraphMindMark } from './Mark.js';
 
 type DemoState = 'idle' | 'starting' | 'error';
 

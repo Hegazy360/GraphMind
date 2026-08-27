@@ -5,7 +5,8 @@ sidebar:
   order: 2
 ---
 
-import { Tabs, TabItem, Steps, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import { Tabs, TabItem, Steps, Aside, CardGrid } from '@astrojs/starlight/components';
+import LinkCard from '../../../components/LinkCard.astro';
 import pausedImg from '../../../assets/debugger-paused.png';
 
 **Requirements:** Node ≥ 22.13 (GraphMind uses Node's built-in SQLite — no native modules, no
@@ -159,7 +160,7 @@ const tools = gm.wrapTools({ searchOrders, issueRefund });
 await gm.ready();
 
 await gm.run('handle-ticket', async () => {
-  // your normal messages.create / tool loop, using `client` and `tools`
+  // your usual messages.create / tool-use loop, using `client` and `tools`
 });
 
 await gm.dispose();
@@ -189,16 +190,18 @@ await gm.dispose();
 </TabItem>
 <TabItem label="LangGraph">
 
-```ts title="agent.ts" {1,4,7,10}
+```ts title="agent.ts" {1,3,5,8}
 import { graphmind } from '@graphmind-ai/langgraph';
 
 const gm = graphmind({ app: 'support-agent' });
 
+// Full gate set (inject + retry) needs the tool wrappers.
+const tools = gm.wrapTools({ searchOrders, issueRefund });
+
 await gm.ready();
 
-await gm.run('handle-ticket', () =>
-  app.invoke({ messages }, { callbacks: [gm.handler()] }),
-);
+// gm.config() supplies the callback handler AND its abort signal.
+const result = await graph.invoke({ messages }, gm.config());
 
 await gm.dispose();
 ```
@@ -224,9 +227,10 @@ gm.dispose()
 </TabItem>
 </Tabs>
 
-That is the whole integration. Every adapter exposes the same four calls — `wrapClient` /
-`wrapModel`, `wrapTools`, `run`, `ready` — so switching frameworks does not mean relearning
-GraphMind. Each [integration page](/integrations/) has the complete, runnable version.
+That is the whole integration. Every adapter exposes the same shape — a client/model wrapper (or
+a callback handler), `wrapTools`, `run` and `ready` — so switching frameworks does not mean
+relearning GraphMind. Each [integration page](/integrations/) has the complete, runnable version
+and the exact gate behaviour for that framework.
 
 <Aside type="caution" title="Why await gm.ready()">
 The transport is lazy: nothing touches the network until the first event. An agent that starts
@@ -251,6 +255,9 @@ do it for you.
 4. When something throws, the run **stops there**. Pause-on-error is armed by default. Open the
    inspector, read the inputs, and choose `continue`, `retry`, `inject` or `abort`.
 
+5. Press <kbd>⌘</kbd><kbd>K</kbd> in the viewer for everything else — jump to any node, filter to
+   the error path, open the timeline. See [the viewer](/reference/viewer/).
+
 </Steps>
 
 If nothing appears, work through [troubleshooting](/reference/troubleshooting/) — it is almost
@@ -262,5 +269,6 @@ always a port mismatch or a process that exited before the handshake.
   <LinkCard title="Core concepts" href="/start/concepts/" description="Runs, nodes, instances, gates, fail-open." />
   <LinkCard title="Pause on error" href="/debugging/pause-on-error/" description="The default workflow, in detail." />
   <LinkCard title="Inject and continue" href="/debugging/inject-and-continue/" description="The hero capability." />
+  <LinkCard title="The viewer" href="/reference/viewer/" description="Command palette, shortcuts, timeline, filters." />
   <LinkCard title="CLI reference" href="/reference/cli/" description="Every command, flag and env var." />
 </CardGrid>

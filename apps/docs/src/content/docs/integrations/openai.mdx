@@ -1,41 +1,45 @@
 ---
 title: OpenAI SDK
-description: Debug an agent built directly on the openai Node SDK — wrap the client and your tool functions, then pause, inspect, inject and resume live.
+description: Debug an agent built directly on the openai Node SDK — wrap the client and your tools, then pause, inspect, inject and resume live. Chat Completions and Responses both supported.
 sidebar:
   order: 4
 ---
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
-`@graphmind-ai/openai` instruments the official OpenAI Node SDK. Wrap the client once and every
-`responses.create` / `chat.completions.create` becomes a gated `llm:step` node; wrap your tool
-functions and each call becomes a gated `tool:<name>` node.
+`@graphmind-ai/openai` instruments the official OpenAI Node SDK. `wrapClient` returns a **Proxy
+tree** over your client — your original is never mutated and `client instanceof OpenAI` still
+holds — so every model request becomes a gated `llm:step` node, and `wrapTools` decorates the
+functions you dispatch tool calls to.
+
+Both APIs are covered: **Chat Completions** and **Responses**, including their `.stream()`,
+`.parse()` and `.runTools()` helpers.
 
 <Tabs syncKey="pkg">
 <TabItem label="npm">
 
 ```sh
-npm i -D @graphmind-ai/openai
+npm i -D @graphmind-ai/openai graphmind-ai
 ```
 
 </TabItem>
 <TabItem label="pnpm">
 
 ```sh
-pnpm add -D @graphmind-ai/openai
+pnpm add -D @graphmind-ai/openai graphmind-ai
 ```
 
 </TabItem>
 <TabItem label="yarn">
 
 ```sh
-yarn add -D @graphmind-ai/openai
+yarn add -D @graphmind-ai/openai graphmind-ai
 ```
 
 </TabItem>
 </Tabs>
 
-`openai` is a peer dependency.
+`openai` is a peer dependency, range `>=5 <7`; the primary target is v6.
 
 ## End to end
 
@@ -45,10 +49,7 @@ import OpenAI from 'openai';
 
 const gm = graphmind({ app: 'support-agent' });
 
-// 1. Wrap the client — every model request becomes a gated llm:step node.
 const client = gm.wrapClient(new OpenAI());
-
-// 2. Wrap your tool implementations — each call becomes a gated tool node.
 const tools = gm.wrapTools({
   searchOrders: async ({ email }: { email: string }) =>
     db.orders.findMany({ where: { email } }),
@@ -56,63 +57,46 @@ const tools = gm.wrapTools({
     payments.refund(orderId, cents),
 });
 
-const toolSpecs = [
-  {
-    type: 'function' as const,
-    name: 'searchOrders',
-    description: 'Find a customer’s recent orders',
-    parameters: {
-      type: 'object',
-      properties: { email: { type: 'string' } },
-      required: ['email'],
-      additionalProperties: false,
-    },
-  },
-  {
-    type: 'function' as const,
-    name: 'issueRefund',
-    description: 'Refund an order',
-    parameters: {
-      type: 'object',
-      properties: { orderId: { type: 'string' }, cents: { type: 'number' } },
-      required: ['orderId', 'cents'],
-      additionalProperties: false,
-    },
-  },
-];
-
 async function main() {
   await gm.ready();
 
-  const answer = await gm.run('handle-ticket', async (ctx) => {
-    let input: any[] = [
+  const answer = await gm.run('handle-ticket', async () => {
+    const messages: any[] = [
       { role: 'user', content: 'Order #4471 for alex@example.com arrived broken. Sort it out.' },
     ];
 
-    for (let step = 0; step < 8; step++) {
-      const response = await client.responses.create(
-        { model: 'gpt-5.1', tools: toolSpecs, input },
-        // Pass the run's signal so the debugger's `abort` action cancels cleanly.
-        { signal: ctx.signal },
+    for (;;) {
+      const completion = await client.chat.completions.create({
+        model: 'gpt-5.4',
+        messages,
+        tools: toolSchemas,
+      });
+
+      const message = completion.choices[0].message;
+      if (!message.tool_calls?.length) return message.content;
+      messages.push(message);
+
+      // Parallel calls gate INDEPENDENTLY — hold one, let the other run.
+      const results = await Promise.all(
+        message.tool_calls.map(async (call) => ({
+          call,
+          // Pass the tool call as the 2nd argument so the debugger can
+          // correlate this execution with the model's tool_call id.
+          output: await tools[call.function.name](
+            JSON.parse(call.function.arguments),
+            call,
+          ),
+        })),
       );
 
-      const calls = response.output.filter((item) => item.type === 'function_call');
-      if (calls.length === 0) return response.output_text;
-
-      input = [
-        ...input,
-        ...response.output,
-        ...(await Promise.all(
-          calls.map(async (call) => ({
-            type: 'function_call_output' as const,
-            call_id: call.call_id,
-            output: JSON.stringify(await tools[call.name](JSON.parse(call.arguments))),
-          })),
-        )),
-      ];
+      for (const { call, output } of results) {
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: JSON.stringify(output),
+        });
+      }
     }
-
-    return '';
   });
 
   console.log(answer);
@@ -124,54 +108,190 @@ main();
 
 Run `graphmind` in one terminal and this in another.
 
+The Responses API works the same way:
+
+```ts
+const response = await client.responses.create({ model: 'gpt-5.4', input: 'hi' });
+const stream = client.responses.stream({ model: 'gpt-5.4', input: 'hi' });
+```
+
+<Aside type="tip" title="Pass the tool call as the second argument">
+`tools.searchOrders(args, call)` is what lets GraphMind use OpenAI's real `tool_call.id` as the
+node's `instanceId`. Leave it out and the adapter falls back to a generated id — everything still
+works, but parallel calls are harder to tell apart in the viewer.
+</Aside>
+
+## What it instruments
+
+| You call | Gated | Streamed to the viewer |
+| --- | --- | --- |
+| `chat.completions.create` (incl. `stream: true`) | before / error / after¹ | yes |
+| `chat.completions.stream()` | yes | yes |
+| `chat.completions.parse()` | yes | yes |
+| `chat.completions.runTools()` | model turns² | yes |
+| `responses.create` (incl. `stream: true`) | before / error / after¹ | yes |
+| `responses.stream()` | yes | yes |
+| `responses.parse()` | yes | yes |
+| Your tool functions via `wrapTools` | before / after / error | yes |
+| OpenAI built-in tools (web search, code interpreter, file search, image gen, MCP) | observe-only | yes |
+
+¹ The `after` gate fires for non-streaming requests only — a streamed response is already live
+by the time it is returned, so there is nothing meaningful to hold there.
+² The tools `runTools()` executes are gated when you hand it functions from `gm.wrapTools()`.
+
+## Per model request
+
+- `node.started` before anything is dispatched;
+- the **`before` gate is awaited BEFORE the HTTP request goes out** — nothing is in flight while
+  a gate is held, so holds are indefinite by design and no server timeout is ticking;
+- the response stream is teed so batched `node.token` deltas (~30/sec per node) are observed
+  without disturbing what your code consumes — both branches see the identical chunk sequence;
+- `node.finished` with text, tool calls, finish reason and token usage;
+- `graph.hint` from the request's `tools` array plus every name you passed to `wrapTools`, on an
+  invocation's first step.
+
+**On error**, the `error` gate fires before the SDK's error reaches your code — a 500, a rate
+limit, a connection error. `retry` re-issues the request, `inject` substitutes a completion
+object as the result of `create()`, `continue` rethrows the SDK's error untouched, `abort` ends
+the run. Pause-on-error is armed by default.
+
+### Token channels
+
+Chat Completions maps `delta.content` and `delta.refusal` to `text`, `delta.reasoning_content`
+to `reasoning`, and `delta.tool_calls[].function.arguments` to `tool-args`.
+
+Responses maps `response.output_text.delta` / `response.refusal.delta` to `text`,
+`response.reasoning_summary_text.delta` and `response.reasoning_text.delta` to `reasoning`, and
+the `function_call_arguments` / `custom_tool_call_input` / `mcp_call_arguments` /
+`code_interpreter_call_code` deltas to `tool-args`.
+
+### Usage
+
+Normalised onto the wire's `inputTokens` / `outputTokens`, with `totalTokens`,
+`cachedInputTokens` and `reasoningTokens` carried as loose fields.
+
 <Aside type="note">
-The Chat Completions API works the same way — `client.chat.completions.create` is wrapped too,
-and `tool_calls` are correlated by their call id.
+Chat Completions only reports usage on a stream when you pass
+`stream_options: { include_usage: true }`. That is the API, not the adapter.
 </Aside>
 
-## The three calls
+## Per tool call
 
-### `gm.wrapClient(client)`
+| Gate | Behaviour |
+| --- | --- |
+| `before` | Fires before your function runs |
+| `after` | Post-call, pre-return |
+| `error` | Fires when your function throws, **before the error reaches your loop** |
 
-Returns a client with the identical surface. Around every model request it:
+At the `error` gate: `inject` swallows the error and returns your value as the tool result — the
+substitution lands in the `tool` message and reaches the model's next turn; `retry` re-runs your
+function; `continue` rethrows the original error; `abort` aborts the run's `AbortController` and
+surfaces an `AbortError`, which SDK retry logic never retries.
 
-- awaits the **`before` gate before the request goes out** — a hold costs no open connection;
-- emits `node.started` for `llm:step` with model and input as the node's input;
-- batches streamed deltas into `node.token` events when you pass `stream: true`;
-- emits `node.finished` with `TokenUsage` (`inputTokens` / `outputTokens`) from the response;
-- routes a thrown request error through the **`error` gate** before your code sees it.
+## How the wrapper works
 
-Identity when GraphMind is disabled.
+Only `chat.completions.create` and `responses.create` are intercepted. Every convenience helper
+the SDK ships — `.stream()`, `.parse()`, `.runTools()` — builds on
+`this._client.<resource>.create(...)` internally, so the wrapper calls them against a view of the
+resource whose `_client` points back at the wrapped client. One interception point covers them
+all, and nothing is instrumented twice.
 
-### `gm.wrapTools(tools)`
+Methods the adapter does not instrument are returned **bound to the real object** (the OpenAI
+client uses `#private` fields, and calling such a method with a Proxy as `this` would throw), so
+`client.post(...)`, `client.embeddings.create(...)` and friends work exactly as before.
 
-A record of `name → async function`, returned with each function gated at `before`, `after` and
-`error`. `inject` substitutes the return value, `retry` re-invokes the original, `continue` at
-an `error` gate rethrows. Your JSON tool *specs* stay untouched — only the implementations are
-wrapped.
+`wrapClient` is idempotent, and returns its input untouched when GraphMind is disabled. Any
+client exposing the same resources works — Azure OpenAI, or an OpenAI-compatible gateway.
 
-### `gm.run(name, fn)`
+### `runTools`
 
-Opens the run, names the agent node, and hands you `ctx.signal`.
+`chat.completions.runTools()` runs its own tool loop inside the SDK. Its model turns are gated
+and reported normally. To gate the tool executions too, hand it functions from `gm.wrapTools()`:
 
-<Aside type="caution" title="Pass ctx.signal">
-`abort` cancels via the run's `AbortController`. Without `ctx.signal` on your requests, an abort
-stops the loop at the next gate rather than cancelling the in-flight call.
-</Aside>
+```ts
+const tools = gm.wrapTools({ getWeather });
+
+client.chat.completions.runTools({
+  model: 'gpt-5.4',
+  messages,
+  tools: [{
+    type: 'function',
+    function: {
+      name: 'getWeather',
+      description: '…',
+      parameters: { /* … */ },
+      function: tools.getWeather,   // gated
+      parse: JSON.parse,
+    },
+  }],
+});
+```
+
+The runner passes itself (not the tool call) as the second argument, so those executions get
+generated instance ids rather than OpenAI's `tool_call` ids.
+
+### Deliberately not instrumented
+
+- `client.beta.*`, the **Realtime API** (WebRTC/WebSocket sessions, not request/response) and the
+  **Assistants API** — neither fits the gate-before-the-request model.
+- `responses.retrieve(id, { stream: true })` — resuming an existing response's stream.
+- Batch, files, embeddings, images, audio, moderations, fine-tuning — not agent execution steps.
+- `responses.create({ background: true })` is reported as one step when the request returns, not
+  for the lifetime of the background job.
 
 ## Node identity
 
 | Node | `nodeId` | `instanceId` |
 | --- | --- | --- |
 | Agent (a run) | `agent:<runName>` | the run id |
-| Model request | `llm:step` | one per request |
-| Tool call | `tool:<toolName>` | the `call_id` when available |
+| Model call | `llm:step` | `<invocationId>:s<N>` |
+| Tool call | `tool:<toolName>` | OpenAI `tool_call.id` / `call_id` |
+| Built-in tool | `tool:<name>` | the Responses output item id |
+
+Both APIs map onto the same `llm:step` node — an app migrating from Chat Completions to
+Responses keeps its graph — and the concrete API is reported as an `api` field on the node
+payloads.
+
+Requests are grouped into invocations so the viewer can show "step 3 of the handle-ticket loop".
+Grouping is scoped by the `gm.run` context; inside a scope two heuristics chain steps: an exact
+match on `previous_response_id` (Responses), and prompt-prefix growth. Outside `gm.run` all
+requests share one scope, so two *concurrent* loops with the same first message can merge — wrap
+concurrent work in `gm.run`.
+
+## Timeouts and abort signals
+
+The SDK's own `timeout` option starts when the HTTP request is dispatched, which happens *after*
+the `before` gate releases — holds never eat into it.
+
+An `AbortSignal.timeout()` you pass as `options.signal` is different: it is already running while
+the gate holds. While a debugger is attached the adapter **chains — never replaces —** your
+signal with the debugger's run signal and filters timeout-driven aborts out of what the request
+sees, warning once. Your own aborts (any other reason) pass through untouched. Detached, signals
+are not touched at all.
+
+## Fail-open invariants
+
+- Disabled session: `wrapClient` / `wrapTools` return their inputs unchanged (identity, zero
+  overhead).
+- Enabled but detached: gates resolve `continue` on a fast path; events go to the replay ring
+  buffer only.
+- The adapter never throws into the host app; internal failures degrade to rate-limited warnings
+  and uninstrumented behaviour.
+- Disconnect mid-hold releases every held gate with `continue`.
+
+<Aside type="caution" title="One fidelity note">
+A gated `create()` returns a `Promise` subclass that re-implements `APIPromise`'s helpers
+(`asResponse()`, `withResponse()`, `_thenUnwrap()`) on top of the eventual SDK promise — the
+debugger has to await a gate before the SDK's own `APIPromise` can exist. `instanceof Promise`
+holds; `instanceof APIPromise` does not. Nothing in the SDK branches on that.
+</Aside>
 
 ## Options
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `app` | app name | Shown in the viewer's run list |
+| `tokenFlushIntervalMs` | `34` | `node.token` batching interval per node |
 | `waitForAttach` | `false` | `true` (2000 ms) or a number: first call awaits `ready()` |
 | `url` | `ws://127.0.0.1:4747/ingest` | Ingest endpoint (or `GRAPHMIND_URL`) |
 | `enabled` | kill-switch logic | Force on/off (`GRAPHMIND_DISABLED=1` still wins) |

@@ -8,19 +8,19 @@ original ``seq``, so viewers deduplicate the replay (decisions.md #5).
 from __future__ import annotations
 
 from collections import deque
-from typing import Deque, Generic, List, TypeVar
+from typing import Generic, TypeVar
 
 T = TypeVar("T")
 
 
 class RingBuffer(Generic[T]):
-    __slots__ = ("_items", "_dropped", "capacity")
+    __slots__ = ("_dropped", "_items", "capacity")
 
     def __init__(self, capacity: int) -> None:
         if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity < 1:
             raise ValueError(f"RingBuffer capacity must be a positive integer, got {capacity!r}")
         self.capacity = capacity
-        self._items: Deque[T] = deque(maxlen=capacity)
+        self._items: deque[T] = deque(maxlen=capacity)
         self._dropped = 0
 
     def push(self, item: T) -> None:
@@ -28,7 +28,7 @@ class RingBuffer(Generic[T]):
             self._dropped += 1
         self._items.append(item)
 
-    def to_list(self) -> List[T]:
+    def to_list(self) -> list[T]:
         """Oldest-to-newest snapshot. Does not consume."""
         return list(self._items)
 

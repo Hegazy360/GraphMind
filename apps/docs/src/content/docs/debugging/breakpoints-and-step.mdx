@@ -58,6 +58,8 @@ In the viewer:
 - **Pause all** in the run bar sets `{}`.
 - Every armed matcher shows as a **chip** in the run bar; the × clears it.
 - Pause-on-error appears as a chip too, so it is one click to remove.
+- <kbd>⌘</kbd><kbd>K</kbd> → *set breakpoint on ‹node›* arms one on whatever you have selected,
+  and *clear every breakpoint* wipes the lot. See [the viewer](/reference/viewer/).
 
 Breakpoints live on the **server**, not in a browser tab: they survive a viewer reload, apply to
 every connected app, and are re-armed on any app that reconnects (they ride in the `hello.ack`

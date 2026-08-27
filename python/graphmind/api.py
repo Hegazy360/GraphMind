@@ -21,11 +21,13 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Callable, Dict, Iterable, Optional, TypeVar
+from collections.abc import Callable, Iterable
+from typing import Any, TypeVar
 
 from ._version import __version__
 from .gate import GateDecision, GateNode
 from .ids import next_id
+from .protocol import NODE_KINDS
 from .session import RunContext, RunScope, Session, SessionStats
 from .wrap import ToolsInput, gate_callable
 from .wrap import wrap_tools as _wrap_tools
@@ -40,7 +42,7 @@ class GraphMind:
         self,
         *,
         app: str = "python-app",
-        sdk: Optional[Dict[str, str]] = None,
+        sdk: dict[str, str] | None = None,
         **session_options: Any,
     ) -> None:
         self.session = Session(
@@ -69,7 +71,7 @@ class GraphMind:
 
     # -- runs & spans ---------------------------------------------------------
 
-    def run(self, name: str, meta: Optional[Dict[str, Any]] = None) -> RunScope:
+    def run(self, name: str, meta: dict[str, Any] | None = None) -> RunScope:
         """Run boundary; works as ``with`` and ``async with``."""
         return self.session.run(name, meta)
 
@@ -78,8 +80,8 @@ class GraphMind:
         name: str,
         kind: str = "custom",
         input: Any = None,
-        parent_id: Optional[str] = None,
-    ) -> "Span":
+        parent_id: str | None = None,
+    ) -> Span:
         """An arbitrary node on the canvas: gated, timed, sync **and** async.
 
         Use it for the parts of a graph GraphMind cannot see by itself — a
@@ -87,18 +89,18 @@ class GraphMind:
         """
         return Span(self.session, name, kind, input, parent_id)
 
-    def current_run(self) -> Optional[RunContext]:
+    def current_run(self) -> RunContext | None:
         return self.session.current_run()
 
     # -- tools ----------------------------------------------------------------
 
     def tool(
         self,
-        fn: Optional[F] = None,
+        fn: F | None = None,
         *,
-        name: Optional[str] = None,
+        name: str | None = None,
         kind: str = "tool",
-        parent_id: Optional[str] = None,
+        parent_id: str | None = None,
     ) -> Any:
         """Decorator. Usable bare (``@gm.tool``) or called (``@gm.tool(name=...)``)."""
 
@@ -150,9 +152,13 @@ class GraphMind:
 
         return AsyncGraphMindCallbackHandler(session=self.session, **kwargs)
 
+    #: Short aliases: the names the docs and `graphmind init` scaffolding use.
+    handler = callback_handler
+    async_handler = async_callback_handler
+
     # -- low level ------------------------------------------------------------
 
-    def emit(self, type: str, payload: Dict[str, Any]) -> None:
+    def emit(self, type: str, payload: dict[str, Any]) -> None:
         self.session.emit(type, payload)
 
     def gate(self, point: str, node: GateNode) -> GateDecision:
@@ -161,7 +167,7 @@ class GraphMind:
     async def gate_async(self, point: str, node: GateNode) -> GateDecision:
         return await self.session.gate_async(point, node)
 
-    def graph_hint(self, nodes: Iterable[Dict[str, Any]]) -> None:
+    def graph_hint(self, nodes: Iterable[dict[str, Any]]) -> None:
         """Pre-announce static graph structure so the viewer renders it grey."""
         self.session.graph_hint(nodes)
 
@@ -172,28 +178,27 @@ class GraphMind:
         """Release held gates, flush events, close the socket. Idempotent."""
         self.session.dispose()
 
-    def __enter__(self) -> "GraphMind":
+    def __enter__(self) -> GraphMind:
         return self
 
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         self.dispose()
-        return False
 
 
 class Span:
     """A user-declared node, gated like a tool. ``with`` and ``async with``."""
 
     __slots__ = (
-        "_session",
-        "_name",
-        "_kind",
-        "_input",
-        "_parent_id",
-        "_node",
-        "_instance_id",
-        "_started",
-        "_output",
         "_done",
+        "_input",
+        "_instance_id",
+        "_kind",
+        "_name",
+        "_node",
+        "_output",
+        "_parent_id",
+        "_session",
+        "_started",
     )
 
     def __init__(
@@ -202,11 +207,11 @@ class Span:
         name: str,
         kind: str,
         input: Any,
-        parent_id: Optional[str],
+        parent_id: str | None,
     ) -> None:
         self._session = session
         self._name = name
-        self._kind = kind if kind in ("agent", "llm", "tool", "chain", "retriever", "custom") else "custom"
+        self._kind = kind if kind in NODE_KINDS else "custom"
         self._input = input
         self._parent_id = parent_id
         self._node = GateNode(f"{self._kind}:{name}", self._kind, name)
@@ -223,25 +228,23 @@ class Span:
         """Record what this span produced (shown on the node in the viewer)."""
         self._output = output
 
-    def __enter__(self) -> "Span":
+    def __enter__(self) -> Span:
         self._begin()
         decision = self._session.gate("before", self._node)
         self._check(decision)
         return self
 
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         self._end(exc)
-        return False
 
-    async def __aenter__(self) -> "Span":
+    async def __aenter__(self) -> Span:
         self._begin()
         decision = await self._session.gate_async("before", self._node)
         self._check(decision)
         return self
 
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         self._end(exc)
-        return False
 
     def _begin(self) -> None:
         self._instance_id = next_id("span")
@@ -264,7 +267,7 @@ class Span:
             # the span's output rather than silently dropped.
             self._output = decision.output
 
-    def _end(self, error: Optional[BaseException]) -> None:
+    def _end(self, error: BaseException | None) -> None:
         from .errors import is_abort_error
 
         if error is not None:
@@ -290,7 +293,7 @@ class Span:
 
 # -- module-level default instance -------------------------------------------
 
-_default: Optional[GraphMind] = None
+_default: GraphMind | None = None
 _default_lock = threading.Lock()
 
 
@@ -321,6 +324,10 @@ def instance() -> GraphMind:
         if _default is None:
             _default = GraphMind()
         return _default
+
+
+#: `init` is the name the docs and `graphmind init` scaffolding use.
+init = configure
 
 
 def is_configured() -> bool:

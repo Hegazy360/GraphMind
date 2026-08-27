@@ -10,18 +10,19 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from typing import Any, Callable, Dict, List
+from collections.abc import Callable
+from typing import Any
 
 from .runtime import runtime
 
-TokenBatchSink = Callable[[str, List[Dict[str, Any]]], None]
+TokenBatchSink = Callable[[str, list[dict[str, Any]]], None]
 
 
 class TokenBatcher:
     def __init__(self, sink: TokenBatchSink, interval: float = 0.034) -> None:
         self._sink = sink
         self._interval = interval
-        self._pending: Dict[str, List[Dict[str, Any]]] = {}
+        self._pending: dict[str, list[dict[str, Any]]] = {}
         self._lock = threading.Lock()
         self._scheduled = False
         self._disposed = False
@@ -37,11 +38,10 @@ class TokenBatcher:
             if not self._scheduled:
                 self._scheduled = True
                 schedule = True
-        if schedule:
-            if not runtime.spawn(self._flush_later()):
-                # No loop available (very early shutdown): flush inline rather
-                # than lose the deltas.
-                self.flush_all()
+        # No loop available (very early shutdown): flush inline rather than
+        # lose the deltas.
+        if schedule and not runtime.spawn(self._flush_later()):
+            self.flush_all()
 
     async def _flush_later(self) -> None:
         try:

@@ -14,6 +14,20 @@
  * after the `before` gate is released, so holds never eat into it.
  */
 
+/**
+ * Any abort-shaped error: the debugger's own `AbortError`, a `DOMException`
+ * from `AbortController.abort()`, or the OpenAI SDK's `APIUserAbortError`.
+ * Aborts are terminal — never gated, never retried.
+ */
+export function isAbortLikeError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.name === 'AbortError' ||
+    error.name === 'APIUserAbortError' ||
+    error.name === 'GraphMindAbortError'
+  );
+}
+
 export function isTimeoutAbortReason(reason: unknown): boolean {
   return (
     (reason instanceof Error ||

@@ -24,8 +24,9 @@ Fail-open invariants:
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable, Iterable
 from concurrent.futures import Future
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 
 class GateDecision:
@@ -60,7 +61,7 @@ CONTINUE = GateDecision("continue")
 class GateNode:
     """The logical node a gate belongs to."""
 
-    __slots__ = ("node_id", "kind", "name")
+    __slots__ = ("kind", "name", "node_id")
 
     def __init__(self, node_id: str, kind: str, name: str) -> None:
         self.node_id = node_id
@@ -71,7 +72,7 @@ class GateNode:
         return f"GateNode({self.node_id!r}, {self.kind!r}, {self.name!r})"
 
 
-def matcher_matches(matcher: Dict[str, Any], point: str, node: GateNode) -> bool:
+def matcher_matches(matcher: dict[str, Any], point: str, node: GateNode) -> bool:
     """Every present matcher field must match; absent fields match anything."""
     if (matcher.get("point") or "before") != point:
         return False
@@ -79,12 +80,10 @@ def matcher_matches(matcher: Dict[str, Any], point: str, node: GateNode) -> bool
     if kind is not None and kind != node.kind:
         return False
     name = matcher.get("name")
-    if name is not None and name != node.name:
-        return False
-    return True
+    return name is None or name == node.name
 
 
-def matcher_equals(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+def matcher_equals(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return (
         a.get("kind") == b.get("kind")
         and a.get("name") == b.get("name")
@@ -95,15 +94,15 @@ def matcher_equals(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
 class Hold:
     """Handle for one held gate: the pause id plus the future to wait on."""
 
-    __slots__ = ("pause_id", "future")
+    __slots__ = ("future", "pause_id")
 
-    def __init__(self, pause_id: str, future: "Future[GateDecision]") -> None:
+    def __init__(self, pause_id: str, future: Future[GateDecision]) -> None:
         self.pause_id = pause_id
         self.future = future
 
 
 class _HeldGate:
-    __slots__ = ("pause_id", "node", "point", "run_id", "timer", "future")
+    __slots__ = ("future", "node", "pause_id", "point", "run_id", "timer")
 
     def __init__(
         self,
@@ -111,14 +110,14 @@ class _HeldGate:
         node: GateNode,
         point: str,
         run_id: str,
-        future: "Future[GateDecision]",
+        future: Future[GateDecision],
     ) -> None:
         self.pause_id = pause_id
         self.node = node
         self.point = point
         self.run_id = run_id
         self.future = future
-        self.timer: Optional[threading.Timer] = None
+        self.timer: threading.Timer | None = None
 
 
 class GateEngine:
@@ -129,20 +128,20 @@ class GateEngine:
         on_paused: Callable[[str, GateNode, str, str], None],
         on_resumed: Callable[[str, GateNode, str, str], None],
         new_pause_id: Callable[[], str],
-        pause_timeout: Optional[float] = None,
+        pause_timeout: float | None = None,
     ) -> None:
         self._on_paused = on_paused
         self._on_resumed = on_resumed
         self._new_pause_id = new_pause_id
         self._pause_timeout = pause_timeout
         self._lock = threading.RLock()
-        self._breakpoints: List[Dict[str, Any]] = []
+        self._breakpoints: list[dict[str, Any]] = []
         self._mode = "run"
-        self._held: Dict[str, _HeldGate] = {}
+        self._held: dict[str, _HeldGate] = {}
 
     # -- viewer state ---------------------------------------------------------
 
-    def arm(self, breakpoints: Iterable[Dict[str, Any]], mode: str) -> None:
+    def arm(self, breakpoints: Iterable[dict[str, Any]], mode: str) -> None:
         """Adopt the viewer's full debug state (from ``hello.ack``)."""
         with self._lock:
             self._breakpoints = [dict(m) for m in breakpoints if isinstance(m, dict)]
@@ -159,18 +158,18 @@ class GateEngine:
             with self._lock:
                 self._mode = mode
 
-    def add_breakpoint(self, matcher: Dict[str, Any]) -> None:
+    def add_breakpoint(self, matcher: dict[str, Any]) -> None:
         with self._lock:
             if not any(matcher_equals(existing, matcher) for existing in self._breakpoints):
                 self._breakpoints.append(dict(matcher))
 
-    def remove_breakpoint(self, matcher: Dict[str, Any]) -> None:
+    def remove_breakpoint(self, matcher: dict[str, Any]) -> None:
         with self._lock:
             self._breakpoints = [
                 existing for existing in self._breakpoints if not matcher_equals(existing, matcher)
             ]
 
-    def snapshot(self) -> Tuple[List[Dict[str, Any]], str]:
+    def snapshot(self) -> tuple[list[dict[str, Any]], str]:
         with self._lock:
             return [dict(m) for m in self._breakpoints], self._mode
 
@@ -182,17 +181,13 @@ class GateEngine:
         with self._lock:
             if self._mode == "step" and point != "after":
                 return True
-            breakpoints = self._breakpoints
-            for matcher in breakpoints:
-                if matcher_matches(matcher, point, node):
-                    return True
-            return False
+            return any(matcher_matches(matcher, point, node) for matcher in self._breakpoints)
 
     # -- holds ----------------------------------------------------------------
 
     def hold(self, point: str, node: GateNode, run_id: str) -> Hold:
         """Register a held gate. Call only after :meth:`should_pause`."""
-        future: "Future[GateDecision]" = Future()
+        future: Future[GateDecision] = Future()
         pause_id = self._new_pause_id()
         gate = _HeldGate(pause_id, node, point, run_id, future)
         with self._lock:

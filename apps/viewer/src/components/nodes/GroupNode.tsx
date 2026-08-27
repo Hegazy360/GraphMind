@@ -7,8 +7,8 @@
 import { memo } from 'react';
 import type { NodeProps, Node } from '@xyflow/react';
 import type { FlowNodeData } from '../../store/runStateToFlow.js';
-import { fmtCount, fmtDuration, fmtTokens } from '../../lib/format.js';
-import { summarizeGroup } from '../../store/collapse.js';
+import { fmtCount, fmtDuration } from '../../lib/format.js';
+import { groupSummaryOf } from '../../store/derived.js';
 import { useRunStore } from '../../store/runStore.js';
 import {
   CollapseToggle,
@@ -26,7 +26,7 @@ function GroupNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
   const selected = useIsSelected(runId, nodeId);
   const summary = useRunStore((s) => {
     const run = s.runs[runId];
-    return run === undefined ? undefined : summarizeGroup(run, nodeId);
+    return run === undefined ? undefined : groupSummaryOf(run, nodeId);
   });
 
   if (node === undefined || summary === undefined) return null;
@@ -38,11 +38,8 @@ function GroupNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
         <CollapseToggle runId={runId} nodeId={nodeId} />
         <StatusDot status={summary.status} />
         <span className="gm-node-title">{node.name}</span>
-        <span className="gm-badge-count" title={`${summary.nodes} nodes folded`}>
-          {fmtCount(summary.nodes)} nodes
-        </span>
-        <span className="gm-node-kind" style={{ marginLeft: 'auto' }}>
-          {node.kind} group
+        <span className="gm-node-kind" style={{ marginLeft: 'auto' }} title={`folded ${node.kind}`}>
+          group
         </span>
       </div>
 
@@ -53,6 +50,9 @@ function GroupNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
       </div>
 
       <div className="gm-node-meta">
+        <span className="gm-badge-count" title={`${summary.nodes} nodes folded into this card`}>
+          {fmtCount(summary.nodes)} nodes
+        </span>
         <span>
           {summary.steps > 0 && `${fmtCount(summary.steps)} steps · `}
           {fmtCount(summary.tools)} calls
@@ -60,12 +60,7 @@ function GroupNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
             <span style={{ color: 'var(--err)' }}> · {fmtCount(summary.errors)} failed</span>
           )}
         </span>
-        <span style={{ marginLeft: 'auto' }}>
-          {summary.tokensIn + summary.tokensOut > 0 && (
-            <>{fmtTokens(summary.tokensIn + summary.tokensOut)} tok · </>
-          )}
-          {fmtDuration(summary.durationMs)}
-        </span>
+        <span style={{ marginLeft: 'auto' }}>{fmtDuration(summary.durationMs)}</span>
       </div>
       <PauseBanner runId={runId} node={node} />
     </div>

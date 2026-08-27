@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from typing import Any, Callable, Deque, Dict, Optional
+from collections.abc import Callable
+from typing import Any
 
 from .protocol import PROTOCOL_VERSION, parse_envelope_json
 from .runtime import runtime
@@ -25,7 +26,7 @@ from .safe import RateLimitedWarner
 MAX_OUTBOX = 10_000
 
 
-def _resolve_connect() -> Optional[Callable[..., Any]]:
+def _resolve_connect() -> Callable[..., Any] | None:
     """The websockets client factory, tolerating old and new package layouts."""
     try:
         from websockets.asyncio.client import connect  # websockets >= 13
@@ -34,7 +35,7 @@ def _resolve_connect() -> Optional[Callable[..., Any]]:
     except Exception:
         pass
     try:  # pragma: no cover - only on ancient websockets
-        from websockets.client import connect as legacy_connect
+        from websockets.client import connect as legacy_connect  # type: ignore[attr-defined]
 
         return legacy_connect
     except Exception:
@@ -44,14 +45,14 @@ def _resolve_connect() -> Optional[Callable[..., Any]]:
 class TransportHooks:
     """Callbacks the session installs. All are invoked on the loop thread."""
 
-    __slots__ = ("build_hello", "on_attached", "on_detached", "on_control")
+    __slots__ = ("build_hello", "on_attached", "on_control", "on_detached")
 
     def __init__(
         self,
         build_hello: Callable[[], str],
-        on_attached: Callable[[Dict[str, Any]], None],
+        on_attached: Callable[[dict[str, Any]], None],
         on_detached: Callable[[], None],
-        on_control: Callable[[Dict[str, Any]], None],
+        on_control: Callable[[dict[str, Any]], None],
     ) -> None:
         self.build_hello = build_hello
         self.on_attached = on_attached
@@ -78,10 +79,10 @@ class Transport:
 
         self._state = "idle"  # idle | connecting | attached | disposed
         self._started = False
-        self._outbox: Deque[str] = deque()
-        self._wake: Optional[asyncio.Event] = None
-        self._kick: Optional[asyncio.Event] = None
-        self._supervisor: Optional["asyncio.Task[None]"] = None
+        self._outbox: deque[str] = deque()
+        self._wake: asyncio.Event | None = None
+        self._kick: asyncio.Event | None = None
+        self._supervisor: asyncio.Task[None] | None = None
         self._connect = _resolve_connect()
 
     # -- public, thread-safe --------------------------------------------------
@@ -103,7 +104,7 @@ class Transport:
             self._warner.warn(
                 "transport-no-impl",
                 "the `websockets` package is not importable; GraphMind stays detached "
-                "(pip install graphmind-ai[all] or pip install websockets)",
+                "(pip install --upgrade websockets)",
             )
             return
         runtime.call_soon(self._start_supervisor)
@@ -248,7 +249,7 @@ class Transport:
                 except Exception:
                     pass
 
-    async def _await_ack(self, connection: Any) -> Optional[Dict[str, Any]]:
+    async def _await_ack(self, connection: Any) -> dict[str, Any] | None:
         """Read frames until ``hello.ack``; anything before it is ignored."""
         while True:
             try:

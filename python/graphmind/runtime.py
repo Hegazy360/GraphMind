@@ -22,8 +22,9 @@ import asyncio
 import atexit
 import os
 import threading
+from collections.abc import Callable, Coroutine
 from concurrent.futures import Future
-from typing import Any, Callable, Coroutine, List, Optional
+from typing import Any
 
 
 class Runtime:
@@ -31,13 +32,13 @@ class Runtime:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._thread: Optional[threading.Thread] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
         self._ready = threading.Event()
 
     # -- lifecycle ------------------------------------------------------------
 
-    def ensure_started(self) -> Optional[asyncio.AbstractEventLoop]:
+    def ensure_started(self) -> asyncio.AbstractEventLoop | None:
         loop = self._loop
         if loop is not None and not loop.is_closed():
             return loop
@@ -75,9 +76,7 @@ class Runtime:
                 for task in pending:
                     task.cancel()
                 if pending:
-                    loop.run_until_complete(
-                        asyncio.gather(*pending, return_exceptions=True)
-                    )
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             except Exception:
                 pass
             try:
@@ -86,7 +85,7 @@ class Runtime:
                 pass
 
     @property
-    def loop(self) -> Optional[asyncio.AbstractEventLoop]:
+    def loop(self) -> asyncio.AbstractEventLoop | None:
         loop = self._loop
         if loop is None or loop.is_closed():
             return None
@@ -111,7 +110,7 @@ class Runtime:
         except Exception:
             return False
 
-    def spawn(self, coro: "Coroutine[Any, Any, Any]") -> bool:
+    def spawn(self, coro: Coroutine[Any, Any, Any]) -> bool:
         """Fire-and-forget a coroutine on the loop thread."""
         loop = self.ensure_started()
         if loop is None:
@@ -127,7 +126,7 @@ class Runtime:
                 pass
             return False
 
-    def submit(self, coro: "Coroutine[Any, Any, Any]") -> "Optional[Future[Any]]":
+    def submit(self, coro: Coroutine[Any, Any, Any]) -> Future[Any] | None:
         """Run a coroutine on the loop thread and return a waitable future."""
         loop = self.ensure_started()
         if loop is None:
@@ -174,7 +173,7 @@ def _guarded(fn: Callable[..., Any], args: Any) -> None:
         pass
 
 
-def _spawn_on_loop(loop: asyncio.AbstractEventLoop, coro: "Coroutine[Any, Any, Any]") -> None:
+def _spawn_on_loop(loop: asyncio.AbstractEventLoop, coro: Coroutine[Any, Any, Any]) -> None:
     try:
         task = loop.create_task(coro)
         # Keep a strong reference: bare tasks can be GC'd mid-flight.
@@ -187,13 +186,13 @@ def _spawn_on_loop(loop: asyncio.AbstractEventLoop, coro: "Coroutine[Any, Any, A
             pass
 
 
-_BACKGROUND_TASKS: "set[asyncio.Task[Any]]" = set()
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 
 #: Process-wide runtime. One loop thread serves every session.
 runtime = Runtime()
 
 #: Sessions register a shutdown hook so gates fail open at interpreter exit.
-_shutdown_hooks: "List[Callable[[], None]]" = []
+_shutdown_hooks: list[Callable[[], None]] = []
 _shutdown_lock = threading.Lock()
 
 

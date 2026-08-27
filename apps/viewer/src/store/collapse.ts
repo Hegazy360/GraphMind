@@ -153,6 +153,55 @@ export function summarizeGroup(
   return summary;
 }
 
+/** Depth of every node in the parent forest. */
+function depthIndex(run: RunState): Map<string, number> {
+  const depths = new Map<string, number>();
+  const depthOf = (nodeId: string, guard = 0): number => {
+    const cached = depths.get(nodeId);
+    if (cached !== undefined) return cached;
+    const parentId = run.nodes[nodeId]?.parentId;
+    const value = parentId === undefined || guard > 64 ? 0 : depthOf(parentId, guard + 1) + 1;
+    depths.set(nodeId, value);
+    return value;
+  };
+  for (const nodeId of run.order) depthOf(nodeId);
+  return depths;
+}
+
+/**
+ * What to fold when a big run first opens.
+ *
+ * A hundred sibling sub-agents laid out side by side is technically correct
+ * and completely unreadable — the graph ends up 15,000px wide and every card
+ * is a dot. So we fold the shallowest level that gets the visible count under
+ * `targetVisible`, starting from the deepest (least destructive) level and
+ * working up. Collapsing is remembered per run and undone with one keystroke,
+ * so this is a starting view, not a decision taken away from the user.
+ *
+ * Returns an empty array when the run is small enough to show whole.
+ */
+export function autoCollapseRoots(run: RunState, targetVisible = 60): string[] {
+  const total = run.order.length;
+  if (total <= targetVisible) return [];
+  const index = childIndex(run);
+  const depths = depthIndex(run);
+  let maxDepth = 0;
+  for (const depth of depths.values()) maxDepth = Math.max(maxDepth, depth);
+
+  for (let depth = maxDepth; depth >= 1; depth--) {
+    const candidates = run.order.filter(
+      (id) => depths.get(id) === depth && (index.get(id) ?? []).length > 0,
+    );
+    if (candidates.length === 0) continue;
+    const hidden = new Set<string>();
+    for (const id of candidates) {
+      for (const descendant of descendantsOf(run, id, index)) hidden.add(descendant);
+    }
+    if (total - hidden.size <= targetVisible) return candidates;
+  }
+  return [];
+}
+
 /**
  * Sensible default collapse for a freshly opened large run: every node that
  * owns a subtree of at least `minSize`, outermost first. Used by the

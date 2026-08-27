@@ -4,9 +4,20 @@ description: GraphMind is a live debugger for AI agents. Attach to a running age
 template: splash
 tableOfContents: false
 editUrl: false
+head:
+  - tag: title
+    content: GraphMind — the live debugger for AI agents
+  - tag: style
+    content: |
+      /* the splash template prints the frontmatter title as an <h1>;
+         this page supplies its own hero instead. */
+      .content-panel:first-of-type > .sl-container > h1#_top { display: none; }
+      .content-panel:first-of-type { padding-block: 1.5rem 0; border-block-end: 0; }
 ---
 
-import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import LinkCard from '../../components/LinkCard.astro';
+import { withBase } from '../../lib/with-base.js';
 
 <div class="gm-hero not-content">
   <p class="gm-eyebrow">Open source · MIT · Local-first</p>
@@ -19,8 +30,8 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
   </p>
 
   <div class="gm-cta-row">
-    <a class="gm-btn gm-btn--primary" href="/start/install/">Install &amp; first run</a>
-    <a class="gm-btn gm-btn--ghost" href="/start/what-is-graphmind/">Why a debugger?</a>
+    <a class="gm-btn gm-btn--primary" href={withBase("/start/install/")}>Install &amp; first run</a>
+    <a class="gm-btn gm-btn--ghost" href={withBase("/start/what-is-graphmind/")}>Why a debugger?</a>
   </div>
 
   <code class="gm-cmd">npx graphmind-ai demo</code>
@@ -31,7 +42,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 </div>
 
 <figure class="gm-demo not-content">
-  <img src="/demo.gif" alt="The GraphMind viewer: an agent run drawn as a live graph, pausing on a failing tool call, with the inspector open on its inputs and outputs." width="1280" height="720" loading="eager" />
+  <img src={withBase("/demo.gif")} alt="The GraphMind viewer: an agent run drawn as a live graph, pausing on a failing tool call, with the inspector open on its inputs and outputs." width="1200" height="750" loading="lazy" decoding="async" />
   <figcaption>graphmind demo — pause on error, inspect, inject, resume.</figcaption>
 </figure>
 
@@ -67,7 +78,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
     Armed by default. The first time a tool throws, the agent stops *in place* — arguments,
     partial state and stack still live — instead of leaving you a trace to read afterwards.
   </Card>
-  <Card title="Breakpoints & step mode" icon="seti:config">
+  <Card title="Breakpoints & step mode" icon="setting">
     Break before any node by kind or name, or step every boundary. Held gates are indefinite:
     nothing is in flight while you think.
   </Card>

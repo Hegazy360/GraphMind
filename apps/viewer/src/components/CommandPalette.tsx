@@ -25,14 +25,12 @@ interface PaletteItem {
   id: string;
   group: Group;
   title: string;
-  subtitle?: string;
-  hint?: string;
-  status?: NodeLifeStatus;
-  keywords?: string;
+  subtitle?: string | undefined;
+  hint?: string | undefined;
+  status?: NodeLifeStatus | undefined;
+  keywords?: string | undefined;
   run: () => void;
 }
-
-const GROUP_ORDER: Group[] = ['Actions', 'Nodes', 'Runs'];
 
 function useActionItems(runId: string | undefined): PaletteItem[] {
   const view = useUiStore((s) => s.view);
@@ -137,9 +135,9 @@ function useActionItems(runId: string | undefined): PaletteItem[] {
         id: 'act:arrange',
         group: 'Actions',
         title: 'Re-arrange the layout',
-        subtitle: 'Full ELK pass — tidies a graph grown by incremental layout',
+        subtitle: 'Full tidy-tree pass — cleans up a graph grown incrementally',
         hint: '⇧A',
-        keywords: 'layout elk tidy',
+        keywords: 'layout tidy tree arrange',
         run: () => canvasActions()?.arrange(),
       },
       {

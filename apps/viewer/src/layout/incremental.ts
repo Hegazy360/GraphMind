@@ -1,10 +1,11 @@
 /**
  * Incremental layout.
  *
- * A full ELK pass on every `node.started` is fine for a demo and awful for a
- * real run: at 200 nodes the whole graph slides sideways every few hundred
- * milliseconds while you are trying to read it. So we classify each
- * structural change first:
+ * The layout itself is fast (see tidyTree.ts — ~1ms at 300 nodes), so this
+ * is not about cost: it is about *stillness*. Re-laying out the whole graph
+ * on every `node.started` re-centres parents over their new children and the
+ * canvas slides under you while you are trying to read it. So every
+ * structural change is classified first:
  *
  *  - `none`   — same ids, same sizes: reuse the previous positions verbatim.
  *  - `resize` — a card grew or shrank in place (a gate opened its action
@@ -19,7 +20,7 @@
  * already existed keep their centroid, which stops the camera from jumping.
  */
 import type { FlowGraph, FlowNodeSpec } from '../store/runStateToFlow.js';
-import { LAYER_GAP, SIBLING_GAP, type PositionedNode } from './elkLayout.js';
+import { LAYER_GAP, SIBLING_GAP, type PositionedNode } from './tidyTree.js';
 
 export type LayoutMode = 'none' | 'resize' | 'append' | 'full';
 
@@ -153,8 +154,9 @@ function boundsOf(rects: readonly Rect[]): { minX: number; maxX: number; minY: n
 
 /**
  * Translate a fresh layout so the nodes that already existed keep their
- * average position. ELK re-origins its output at (0,0) on every pass; without
- * this the whole graph slides under the camera each time a layer is added.
+ * average position. A tidy-tree pass re-origins its output at (0,0) every
+ * time; without this the whole graph slides under the camera whenever a
+ * layer is added.
  */
 export function anchorPositions(
   prev: ReadonlyMap<string, Placed>,

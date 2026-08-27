@@ -43,6 +43,10 @@ Repository = "https://github.com/Hegazy360/GraphMind"
 Issues = "https://github.com/Hegazy360/GraphMind/issues"
 
 [project.optional-dependencies]
+openai = ["openai>=1.40"]
+anthropic = ["anthropic>=0.34"]
+langchain = ["langchain-core>=0.3"]
+all = ["openai>=1.40", "anthropic>=0.34", "langchain-core>=0.3"]
 dev = [
   "pytest>=8",
   "pytest-asyncio>=0.24",
@@ -74,8 +78,7 @@ target-version = "py310"
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "ASYNC"]
 ignore = [
   "B008",   # function call in default argument — not used
-  "SIM105", # contextlib.suppress is slower on the hot path
-  "UP038",  # isinstance tuple form is faster than X | Y at runtime
+  "SIM105", # contextlib.suppress is slower than try/except on the hot path
 ]
 
 [tool.ruff.lint.per-file-ignores]

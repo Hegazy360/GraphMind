@@ -83,11 +83,12 @@ If you attach *mid-run*, the client replays its ring buffer (2000 events by defa
 with the original sequence numbers, so you get the history you missed and the viewer
 deduplicates on `(runId, seq)`.
 
-## Searching a big run
+## Finding a node quickly
 
-The viewer has a search overlay for jumping to a node by name in a graph too large to scan. For
-the wider strategies — collapsing, filtering, long-running runs — see
-[working with large graphs](/debugging/large-graphs/).
+<kbd>⌘</kbd><kbd>K</kbd> opens the command palette: fuzzy-search every node in the run by name,
+hit <kbd>Enter</kbd>, and the canvas centres it with the inspector open. The full UI map is on
+[the viewer](/reference/viewer/) page; for the wider strategies — collapsing, filtering,
+long-running runs — see [big & long-running graphs](/debugging/large-graphs/).
 
 ## Reading a run from your coding agent
 

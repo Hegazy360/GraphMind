@@ -1,0 +1,18 @@
+---
+/**
+ * Starlight's LinkCard, with `href` resolved against Astro's `base`.
+ *
+ * MDX component props are JSX expressions, so the `rehypeBaseLinks` plugin
+ * (which rewrites Markdown links) never sees them. Pages import this instead
+ * of `@astrojs/starlight/components` for link cards, and keep writing plain
+ * root-absolute hrefs.
+ */
+import { LinkCard as StarlightLinkCard } from '@astrojs/starlight/components';
+import { withBase } from '../lib/with-base.js';
+
+type Props = { href: string; title: string; description?: string };
+
+const { href, ...rest } = Astro.props;
+---
+
+<StarlightLinkCard href={withBase(href)} {...rest} />

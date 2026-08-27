@@ -42,9 +42,7 @@ def is_abort_error(error: BaseException | None) -> bool:
 
 def _short_stack(error: BaseException, limit: int = 4096) -> str | None:
     try:
-        text = "".join(
-            traceback.format_exception(type(error), error, error.__traceback__)
-        )
+        text = "".join(traceback.format_exception(type(error), error, error.__traceback__))
     except Exception:  # pragma: no cover - formatting a broken traceback
         return None
     if not text:

@@ -24,11 +24,12 @@
  * is already live by the time it is returned, so there is nothing meaningful
  * to hold there — the stream tee reports it as it flows instead.
  */
-import { isAbortError, type GateNode, type RunContext, type RunStatus } from '@graphmind-ai/client';
+import type { GateNode, RunContext, RunStatus } from '@graphmind-ai/client';
 import { GatedApiPromise, type ApiTracker } from './api-promise.js';
 import type { AdapterCore } from './core.js';
 import { LLM_NODE_ID, LLM_NODE_NAME, agentNodeId } from './ids.js';
 import type { PromptKey } from './invocation.js';
+import { isAbortLikeError } from './signals.js';
 import {
   isStreamLike,
   isThenable,
@@ -94,7 +95,7 @@ function makeReporter(core: AdapterCore, ctx: StepCtx): StepReporter {
     ctx,
     core,
     token(channel, value) {
-      core.pushToken(LLM_NODE_ID, channel, value);
+      core.pushToken(LLM_NODE_ID, ctx.instanceId, channel, value);
     },
     error(error) {
       core.errorNode(LLM_NODE_ID, ctx.instanceId, error);
@@ -162,17 +163,26 @@ async function runGatedRequest(
   const reporter = beginStep(core, flavor, body, ctx);
   if (reporter === undefined) {
     // Instrumentation prep failed; never break the host.
-    return await (original.call(resource, body, options) as PromiseLike<unknown>);
+    const api = original.call(resource, body, options);
+    if (isThenable(api)) track(api);
+    return await (api as PromiseLike<unknown>);
   }
 
+  // One `create()` call is ONE execution of the llm node even when the
+  // debugger retries it; the attempt count rides along on node.finished.
+  let attempt = 0;
+  const attemptExtra = (): Record<string, unknown> | undefined =>
+    attempt > 1 ? { attempts: attempt } : undefined;
+
   for (;;) {
+    attempt += 1;
     const pre = await core.session.gate('before', LLM_GATE_NODE);
     if (pre.action === 'abort') {
-      reporter.finish(undefined, 'aborted');
+      reporter.finish(undefined, 'aborted', undefined, attemptExtra());
       throw core.abortError(core.session.currentRun());
     }
     if (pre.action === 'inject') {
-      reporter.finish(pre.output, 'ok', undefined, { injected: true });
+      reporter.finish(pre.output, 'ok', undefined, { injected: true, ...attemptExtra() });
       return pre.output;
     }
     // 'retry' before the request has been made is equivalent to continue.
@@ -185,22 +195,22 @@ async function runGatedRequest(
     } catch (error) {
       // Aborts are terminal: never gate them, never retry them (a
       // debugger-driven abort would otherwise loop back into the error gate).
-      if (isAbortError(error) || isUserAbort(error)) {
-        reporter.finish(undefined, 'aborted');
+      if (isAbortLikeError(error)) {
+        reporter.finish(undefined, 'aborted', undefined, attemptExtra());
         throw error;
       }
       reporter.error(error);
       const dec = await core.session.gate('error', LLM_GATE_NODE);
       if (dec.action === 'inject') {
-        reporter.finish(dec.output, 'ok', undefined, { injected: true });
+        reporter.finish(dec.output, 'ok', undefined, { injected: true, ...attemptExtra() });
         return dec.output;
       }
       if (dec.action === 'retry') continue;
       if (dec.action === 'abort') {
-        reporter.finish(undefined, 'aborted');
+        reporter.finish(undefined, 'aborted', undefined, attemptExtra());
         throw core.abortError(core.session.currentRun());
       }
-      reporter.finish(undefined, 'error');
+      reporter.finish(undefined, 'error', undefined, attemptExtra());
       throw error; // 'continue': the host sees the SDK's original error
     }
 
@@ -212,7 +222,7 @@ async function runGatedRequest(
           `tee-unavailable:${flavor.api}`,
           `GraphMind could not tee a ${flavor.api} stream; the response is passed through unobserved.`,
         );
-        reporter.finish(undefined, 'ok', undefined, { observed: false });
+        reporter.finish(undefined, 'ok', undefined, { observed: false, ...attemptExtra() });
         return value;
       }
       void flavor.observeStream(reporter, teed.forObserver);
@@ -222,16 +232,19 @@ async function runGatedRequest(
     const summary = flavor.summarize(reporter, value);
     const post = await core.session.gate('after', LLM_GATE_NODE);
     if (post.action === 'inject') {
-      reporter.finish(post.output, 'ok', summary.usage, { injected: true });
+      reporter.finish(post.output, 'ok', summary.usage, { injected: true, ...attemptExtra() });
       return post.output;
     }
     if (post.action === 'retry') continue;
     if (post.action === 'abort') {
-      reporter.finish(summary.output, 'aborted', summary.usage);
+      reporter.finish(summary.output, 'aborted', summary.usage, attemptExtra());
       throw core.abortError(core.session.currentRun());
     }
     if (summary.status === 'error' && summary.error !== undefined) reporter.error(summary.error);
-    reporter.finish(summary.output, summary.status, summary.usage, summary.extra);
+    reporter.finish(summary.output, summary.status, summary.usage, {
+      ...summary.extra,
+      ...attemptExtra(),
+    });
     return value;
   }
 }
@@ -267,11 +280,6 @@ function beginStep(
   } catch {
     return undefined;
   }
-}
-
-/** The OpenAI SDK's own abort error (`client.APIUserAbortError`). */
-function isUserAbort(error: unknown): boolean {
-  return error instanceof Error && error.name === 'APIUserAbortError';
 }
 
 /**

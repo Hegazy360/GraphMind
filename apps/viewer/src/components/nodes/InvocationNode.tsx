@@ -6,6 +6,7 @@ import type { NodeProps, Node } from '@xyflow/react';
 import type { FlowNodeData } from '../../store/runStateToFlow.js';
 import { fmtDuration } from '../../lib/format.js';
 import { latestExecution } from '../../store/types.js';
+import { agentCountsFor } from '../../store/derived.js';
 import { useRunStore } from '../../store/runStore.js';
 import {
   CollapseToggle,
@@ -23,28 +24,14 @@ function InvocationNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
   const { runId, nodeId } = data;
   const node = useNodeState(runId, nodeId);
   const selected = useIsSelected(runId, nodeId);
+  // One llm:step node per invocation — its executions are the steps; tool
+  // calls count executions too, and either may hang off the agent or off the
+  // llm step node. The subtree walk is cached per status version (see
+  // store/derived.ts): this selector must stay O(1).
   const counts = useRunStore((s) => {
     const run = s.runs[runId];
     if (run === undefined) return '';
-    // One llm:step node per invocation — its executions are the steps; tool
-    // calls count executions too, and either may hang off the agent or off
-    // the llm step node.
-    const withinAgent = (child: { parentId?: string }): boolean => {
-      let current: string | undefined = child.parentId;
-      for (let hops = 0; current !== undefined && hops < 8; hops++) {
-        if (current === nodeId) return true;
-        current = run.nodes[current]?.parentId;
-      }
-      return false;
-    };
-    let steps = 0;
-    let tools = 0;
-    for (const id of run.order) {
-      const child = run.nodes[id];
-      if (child === undefined || child.ghost || !withinAgent(child)) continue;
-      if (child.kind === 'llm') steps += child.executions.length;
-      else if (child.kind === 'tool') tools += child.executions.length;
-    }
+    const { steps, tools } = agentCountsFor(run, nodeId);
     const parts: string[] = [];
     if (steps > 0) parts.push(`${steps} step${steps === 1 ? '' : 's'}`);
     if (tools > 0) parts.push(`${tools} tool call${tools === 1 ? '' : 's'}`);

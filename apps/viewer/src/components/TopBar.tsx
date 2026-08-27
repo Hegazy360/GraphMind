@@ -23,6 +23,7 @@ import {
   IconLink,
   IconMoon,
   IconSearch,
+  IconSplit,
   IconSun,
   IconTheme,
   IconTimeline,
@@ -89,7 +90,7 @@ function FilterPopover({ runId }: { runId: string }) {
         title="Filter the canvas"
       >
         <IconFilter />
-        {active ? filterSummary(filters) : 'Filter'}
+        <span className="gm-toolbtn-label">{active ? filterSummary(filters) : 'Filter'}</span>
       </button>
       {open && (
         <div className="gm-popover" role="dialog" aria-label="Canvas filters">
@@ -197,7 +198,7 @@ export function TopBar({ runId }: { runId: string }) {
       {stats !== undefined && (
         <div className="gm-topbar-stats" aria-label="Run statistics">
           <Stat value={fmtCount(stats.nodes)} label="nodes" />
-          <Stat value={fmtCount(stats.steps)} label="steps" />
+          <Stat value={fmtCount(stats.steps)} label="steps" optional />
           <Stat value={fmtCount(stats.tools)} label="tool calls" />
           {stats.errors > 0 && <Stat value={fmtCount(stats.errors)} label="errors" tone="error" />}
           <Stat value={fmtDuration(stats.wallMs)} label="wall" />
@@ -206,11 +207,13 @@ export function TopBar({ runId }: { runId: string }) {
               <Stat
                 value={`${fmtTokens(stats.tokensIn)}→${fmtTokens(stats.tokensOut)}`}
                 label="tokens"
+                optional
               />
               <Stat
                 value={fmtCost(stats.estCostUsd)}
                 label="est. cost"
-                title="Rough estimate at $3/$15 per million tokens — token counts are from the run, prices are not."
+                optional
+                title="Rough estimate at $3/$15 per million tokens — token counts come from the run, prices do not."
               />
             </>
           )}
@@ -226,7 +229,9 @@ export function TopBar({ runId }: { runId: string }) {
           title={collapsedCount > 0 ? 'Expand every group (⇧C)' : 'Collapse sub-agents into summary cards (⇧C)'}
         >
           {collapsedCount > 0 ? <IconExpand /> : <IconCollapse />}
-          {collapsedCount > 0 ? `${collapsedCount} folded` : 'Collapse'}
+          <span className="gm-toolbtn-label">
+            {collapsedCount > 0 ? `${collapsedCount} folded` : 'Collapse'}
+          </span>
         </button>
 
         <div className="gm-seg" role="radiogroup" aria-label="View">
@@ -244,8 +249,7 @@ export function TopBar({ runId }: { runId: string }) {
             title="Graph + timeline (⇧T)"
             aria-label="Split"
           >
-            <IconGraph />
-            <IconTimeline />
+            <IconSplit />
           </button>
           <button
             className={view === 'timeline' ? 'gm-seg--on' : ''}
@@ -263,7 +267,7 @@ export function TopBar({ runId }: { runId: string }) {
           title="Search nodes, runs and actions"
         >
           <IconSearch />
-          Search
+          <span className="gm-toolbtn-label">Search</span>
           <span className="gm-kbd">⌘K</span>
         </button>
 
@@ -285,14 +289,20 @@ function Stat({
   label,
   tone,
   title,
+  optional,
 }: {
   value: string;
   label: string;
   tone?: 'error';
   title?: string;
+  /** Dropped first when the toolbar runs out of room. */
+  optional?: boolean;
 }) {
   return (
-    <div className={`gm-stat${tone === 'error' ? ' gm-stat--error' : ''}`} title={title ?? label}>
+    <div
+      className={`gm-stat${tone === 'error' ? ' gm-stat--error' : ''}${optional === true ? ' gm-stat--optional' : ''}`}
+      title={title ?? label}
+    >
       <span className="gm-stat-value">{value}</span>
       <span className="gm-stat-label">{label}</span>
     </div>

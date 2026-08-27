@@ -3,7 +3,8 @@
  * on `<html data-theme>` (CSS owns the rest) and remembered in localStorage,
  * which is also what makes both themes reviewable side by side.
  */
-import type { ThemeChoice } from '../store/uiStore.js';
+/** Follow the OS, or pin one. */
+export type ThemeChoice = 'system' | 'dark' | 'light';
 
 export const THEME_STORAGE_KEY = 'graphmind.theme';
 

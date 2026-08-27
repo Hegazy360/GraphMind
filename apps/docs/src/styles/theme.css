@@ -208,6 +208,28 @@ h3 {
   font-weight: 600;
 }
 
+/* keyboard keys */
+.sl-markdown-content kbd:not(:where(.not-content *)) {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0.12em 0.42em;
+  font-family: var(--sl-font-mono);
+  font-size: 0.8em;
+  font-weight: 500;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--gm-text);
+  background: var(--gm-bg-soft);
+  border: 1px solid var(--gm-border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  white-space: nowrap;
+  vertical-align: 0.05em;
+}
+.sl-markdown-content kbd + kbd {
+  margin-inline-start: 0.2em;
+}
+
 /* ---------- page frame ---------- */
 
 .page > header.header,

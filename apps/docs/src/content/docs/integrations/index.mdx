@@ -6,19 +6,24 @@ sidebar:
   label: Overview
 ---
 
-import { LinkCard, CardGrid, Aside } from '@astrojs/starlight/components';
+import { CardGrid, Aside } from '@astrojs/starlight/components';
+import LinkCard from '../../../components/LinkCard.astro';
 
-Every GraphMind adapter exposes the **same four calls**, so the debugger works the same way
-whatever you write your agents in:
+Every GraphMind adapter exposes the **same shape**, so the debugger works the same way whatever
+you write your agents in:
 
 ```ts
 const gm = graphmind({ app: 'my-agent' });
 
-gm.wrapClient(client);   // or gm.wrapModel(model) / gm.handler()
+gm.wrapClient(client);   // or gm.wrapModel(model) / gm.handler() for LangChain
 gm.wrapTools({ ... });   // gates each tool call
 gm.run(name, fn);        // one run, one AbortController, one agent node
 await gm.ready();        // wait for the debugger handshake (optional, recommended)
 ```
+
+What differs is only what each framework's extension points allow — the
+[LangGraph page](/integrations/langgraph/#capability-matrix) has the honest matrix for the one
+case where a callback-only path cannot do everything.
 
 Adapters are built strictly on **public extension points** — middleware, callback handlers,
 client hooks, tool decoration. No forks, no monkey-patching of module internals, nothing that

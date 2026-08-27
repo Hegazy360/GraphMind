@@ -17,7 +17,8 @@ Three jobs:
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Set
+from collections.abc import Callable
+from typing import Any
 
 from ..ids import LLM_NODE_ID, LLM_NODE_NAME, agent_node_id, tool_node_id
 from ..safe import OnceWarner
@@ -48,7 +49,7 @@ def safe_value(value: Any, depth: int = 0) -> Any:
     if depth >= MAX_DEPTH:
         return "…[depth limit]"
     if isinstance(value, dict):
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         for index, (key, item) in enumerate(value.items()):
             if index >= MAX_ITEMS:
                 out["…"] = f"[{len(value) - MAX_ITEMS} more keys]"
@@ -78,9 +79,9 @@ def safe_value(value: Any, depth: int = 0) -> Any:
         return f"<{type(value).__name__}>"
 
 
-def tool_names(tools: Any) -> List[str]:
+def tool_names(tools: Any) -> list[str]:
     """Extract tool names from any of the provider tool-definition shapes."""
-    names: List[str] = []
+    names: list[str] = []
     if not isinstance(tools, (list, tuple)):
         return names
     for entry in tools:
@@ -109,7 +110,7 @@ class GraphHinter:
     MAX_RUNS = 256
 
     def __init__(self) -> None:
-        self._seen: Set[str] = set()
+        self._seen: set[str] = set()
 
     def maybe_hint(self, session: Session, tools: Any, node_id: str, node_name: str) -> None:
         try:
@@ -120,12 +121,12 @@ class GraphHinter:
             if len(self._seen) >= self.MAX_RUNS:
                 self._seen.clear()
             self._seen.add(key)
-            nodes: List[Dict[str, Any]] = []
-            parent: Optional[str] = None
+            nodes: list[dict[str, Any]] = []
+            parent: str | None = None
             if ctx is not None:
                 parent = agent_node_id(ctx.name)
                 nodes.append({"nodeId": parent, "kind": "agent", "name": ctx.name})
-            llm: Dict[str, Any] = {"nodeId": node_id, "kind": "llm", "name": node_name}
+            llm: dict[str, Any] = {"nodeId": node_id, "kind": "llm", "name": node_name}
             if parent is not None:
                 llm["parentId"] = parent
             nodes.append(llm)
@@ -149,7 +150,7 @@ _INPUT_FIELDS = ("input_tokens", "prompt_tokens")
 _OUTPUT_FIELDS = ("output_tokens", "completion_tokens")
 
 
-def usage_of(obj: Any) -> Optional[Dict[str, int]]:
+def usage_of(obj: Any) -> dict[str, int] | None:
     """Map any provider usage object onto the wire ``TokenUsage`` shape."""
     if obj is None:
         return None
@@ -161,11 +162,9 @@ def usage_of(obj: Any) -> Optional[Dict[str, int]]:
     if source is None:
         return None
 
-    def read(fields: "tuple[str, ...]") -> Optional[int]:
+    def read(fields: tuple[str, ...]) -> int | None:
         for field in fields:
-            value = (
-                source.get(field) if isinstance(source, dict) else getattr(source, field, None)
-            )
+            value = source.get(field) if isinstance(source, dict) else getattr(source, field, None)
             if isinstance(value, int) and not isinstance(value, bool):
                 return value
         return None
@@ -180,9 +179,7 @@ def usage_of(obj: Any) -> Optional[Dict[str, int]]:
     }
 
 
-def merge_usage(
-    left: Optional[Dict[str, int]], right: Optional[Dict[str, int]]
-) -> Optional[Dict[str, int]]:
+def merge_usage(left: dict[str, int] | None, right: dict[str, int] | None) -> dict[str, int] | None:
     if left is None:
         return right
     if right is None:
@@ -203,7 +200,7 @@ class SyncStreamTee:
         self,
         inner: Any,
         on_chunk: Callable[[Any], None],
-        on_end: Callable[[Optional[BaseException]], None],
+        on_end: Callable[[BaseException | None], None],
     ) -> None:
         self._inner = inner
         self._on_chunk = on_chunk
@@ -211,7 +208,7 @@ class SyncStreamTee:
         self._iterator: Any = None
         self._finished = False
 
-    def __iter__(self) -> "SyncStreamTee":
+    def __iter__(self) -> SyncStreamTee:
         if self._iterator is None:
             self._iterator = iter(self._inner)
         return self
@@ -233,13 +230,13 @@ class SyncStreamTee:
             pass
         return chunk
 
-    def __enter__(self) -> "SyncStreamTee":
+    def __enter__(self) -> SyncStreamTee:
         enter = getattr(self._inner, "__enter__", None)
         if enter is not None:
             enter()
         return self
 
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         self._finish(exc)
         exit_ = getattr(self._inner, "__exit__", None)
         if exit_ is not None:
@@ -247,7 +244,6 @@ class SyncStreamTee:
                 exit_(exc_type, exc, tb)
             except Exception:
                 pass
-        return False
 
     def close(self) -> None:
         self._finish(None)
@@ -258,7 +254,7 @@ class SyncStreamTee:
             except Exception:
                 pass
 
-    def _finish(self, error: Optional[BaseException]) -> None:
+    def _finish(self, error: BaseException | None) -> None:
         if self._finished:
             return
         self._finished = True
@@ -278,7 +274,7 @@ class AsyncStreamTee:
         self,
         inner: Any,
         on_chunk: Callable[[Any], None],
-        on_end: Callable[[Optional[BaseException]], None],
+        on_end: Callable[[BaseException | None], None],
     ) -> None:
         self._inner = inner
         self._on_chunk = on_chunk
@@ -286,7 +282,7 @@ class AsyncStreamTee:
         self._iterator: Any = None
         self._finished = False
 
-    def __aiter__(self) -> "AsyncStreamTee":
+    def __aiter__(self) -> AsyncStreamTee:
         if self._iterator is None:
             self._iterator = self._inner.__aiter__()
         return self
@@ -308,13 +304,13 @@ class AsyncStreamTee:
             pass
         return chunk
 
-    async def __aenter__(self) -> "AsyncStreamTee":
+    async def __aenter__(self) -> AsyncStreamTee:
         enter = getattr(self._inner, "__aenter__", None)
         if enter is not None:
             await enter()
         return self
 
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         self._finish(exc)
         exit_ = getattr(self._inner, "__aexit__", None)
         if exit_ is not None:
@@ -322,7 +318,6 @@ class AsyncStreamTee:
                 await exit_(exc_type, exc, tb)
             except Exception:
                 pass
-        return False
 
     async def close(self) -> None:
         self._finish(None)
@@ -335,7 +330,7 @@ class AsyncStreamTee:
             except Exception:
                 pass
 
-    def _finish(self, error: Optional[BaseException]) -> None:
+    def _finish(self, error: BaseException | None) -> None:
         if self._finished:
             return
         self._finished = True
@@ -348,6 +343,49 @@ class AsyncStreamTee:
         return getattr(self._inner, item)
 
 
+# -- async detection ----------------------------------------------------------
+
+
+def is_async_callable(fn: Any, _depth: int = 0) -> bool:
+    """True for ``async def`` functions, **including decorated ones**.
+
+    Provider SDKs wrap their async methods in synchronous validators
+    (``openai``'s ``@required_args``, ``anthropic``'s equivalent), so a bare
+    ``inspect.iscoroutinefunction`` reports False for
+    ``AsyncOpenAI().chat.completions.create``. Getting this wrong is not a
+    cosmetic bug — it would run a blocking gate inside the caller's event loop
+    and deadlock the host. So follow ``__func__`` / ``__wrapped__`` down to the
+    real function.
+    """
+    import inspect as _inspect
+
+    target = fn
+    for _ in range(10):
+        if target is None:
+            return False
+        if _inspect.iscoroutinefunction(target):
+            return True
+        nxt = getattr(target, "__func__", None)
+        if nxt is not None and nxt is not target:
+            target = nxt
+            continue
+        nxt = getattr(target, "__wrapped__", None)
+        if nxt is not None and nxt is not target:
+            target = nxt
+            continue
+        return False
+    return False
+
+
+def is_async_client(client: Any) -> bool:
+    """Corroborating signal: the SDK's underlying transport is an httpx AsyncClient."""
+    inner = getattr(client, "_client", None)
+    if inner is None:
+        return False
+    name = type(inner).__name__
+    return "Async" in name
+
+
 # -- patching -----------------------------------------------------------------
 
 WRAPPED_FLAG = "__graphmind_wrapped__"
@@ -355,7 +393,7 @@ WRAPPED_FLAG = "__graphmind_wrapped__"
 
 def patch_method(
     root: Any,
-    path: "tuple[str, ...]",
+    path: tuple[str, ...],
     attr: str,
     make_wrapper: Callable[[Callable[..., Any]], Callable[..., Any]],
     label: str,
@@ -378,7 +416,7 @@ def patch_method(
             return True  # already instrumented; idempotent
         wrapper = make_wrapper(original)
         setattr(wrapper, WRAPPED_FLAG, True)
-        setattr(wrapper, "__graphmind_original__", original)
+        setattr(wrapper, "__graphmind_original__", original)  # noqa: B010
         setattr(target, attr, wrapper)
         # Verify the patch stuck: some SDKs build resource objects on every
         # attribute access, in which case an instance patch is invisible.
@@ -397,11 +435,15 @@ def patch_method(
             return False
         return True
     except Exception as exc:
-        warn_once(f"patch-failed:{label}", f"could not instrument {label}; continuing without it", exc)
+        warn_once(
+            f"patch-failed:{label}",
+            f"could not instrument {label}; continuing without it",
+            exc,
+        )
         return False
 
 
-def unpatch_method(root: Any, path: "tuple[str, ...]", attr: str) -> bool:
+def unpatch_method(root: Any, path: tuple[str, ...], attr: str) -> bool:
     """Restore an instrumented method (used by tests and by ``uninstrument``)."""
     try:
         target = root
@@ -425,6 +467,8 @@ __all__ = [
     "AsyncStreamTee",
     "GraphHinter",
     "SyncStreamTee",
+    "is_async_callable",
+    "is_async_client",
     "merge_usage",
     "patch_method",
     "safe_value",

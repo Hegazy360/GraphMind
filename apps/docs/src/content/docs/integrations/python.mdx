@@ -14,6 +14,13 @@ same `graphmind` CLI, so a Python agent and a TypeScript one look identical in t
 pip install graphmind-ai
 ```
 
+<Aside type="caution" title="Newest adapter">
+The Python package lands alongside the 0.1.0 TypeScript adapters and is the least exercised of
+the set. The surface below is what `graphmind init` prints for a Python project, and it is
+stable; if something here does not match what you installed, please
+[open an issue](https://github.com/Hegazy360/GraphMind/issues) — that is a bug in one of the two.
+</Aside>
+
 The API is idiomatic Python rather than a transliteration: a context manager for runs, a
 decorator for tools, and one `instrument_*` call per client.
 
@@ -24,7 +31,7 @@ import json
 import graphmind
 from openai import OpenAI
 
-gm = graphmind.graphmind(app="support-agent")
+gm = graphmind.init(app="support-agent")
 
 # 1. Instrument the client — every request becomes a gated llm:step node.
 client = graphmind.instrument_openai(OpenAI())
@@ -112,7 +119,7 @@ Swap one line:
 import anthropic
 import graphmind
 
-gm = graphmind.graphmind(app="support-agent")
+gm = graphmind.init(app="support-agent")
 client = graphmind.instrument_anthropic(anthropic.Anthropic())
 
 with gm.run("handle-ticket"):
@@ -134,7 +141,7 @@ Attach the callback handler, exactly like the JS adapter:
 import graphmind
 from langgraph.prebuilt import create_react_agent
 
-gm = graphmind.graphmind(app="support-agent")
+gm = graphmind.init(app="support-agent")
 gm.ready()
 
 agent = create_react_agent(model, tools=[search_orders, issue_refund])
@@ -155,7 +162,7 @@ becomes the parent/child structure on the canvas.
 
 | Call | What it does |
 | --- | --- |
-| `graphmind.graphmind(app=...)` | Create the session. Same options as the TS adapters. |
+| `graphmind.init(app=...)` | Create the session. Same options as the TS adapters. |
 | `graphmind.instrument_openai(client)` | Gate every OpenAI request; returns the client. |
 | `graphmind.instrument_anthropic(client)` | Gate every Anthropic request; returns the client. |
 | `gm.handler()` | LangChain `BaseCallbackHandler` for LangGraph / LCEL runs. |

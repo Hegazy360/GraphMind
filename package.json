@@ -8,8 +8,9 @@
   "packageManager": "pnpm@11.24.0",
   "scripts": {
     "typecheck": "pnpm -r --filter './packages/**' --filter './apps/**' run typecheck",
-    "test": "pnpm -r --filter './packages/**' run test",
+    "test": "pnpm -r --filter './packages/**' --filter './apps/viewer' run test",
     "build": "pnpm -r --filter './packages/**' --filter './apps/**' run build",
-    "build:viewer": "pnpm --filter viewer run build && node scripts/copy-viewer-dist.mjs"
+    "build:viewer": "pnpm --filter viewer run build && node scripts/copy-viewer-dist.mjs",
+    "test:all": "pnpm test && pnpm --filter web test"
   }
 }

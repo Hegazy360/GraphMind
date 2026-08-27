@@ -19,3 +19,14 @@ internal/
 
 # viewer build artifact copied into cli for serving
 packages/cli/viewer-dist/
+
+# astro/docs build caches
+apps/docs/.astro/
+apps/docs/dist/
+apps/viewer/dist/
+python/.venv/
+python/dist/
+python/**/__pycache__/
+python/.pytest_cache/
+python/.ruff_cache/
+python/.mypy_cache/

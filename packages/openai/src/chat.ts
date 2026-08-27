@@ -14,6 +14,7 @@
  */
 import type { StepReporter, LlmFlavor, ResultSummary } from './llm-step.js';
 import { promptKey, type PromptKey } from './invocation.js';
+import { isAbortLikeError } from './signals.js';
 import {
   mapChatUsage,
   parseToolInput,
@@ -150,7 +151,7 @@ export const chatFlavor: LlmFlavor = {
     } catch (error) {
       // The observer runs detached from the host: report, never rethrow.
       try {
-        const aborted = isAbortLike(error);
+        const aborted = isAbortLikeError(error);
         if (!aborted) reporter.error(error);
         reporter.finish({ text, finishReason }, aborted ? 'aborted' : 'error', usage, {
           streamed: true,
@@ -161,12 +162,3 @@ export const chatFlavor: LlmFlavor = {
     }
   },
 };
-
-function isAbortLike(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.name === 'AbortError' ||
-      error.name === 'APIUserAbortError' ||
-      error.name === 'GraphMindAbortError')
-  );
-}

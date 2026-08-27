@@ -19,7 +19,7 @@ import {
   type TokenUsage,
 } from '@graphmind-ai/client';
 import { DEFAULT_MAX_PAYLOAD_CHARS, safePayload } from './payload.js';
-import { TokenBatcher } from './token-batcher.js';
+import { TokenBatcher, type TokenBatchSink } from './token-batcher.js';
 import { OnceWarner, type WarnSink } from './warn.js';
 
 /** Which chain runs become graph nodes. */
@@ -64,6 +64,7 @@ export interface ToolAnnotation {
   injected?: boolean;
   attempts?: number;
   aborted?: boolean;
+  recoveredFromError?: boolean;
 }
 
 /**
@@ -104,6 +105,13 @@ export class AdapterCore {
 
   /** Every run scope currently open, so un-linked wrappers can find the run. */
   private readonly openScopes = new Set<{ runIn: <T>(fn: () => T | Promise<T>) => Promise<T> }>();
+
+  /**
+   * Handlers with a run still open. Registered only while a run is in flight,
+   * so a long-lived process that creates a handler per invocation does not
+   * accumulate them; `gm.dispose()` closes whatever is left.
+   */
+  readonly openHandlers = new Set<{ close: () => Promise<void> }>();
 
   /**
    * Errors already gated once. A LangGraph failure surfaces as
@@ -173,7 +181,10 @@ export class AdapterCore {
   }
 
   finishNode(input: FinishNodeInput): void {
-    this.batcher.flushNode(input.nodeId);
+    // Emit any queued deltas here (synchronously, in the caller's run context)
+    // so node.token always precedes the node.finished it belongs to.
+    const deltas = this.batcher.take(input.nodeId);
+    if (deltas !== undefined) this.session.emit('node.token', { nodeId: input.nodeId, deltas });
     this.session.emit('node.finished', {
       nodeId: input.nodeId,
       instanceId: input.instanceId,
@@ -193,9 +204,22 @@ export class AdapterCore {
     });
   }
 
-  pushToken(nodeId: string, channel: TokenDelta['t'], value: string): void {
+  /**
+   * Queue one streamed delta. `sink` (built once per run by
+   * `tokenSinkFor`) is stored with the batch so the interval flush — which
+   * fires from a bare timer, outside any run context — still emits into the
+   * right run.
+   */
+  pushToken(nodeId: string, channel: TokenDelta['t'], value: string, sink?: TokenBatchSink): void {
     if (value.length === 0) return;
-    this.batcher.push(nodeId, { t: channel, v: value });
+    this.batcher.push(nodeId, { t: channel, v: value }, sink);
+  }
+
+  /** A `node.token` emitter bound to one run's context. Build once per run. */
+  tokenSinkFor(runIn: <T>(fn: () => T | Promise<T>) => Promise<T>): TokenBatchSink {
+    return (nodeId, deltas) => {
+      void runIn(() => this.session.emit('node.token', { nodeId, deltas })).catch(() => undefined);
+    };
   }
 
   payload(value: unknown): unknown {

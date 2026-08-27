@@ -24,6 +24,7 @@ export default new Map([
 ["src/content/docs/reference/mcp.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Freference%2Fmcp.mdx&astroContentModuleFlag=true")],
 ["src/content/docs/reference/telemetry.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Freference%2Ftelemetry.mdx&astroContentModuleFlag=true")],
 ["src/content/docs/reference/troubleshooting.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Freference%2Ftroubleshooting.mdx&astroContentModuleFlag=true")],
+["src/content/docs/reference/viewer.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Freference%2Fviewer.mdx&astroContentModuleFlag=true")],
 ["src/content/docs/reference/wire-protocol.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Freference%2Fwire-protocol.mdx&astroContentModuleFlag=true")],
 ["src/content/docs/start/concepts.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Fstart%2Fconcepts.mdx&astroContentModuleFlag=true")],
 ["src/content/docs/start/install.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Fstart%2Finstall.mdx&astroContentModuleFlag=true")],

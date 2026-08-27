@@ -1,12 +1,32 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
+import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
+import { rehypeBaseLinks } from './plugins/rehype-base-links.mjs';
 
 const GITHUB = 'https://github.com/Hegazy360/GraphMind';
 
+/**
+ * The docs are served from `graphmind.ai/docs` — the URL the `graphmind init`
+ * command and the landing page both point at. Pages are authored with plain
+ * root-absolute links; `rehypeBaseLinks` rewrites them onto this base, so
+ * moving the site (e.g. to its own subdomain) is a one-line change here.
+ */
+const BASE = '/docs';
+
 export default defineConfig({
-  site: 'https://docs.graphmind.ai',
+  site: 'https://graphmind.ai',
+  base: BASE,
+  trailingSlash: 'always',
   build: { format: 'directory' },
+  markdown: {
+    processor: unified({ rehypePlugins: [[rehypeBaseLinks, { base: BASE }]] }),
+  },
+  redirects: {
+    // `graphmind init` prints .../docs/reference/schema/ for adapter authors.
+    // Keys are base-relative (Astro prepends `base`); destinations are not.
+    '/reference/schema/': `${BASE}/reference/wire-protocol/`,
+  },
   integrations: [
     starlight({
       title: 'GraphMind',
@@ -65,6 +85,10 @@ export default defineConfig({
             editorActiveTabIndicatorTopColor: 'var(--gm-accent)',
             terminalTitlebarDotsForeground: 'var(--gm-border-strong)',
           },
+          textMarkers: {
+            markBackground: 'var(--gm-accent-dim)',
+            markBorderColor: 'var(--gm-accent)',
+          },
         },
       },
       sidebar: [
@@ -104,6 +128,7 @@ export default defineConfig({
         {
           label: 'Reference',
           items: [
+            { slug: 'reference/viewer' },
             { slug: 'reference/cli' },
             { slug: 'reference/environment' },
             { slug: 'reference/wire-protocol' },

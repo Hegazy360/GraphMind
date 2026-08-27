@@ -1,6 +1,128 @@
 ---
-title: TODO
-description: TODO
+title: Contributing
+description: How the repo is laid out, how to run it locally, what kinds of contribution are most useful, and the conventions a change is reviewed against.
+sidebar:
+  order: 2
 ---
 
-TODO
+import { FileTree, Aside } from '@astrojs/starlight/components';
+import LinkCard from '../../../components/LinkCard.astro';
+
+GraphMind is MIT and maintained by one person. That shapes what is most useful to contribute:
+things that make the project cover more ground without adding maintenance surface.
+
+## Most useful contributions
+
+1. **Adapters.** The single highest-leverage thing. Every framework GraphMind speaks is a
+   framework whose users get a debugger. See
+   [writing an adapter](/contributing/writing-an-adapter/).
+2. **Trace-import dialects.** `graphmind import` is best-effort across OTel and OpenInference
+   shapes; each dialect it recognises properly is a whole ecosystem that can at least *read* its
+   runs.
+3. **Reproductions.** A `graphmind record` NDJSON export attached to an issue is the actual run,
+   not a description of one. It is worth more than a paragraph of narrative.
+4. **Documentation gaps.** If something here was wrong, unclear, or missing when you needed it,
+   that is a bug in the docs.
+
+## Repository layout
+
+<FileTree>
+- packages/
+  - schema/ the wire contract — protocol types, envelope, parser, JSON Schema export
+  - client/ the runtime — session, transport, gate engine, ring buffer, kill switches
+  - ai-sdk/ **the reference adapter** (Vercel AI SDK)
+  - anthropic/ Anthropic SDK adapter
+  - openai/ OpenAI SDK adapter
+  - langgraph/ LangChain / LangGraph adapter
+  - cli/ server, SQLite storage, demo, importer, MCP, bundled viewer
+- apps/
+  - viewer/ the debugger UI (React)
+  - docs/ this site (Astro + Starlight)
+  - web/ graphmind.ai landing page
+- examples/
+  - demo-agent/ the instrumented trip planner behind `graphmind demo`
+  - e2e/ full-stack smoke test against a running server
+</FileTree>
+
+The dependency direction is strict and one-way: **schema ← client ← adapters**. The CLI depends
+on schema only. Nothing depends on an adapter.
+
+## Running it locally
+
+```sh
+git clone https://github.com/Hegazy360/GraphMind.git
+cd GraphMind
+pnpm install
+pnpm build
+pnpm test
+```
+
+Requires **Node ≥ 22.13** and pnpm. Then:
+
+```sh
+pnpm build:viewer      # build the viewer into the CLI's bundle
+node packages/cli/dist/cli.js demo
+```
+
+## Conventions
+
+| | |
+| --- | --- |
+| Language | TypeScript, `strict`, ESM |
+| Build | plain `tsc` (ESM + `.d.ts`) — no bundler, no task runner |
+| Tests | vitest |
+| Node | ≥ 22.13 (built-in `node:sqlite`, native `WebSocket`) |
+| Dependencies | as few as possible; a hand-rolled 60-line arg parser beat adding one |
+
+<Aside type="note" title="The bar for a new dependency">
+Every dependency is surface a solo maintainer has to keep track of, and weight in a package
+people install to debug something. "Could this be 50 lines instead?" is a real question here, and
+the answer has usually been yes.
+</Aside>
+
+## The invariants a change is reviewed against
+
+These are the promises GraphMind makes to people who ship it in their codebase. A change that
+weakens one needs a very good reason:
+
+- **Never throws into the host app.** Internal failures degrade to a no-op plus one rate-limited
+  warning.
+- **Zero cost when detached**, identity when disabled.
+- **Fails open.** A disconnected debugger releases every held gate.
+- **Local-first.** No payload leaves the machine. The server binds `127.0.0.1`.
+- **Protocol tolerance.** Unknown message types and unknown payload fields are absorbed, never
+  rejected. Only an incompatible change bumps `gm`.
+
+New behaviour that can hold or alter execution needs a test that asserts the fail-open path too,
+not just the happy one.
+
+## Changing the protocol
+
+The schema is the contract every adapter and any third-party implementation targets, so:
+
+- **Additive changes** — a new event type, a new optional payload field — do **not** bump
+  `PROTOCOL_VERSION`. Receivers already tolerate both.
+- **Incompatible changes** bump the major, and need a genuine argument for why tolerance cannot
+  absorb them.
+- The JSON Schema export is pinned by a golden-file test. If your change is intentional, update
+  the golden file in the same commit so the diff is visible in review.
+
+## Filing a good issue
+
+Include:
+
+- what you expected and what happened;
+- `node -v`, adapter and `graphmind-ai` versions, framework version;
+- any `[graphmind]` warning (the client never throws, so warnings are the signal);
+- ideally a `graphmind record <runId>` export.
+
+<Aside type="caution">
+Read the export before attaching it publicly — it contains your real prompts, tool arguments and
+outputs, unredacted.
+</Aside>
+
+<LinkCard
+  title="GitHub"
+  href="https://github.com/Hegazy360/GraphMind"
+  description="Issues, discussions, and the source for everything on this site."
+/>

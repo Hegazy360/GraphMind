@@ -4,7 +4,8 @@
  * stack, the exact input that produced it, and what ran around it — then the
  * numbers (duration, tokens, retries, estimated spend), then the payloads.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ErrorInfo } from '@graphmind-ai/schema';
 import { copyText, deepLink } from '../lib/commands.js';
 import {
   fmtClockMs,
@@ -75,7 +76,15 @@ function toJson(value: unknown): string {
   }
 }
 
-function StatCell({ label, value, tone }: { label: string; value: string; tone?: 'error' | 'dim' }) {
+function StatCell({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: 'error' | 'dim' | undefined;
+}) {
   return (
     <div className={`gm-inspect-stat${tone !== undefined ? ` gm-inspect-stat--${tone}` : ''}`}>
       <span className="gm-inspect-stat-value">{value}</span>
@@ -93,12 +102,16 @@ function WhyItFailed({
   runId: string;
   node: NodeState;
   exec: NodeExecution;
-  error: { name: string; message: string; stack?: string };
+  error: ErrorInfo;
 }) {
-  const context = useRunStore((s) => {
-    const run = s.runs[runId];
+  // Derived per render, not per store notification: `failureContext` builds a
+  // fresh object every call, and a zustand selector that never returns a
+  // stable reference is an infinite render loop.
+  const statusVersion = useRunStore((s) => s.runs[runId]?.statusVersion ?? 0);
+  const context = useMemo(() => {
+    const run = useRunStore.getState().runs[runId];
     return run === undefined ? { siblings: [] } : failureContext(run, node.nodeId);
-  });
+  }, [runId, node.nodeId, statusVersion]);
   const [showStack, setShowStack] = useState(false);
 
   return (
@@ -175,7 +188,7 @@ function WhyItFailed({
               >
                 {sibling.name}
                 {sibling.durationMs !== undefined && (
-                  <span className="gm-node-kind">{fmtDuration(sibling.durationMs)}</span>
+                  <span className="gm-why-chip-ms">{fmtDuration(sibling.durationMs)}</span>
                 )}
               </button>
             ))}

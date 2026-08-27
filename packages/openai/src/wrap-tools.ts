@@ -32,13 +32,20 @@ import { isObject, parseToolInput } from './sdk-types.js';
 
 type AnyFn = (...args: unknown[]) => unknown;
 
-/** Extract the tool call id from whatever the caller passed as the 2nd arg. */
+/**
+ * Extract the tool call id from whatever the caller passed as the 2nd arg.
+ * A bare `id` only counts when the object also looks like a tool call — the
+ * SDK's `runTools()` passes its *runner* there, and reusing one id across every
+ * call would collapse distinct executions into one node instance.
+ */
 function instanceIdOf(options: unknown): string {
   if (isObject(options)) {
-    const candidates = [options['toolCallId'], options['id'], options['call_id']];
-    for (const candidate of candidates) {
-      if (typeof candidate === 'string' && candidate.length > 0) return candidate;
-    }
+    const explicit = options['toolCallId'] ?? options['call_id'];
+    if (typeof explicit === 'string' && explicit.length > 0) return explicit;
+    const looksLikeToolCall =
+      'function' in options || 'name' in options || options['type'] === 'function';
+    const id = options['id'];
+    if (looksLikeToolCall && typeof id === 'string' && id.length > 0) return id;
   }
   return nextId('call');
 }

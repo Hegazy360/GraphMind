@@ -1,0 +1,131 @@
+---
+title: The viewer
+description: Everything the debugger UI does — the command palette, keyboard shortcuts, the timeline waterfall, filters, collapsing, and deep links.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The viewer is the bundled UI the CLI serves at `http://127.0.0.1:4747`. This page is the map: if
+you learn one thing from it, learn <kbd>⌘</kbd><kbd>K</kbd>.
+
+## The command palette
+
+<kbd>⌘</kbd><kbd>K</kbd> (or <kbd>Ctrl</kbd><kbd>K</kbd>) opens a palette over everything. It is
+the fastest route to any node, any run, and every action on this page — so you never have to hunt
+for a control.
+
+| Type | To get |
+| --- | --- |
+| anything | Fuzzy search across the run's nodes and your recent runs |
+| `>` | Actions only (or press <kbd>&gt;</kbd> to open straight into command mode) |
+| `/` | Opens the palette from anywhere |
+
+Arrow keys move, <kbd>Enter</kbd> runs, <kbd>Esc</kbd> closes. Selecting a node centres it on the
+canvas and opens the inspector on it.
+
+## Keyboard shortcuts
+
+Shortcuts are ignored while you are typing in a field — except <kbd>⌘</kbd><kbd>K</kbd>, which
+always works.
+
+| Key | Action |
+| --- | --- |
+| <kbd>⌘</kbd><kbd>K</kbd> | Toggle the command palette |
+| <kbd>/</kbd> | Open the palette (search) |
+| <kbd>&gt;</kbd> | Open the palette (actions) |
+| <kbd>Esc</kbd> | Close the palette, or deselect the current node |
+| <kbd>F</kbd> | Follow the active node with the camera |
+| <kbd>⇧</kbd><kbd>F</kbd> | Fit the graph to the screen |
+| <kbd>⇧</kbd><kbd>A</kbd> | Re-arrange the layout (full ELK pass) |
+| <kbd>⇧</kbd><kbd>T</kbd> | Toggle the timeline |
+| <kbd>⇧</kbd><kbd>E</kbd> | Show only the error path |
+| <kbd>⇧</kbd><kbd>C</kbd> | Collapse / expand all groups |
+| <kbd>⇧</kbd><kbd>L</kbd> | Copy a deep link to this view |
+| <kbd>B</kbd> | Toggle the run list rail |
+| <kbd>D</kbd> | Cycle the theme (system → dark → light) |
+
+## The graph
+
+One node per **logical** node, lit up per execution — see
+[nodes and instances](/start/concepts/#nodes-and-instances). Nodes appear as the agent reaches
+them, glow while running, and turn red on failure.
+
+- **Follow** (<kbd>F</kbd>) keeps the camera on whatever is executing — the right default for
+  watching a live run.
+- **Fit** (<kbd>⇧</kbd><kbd>F</kbd>) zooms out to the whole graph.
+- **Re-arrange** (<kbd>⇧</kbd><kbd>A</kbd>) runs a full layout pass. Live runs are laid out
+  incrementally so nothing jumps under your cursor; after a long run this tidies the result.
+- **Collapse** (<kbd>⇧</kbd><kbd>C</kbd>) folds sub-agents and chains into summary cards — the
+  first thing to reach for on a graph you cannot take in at once.
+
+## Filters
+
+From the palette, to cut a large run down to what you care about:
+
+| Filter | Shows |
+| --- | --- |
+| **Errored nodes** | Only nodes that failed |
+| **Slow nodes** | p90 duration and above, *for this run* |
+| **Paused nodes** | Only nodes currently held at a gate |
+| **Error path** (<kbd>⇧</kbd><kbd>E</kbd>) | Dims everything that is not an ancestor of a failure |
+
+Error path is the one to know: on a 200-node run it answers "what actually led here" in a
+keystroke, instead of you tracing edges by hand.
+
+Filters also narrow by node kind, and **Clear all filters** puts the whole graph back.
+
+## The timeline
+
+<kbd>⇧</kbd><kbd>T</kbd> opens a waterfall under the graph. It answers the questions the graph
+cannot:
+
+- what **overlapped** — which tool calls actually ran in parallel;
+- where the **wall clock** went — the step that took eleven seconds is the widest bar;
+- how long a step **waited before its first token**;
+- when a **gate held**, and for how long.
+
+Rows are virtualised, so a thousand bars cost the same as thirty. Zoom with
+<kbd>⌘</kbd>-scroll, the +/−/fit buttons, or by dragging a range on the ruler. Labels stay pinned
+while you scroll horizontally. **Timeline only** hides the graph when you want the full height.
+
+## The inspector
+
+Click any node to open it: input, output, error with stack, duration, token usage, status, and
+every instance of that node newest-first. See [inspecting a run](/debugging/inspecting/).
+
+## The run bar
+
+Connection status, the run picker, the **Run / Step** toggle, **Pause all**, and a removable chip
+for every armed breakpoint — including the default pause-on-error one. See
+[breakpoints & step mode](/debugging/breakpoints-and-step/).
+
+## Deep links
+
+The viewer's routes are plain hash URLs:
+
+```text
+http://127.0.0.1:4747/#/run/<runId>
+http://127.0.0.1:4747/#/run/<runId>/node/<nodeId>
+```
+
+Both segments are URI-component encoded, so `tool:issueRefund` appears as `tool%3AissueRefund`.
+
+<kbd>⇧</kbd><kbd>L</kbd> copies a link to the current view — paste it into an issue, a message,
+or your notes and it reopens exactly there. The [MCP tools](/reference/mcp/) return these same
+links, so a coding agent can cite the precise node it is talking about.
+
+<Aside type="note" title="Two viewers, one server">
+Breakpoints and mode live on the server, not in a browser tab. Two windows on the same server
+see the same debug state, and a change in one broadcasts to the other — which is what makes
+"open the good run and the bad run side by side" work. See
+[comparing runs](/debugging/comparing-runs/).
+</Aside>
+
+## Imported and replayed runs
+
+A run brought in by `graphmind import` is rendered with the viewer's "imported" treatment:
+history only. Nothing is executing, so there is nothing to pause, and the control affordances are
+not offered. `graphmind demo` replays a recording through the real pipeline, so it *does* pause
+for real.

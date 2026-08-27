@@ -3,10 +3,15 @@
  * wrapTools -> a raw Anthropic tool loop on the real @anthropic-ai/sdk client
  * with a scripted fetch) against a fake debugger WebSocket server.
  */
+import Anthropic from '@anthropic-ai/sdk';
 import { afterEach, describe, expect, it } from 'vitest';
 import { graphmind, type Graphmind, type GraphmindOptions } from '../src/index.js';
 import { FakeViewer, tick, waitUntil, type FakeViewerOptions } from './helpers/fake-viewer.js';
-import { FakeAnthropicTransport } from './helpers/fake-anthropic.js';
+import {
+  FakeAnthropicTransport,
+  assistantEvents,
+  assistantMessage,
+} from './helpers/fake-anthropic.js';
 import {
   Marks,
   TOOL_USE_IDS,
@@ -108,6 +113,50 @@ describe('LLM gate: nothing is in flight while held', () => {
       (f) => f.type === 'run.finished' && f.payload['status'] === 'aborted',
     );
     expect(runFinished).toBeDefined();
+  });
+});
+
+describe('client.beta.messages', () => {
+  it('gates beta create and the beta stream helper before the request', async () => {
+    const { viewer, gm } = await setup({ breakpoints: [{ kind: 'llm' }] });
+    await attach(gm);
+
+    const transport = new FakeAnthropicTransport((_body, index) =>
+      index === 0
+        ? { message: assistantMessage('b0', 'beta ok') }
+        : { events: assistantEvents('b1', 'beta streamed') },
+    );
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    const client = gm.wrapClient(
+      new Anthropic({ apiKey: 'test-key', maxRetries: 0, fetch: transport.fetch }),
+      /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    ) as any;
+    const params = {
+      model: 'claude-sonnet-4-5',
+      max_tokens: 64,
+      messages: [{ role: 'user', content: 'hi' }],
+    };
+
+    const pending = client.beta.messages.create(params);
+    const paused = await viewer.waitFor(
+      (f) => f.type === 'exec.paused' && f.payload['nodeId'] === 'llm:step',
+    );
+    await tick(200);
+    expect(transport.requests).toHaveLength(0);
+    viewer.resume(paused.payload['pauseId'] as string, 'continue');
+    expect((await pending).content[0].text).toBe('beta ok');
+
+    const helper = client.beta.messages.stream(params);
+    const paused2 = await viewer.waitForNth(
+      (f) => f.type === 'exec.paused' && f.payload['nodeId'] === 'llm:step',
+      2,
+    );
+    await tick(200);
+    expect(transport.requests).toHaveLength(1); // the helper's request is held too
+    viewer.resume(paused2.payload['pauseId'] as string, 'continue');
+    const final = await helper.finalMessage();
+    expect(final.content[0].text).toBe('beta streamed');
+    expect(transport.requests).toHaveLength(2);
   });
 });
 

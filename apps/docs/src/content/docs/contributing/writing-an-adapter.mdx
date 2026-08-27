@@ -1,6 +1,254 @@
 ---
-title: TODO
-description: TODO
+title: Writing an adapter
+description: Bring GraphMind to a framework it does not support yet — the runtime does the hard parts, you supply the hook points. A concrete, copy-along guide.
+sidebar:
+  order: 1
 ---
 
-TODO
+import { Aside, Steps } from '@astrojs/starlight/components';
+import LinkCard from '../../../components/LinkCard.astro';
+
+GraphMind can only cover as many frameworks as people write adapters for, and adapters are the
+part of the project most worth contributing to. The good news: **the runtime already owns
+everything hard**.
+
+`@graphmind-ai/client` gives you the session, the WebSocket transport with reconnect, the ring
+buffer and replay, the gate engine, `AsyncLocalStorage` run contexts, the kill switches, and the
+fail-open discipline. An adapter is glue: find the framework's hook points, map its shapes onto
+the schema, await gates in the right places.
+
+A complete adapter is a few hundred lines.
+
+## Before you start
+
+- Read the [wire protocol](/reference/wire-protocol/) — that is the contract.
+- Read `packages/ai-sdk/` in the repo. It is the reference adapter; its structure, tests and
+  fail-open discipline are the bar.
+- Adapters must use **public extension points only**. Middleware, callback handlers, client
+  hooks, decorated functions. No forks, no patching module internals — anything that breaks on a
+  minor release of your framework is not an adapter, it is a liability.
+
+## 1. Create the session
+
+```ts
+import { createSession } from '@graphmind-ai/client';
+
+const session = createSession({
+  appName: options.app ?? 'my-framework-app',
+  sdk: { name: 'my-framework', version: detectVersion() },
+});
+```
+
+Expose the standard surface so users do not have to relearn GraphMind per framework:
+
+```ts
+export interface Graphmind {
+  readonly session: Session;
+  ready(opts?: ReadyOptions): Promise<boolean>;
+  wrapClient<T>(client: T): T;       // or wrapModel / handler()
+  wrapTools<T>(tools: T): T;
+  run<R>(name: string, fn: (ctx: RunContext) => R | Promise<R>): Promise<R>;
+  dispose(): Promise<void>;
+}
+```
+
+## 2. Decide node identity
+
+This is the design decision that determines whether big runs stay readable.
+
+- `nodeId` is stable per **logical** node — one place in the user's code: `tool:searchFlights`,
+  `llm:step`, `chain:retrieve`.
+- `instanceId` is unique per **execution** — a tool call id, a step index, the framework's run
+  id.
+
+Follow the existing convention (`agent:` / `llm:` / `tool:` / `chain:` / `retriever:` prefixes)
+so a run reads the same whatever produced it.
+
+<Aside type="caution" title="Always send instanceId">
+Set it on `node.started` **and** on `node.finished` / `node.error`. It is optional on the latter
+two only for backwards compatibility. Without it, a receiver attributes a result to the most
+recent open instance — wrong exactly when the same node runs concurrently, which is when someone
+is most likely to be debugging.
+</Aside>
+
+## 3. Instrument the model call
+
+The order matters. Gate **before** you start the work, so a hold has nothing in flight:
+
+```ts
+async function instrumentedCall(params) {
+  const nodeId = 'llm:step';
+  const instanceId = nextStepId();
+
+  session.emit('node.started', {
+    nodeId, kind: 'llm', name: 'step', instanceId, input: params,
+  });
+
+  const decision = await session.gate('before', { nodeId, kind: 'llm', name: 'step' });
+  if (decision.action === 'inject') return decision.output;
+  if (decision.action === 'abort') throw ctx.signal.reason;
+
+  const startedAt = Date.now();
+  try {
+    const result = await original(params, { signal: ctx.signal });
+    session.emit('node.finished', {
+      nodeId, instanceId,
+      output: result,
+      usage: { inputTokens: result.usage.input, outputTokens: result.usage.output },
+      durationMs: Date.now() - startedAt,
+      status: 'ok',
+    });
+    return result;
+  } catch (error) {
+    session.emit('node.error', { nodeId, instanceId, error: toErrorInfo(error) });
+    const onError = await session.gate('error', { nodeId, kind: 'llm', name: 'step' });
+    if (onError.action === 'inject') return onError.output;
+    if (onError.action === 'retry') return instrumentedCall(params);
+    throw error;
+  }
+}
+```
+
+If the framework streams, tee the stream and emit batched `node.token` deltas (one batch per node
+per ~34 ms is what the reference adapter uses — about 30/sec, smooth without flooding). **Tee,
+never intercept**: what the host consumes must be byte-identical to what it would have consumed.
+
+## 4. Instrument tools
+
+Tools are where the debugger earns most of its value, because tool failures are where agent runs
+actually break. Wrap each tool with all three gates:
+
+```ts
+async function gatedExecute(args) {
+  const node = { nodeId: `tool:${name}`, kind: 'tool' as const, name };
+
+  const before = await session.gate('before', node);
+  if (before.action === 'inject') return before.output;   // never call the real one
+  if (before.action === 'abort') throw ctx.signal.reason;
+
+  try {
+    const output = await original(args);
+    const after = await session.gate('after', node);
+    if (after.action === 'inject') return after.output;   // replace the result
+    if (after.action === 'retry') return gatedExecute(args);
+    return output;
+  } catch (error) {
+    const onError = await session.gate('error', node);
+    if (onError.action === 'inject') return onError.output; // swallow the error
+    if (onError.action === 'retry') return gatedExecute(args);
+    if (onError.action === 'abort') throw ctx.signal.reason;
+    throw error;                                            // continue = rethrow ORIGINAL
+  }
+}
+```
+
+The four actions have exact meanings — do not improvise:
+
+| Action | Obligation |
+| --- | --- |
+| `continue` | Proceed normally. At an `error` gate, rethrow the **original** error. |
+| `retry` | Re-run the execution from the top, gating again. |
+| `inject` | Skip execution (or swallow the error) and return `decision.output` verbatim. |
+| `abort` | Throw `ctx.signal.reason` — the session has already aborted the controller. |
+
+<Aside type="note" title="Do not validate injected output">
+`decision.output` is `unknown` and should be passed through as-is. Substituting a value is the
+operator's call, exactly like setting a variable in a debugger. Validating it would defeat the
+point.
+</Aside>
+
+## 5. Wire up abort
+
+Every `session.run` context carries an `AbortController`. Pass `ctx.signal` into every SDK call
+you make. When a gate resolves `abort`, the session aborts that controller with an
+`AbortError`-named reason **before** the gate promise resolves.
+
+This exists because throwing a plain `Error` out of SDK middleware lands in the SDK's *retry*
+logic — an "abort" would be retried `maxRetries` times before surfacing. `AbortError` is
+terminal.
+
+If the framework has its own signals or timeouts, **chain — never replace** them, and consider
+filtering timeout-driven aborts while attached so a long hold does not burn the user's budget.
+
+## 6. Emit a graph hint (optional, high value)
+
+If you can know the shape before anything runs — a tool roster, a compiled graph — send it:
+
+```ts
+session.emit('graph.hint', {
+  nodes: Object.keys(tools).map((name) => ({
+    nodeId: `tool:${name}`, kind: 'tool', name,
+  })),
+});
+```
+
+The viewer renders those nodes greyed out immediately, so a user sees the whole shape before the
+first step and watches it come alive. It is a small amount of code for a large amount of
+"oh, *that* is what my agent looks like".
+
+## 7. Honour the invariants
+
+Non-negotiable, and what a review will check:
+
+<Steps>
+
+1. **Never throw into the host.** Catch your own internal errors, degrade to uninstrumented
+   behaviour, warn once (rate-limited). The host's own errors propagate untouched.
+
+2. **Identity when disabled.** `if (!session.enabled) return input;` at the top of every wrapper.
+   Zero overhead, zero surface.
+
+3. **Fast path when detached.** Never do work that only matters when a viewer is watching. The
+   session's `gate()` already short-circuits; do not add your own cost around it.
+
+4. **Never reimplement the runtime.** No custom reconnect, buffer, breakpoint matching or pause
+   bookkeeping. If you find yourself needing one, that is a change to `@graphmind-ai/client` —
+   open an issue.
+
+5. **Zero overhead when detached, measurably.** Assert it in a test, like the reference adapter
+   does.
+
+</Steps>
+
+## 8. Test it
+
+Mirror `packages/ai-sdk/test/`:
+
+| Test | Asserts |
+| --- | --- |
+| `units` | Node id derivation, payload mapping, edge cases |
+| `observe` | The right events in the right order for a normal run |
+| `gates` | Each of the four actions, at each point, plus parallel independence |
+| `ready` | Attach guarantee, and fail-open on timeout |
+
+The helper pattern that makes this pleasant is a **fake viewer**: a real WebSocket server that
+speaks the handshake and lets a test assert on received envelopes and send controls back. Copy
+`test/helpers/fake-viewer.ts`.
+
+Also assert the invariants directly: detached overhead under 1 ms, disconnect-mid-hold releases
+gates, a host crash does not leave the session wedged.
+
+## Package conventions
+
+TypeScript strict, ESM, plain `tsc` build (copy a sibling package's `tsconfig` / `tsconfig.build`
+/ scripts), vitest, Node ≥ 22.13. Publish under `@graphmind-ai/<framework>` if you would like it
+in the org, or under your own scope — the protocol is open either way.
+
+## Other languages
+
+Target the [wire protocol](/reference/wire-protocol/) directly. The schema package exports a
+JSON Schema (draft 2020-12) of the envelope via `exportJsonSchema()` for exactly this.
+
+The pieces you have to build yourself are the ones `@graphmind-ai/client` provides in
+JavaScript: a WebSocket client with reconnect, a `seq` counter, a ring buffer with replay-on-
+attach, breakpoint matching, mode handling, and a gate primitive that fails open on disconnect.
+Read `packages/client/src/` as the specification of correct behaviour — especially
+`gate-engine.ts` and `session.ts`.
+
+## Get in touch first
+
+<LinkCard
+  title="Open an issue before you build"
+  href="https://github.com/Hegazy360/GraphMind/issues"
+  description="Say which framework you are targeting. It avoids duplicate work and gets you the hook-point advice the hard way was already learned on."
+/>

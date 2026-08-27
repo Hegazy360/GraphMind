@@ -1,4 +1,4 @@
-""""Never raise into the host app" plumbing.
+""" "Never raise into the host app" plumbing.
 
 Every internal failure degrades to a no-op plus a rate-limited warning: at most
 one message per key per interval, so a permanently broken transport cannot spam
@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
+from typing import Any
 
 WarnSink = Callable[[str], None]
 
@@ -30,10 +31,10 @@ class RateLimitedWarner:
 
     __slots__ = ("_interval", "_last_at", "_lock", "_sink")
 
-    def __init__(self, interval: float = 60.0, sink: Optional[WarnSink] = None) -> None:
+    def __init__(self, interval: float = 60.0, sink: WarnSink | None = None) -> None:
         self._interval = interval
         self._sink: WarnSink = sink if sink is not None else _default_sink
-        self._last_at: Dict[str, float] = {}
+        self._last_at: dict[str, float] = {}
         self._lock = threading.Lock()
 
     def warn(self, key: str, message: str, cause: Any = None) -> None:
@@ -59,9 +60,9 @@ class RateLimitedWarner:
 class OnceWarner:
     """One warning per key for the lifetime of the process."""
 
-    __slots__ = ("_seen", "_lock", "_sink")
+    __slots__ = ("_lock", "_seen", "_sink")
 
-    def __init__(self, sink: Optional[WarnSink] = None) -> None:
+    def __init__(self, sink: WarnSink | None = None) -> None:
         self._sink: WarnSink = sink if sink is not None else _default_sink
         self._seen: set[str] = set()
         self._lock = threading.Lock()
@@ -72,7 +73,9 @@ class OnceWarner:
                 if key in self._seen:
                     return
                 self._seen.add(key)
-            suffix = f" ({type(cause).__name__}: {cause})" if isinstance(cause, BaseException) else ""
+            suffix = (
+                f" ({type(cause).__name__}: {cause})" if isinstance(cause, BaseException) else ""
+            )
             self._sink(f"[graphmind] {message}{suffix}")
         except Exception:
             pass

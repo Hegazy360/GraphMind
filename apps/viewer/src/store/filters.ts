@@ -55,8 +55,10 @@ function durations(run: RunState): number[] {
 export function slowThresholdMs(run: RunState): number {
   const sorted = durations(run);
   if (sorted.length === 0) return Number.POSITIVE_INFINITY;
-  const p90 = sorted[Math.floor(0.9 * (sorted.length - 1))] ?? 0;
-  return Math.max(200, p90);
+  // Nearest-rank percentile: with a handful of samples this lands on the
+  // genuine outlier rather than the middle of the pack.
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(0.9 * sorted.length) - 1));
+  return Math.max(200, sorted[index] ?? 0);
 }
 
 /** Nodes that failed, plus every ancestor of one — the path to the failure. */

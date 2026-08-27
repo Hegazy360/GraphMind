@@ -21,7 +21,7 @@ one you must switch on.
 from __future__ import annotations
 
 import os
-from typing import Mapping, Optional
+from collections.abc import Mapping
 
 EnvLike = Mapping[str, str]
 
@@ -42,11 +42,11 @@ ENV_VARS = (
 _PRODUCTION_VALUES = frozenset({"production", "prod"})
 
 
-def _env(env: Optional[EnvLike]) -> EnvLike:
+def _env(env: EnvLike | None) -> EnvLike:
     return os.environ if env is None else env
 
 
-def looks_like_production(env: Optional[EnvLike] = None) -> bool:
+def looks_like_production(env: EnvLike | None = None) -> bool:
     """True when the first set environment variable in :data:`ENV_VARS` is production."""
     source = _env(env)
     for key in ENV_VARS:
@@ -57,19 +57,17 @@ def looks_like_production(env: Optional[EnvLike] = None) -> bool:
     return False
 
 
-def resolve_enabled(explicit: Optional[bool] = None, env: Optional[EnvLike] = None) -> bool:
+def resolve_enabled(explicit: bool | None = None, env: EnvLike | None = None) -> bool:
     """Apply the kill-switch precedence documented in this module."""
     source = _env(env)
     if source.get("GRAPHMIND_DISABLED") == "1":
         return False
     if explicit is not None:
         return explicit
-    if looks_like_production(source) and source.get("GRAPHMIND") != "1":
-        return False
-    return True
+    return not (looks_like_production(source) and source.get("GRAPHMIND") != "1")
 
 
-def resolve_url(explicit: Optional[str] = None, env: Optional[EnvLike] = None) -> str:
+def resolve_url(explicit: str | None = None, env: EnvLike | None = None) -> str:
     """Viewer endpoint: explicit argument, then ``GRAPHMIND_URL``, then the default."""
     if explicit is not None:
         return explicit

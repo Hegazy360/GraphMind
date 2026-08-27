@@ -10,6 +10,7 @@
 import { create } from 'zustand';
 import type { BreakpointMatcher, NodeKind, RunMode } from '@graphmind-ai/schema';
 import { EMPTY_FILTER, type FilterSpec, type StatusFilter } from './filters.js';
+import { loadTheme, type ThemeChoice } from '../lib/theme.js';
 
 export type ConnectionStatus = 'connecting' | 'live' | 'detached' | 'replaying' | 'off';
 
@@ -19,7 +20,7 @@ export type LodLevel = 'full' | 'compact' | 'dot';
 /** Which panes are visible under the canvas. */
 export type ViewMode = 'graph' | 'split' | 'timeline';
 
-export type ThemeChoice = 'system' | 'dark' | 'light';
+export type { ThemeChoice };
 
 export interface FocusRequest {
   nodeId: string;
@@ -126,7 +127,9 @@ export const useUiStore = create<UiState>((set) => ({
   view: 'graph',
   timelineHeight: DEFAULT_TIMELINE_HEIGHT,
   filters: EMPTY_FILTER,
-  theme: 'system',
+  // Seeded from storage at creation, not in an effect: a mount-time effect
+  // would race the "persist on change" effect and wipe the stored choice.
+  theme: loadTheme(),
 
   selectRun: (runId) =>
     set({ selectedRunId: runId, selectedNodeId: undefined, selectedInstanceIdx: undefined }),

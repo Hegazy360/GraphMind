@@ -22,7 +22,8 @@ from __future__ import annotations
 import functools
 import inspect
 import time
-from typing import Any, Callable, Dict, List, Mapping, Optional, TypeVar, Union
+from collections.abc import Callable, Mapping
+from typing import Any, TypeVar, Union
 
 from .errors import is_abort_error
 from .gate import GateNode
@@ -34,7 +35,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 MAX_PREVIEW = 4000
 
 
-def _describe(signature: Optional[inspect.Signature], args: Any, kwargs: Any) -> Any:
+def _describe(signature: inspect.Signature | None, args: Any, kwargs: Any) -> Any:
     """A readable ``input`` payload for the viewer."""
     if signature is not None:
         try:
@@ -43,7 +44,7 @@ def _describe(signature: Optional[inspect.Signature], args: Any, kwargs: Any) ->
             return dict(bound.arguments)
         except Exception:
             pass
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     if args:
         out["args"] = list(args)
     if kwargs:
@@ -51,7 +52,7 @@ def _describe(signature: Optional[inspect.Signature], args: Any, kwargs: Any) ->
     return out
 
 
-def _signature_of(fn: Callable[..., Any]) -> Optional[inspect.Signature]:
+def _signature_of(fn: Callable[..., Any]) -> inspect.Signature | None:
     try:
         return inspect.signature(fn)
     except (TypeError, ValueError):  # builtins, C extensions
@@ -61,16 +62,16 @@ def _signature_of(fn: Callable[..., Any]) -> Optional[inspect.Signature]:
 class _Wrapper:
     """Shared state between the sync and async gate loops."""
 
-    __slots__ = ("session_of", "name", "kind", "node_id", "parent_id", "signature")
+    __slots__ = ("kind", "name", "node_id", "parent_id", "session_of", "signature")
 
     def __init__(
         self,
-        session_of: Callable[[], Optional[Session]],
+        session_of: Callable[[], Session | None],
         name: str,
         kind: str,
         node_id: str,
-        parent_id: Optional[str],
-        signature: Optional[inspect.Signature],
+        parent_id: str | None,
+        signature: inspect.Signature | None,
     ) -> None:
         self.session_of = session_of
         self.name = name
@@ -85,12 +86,12 @@ class _Wrapper:
 
 def gate_callable(
     fn: F,
-    session_of: Callable[[], Optional[Session]],
+    session_of: Callable[[], Session | None],
     *,
-    name: Optional[str] = None,
+    name: str | None = None,
     kind: str = "tool",
-    node_id: Optional[str] = None,
-    parent_id: Optional[str] = None,
+    node_id: str | None = None,
+    parent_id: str | None = None,
 ) -> F:
     """Wrap ``fn`` with before/error/after gates. Async functions stay async."""
     resolved_name = name or getattr(fn, "__name__", None) or repr(fn)
@@ -153,7 +154,7 @@ def _run_sync(
         input=_describe(state.signature, args, kwargs),
     )
 
-    def finish(output: Any, status: str, extra: Optional[Dict[str, Any]] = None) -> None:
+    def finish(output: Any, status: str, extra: dict[str, Any] | None = None) -> None:
         session.finish_node(
             node_id=node.node_id,
             instance_id=instance_id,
@@ -212,7 +213,7 @@ async def _run_async(
         input=_describe(state.signature, args, kwargs),
     )
 
-    def finish(output: Any, status: str, extra: Optional[Dict[str, Any]] = None) -> None:
+    def finish(output: Any, status: str, extra: dict[str, Any] | None = None) -> None:
         session.finish_node(
             node_id=node.node_id,
             instance_id=instance_id,
@@ -273,9 +274,7 @@ def _should_gate_error(ctx: Any, exc: BaseException) -> bool:
     """
     if not isinstance(exc, Exception):
         return False
-    if is_abort_error(exc):
-        return False
-    return True
+    return not is_abort_error(exc)
 
 
 def _handle_error(
@@ -325,10 +324,13 @@ def _apply_error_decision(
     return _RERAISE
 
 
-ToolsInput = Union[Mapping[str, Callable[..., Any]], List[Callable[..., Any]], Callable[..., Any]]
+# `Union` (not `X | Y`): this alias is evaluated at import time.
+ToolsInput = Union[  # noqa: UP007
+    Mapping[str, Callable[..., Any]], list[Callable[..., Any]], Callable[..., Any]
+]
 
 
-def wrap_tools(tools: ToolsInput, session_of: Callable[[], Optional[Session]]) -> Any:
+def wrap_tools(tools: ToolsInput, session_of: Callable[[], Session | None]) -> Any:
     """Wrap a dict / list / single callable of tools. Shape in, shape out."""
     if callable(tools) and not isinstance(tools, (dict, list, tuple)):
         return gate_callable(tools, session_of)

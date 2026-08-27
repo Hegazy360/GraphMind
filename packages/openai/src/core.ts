@@ -75,7 +75,11 @@ export class AdapterCore {
   ) {
     this.warner = new OnceWarner(logger);
     this.batcher = new TokenBatcher(
-      (nodeId, deltas) => this.session.emit('node.token', { nodeId, deltas }),
+      // `instanceId` is a loose field on `node.token`: viewers that ignore it
+      // behave as before, viewers that read it can separate concurrent
+      // executions of the same logical node.
+      (nodeId, instanceId, deltas) =>
+        this.session.emit('node.token', { nodeId, instanceId, deltas }),
       tokenFlushIntervalMs,
     );
   }
@@ -123,7 +127,7 @@ export class AdapterCore {
   }
 
   finishNode(input: FinishNodeInput): void {
-    this.batcher.flushNode(input.nodeId);
+    this.batcher.flush(input.nodeId, input.instanceId);
     this.session.emit('node.finished', {
       nodeId: input.nodeId,
       instanceId: input.instanceId,
@@ -139,9 +143,9 @@ export class AdapterCore {
     this.session.emit('node.error', { nodeId, instanceId, error: toErrorInfo(error) });
   }
 
-  pushToken(nodeId: string, channel: TokenDelta['t'], value: string): void {
+  pushToken(nodeId: string, instanceId: string, channel: TokenDelta['t'], value: string): void {
     if (value.length === 0) return;
-    this.batcher.push(nodeId, { t: channel, v: value });
+    this.batcher.push(nodeId, instanceId, { t: channel, v: value });
   }
 
   /**

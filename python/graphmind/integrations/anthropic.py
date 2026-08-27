@@ -22,7 +22,8 @@ from __future__ import annotations
 import functools
 import inspect
 import time
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Tuple
+from collections.abc import AsyncIterator, Callable, Iterator
+from typing import Any
 
 from ..gate import GateNode
 from ..ids import LLM_NODE_ID, LLM_NODE_NAME, agent_node_id, next_id
@@ -31,6 +32,8 @@ from ._common import (
     AsyncStreamTee,
     GraphHinter,
     SyncStreamTee,
+    is_async_callable,
+    is_async_client,
     merge_usage,
     patch_method,
     safe_value,
@@ -41,11 +44,11 @@ from ._common import (
 
 SDK_NAME = "anthropic"
 
-_CREATE: Tuple[str, ...] = ("messages",)
+_CREATE: tuple[str, ...] = ("messages",)
 
 
-def _describe(kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {"provider": SDK_NAME}
+def _describe(kwargs: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {"provider": SDK_NAME}
     for key in ("model", "max_tokens", "temperature", "system"):
         if key in kwargs:
             payload[key] = safe_value(kwargs[key])
@@ -58,11 +61,11 @@ def _describe(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
-def _summarize(message: Any) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+def _summarize(message: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     try:
-        texts: List[str] = []
-        tool_calls: List[Dict[str, Any]] = []
+        texts: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
         for block in getattr(message, "content", None) or []:
             block_type = getattr(block, "type", None)
             if block_type == "text":
@@ -93,16 +96,16 @@ def _summarize(message: Any) -> Dict[str, Any]:
 
 
 class _StreamState:
-    __slots__ = ("text", "usage", "finish_reason", "chunks")
+    __slots__ = ("chunks", "finish_reason", "text", "usage")
 
     def __init__(self) -> None:
-        self.text: List[str] = []
-        self.usage: Optional[Dict[str, int]] = None
-        self.finish_reason: Optional[str] = None
+        self.text: list[str] = []
+        self.usage: dict[str, int] | None = None
+        self.finish_reason: str | None = None
         self.chunks = 0
 
-    def output(self) -> Dict[str, Any]:
-        out: Dict[str, Any] = {"text": safe_value("".join(self.text)), "chunks": self.chunks}
+    def output(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"text": safe_value("".join(self.text)), "chunks": self.chunks}
         if self.finish_reason:
             out["finishReason"] = self.finish_reason
         return out
@@ -143,7 +146,7 @@ def _observe_event(session: Session, node_id: str, state: _StreamState, event: A
 
 
 class _Call:
-    __slots__ = ("session", "hinter", "node", "instance_id", "started")
+    __slots__ = ("hinter", "instance_id", "node", "session", "started")
 
     def __init__(self, session: Session, hinter: GraphHinter) -> None:
         self.session = session
@@ -152,7 +155,7 @@ class _Call:
         self.instance_id = next_id("step")
         self.started = time.monotonic()
 
-    def begin(self, kwargs: Dict[str, Any]) -> None:
+    def begin(self, kwargs: dict[str, Any]) -> None:
         ctx = self.session.current_run()
         self.hinter.maybe_hint(self.session, kwargs.get("tools"), LLM_NODE_ID, LLM_NODE_NAME)
         self.session.start_node(
@@ -170,8 +173,8 @@ class _Call:
         self,
         output: Any,
         status: str,
-        usage: Optional[Dict[str, int]] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        usage: dict[str, int] | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         self.session.finish_node(
             node_id=LLM_NODE_ID,
@@ -189,7 +192,7 @@ class _Call:
         def on_chunk(event: Any) -> None:
             _observe_event(self.session, LLM_NODE_ID, state, event)
 
-        def on_end(error: Optional[BaseException]) -> None:
+        def on_end(error: BaseException | None) -> None:
             if error is not None:
                 self.session.error_node(LLM_NODE_ID, self.instance_id, error)
                 self.finish(state.output(), "error", state.usage, {"streaming": True})
@@ -212,7 +215,7 @@ class _StreamProxy(SyncStreamTee):
         def on_chunk(event: Any) -> None:
             _observe_event(session, LLM_NODE_ID, state, event)
 
-        def on_end(error: Optional[BaseException]) -> None:
+        def on_end(error: BaseException | None) -> None:
             _finish_stream(call, state, inner, error)
 
         super().__init__(inner, on_chunk, on_end)
@@ -247,7 +250,7 @@ class _AsyncStreamProxy(AsyncStreamTee):
         def on_chunk(event: Any) -> None:
             _observe_event(session, LLM_NODE_ID, state, event)
 
-        def on_end(error: Optional[BaseException]) -> None:
+        def on_end(error: BaseException | None) -> None:
             _finish_stream(call, state, inner, error)
 
         super().__init__(inner, on_chunk, on_end)
@@ -276,22 +279,36 @@ class _AsyncStreamProxy(AsyncStreamTee):
 
 
 def _finish_stream(
-    call: _Call, state: _StreamState, inner: Any, error: Optional[BaseException]
+    call: _Call, state: _StreamState, inner: Any, error: BaseException | None
 ) -> None:
-    """Terminal bookkeeping: read usage back off the accumulated final message."""
+    """Terminal bookkeeping: read usage back off the accumulated final message.
+
+    The SDK accumulates a message snapshot regardless of how the host consumed
+    the stream, so usage and the full text land on the node even when the host
+    only ever touched ``.text_stream`` (which bypasses our event tee).
+    """
     output = state.output()
     usage = state.usage
-    try:
-        getter = getattr(inner, "get_final_message", None)
-        if getter is not None and error is None:
-            final = getter()
-            if not inspect.isawaitable(final):
+    if error is None:
+        final = None
+        try:
+            getter = getattr(inner, "get_final_message", None)
+            # The async variant is a coroutine function; never call it here —
+            # this runs on the host's thread with no loop to await on.
+            if getter is not None and not inspect.iscoroutinefunction(getter):
+                final = getter()
+            if final is None:
+                final = getattr(inner, "current_message_snapshot", None)
+        except Exception:
+            final = None
+        try:
+            if final is not None and not inspect.isawaitable(final):
                 usage = merge_usage(usage, usage_of(getattr(final, "usage", None)))
                 summary = _summarize(final)
                 if summary.get("text"):
                     output.update(summary)
-    except Exception:
-        pass
+        except Exception:
+            pass
     if error is not None:
         call.session.error_node(LLM_NODE_ID, call.instance_id, error)
         call.finish(output, "error", usage, {"streaming": True})
@@ -302,11 +319,11 @@ def _finish_stream(
 class _ManagerProxy:
     """Wraps ``MessageStreamManager``; gates in ``__enter__``, before the request."""
 
-    def __init__(self, inner: Any, call: _Call, kwargs: Dict[str, Any]) -> None:
+    def __init__(self, inner: Any, call: _Call, kwargs: dict[str, Any]) -> None:
         self._inner = inner
         self._call = call
         self._kwargs = kwargs
-        self._proxy: Optional[_StreamProxy] = None
+        self._proxy: _StreamProxy | None = None
 
     def __enter__(self) -> Any:
         call = self._call
@@ -334,25 +351,24 @@ class _ManagerProxy:
         self._proxy = proxy
         return proxy
 
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         if self._proxy is not None:
             self._proxy._finish(exc)
         try:
             self._inner.__exit__(exc_type, exc, tb)
         except Exception:
             pass
-        return False
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self._inner, item)
 
 
 class _AsyncManagerProxy:
-    def __init__(self, inner: Any, call: _Call, kwargs: Dict[str, Any]) -> None:
+    def __init__(self, inner: Any, call: _Call, kwargs: dict[str, Any]) -> None:
         self._inner = inner
         self._call = call
         self._kwargs = kwargs
-        self._proxy: Optional[_AsyncStreamProxy] = None
+        self._proxy: _AsyncStreamProxy | None = None
 
     async def __aenter__(self) -> Any:
         call = self._call
@@ -378,14 +394,13 @@ class _AsyncManagerProxy:
         self._proxy = proxy
         return proxy
 
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         if self._proxy is not None:
             self._proxy._finish(exc)
         try:
             await self._inner.__aexit__(exc_type, exc, tb)
         except Exception:
             pass
-        return False
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self._inner, item)
@@ -530,7 +545,7 @@ def _make_stream(session: Session, hinter: GraphHinter, is_async: bool) -> Calla
     return factory
 
 
-def instrument_anthropic(client: Any, session: Optional[Session] = None) -> Any:
+def instrument_anthropic(client: Any, session: Session | None = None) -> Any:
     """Instrument an Anthropic client **in place** and return it. Idempotent."""
     if session is None:
         from ..api import instance
@@ -549,9 +564,7 @@ def instrument_anthropic(client: Any, session: Optional[Session] = None) -> Any:
         return client
 
     create = getattr(messages, "create", None)
-    is_async = inspect.iscoroutinefunction(create) or inspect.iscoroutinefunction(
-        getattr(create, "__func__", None)
-    )
+    is_async = is_async_callable(create) or is_async_client(client)
     patch_method(
         client,
         _CREATE,

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 PROTOCOL_VERSION = 1
 """Envelope ``gm`` field. See ``packages/schema/src/constants.ts``."""
@@ -71,11 +71,11 @@ def now_ms() -> int:
 
 def create_envelope(
     type: str,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     seq: int,
     run_id: str,
-    ts: Optional[int] = None,
-) -> Dict[str, Any]:
+    ts: int | None = None,
+) -> dict[str, Any]:
     """Build a well-formed envelope. Does not validate the payload."""
     return {
         "gm": PROTOCOL_VERSION,
@@ -114,7 +114,7 @@ def _fallback(obj: Any) -> Any:
         return f"<unserializable {type(obj).__name__}>"
 
 
-def serialize_envelope(envelope: Dict[str, Any]) -> str:
+def serialize_envelope(envelope: dict[str, Any]) -> str:
     """Serialize an envelope to a single JSON text frame. Never raises."""
     try:
         return json.dumps(envelope, default=_fallback, ensure_ascii=False)
@@ -129,14 +129,14 @@ def serialize_envelope(envelope: Dict[str, Any]) -> str:
 class ParseResult:
     """Outcome of parsing one inbound frame."""
 
-    __slots__ = ("kind", "envelope", "reason", "received")
+    __slots__ = ("envelope", "kind", "reason", "received")
 
     def __init__(
         self,
         kind: str,
-        envelope: Optional[Dict[str, Any]] = None,
+        envelope: dict[str, Any] | None = None,
         reason: str = "",
-        received: Optional[int] = None,
+        received: int | None = None,
     ) -> None:
         #: one of ``ok`` / ``invalid`` / ``version-mismatch`` / ``unknown-type``
         self.kind = kind

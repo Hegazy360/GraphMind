@@ -22,9 +22,9 @@ is importable with the SDK absent.
 from __future__ import annotations
 
 import functools
-import inspect
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 from ..gate import GateNode
 from ..ids import LLM_NODE_ID, LLM_NODE_NAME, agent_node_id, next_id
@@ -33,6 +33,8 @@ from ._common import (
     AsyncStreamTee,
     GraphHinter,
     SyncStreamTee,
+    is_async_callable,
+    is_async_client,
     merge_usage,
     patch_method,
     safe_value,
@@ -43,7 +45,7 @@ from ._common import (
 
 SDK_NAME = "openai"
 
-_TARGETS: Tuple[Tuple[Tuple[str, ...], str, str], ...] = (
+_TARGETS: tuple[tuple[tuple[str, ...], str, str], ...] = (
     (("chat", "completions"), "create", "chat"),
     (("chat", "completions"), "parse", "chat"),
     (("responses",), "create", "responses"),
@@ -53,8 +55,8 @@ _TARGETS: Tuple[Tuple[Tuple[str, ...], str, str], ...] = (
 # -- input / output shaping ---------------------------------------------------
 
 
-def _describe(flavor: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {"provider": SDK_NAME}
+def _describe(flavor: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {"provider": SDK_NAME}
     for key in ("model", "temperature", "max_tokens", "max_output_tokens", "instructions"):
         if key in kwargs:
             payload[key] = safe_value(kwargs[key])
@@ -70,14 +72,14 @@ def _describe(flavor: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
-def _summarize(flavor: str, result: Any) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+def _summarize(flavor: str, result: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     try:
         if flavor == "chat":
             choices = getattr(result, "choices", None) or []
-            texts: List[str] = []
-            tool_calls: List[Any] = []
-            finish_reason: Optional[str] = None
+            texts: list[str] = []
+            tool_calls: list[Any] = []
+            finish_reason: str | None = None
             for choice in choices:
                 message = getattr(choice, "message", None)
                 content = getattr(message, "content", None)
@@ -119,16 +121,16 @@ def _summarize(flavor: str, result: Any) -> Dict[str, Any]:
 
 
 class _StreamState:
-    __slots__ = ("text", "usage", "finish_reason", "chunks")
+    __slots__ = ("chunks", "finish_reason", "text", "usage")
 
     def __init__(self) -> None:
-        self.text: List[str] = []
-        self.usage: Optional[Dict[str, int]] = None
-        self.finish_reason: Optional[str] = None
+        self.text: list[str] = []
+        self.usage: dict[str, int] | None = None
+        self.finish_reason: str | None = None
         self.chunks = 0
 
-    def output(self) -> Dict[str, Any]:
-        out: Dict[str, Any] = {"text": safe_value("".join(self.text)), "chunks": self.chunks}
+    def output(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"text": safe_value("".join(self.text)), "chunks": self.chunks}
         if self.finish_reason:
             out["finishReason"] = self.finish_reason
         return out
@@ -171,11 +173,10 @@ def _observe_responses_event(
         session.push_token(node_id, "text", delta)
     elif event_type == "response.function_call_arguments.delta" and isinstance(delta, str):
         session.push_token(node_id, "tool-args", delta)
-    elif (
-        event_type
-        in ("response.reasoning_summary_text.delta", "response.reasoning_text.delta")
-        and isinstance(delta, str)
-    ):
+    elif event_type in (
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_text.delta",
+    ) and isinstance(delta, str):
         session.push_token(node_id, "reasoning", delta)
     elif event_type in ("response.completed", "response.incomplete", "response.failed"):
         response = getattr(event, "response", None)
@@ -187,7 +188,7 @@ def _observe_responses_event(
             state.finish_reason = status
 
 
-_OBSERVERS: Dict[str, Callable[[Session, str, _StreamState, Any], None]] = {
+_OBSERVERS: dict[str, Callable[[Session, str, _StreamState, Any], None]] = {
     "chat": _observe_chat_chunk,
     "responses": _observe_responses_event,
 }
@@ -199,7 +200,7 @@ _OBSERVERS: Dict[str, Callable[[Session, str, _StreamState, Any], None]] = {
 class _Call:
     """Per-invocation bookkeeping shared by the sync and async paths."""
 
-    __slots__ = ("session", "node", "instance_id", "started", "flavor", "hinter")
+    __slots__ = ("flavor", "hinter", "instance_id", "node", "session", "started")
 
     def __init__(self, session: Session, hinter: GraphHinter, flavor: str) -> None:
         self.session = session
@@ -209,7 +210,7 @@ class _Call:
         self.instance_id = next_id("step")
         self.started = time.monotonic()
 
-    def begin(self, kwargs: Dict[str, Any]) -> None:
+    def begin(self, kwargs: dict[str, Any]) -> None:
         ctx = self.session.current_run()
         self.hinter.maybe_hint(self.session, kwargs.get("tools"), LLM_NODE_ID, LLM_NODE_NAME)
         self.session.start_node(
@@ -227,8 +228,8 @@ class _Call:
         self,
         output: Any,
         status: str,
-        usage: Optional[Dict[str, int]] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        usage: dict[str, int] | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         self.session.finish_node(
             node_id=LLM_NODE_ID,
@@ -247,7 +248,7 @@ class _Call:
         def on_chunk(chunk: Any) -> None:
             observe(self.session, LLM_NODE_ID, state, chunk)
 
-        def on_end(error: Optional[BaseException]) -> None:
+        def on_end(error: BaseException | None) -> None:
             if error is not None:
                 self.session.error_node(LLM_NODE_ID, self.instance_id, error)
                 self.finish(state.output(), "error", state.usage, {"streaming": True})
@@ -258,12 +259,13 @@ class _Call:
         return tee_cls(result, on_chunk, on_end)
 
 
-def _is_stream(result: Any, kwargs: Dict[str, Any], is_async: bool) -> bool:
-    if kwargs.get("stream") is not True:
-        # `responses.stream()`-style helpers also return iterables without the
-        # kwarg; detect them structurally but never treat a model object as one.
-        if hasattr(result, "model_dump") or hasattr(result, "choices"):
-            return False
+def _is_stream(result: Any, kwargs: dict[str, Any], is_async: bool) -> bool:
+    # Without an explicit `stream=True`, only treat the result as a stream when
+    # it is not obviously a parsed model object.
+    if kwargs.get("stream") is not True and (
+        hasattr(result, "model_dump") or hasattr(result, "choices")
+    ):
+        return False
     attr = "__aiter__" if is_async else "__iter__"
     return hasattr(result, attr)
 
@@ -388,7 +390,7 @@ def _make_async_wrapper(session: Session, hinter: GraphHinter, flavor: str) -> C
     return factory
 
 
-def instrument_openai(client: Any, session: Optional[Session] = None) -> Any:
+def instrument_openai(client: Any, session: Session | None = None) -> Any:
     """Instrument an OpenAI client **in place** and return it.
 
     Idempotent, safe on both ``OpenAI`` and ``AsyncOpenAI``, and a no-op when
@@ -401,6 +403,7 @@ def instrument_openai(client: Any, session: Optional[Session] = None) -> Any:
     if not session.enabled:
         return client
     hinter = GraphHinter()
+    client_is_async = is_async_client(client)
     patched = 0
     for path, attr, flavor in _TARGETS:
         target: Any = client
@@ -413,9 +416,7 @@ def instrument_openai(client: Any, session: Optional[Session] = None) -> Any:
         original = getattr(target, attr, None)
         if original is None or not callable(original):
             continue
-        is_async = inspect.iscoroutinefunction(original) or inspect.iscoroutinefunction(
-            getattr(original, "__func__", None)
-        )
+        is_async = is_async_callable(original) or client_is_async
         factory = (
             _make_async_wrapper(session, hinter, flavor)
             if is_async

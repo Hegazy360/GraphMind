@@ -389,20 +389,22 @@ describe('detached / disabled fast paths', () => {
     const gm = graphmind({ enabled: true, webSocket: undefined, logger: () => {} });
     cleanups.push(() => gm.dispose());
 
+    // A cyclic value makes the session's JSON serialization throw; the host's
+    // result must still come back untouched.
     const cyclic: Record<string, unknown> = {};
     cyclic['self'] = cyclic;
-    const weird = gm.tool('weird', async () => cyclic);
-    expect(await weird(cyclic)).toBe(cyclic); // host result untouched, no throw
+    const weird = gm.tool('weird', async (_input: unknown) => cyclic);
+    expect(await weird(cyclic)).toBe(cyclic);
 
-    const { client } = makeClient(gm, () => ({
-      message: { ...assistantMessage('m', 'ok'), extra: 'field' },
-    }));
-    const message = await client.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 64,
-      messages: [{ role: 'user', content: cyclic as unknown as string }],
+    // So does a BigInt (JSON.stringify throws a TypeError on it).
+    const big = gm.tool('big', async (input: { n: bigint }) => ({ n: input.n * 10n }));
+    expect((await big({ n: 1n })).n).toBe(10n);
+
+    // A throwing tool still surfaces its own error, unwrapped.
+    const boom = gm.tool('boom', async () => {
+      throw new Error('host failure');
     });
-    expect(message.content[0].text).toBe('ok');
+    await expect(boom()).rejects.toThrow('host failure');
   });
 });
 

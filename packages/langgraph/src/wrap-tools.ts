@@ -91,7 +91,7 @@ export function wrapStructuredTool<T extends StructuredToolLike>(core: AdapterCo
       if (attachWait !== undefined) await attachWait;
       const runId = readRunId(args[1]);
       return runGated(core, name, { runId, link: core.toolLink(runId) }, args[0], () =>
-        original.apply(tool, args),
+        original.apply(clone, args),
       );
     };
     return clone;
@@ -151,6 +151,9 @@ async function runGated(
   const instanceId = site.link?.instanceId ?? nextId('call');
   const startedAt = Date.now();
   const runIn = <T>(fn: () => T | Promise<T>): Promise<T> => core.runIn(site.runId, fn);
+  // Resolved inside the run context so it picks up that run's abort reason.
+  const abortError = (): Promise<Error> =>
+    runIn(() => core.abortError(core.session.currentRun()));
 
   if (ownsEvents) {
     await runIn(() =>
@@ -186,7 +189,7 @@ async function runGated(
     if (pre.action === 'abort') {
       note({ aborted: true, attempts });
       await runIn(() => finish(undefined, 'aborted'));
-      throw core.abortError(core.session.currentRun());
+      throw await abortError();
     }
     if (pre.action === 'inject') {
       note({ injected: true, attempts });
@@ -206,10 +209,15 @@ async function runGated(
         throw error;
       }
       // The error gate fires BEFORE LangChain (and the graph) sees the failure.
+      // Exactly one `node.error` per failure: the handler reports the ones
+      // LangChain gets to see (continue / abort), and the wrapper reports the
+      // ones it swallows (inject / retry), which would otherwise be invisible.
       const decision = await runIn(async () => {
         if (ownsEvents) core.errorNode(nodeId, instanceId, error);
         return core.session.gate('error', node);
       });
+      const swallowed = decision.action === 'inject' || decision.action === 'retry';
+      if (swallowed && !ownsEvents) await runIn(() => core.errorNode(nodeId, instanceId, error));
       if (decision.action === 'inject') {
         note({ injected: true, attempts, recoveredFromError: true });
         await runIn(() => finish(decision.output, 'ok', { injected: true }));
@@ -219,7 +227,7 @@ async function runGated(
       if (decision.action === 'abort') {
         note({ aborted: true, attempts });
         await runIn(() => finish(undefined, 'aborted'));
-        throw core.abortError(core.session.currentRun());
+        throw await abortError();
       }
       note({ attempts });
       await runIn(() => finish(undefined, 'error'));
@@ -236,7 +244,7 @@ async function runGated(
     if (post.action === 'abort') {
       note({ aborted: true, attempts });
       await runIn(() => finish(result, 'aborted'));
-      throw core.abortError(core.session.currentRun());
+      throw await abortError();
     }
     note({ attempts });
     await runIn(() => finish(result, 'ok'));

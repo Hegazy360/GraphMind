@@ -25,7 +25,11 @@ the node, then scroll its instances.
 display rather than a wall of text. The important motion — what is running now, what just failed
 — is what your eye is drawn to.
 
-**Search** jumps to a node by name when the graph is too large to scan.
+**The command palette** (<kbd>⌘</kbd><kbd>K</kbd>) jumps to any node by name, and carries
+every view action. **Collapse all** (<kbd>⇧</kbd><kbd>C</kbd>) folds sub-agents and chains into
+summary cards; the **error-path filter** (<kbd>⇧</kbd><kbd>E</kbd>) dims everything that is not an
+ancestor of a failure; the **timeline** (<kbd>⇧</kbd><kbd>T</kbd>) shows what actually overlapped and
+where the wall clock went. See [the viewer](/reference/viewer/).
 
 **Pause-on-error is your filter.** In a 200-step run you do not want to watch; you want to be
 told. Leave run mode on with only the error breakpoint armed and let the agent stop itself.

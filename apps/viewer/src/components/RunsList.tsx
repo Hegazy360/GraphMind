@@ -1,13 +1,18 @@
 /**
- * Left rail: live-updating list of runs with app name, status, time and
- * source badge.
+ * Left rail: live-updating list of runs with app name, status, time, source
+ * badge, and a one-line shape summary (nodes / errors) so you can tell two
+ * runs of the same app apart without opening them.
  */
 import { useEffect, useMemo, useState } from 'react';
 import { runChipLabel } from '../lib/firstRun.js';
-import { fmtRelative } from '../lib/format.js';
+import { fmtCount, fmtDuration, fmtRelative } from '../lib/format.js';
 import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';
 import { runBadgeStatus, type RunBadgeStatus, type RunState } from '../store/types.js';
+import { GraphMindMark } from './Mark.js';
+import { IconClose, IconSearch } from './Icons.js';
+
+export { GraphMindMark };
 
 function dotClass(status: RunBadgeStatus): string {
   switch (status) {
@@ -38,130 +43,131 @@ function statusLabel(status: RunBadgeStatus): string {
 function RunItem({ run, now }: { run: RunState; now: number }) {
   const selected = useUiStore((s) => s.selectedRunId === run.runId);
   const status = runBadgeStatus(run);
+  const nodeCount = run.order.length;
+  const errors = useMemo(() => {
+    let count = 0;
+    for (const id of run.order) {
+      const node = run.nodes[id];
+      if (node?.lastError !== undefined) count += 1;
+    }
+    return count;
+  }, [run]);
+  const elapsed =
+    run.meta.startedTs === undefined
+      ? undefined
+      : (run.meta.finishedTs ?? now) - run.meta.startedTs;
+
   return (
     <button
       className={`gm-run-item${selected ? ' gm-run-item--selected' : ''}`}
       onClick={() => useUiStore.getState().selectRun(run.runId)}
+      aria-current={selected}
     >
-      <div className="flex items-center" style={{ gap: 8 }}>
+      <div className="gm-run-item-top">
         <span className={dotClass(status)} />
-        <span style={{ fontWeight: 600, fontSize: 12.5, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {run.meta.app}
-        </span>
-        <span className="gm-chip" style={{ padding: '1px 7px' }}>
-          {runChipLabel(run.meta)}
-        </span>
+        <span className="gm-run-item-app">{run.meta.app}</span>
+        <span className="gm-chip gm-chip--tiny">{runChipLabel(run.meta)}</span>
       </div>
-      <div
-        className="flex items-center"
-        style={{
-          gap: 6,
-          marginTop: 4,
-          fontSize: 11,
-          color: 'var(--text-faint)',
-          fontVariantNumeric: 'tabular-nums',
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-        }}
-      >
+      <div className="gm-run-item-meta">
         <span
-          style={{
-            fontFamily: 'var(--font-mono)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            minWidth: 0,
-            flexShrink: 1,
-          }}
-        >
-          {run.runId.slice(0, 14)}
-        </span>
-        <span
-          style={{
-            marginLeft: 'auto',
-            flexShrink: 0,
-            color: status === 'error' ? 'var(--err)' : status === 'paused' ? 'var(--amber)' : 'var(--text-faint)',
-          }}
+          className={`gm-run-item-status gm-run-item-status--${status}`}
         >
           {statusLabel(status)}
         </span>
+        {nodeCount > 0 && <span>· {fmtCount(nodeCount)} nodes</span>}
+        {errors > 0 && <span className="gm-run-item-errors">· {errors} err</span>}
+        {elapsed !== undefined && <span>· {fmtDuration(elapsed)}</span>}
         {run.meta.startedTs !== undefined && (
-          <span style={{ flexShrink: 0 }}>· {fmtRelative(run.meta.startedTs, now)}</span>
+          <span className="gm-run-item-when">{fmtRelative(run.meta.startedTs, now)}</span>
         )}
       </div>
     </button>
   );
 }
 
-export function RunsList() {
+export function RunsList({ onCollapse }: { onCollapse?: () => void }) {
   const runs = useRunStore((s) => s.runs);
   const [now, setNow] = useState(() => Date.now());
+  const [query, setQuery] = useState('');
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 10_000);
+    const timer = setInterval(() => setNow(Date.now()), 5_000);
     return () => clearInterval(timer);
   }, []);
 
-  const sorted = useMemo(
-    () =>
-      Object.values(runs).sort(
-        (a, b) => (b.meta.startedTs ?? 0) - (a.meta.startedTs ?? 0),
-      ),
-    [runs],
-  );
+  const sorted = useMemo(() => {
+    const list = Object.values(runs).sort(
+      (a, b) => (b.meta.startedTs ?? 0) - (a.meta.startedTs ?? 0),
+    );
+    if (query.trim() === '') return list;
+    const needle = query.trim().toLowerCase();
+    return list.filter(
+      (run) =>
+        run.meta.app.toLowerCase().includes(needle) || run.runId.toLowerCase().includes(needle),
+    );
+  }, [runs, query]);
 
   return (
-    <nav className="gm-rail flex flex-col" style={{ width: 236, flexShrink: 0 }}>
-      <div
-        className="flex items-center px-4"
-        style={{ height: 52, borderBottom: '1px solid var(--border)', gap: 8, flexShrink: 0 }}
-      >
+    <nav className="gm-rail" aria-label="Runs">
+      <div className="gm-rail-head">
         <GraphMindMark />
-        <span style={{ fontWeight: 650, fontSize: 14, letterSpacing: '-0.02em' }}>GraphMind</span>
-        <span className="gm-node-kind" style={{ marginTop: 2 }}>
-          debugger
-        </span>
+        <span className="gm-wordmark">GraphMind</span>
+        <span className="gm-node-kind">debugger</span>
+        {onCollapse !== undefined && (
+          <button
+            className="gm-iconbtn"
+            style={{ marginLeft: 'auto' }}
+            onClick={onCollapse}
+            title="Hide the run list (b)"
+            aria-label="Hide the run list"
+          >
+            <IconClose />
+          </button>
+        )}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto" style={{ padding: 8 }}>
-        <div className="gm-section-label" style={{ padding: '6px 10px 8px' }}>
+
+      {Object.keys(runs).length > 6 && (
+        <div className="gm-rail-search">
+          <IconSearch width={12} height={12} />
+          <input
+            value={query}
+            placeholder="Filter runs…"
+            spellCheck={false}
+            aria-label="Filter runs"
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+      )}
+
+      <div className="gm-rail-list">
+        <div className="gm-section-label gm-rail-label">
           Runs
+          <span>{Object.keys(runs).length}</span>
         </div>
         {sorted.length === 0 ? (
-          <div style={{ padding: '4px 10px', fontSize: 12, color: 'var(--text-faint)' }}>
-            No runs yet.
+          <div className="gm-rail-empty">
+            {Object.keys(runs).length === 0 ? 'No runs yet.' : 'No run matches that filter.'}
           </div>
         ) : (
-          <div className="flex flex-col" style={{ gap: 2 }}>
+          <div className="gm-rail-items">
             {sorted.map((run) => (
               <RunItem key={run.runId} run={run} now={now} />
             ))}
           </div>
         )}
       </div>
-      <div
-        className="px-4 py-3"
-        style={{ borderTop: '1px solid var(--border)', fontSize: 10.5, color: 'var(--text-faint)', display: 'flex', gap: 10 }}
-      >
+
+      <div className="gm-rail-foot">
         <span>
-          <span className="gm-kbd">/</span> search
+          <span className="gm-kbd">⌘K</span> palette
+        </span>
+        <span>
+          <span className="gm-kbd">⇧T</span> timeline
         </span>
         <span>
           <span className="gm-kbd">f</span> follow
         </span>
-        <span>
-          <span className="gm-kbd">esc</span> close
-        </span>
       </div>
     </nav>
-  );
-}
-
-export function GraphMindMark({ size = 18 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
-      <circle cx="12" cy="5" r="2.4" fill="var(--accent)" />
-      <circle cx="5" cy="17" r="2.4" fill="var(--text-dim)" />
-      <circle cx="19" cy="17" r="2.4" fill="var(--text-dim)" />
-      <path d="M12 7.4 6.2 15M12 7.4l5.8 7.6" stroke="var(--text-faint)" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
   );
 }

@@ -2,6 +2,7 @@
  * Shared building blocks for the node cards.
  */
 import { Handle, Position } from '@xyflow/react';
+import { hasChildren } from '../../store/derived.js';
 import { useRunStore } from '../../store/runStore.js';
 import { collapsedFor, useUiStore, type LodLevel } from '../../store/uiStore.js';
 import { nodeStatus, type NodeLifeStatus, type NodeState } from '../../store/types.js';
@@ -56,16 +57,13 @@ export function InstanceBadge({ node }: { node: NodeState }) {
  * children — the store's child index is cheap to consult per card.
  */
 export function CollapseToggle({ runId, nodeId }: { runId: string; nodeId: string }) {
-  const hasChildren = useRunStore((s) => {
+  // O(1) per store notification — see store/derived.ts for why that matters.
+  const foldable = useRunStore((s) => {
     const run = s.runs[runId];
-    if (run === undefined) return false;
-    for (const id of run.order) {
-      if (run.nodes[id]?.parentId === nodeId) return true;
-    }
-    return false;
+    return run !== undefined && hasChildren(run, nodeId);
   });
   const collapsed = useUiStore((s) => collapsedFor(s, runId).includes(nodeId));
-  if (!hasChildren) return null;
+  if (!foldable) return null;
   return (
     <button
       className={`gm-fold nodrag${collapsed ? ' gm-fold--on' : ''}`}

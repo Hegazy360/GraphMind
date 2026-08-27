@@ -23,7 +23,8 @@ import concurrent.futures
 import contextvars
 import threading
 import time
-from typing import Any, Dict, Iterable, List, Optional
+from collections.abc import Iterable
+from typing import Any
 
 from ._version import __version__
 from .env import EnvLike, resolve_enabled, resolve_url
@@ -38,7 +39,7 @@ from .protocol import (
     serialize_envelope,
 )
 from .ring_buffer import RingBuffer
-from .runtime import register_shutdown_hook, runtime, unregister_shutdown_hook
+from .runtime import register_shutdown_hook, unregister_shutdown_hook
 from .safe import RateLimitedWarner, WarnSink
 from .tokens import TokenBatcher
 from .transport import Transport, TransportHooks
@@ -68,23 +69,23 @@ class RunContext:
     reaches work GraphMind does not wrap.
     """
 
-    __slots__ = ("run_id", "name", "abort_event", "_reason")
+    __slots__ = ("_reason", "abort_event", "name", "run_id")
 
     def __init__(self, run_id: str, name: str) -> None:
         self.run_id = run_id
         self.name = name
         self.abort_event = threading.Event()
-        self._reason: Optional[BaseException] = None
+        self._reason: BaseException | None = None
 
     @property
     def aborted(self) -> bool:
         return self.abort_event.is_set()
 
     @property
-    def reason(self) -> Optional[BaseException]:
+    def reason(self) -> BaseException | None:
         return self._reason
 
-    def abort(self, reason: Optional[BaseException] = None) -> None:
+    def abort(self, reason: BaseException | None = None) -> None:
         if self._reason is None:
             self._reason = reason if reason is not None else GraphMindAbortError()
         self.abort_event.set()
@@ -93,13 +94,13 @@ class RunContext:
         return f"RunContext({self.name!r}, run_id={self.run_id!r}, aborted={self.aborted})"
 
 
-_current_run: "contextvars.ContextVar[Optional[RunContext]]" = contextvars.ContextVar(
+_current_run: contextvars.ContextVar[RunContext | None] = contextvars.ContextVar(
     "graphmind_current_run", default=None
 )
 
 
 class SessionStats:
-    __slots__ = ("enabled", "attached", "buffered", "dropped", "held_gates", "seq")
+    __slots__ = ("attached", "buffered", "dropped", "enabled", "held_gates", "seq")
 
     def __init__(
         self,
@@ -117,7 +118,7 @@ class SessionStats:
         self.held_gates = held_gates
         self.seq = seq
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "enabled": self.enabled,
             "attached": self.attached,
@@ -138,19 +139,19 @@ class Session:
     def __init__(
         self,
         *,
-        url: Optional[str] = None,
+        url: str | None = None,
         app_name: str = "python",
-        sdk: Optional[Dict[str, str]] = None,
-        meta: Optional[Dict[str, Any]] = None,
-        enabled: Optional[bool] = None,
+        sdk: dict[str, str] | None = None,
+        meta: dict[str, Any] | None = None,
+        enabled: bool | None = None,
         connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
         handshake_timeout: float = DEFAULT_HANDSHAKE_TIMEOUT,
         retry_interval: float = DEFAULT_RETRY_INTERVAL,
         buffer_size: int = DEFAULT_BUFFER_SIZE,
-        pause_timeout: Optional[float] = None,
+        pause_timeout: float | None = None,
         token_interval: float = DEFAULT_TOKEN_INTERVAL,
-        env: Optional[EnvLike] = None,
-        logger: Optional[WarnSink] = None,
+        env: EnvLike | None = None,
+        logger: WarnSink | None = None,
         warn_interval: float = 60.0,
     ) -> None:
         self.enabled = resolve_enabled(enabled, env)
@@ -165,8 +166,8 @@ class Session:
         self._started = False
         self._disposed = False
         self._attached_mirror = False
-        self._implicit_run: Optional[RunContext] = None
-        self._ready_waiters: List["concurrent.futures.Future[bool]"] = []
+        self._implicit_run: RunContext | None = None
+        self._ready_waiters: list[concurrent.futures.Future[bool]] = []
 
         self._engine = GateEngine(
             on_paused=self._on_paused,
@@ -246,12 +247,13 @@ class Session:
         if waiter is None:
             return self.attached and self._active()
         try:
-            return bool(await asyncio.wait_for(asyncio.wrap_future(waiter), timeout=timeout))
+            wrapped = asyncio.wrap_future(waiter)  # type: ignore[arg-type]
+            return bool(await asyncio.wait_for(wrapped, timeout=timeout))
         except Exception:
             self._drop_ready_waiter(waiter)
             return False
 
-    def _begin_ready(self) -> "Optional[concurrent.futures.Future[bool]]":
+    def _begin_ready(self) -> concurrent.futures.Future[bool] | None:
         """Start connecting; ``None`` means "answer immediately"."""
         try:
             if not self._active():
@@ -262,7 +264,7 @@ class Session:
             self._transport.kick()
             if self._transport.attached:
                 return None
-            waiter: "concurrent.futures.Future[bool]" = concurrent.futures.Future()
+            waiter: concurrent.futures.Future[bool] = concurrent.futures.Future()
             with self._lock:
                 self._ready_waiters.append(waiter)
             # Re-check: attaching between the check and the append would
@@ -274,7 +276,7 @@ class Session:
             self._warner.warn("ready", "internal error in ready(); resolving detached", exc)
             return None
 
-    def _drop_ready_waiter(self, waiter: "concurrent.futures.Future[bool]") -> None:
+    def _drop_ready_waiter(self, waiter: concurrent.futures.Future[bool]) -> None:
         with self._lock:
             try:
                 self._ready_waiters.remove(waiter)
@@ -293,10 +295,10 @@ class Session:
 
     # -- runs -----------------------------------------------------------------
 
-    def current_run(self) -> Optional[RunContext]:
+    def current_run(self) -> RunContext | None:
         return _current_run.get()
 
-    def run(self, name: str, meta: Optional[Dict[str, Any]] = None) -> "RunScope":
+    def run(self, name: str, meta: dict[str, Any] | None = None) -> RunScope:
         """A run boundary usable as ``with`` **and** ``async with``."""
         return RunScope(self, name, meta)
 
@@ -310,7 +312,7 @@ class Session:
         with self._lock:
             if self._implicit_run is None:
                 self._implicit_run = self._make_run_context("implicit")
-                meta: Dict[str, Any] = {"name": "implicit", "implicit": True}
+                meta: dict[str, Any] = {"name": "implicit", "implicit": True}
                 if self.meta:
                     meta.update(self.meta)
                 self._emit_internal(
@@ -322,7 +324,7 @@ class Session:
 
     # -- events ---------------------------------------------------------------
 
-    def emit(self, type: str, payload: Dict[str, Any]) -> None:
+    def emit(self, type: str, payload: dict[str, Any]) -> None:
         """Emit one event, attributed to the current run (or an implicit one)."""
         if not self.enabled or self._disposed:
             return
@@ -338,11 +340,11 @@ class Session:
         kind: str,
         name: str,
         instance_id: str,
-        parent_id: Optional[str] = None,
+        parent_id: str | None = None,
         input: Any = None,
-        extra: Optional[Dict[str, Any]] = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "nodeId": node_id,
             "kind": kind,
             "name": name,
@@ -363,11 +365,11 @@ class Session:
         duration_ms: float,
         status: str = "ok",
         output: Any = None,
-        usage: Optional[Dict[str, int]] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        usage: dict[str, int] | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         self._batcher.flush_node(node_id)
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "nodeId": node_id,
             "instanceId": instance_id,
             "durationMs": max(0.0, duration_ms),
@@ -387,7 +389,7 @@ class Session:
             {"nodeId": node_id, "instanceId": instance_id, "error": to_error_info(error)},
         )
 
-    def graph_hint(self, nodes: Iterable[Dict[str, Any]]) -> None:
+    def graph_hint(self, nodes: Iterable[dict[str, Any]]) -> None:
         node_list = [n for n in nodes if isinstance(n, dict)]
         if node_list:
             self.emit("graph.hint", {"nodes": node_list})
@@ -478,7 +480,7 @@ class Session:
                     pass
         return decision
 
-    def abort_error(self, ctx: Optional[RunContext] = None) -> BaseException:
+    def abort_error(self, ctx: RunContext | None = None) -> BaseException:
         """The exception to raise after an ``abort`` decision."""
         if ctx is None:
             ctx = _current_run.get()
@@ -505,9 +507,7 @@ class Session:
             pass
         try:
             if self._implicit_run is not None and self.enabled:
-                self._emit_internal(
-                    "run.finished", {"status": "ok"}, self._implicit_run.run_id
-                )
+                self._emit_internal("run.finished", {"status": "ok"}, self._implicit_run.run_id)
         except Exception:
             pass
         # Give the writer a moment to drain the final frames before the socket
@@ -545,7 +545,7 @@ class Session:
             self._started = True
         self._transport.start()
 
-    def _emit_internal(self, type: str, payload: Dict[str, Any], run_id: str) -> None:
+    def _emit_internal(self, type: str, payload: dict[str, Any], run_id: str) -> None:
         with self._lock:
             seq = self._seq
             self._seq += 1
@@ -572,7 +572,7 @@ class Session:
             )
         )
 
-    def _handle_attached(self, ack: Dict[str, Any]) -> None:
+    def _handle_attached(self, ack: dict[str, Any]) -> None:
         try:
             breakpoints = ack.get("breakpoints")
             mode = ack.get("mode")
@@ -602,7 +602,7 @@ class Session:
         except Exception as exc:
             self._warner.warn("detach", "internal error while detaching", exc)
 
-    def _handle_control(self, envelope: Dict[str, Any]) -> None:
+    def _handle_control(self, envelope: dict[str, Any]) -> None:
         try:
             type_ = envelope.get("type")
             payload = envelope.get("payload") or {}
@@ -635,7 +635,7 @@ class Session:
     def _on_resumed(self, pause_id: str, node: GateNode, action: str, run_id: str) -> None:
         self._emit_or_warn("exec.resumed", {"pauseId": pause_id, "action": action}, run_id)
 
-    def _emit_or_warn(self, type: str, payload: Dict[str, Any], run_id: str) -> None:
+    def _emit_or_warn(self, type: str, payload: dict[str, Any], run_id: str) -> None:
         if not self.enabled or self._disposed:
             return
         try:
@@ -651,19 +651,19 @@ class RunScope:
     carries the :class:`RunContext` the debugger's ``abort`` action targets.
     """
 
-    __slots__ = ("_session", "_name", "_meta", "_ctx", "_token", "_started_at", "_node_id")
+    __slots__ = ("_ctx", "_meta", "_name", "_node_id", "_session", "_started_at", "_token")
 
-    def __init__(self, session: Session, name: str, meta: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, session: Session, name: str, meta: dict[str, Any] | None = None) -> None:
         self._session = session
         self._name = name
         self._meta = meta
-        self._ctx: Optional[RunContext] = None
+        self._ctx: RunContext | None = None
         self._token: Any = None
         self._started_at = 0.0
         self._node_id = agent_node_id(name)
 
     @property
-    def context(self) -> Optional[RunContext]:
+    def context(self) -> RunContext | None:
         return self._ctx
 
     # -- sync -----------------------------------------------------------------
@@ -671,18 +671,16 @@ class RunScope:
     def __enter__(self) -> RunContext:
         return self._begin()
 
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         self._end(exc)
-        return False
 
     # -- async ----------------------------------------------------------------
 
     async def __aenter__(self) -> RunContext:
         return self._begin()
 
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         self._end(exc)
-        return False
 
     # -- shared ---------------------------------------------------------------
 
@@ -696,7 +694,7 @@ class RunScope:
             return ctx
         try:
             session._ensure_started()
-            meta: Dict[str, Any] = {"name": self._name}
+            meta: dict[str, Any] = {"name": self._name}
             if session.meta:
                 meta.update(session.meta)
             if self._meta:
@@ -716,7 +714,7 @@ class RunScope:
             session._warner.warn("run-start", "internal error starting a run", exc)
         return ctx
 
-    def _end(self, error: Optional[BaseException]) -> None:
+    def _end(self, error: BaseException | None) -> None:
         session = self._session
         ctx = self._ctx
         try:
@@ -754,7 +752,7 @@ class RunScope:
                 },
                 ctx.run_id,
             )
-            payload: Dict[str, Any] = {"status": status}
+            payload: dict[str, Any] = {"status": status}
             if error is not None and not aborted:
                 payload["error"] = to_error_info(error)
             session._emit_internal("run.finished", payload, ctx.run_id)

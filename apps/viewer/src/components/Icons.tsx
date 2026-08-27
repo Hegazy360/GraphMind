@@ -88,6 +88,14 @@ export const IconGraph = (p: SVGProps<SVGSVGElement>) => (
   </svg>
 );
 
+export const IconSplit = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M3 14h18" />
+    <path d="M6.5 17h6" strokeOpacity="0.6" />
+  </svg>
+);
+
 export const IconFilter = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base(p)}>
     <path d="M3.5 5.5h17l-6.6 7.6V19l-3.8 2v-7.9L3.5 5.5Z" />

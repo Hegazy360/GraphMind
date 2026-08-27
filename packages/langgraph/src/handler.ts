@@ -42,6 +42,7 @@ import {
   type SerializedLike,
 } from './lc-types.js';
 import { RunScope } from './run-scope.js';
+import type { TokenBatchSink } from './token-batcher.js';
 import { RunTree, type RunRecord } from './run-tree.js';
 
 const HIDDEN_TAG = 'langsmith:hidden';
@@ -58,6 +59,10 @@ interface OpenRoot {
   /** undefined when the run came from an ambient `gm.run()` (no scope needed). */
   scope: RunScope | undefined;
   ctx: RunContext | undefined;
+  /** Stable identity registered with the core so tool wrappers can find it. */
+  runner: { runIn: <T>(fn: () => T | Promise<T>) => Promise<T> };
+  /** `node.token` emitter bound to this run; built once, used per token. */
+  tokenSink: TokenBatchSink;
 }
 
 export class GraphMindCallbackHandler extends BaseCallbackHandler {
@@ -97,7 +102,9 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
     const roots = [...this.roots.values()];
     this.roots.clear();
     this.tree.clear();
+    this.core.openHandlers.delete(this);
     for (const root of roots) {
+      this.core.closeScope(root.runner);
       try {
         await root.scope?.end();
       } catch {
@@ -157,7 +164,10 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       const record = this.tree.take(runId);
       if (record === undefined) return;
       if (record.emitted) {
-        await this.inRoot(record.rootRunId, () => this.emitFinish(record, outputs, 'ok'));
+        await this.inRoot(record.rootRunId, async () => {
+          this.emitFinish(record, outputs, 'ok');
+          await this.gateAfter(record);
+        });
       }
       await this.closeRoot(record);
     });
@@ -215,8 +225,11 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
     return this.guard('llm-token', async () => {
       const record = this.tree.get(runId);
       if (record === undefined || !record.emitted || typeof token !== 'string') return;
-      await this.inRoot(record.rootRunId, () =>
-        this.core.pushToken(record.nodeId, 'text', token),
+      this.core.pushToken(
+        record.nodeId,
+        'text',
+        token,
+        this.roots.get(record.rootRunId)?.tokenSink,
       );
     });
   }
@@ -230,6 +243,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       await this.inRoot(record.rootRunId, () =>
         this.emitFinish(record, { text }, 'ok', { usage }),
       );
+      await this.closeRoot(record);
     });
   }
 
@@ -238,6 +252,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       const record = this.tree.take(runId);
       if (record === undefined) return;
       await this.inRoot(record.rootRunId, () => this.failRun(record, error));
+      await this.closeRoot(record, error);
     });
   }
 
@@ -255,6 +270,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
   ): Promise<void> {
     return this.guard('tool-start', async () => {
       const name = runName ?? serializedName(tool) ?? 'tool';
+      if (parentRunId === undefined) await this.openRoot(runId, name);
       const rootRunId = this.tree.rootFor(runId, parentRunId);
       const record = this.open(runId, rootRunId, parentRunId, 'tool', name, toolCallId ?? runId);
       // A wrapped tool gates in its own wrapper, where inject/retry ARE
@@ -267,6 +283,15 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       const langgraphNode = readString(metadata?.['langgraph_node']);
       if (langgraphNode !== undefined) extra['langgraphNode'] = langgraphNode;
 
+      // Publish the node identity + run scope for a wrapper about to execute
+      // this same run (see wrap-tools.ts).
+      const runner = this.roots.get(rootRunId)?.runner;
+      this.core.linkToolRun(runId, {
+        nodeId: record.nodeId,
+        instanceId: record.instanceId,
+        runIn: runner?.runIn ?? (<T>(fn: () => T | Promise<T>) => (async () => fn())()),
+      });
+
       await this.inRoot(rootRunId, async () => {
         this.emitStart(record, parseToolInput(input), extra);
         if (!record.gatedByWrapper) await this.gateBefore(record);
@@ -276,25 +301,30 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
 
   override async handleToolEnd(output: unknown, runId: string): Promise<void> {
     return this.guard('tool-end', async () => {
+      this.core.unlinkToolRun(runId);
       const record = this.tree.take(runId);
       if (record === undefined || !record.emitted) return;
       const annotation = this.core.takeToolAnnotation(runId) as
         | Record<string, unknown>
         | undefined;
-      await this.inRoot(record.rootRunId, () =>
-        this.emitFinish(record, unwrapToolOutput(output), 'ok', { extra: annotation }),
-      );
+      await this.inRoot(record.rootRunId, async () => {
+        this.emitFinish(record, unwrapToolOutput(output), 'ok', { extra: annotation });
+        await this.gateAfter(record);
+      });
+      await this.closeRoot(record);
     });
   }
 
   override async handleToolError(error: unknown, runId: string): Promise<void> {
     return this.guard('tool-error', async () => {
+      this.core.unlinkToolRun(runId);
       const record = this.tree.take(runId);
       if (record === undefined) return;
       const annotation = this.core.takeToolAnnotation(runId) as
         | Record<string, unknown>
         | undefined;
       await this.inRoot(record.rootRunId, () => this.failRun(record, error, annotation));
+      await this.closeRoot(record, error);
     });
   }
 
@@ -311,6 +341,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
   ): Promise<void> {
     return this.guard('retriever-start', async () => {
       const name = runName ?? serializedName(retriever) ?? 'retriever';
+      if (parentRunId === undefined) await this.openRoot(runId, name);
       const rootRunId = this.tree.rootFor(runId, parentRunId);
       const record = this.open(runId, rootRunId, parentRunId, 'retriever', name, runId);
       await this.inRoot(rootRunId, async () => {
@@ -325,9 +356,11 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       const record = this.tree.take(runId);
       if (record === undefined || !record.emitted) return;
       const docs = Array.isArray(documents) ? documents : [];
-      await this.inRoot(record.rootRunId, () =>
-        this.emitFinish(record, { documents: docs, count: docs.length }, 'ok'),
-      );
+      await this.inRoot(record.rootRunId, async () => {
+        this.emitFinish(record, { documents: docs, count: docs.length }, 'ok');
+        await this.gateAfter(record);
+      });
+      await this.closeRoot(record);
     });
   }
 
@@ -336,6 +369,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       const record = this.tree.take(runId);
       if (record === undefined) return;
       await this.inRoot(record.rootRunId, () => this.failRun(record, error));
+      await this.closeRoot(record, error);
     });
   }
 
@@ -347,6 +381,8 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
    * debugger.
    */
   private async guard(key: string, body: () => Promise<void> | void): Promise<void> {
+    // Disabled session: the handler is inert, so attaching it costs nothing.
+    if (!this.core.session.enabled) return;
     try {
       await body();
     } catch (error) {
@@ -362,13 +398,10 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
   }
 
   /** Execute instrumentation inside the run context that owns `rootRunId`. */
-  private async inRoot(rootRunId: string, body: () => Promise<void> | void): Promise<void> {
-    const scope = this.roots.get(rootRunId)?.scope;
-    if (scope === undefined) {
-      await body();
-      return;
-    }
-    await scope.run(body);
+  private inRoot<T>(rootRunId: string, body: () => T | Promise<T>): Promise<T> {
+    const runner = this.roots.get(rootRunId)?.runner;
+    if (runner === undefined) return (async () => body())();
+    return runner.runIn(body);
   }
 
   private shouldEmitChain(langgraphNode: string | undefined, tags: string[] | undefined): boolean {
@@ -378,13 +411,13 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
     return true;
   }
 
-  private async startRoot(
-    runId: string,
-    name: string,
-    inputs: unknown,
-    metadata: Record<string, unknown> | undefined,
-    tags: string[] | undefined,
-  ): Promise<void> {
+  /**
+   * Open the GraphMind run for a LangChain run that has no parent. Called for
+   * whatever starts first — usually the graph's own chain run, but a directly
+   * invoked model, tool or retriever is a root too.
+   */
+  private async openRoot(runId: string, name: string): Promise<void> {
+    if (this.roots.has(runId)) return;
     const attachWait = this.core.maybeWaitForAttach();
     if (attachWait !== undefined) await attachWait;
 
@@ -393,9 +426,29 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       ambient === undefined && this.core.autoRun
         ? RunScope.open(this.core.session, name)
         : undefined;
-    this.roots.set(runId, { scope, ctx: ambient ?? scope?.ctx });
+    const runner = {
+      runIn: <T>(fn: () => T | Promise<T>): Promise<T> =>
+        scope === undefined ? (async () => fn())() : scope.run(fn),
+    };
+    this.roots.set(runId, {
+      scope,
+      ctx: ambient ?? scope?.ctx,
+      runner,
+      tokenSink: this.core.tokenSinkFor(runner.runIn),
+    });
+    this.core.openScope(runner);
+    this.core.openHandlers.add(this);
     this.linkAbort(ambient ?? scope?.ctx);
+  }
 
+  private async startRoot(
+    runId: string,
+    name: string,
+    inputs: unknown,
+    metadata: Record<string, unknown> | undefined,
+    tags: string[] | undefined,
+  ): Promise<void> {
+    await this.openRoot(runId, name);
     const record = this.open(runId, runId, undefined, 'agent', name, runId);
     const extra: Record<string, unknown> = {};
     const threadId = readString(metadata?.['thread_id']);
@@ -428,16 +481,16 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
     const root = this.roots.get(record.runId);
     this.roots.delete(record.runId);
     this.tree.clearRoot(record.runId);
-    if (root?.scope !== undefined) {
-      try {
-        await root.scope.run(() => this.core.batcher.flushAll());
-      } catch {
-        // flushing is best-effort
-      }
-      await root.scope.end(error);
-    } else {
+    if (this.roots.size === 0) this.core.openHandlers.delete(this);
+    if (root === undefined) {
       this.core.batcher.flushAll();
+      return;
     }
+    // Each pending batch carries its own emit path, so this cannot leak one
+    // run's tokens into another.
+    this.core.batcher.flushAll();
+    this.core.closeScope(root.runner);
+    await root.scope?.end(error);
   }
 
   /** Record a run we do not render, so its children keep correct parentage. */
@@ -489,6 +542,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
   ): Promise<void> {
     const modelName = readString(metadata?.['ls_model_name']);
     const name = runName ?? modelName ?? serializedName(llm) ?? 'llm';
+    if (parentRunId === undefined) await this.openRoot(runId, name);
     const rootRunId = this.tree.rootFor(runId, parentRunId);
     const record = this.open(runId, rootRunId, parentRunId, 'llm', name, runId);
 
@@ -559,15 +613,34 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       await this.performAbort(record, 'before-gate');
       return;
     }
-    if (decision.action === 'inject' || decision.action === 'retry') {
-      this.core.warner.warn(
-        `callback-${decision.action}`,
-        `the debugger asked to ${decision.action} at "${record.name}", but LangChain callbacks ` +
-          'have no return channel — a handler cannot substitute or re-run what it observes, so ' +
-          'execution continued. Wrap that tool with gm.wrapStructuredTool() / gm.tool() to get ' +
-          'inject and retry.',
-      );
+    this.warnUnsupported(decision.action, record);
+  }
+
+  /**
+   * The `after` gate: inspect a finished node before the graph moves on.
+   * Only fires on an explicit `after` breakpoint (step mode does not stop at
+   * `after` — see the client's gate engine), and is observe-only: the result
+   * has already been handed back to LangChain by the time we are told.
+   */
+  private async gateAfter(record: RunRecord): Promise<void> {
+    if (record.gatedByWrapper) return; // the wrapper owns a real `after` gate
+    const decision = await this.core.session.gate('after', gateNode(record));
+    if (decision.action === 'abort') {
+      await this.performAbort(record, 'after-gate');
+      return;
     }
+    this.warnUnsupported(decision.action, record);
+  }
+
+  private warnUnsupported(action: string, record: RunRecord): void {
+    if (action !== 'inject' && action !== 'retry') return;
+    this.core.warner.warn(
+      `callback-${action}`,
+      `the debugger asked to ${action} at "${record.name}", but LangChain callbacks have no ` +
+        'return channel — a handler cannot substitute or re-run what it observes, so execution ' +
+        'continued. Wrap that tool with gm.wrapStructuredTool() / gm.tool() to get inject and ' +
+        'retry.',
+    );
   }
 
   /**
