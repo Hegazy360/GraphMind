@@ -40,7 +40,33 @@ jobs:
           python -m twine check dist/*
           ls -l dist
 
+      # Releases are currently published by hand from the maintainer's machine,
+      # so by the time the tag lands the version is usually already on PyPI.
+      # Without this check the job fails on the OIDC exchange and reports a
+      # red X for a release that actually shipped — a false alarm that trains
+      # you to ignore the one alarm that matters.
+      - name: Is this version already on PyPI?
+        id: existing
+        working-directory: python
+        run: |
+          set -euo pipefail
+          VERSION="$(python -c 'import tomllib,pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if curl -fsS "https://pypi.org/pypi/graphmind-ai/$VERSION/json" >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::graphmind-ai $VERSION is already on PyPI — nothing to upload. (Automated publishing was therefore not exercised; see the note in this workflow.)"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Only runs for a version that is genuinely unpublished — so this step
+      # going red means a real release could not ship, which is worth waking
+      # up for. It needs a Trusted Publisher configured at
+      # pypi.org/manage/account/publishing:
+      #   project graphmind-ai · owner Hegazy360 · repo GraphMind
+      #   workflow publish-python.yml · environment pypi
       - name: Publish to PyPI
+        if: steps.existing.outputs.published == 'false'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: python/dist
