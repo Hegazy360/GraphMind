@@ -40,6 +40,32 @@ jobs:
           python -m twine check dist/*
           ls -l dist
 
+      # Proves the Trusted Publisher is configured WITHOUT uploading anything:
+      # asks GitHub for an OIDC token and exchanges it at PyPI exactly as the
+      # publish action would. Without this, a broken publisher configuration
+      # stays invisible until the one moment it matters — a release that has
+      # to ship. Advisory on its own; the publish step below is the gate.
+      - name: Check trusted publishing is configured
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          claim="$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=pypi" \
+            | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')" || {
+              echo "::warning::could not obtain an OIDC token from GitHub"; exit 0; }
+          # The minted token is an upload credential: never echo the response.
+          code="$(curl -sS -o /tmp/mint.json -w '%{http_code}' -X POST \
+            https://pypi.org/_/oidc/mint-token \
+            -H 'Content-Type: application/json' \
+            -d "{\"token\": \"$claim\"}")"
+          if [ "$code" = "200" ] && python -c 'import json,sys; sys.exit(0 if "token" in json.load(open("/tmp/mint.json")) else 1)'; then
+            echo "::notice::Trusted publishing is configured — PyPI minted a short-lived upload token for this workflow."
+          else
+            echo "::warning::Trusted publishing is NOT configured (PyPI returned $code). Add a publisher at pypi.org/manage/account/publishing: project graphmind-ai, owner Hegazy360, repo GraphMind, workflow publish-python.yml, environment pypi."
+            python -c 'import json; d=json.load(open("/tmp/mint.json")); print("reason:", d.get("message") or list(d)[:3])' 2>/dev/null || true
+          fi
+          rm -f /tmp/mint.json
+
       # Releases are currently published by hand from the maintainer's machine,
       # so by the time the tag lands the version is usually already on PyPI.
       # Without this check the job fails on the OIDC exchange and reports a
