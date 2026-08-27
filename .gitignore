@@ -32,3 +32,5 @@ python/.ruff_cache/
 python/.mypy_cache/
 
 apps/viewer/dist-try/
+
+python/uv.lock
