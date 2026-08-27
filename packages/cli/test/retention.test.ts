@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { parseEnvelope } from '@graphmind-ai/schema';
+import { PROTOCOL_VERSION, parseEnvelope } from '@graphmind-ai/schema';
 import { defaultFlags, type ParsedCli } from '../src/args.js';
 import { runRuns } from '../src/commands/runs.js';
 import { startServer } from '../src/server.js';
@@ -358,5 +358,66 @@ describe('graphmind runs', () => {
     );
     expect(code).toBe(0);
     expect(s.out.join('\n')).toContain('nothing recorded yet');
+  });
+});
+
+describe('unserializable payloads', () => {
+  // Found by CI: Linux trips JSON.stringify's stack depth on payloads macOS
+  // serializes fine, and replacing the whole payload made the stored envelope
+  // fail its own schema — the viewer then dropped the event on replay and the
+  // node hung "running" forever.
+  const deeplyNested = () => {
+    const root: Record<string, unknown> = {};
+    let cursor = root;
+    for (let i = 0; i < 200_000; i += 1) {
+      const next: Record<string, unknown> = {};
+      cursor['n'] = next;
+      cursor = next;
+    }
+    return root;
+  };
+
+  it('keeps the schema-required fields when one field cannot be serialized', () => {
+    const result = serializePayload({
+      nodeId: 'tool:x',
+      instanceId: 'i1',
+      durationMs: 5,
+      status: 'ok',
+      output: deeplyNested(),
+    });
+    expect(result.truncated).toBe(true);
+    const stored = JSON.parse(result.json) as Record<string, unknown>;
+    expect(stored['nodeId']).toBe('tool:x');
+    expect(stored['durationMs']).toBe(5);
+    expect(stored['status']).toBe('ok');
+    expect(stored['fields']).toEqual(['output']);
+    expect(isTruncatedPayload(stored['output'])).toBe(true);
+  });
+
+  it('produces an envelope the viewer can still parse', () => {
+    const result = serializePayload({
+      nodeId: 'tool:x',
+      durationMs: 1,
+      status: 'ok',
+      output: deeplyNested(),
+    });
+    const parsed = parseEnvelope({
+      gm: PROTOCOL_VERSION,
+      seq: 1,
+      ts: Date.now(),
+      runId: 'r1',
+      type: 'node.finished',
+      payload: JSON.parse(result.json),
+    });
+    expect(parsed.kind).toBe('ok');
+  });
+
+  it('does the same for a cyclic field', () => {
+    const cyclic: Record<string, unknown> = { self: null };
+    cyclic['self'] = cyclic;
+    const result = serializePayload({ nodeId: 'tool:y', durationMs: 1, status: 'ok', output: cyclic });
+    const stored = JSON.parse(result.json) as Record<string, unknown>;
+    expect(stored['nodeId']).toBe('tool:y');
+    expect(stored['fields']).toEqual(['output']);
   });
 });

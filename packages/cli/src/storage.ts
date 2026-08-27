@@ -249,6 +249,44 @@ function truncateFields(
  * cyclic value — is replaced whole. Either way the result carries the
  * `__graphmindTruncated` marker fields at the top level.
  */
+
+/**
+ * Keep every field that still serializes, and replace only the ones that do
+ * not (cyclic, or too deeply nested for JSON.stringify) with a marker.
+ *
+ * The whole point is that the envelope must remain valid against its own
+ * schema: `node.finished` keeps nodeId/durationMs/status and loses only the
+ * pathological `output`. Returns undefined when the result still cannot be
+ * serialized, so the caller can fall back to the whole-payload marker.
+ */
+function truncateUnserializableFields(
+  payload: Record<string, unknown>,
+): { json: string; payload: unknown } | undefined {
+  const trimmed: Record<string, unknown> = {};
+  const dropped: string[] = [];
+  for (const key of Object.keys(payload)) {
+    const value = payload[key];
+    if (safeStringify(value) !== undefined) {
+      trimmed[key] = value;
+      continue;
+    }
+    dropped.push(key);
+    // Arrays keep their type so `z.array(...)` still matches.
+    trimmed[key] = Array.isArray(value)
+      ? []
+      : ({
+          __graphmindTruncated: true,
+          bytes: 0,
+          preview: '[unserializable value]',
+        } satisfies TruncatedPayload);
+  }
+  if (dropped.length === 0) return undefined; // nothing to blame; let the caller decide
+  trimmed['__graphmindTruncated'] = true;
+  trimmed['fields'] = dropped;
+  const json = safeStringify(trimmed);
+  return json === undefined ? undefined : { json, payload: trimmed };
+}
+
 export function serializePayload(
   payload: unknown,
   maxBytes: number = MAX_PAYLOAD_BYTES,
@@ -257,7 +295,21 @@ export function serializePayload(
   try {
     json = JSON.stringify(payload) ?? 'null';
   } catch {
-    // Cyclic or non-serializable: keep the run alive, lose the payload.
+    // Cyclic, or nested deeper than the JSON serializer's stack (the depth at
+    // which that bites is platform-dependent — Linux trips on payloads macOS
+    // serializes fine, which is how CI caught this).
+    //
+    // Replacing the WHOLE payload here loses the fields the payload's own
+    // schema requires, so the stored envelope no longer validates and the
+    // viewer drops the event on replay: the node hangs "running" forever.
+    // Trim the offending FIELDS instead, exactly as the oversized path does,
+    // so the event still parses and only the unserializable value is lost.
+    if (isPlainObject(payload)) {
+      const trimmed = truncateUnserializableFields(payload);
+      if (trimmed !== undefined) {
+        return { json: trimmed.json, payload: trimmed.payload, truncated: true };
+      }
+    }
     const marker: TruncatedPayload = {
       __graphmindTruncated: true,
       bytes: 0,

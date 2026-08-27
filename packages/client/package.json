@@ -1,6 +1,6 @@
 {
   "name": "@graphmind-ai/client",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Adapter-agnostic runtime for the GraphMind live agent debugger: session, event transport, and the cooperative gate engine (pause / step / breakpoints / resume).",
   "license": "MIT",
   "type": "module",

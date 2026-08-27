@@ -5,6 +5,24 @@ this repo (`graphmind-ai`, `@graphmind-ai/sdk`, `@graphmind-ai/client`,
 `@graphmind-ai/schema`, `@graphmind-ai/anthropic`, `@graphmind-ai/openai`,
 `@graphmind-ai/langgraph`, and the Python `graphmind-ai` distribution).
 
+## 0.3.1
+
+Two fixes CI found on Linux that macOS hid.
+
+- **An unserializable payload made its stored event unreadable.** A payload
+  nested deeper than the JSON serializer's stack (or cyclic) was replaced
+  wholesale by a truncation marker, which destroyed the fields the payload's
+  own schema requires — so the viewer rejected the event on replay and the
+  node hung "running" forever. Only the offending field is replaced now; the
+  event still validates and still renders. The depth at which this bites is
+  platform-dependent, which is why it passed locally and failed in CI.
+- **The viewer's reducer copied the entire node record on every lifecycle
+  event**, making a run with many nodes quadratic. Measured per-event cost
+  went from 2.4x to 0.69x across a 550-node run. Nothing compared that record
+  by reference — consumers key off the run's version counters — so the copy
+  was pure cost.
+- CI now reports which soak check failed instead of only an exit code.
+
 ## 0.3.0
 
 A hardening release. An adversarial pass — a credential-leak audit, real

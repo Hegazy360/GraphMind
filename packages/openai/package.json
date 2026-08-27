@@ -1,6 +1,6 @@
 {
   "name": "@graphmind-ai/openai",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "OpenAI Node SDK adapter for the GraphMind live agent debugger: wrap your OpenAI client and tools to stream execution events and honour pause / step / inject / retry / abort gates.",
   "license": "MIT",
   "type": "module",

@@ -229,8 +229,10 @@ export async function viewerScenario(flags: Flags): Promise<Section> {
     sec,
     'the reducer stays roughly linear in event count',
     evRatio <= 2,
-    `${evRatio.toFixed(2)}x per-event cost — applyEvent copies the whole nodes record on every node ` +
-      'lifecycle event, so cost per event rises with graph size',
+    `${evRatio.toFixed(2)}x per-event cost per node added` +
+      (evRatio > 2
+        ? ' — cost per event rises with graph size, so something in applyEvent is scanning or copying the whole run'
+        : ''),
   );
 
   // ---- phase 3: node-count sweep (layout) --------------------------------
