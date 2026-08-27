@@ -30,15 +30,11 @@
   "rewrites": [
     {
       "source": "/docs",
-      "destination": "https://graphmind-docs.vercel.app/"
-    },
-    {
-      "source": "/docs/",
-      "destination": "https://graphmind-docs.vercel.app/"
+      "destination": "https://graphmind-docs.vercel.app/docs"
     },
     {
       "source": "/docs/:path*",
-      "destination": "https://graphmind-docs.vercel.app/:path*"
+      "destination": "https://graphmind-docs.vercel.app/docs/:path*"
     }
   ]
 }

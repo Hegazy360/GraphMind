@@ -17,6 +17,9 @@ const BASE = '/docs';
 export default defineConfig({
   site: 'https://graphmind.ai',
   base: BASE,
+  // Emit into dist/docs so the deployment serves /docs/* natively — no
+  // rewrite rules to keep in sync between this project and the marketing site.
+  outDir: './dist/docs',
   trailingSlash: 'always',
   build: { format: 'directory' },
   markdown: {
