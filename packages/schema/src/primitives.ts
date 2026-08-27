@@ -9,7 +9,19 @@ import { z } from 'zod';
 
 /** What kind of graph node an event refers to. */
 export const NodeKindSchema = z
-  .enum(['agent', 'llm', 'tool', 'chain', 'retriever', 'custom'])
+  .enum([
+    'agent',
+    'llm',
+    'tool',
+    'chain',
+    'retriever',
+    // MCP: a server session, a resources/read, and a prompts/get. Tool calls
+    // and sampling reuse 'tool' and 'llm' — they are the same concepts.
+    'server',
+    'resource',
+    'prompt',
+    'custom',
+  ])
   .meta({ id: 'NodeKind' });
 export type NodeKind = z.infer<typeof NodeKindSchema>;
 

@@ -365,6 +365,9 @@
         "tool",
         "chain",
         "retriever",
+        "server",
+        "resource",
+        "prompt",
         "custom"
       ]
     },
