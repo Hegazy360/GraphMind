@@ -1,10 +1,44 @@
 {
   "cleanUrls": true,
   "redirects": [
-    { "source": "/login", "destination": "/", "permanent": true },
-    { "source": "/signup", "destination": "/", "permanent": true },
-    { "source": "/graphs", "destination": "/", "permanent": true },
-    { "source": "/graphs/:path*", "destination": "/", "permanent": true },
-    { "source": "/subscriptions", "destination": "/", "permanent": true }
+    {
+      "source": "/login",
+      "destination": "/",
+      "permanent": true
+    },
+    {
+      "source": "/signup",
+      "destination": "/",
+      "permanent": true
+    },
+    {
+      "source": "/graphs",
+      "destination": "/",
+      "permanent": true
+    },
+    {
+      "source": "/graphs/:path*",
+      "destination": "/",
+      "permanent": true
+    },
+    {
+      "source": "/subscriptions",
+      "destination": "/",
+      "permanent": true
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/docs",
+      "destination": "https://graphmind-docs.vercel.app/"
+    },
+    {
+      "source": "/docs/",
+      "destination": "https://graphmind-docs.vercel.app/"
+    },
+    {
+      "source": "/docs/:path*",
+      "destination": "https://graphmind-docs.vercel.app/:path*"
+    }
   ]
 }
