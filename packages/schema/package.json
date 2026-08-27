@@ -1,6 +1,6 @@
 {
   "name": "@graphmind-ai/schema",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Versioned wire contract (Zod schemas + TypeScript types) for the GraphMind live agent debugger protocol.",
   "license": "MIT",
   "type": "module",

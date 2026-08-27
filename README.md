@@ -10,7 +10,7 @@
 
 **The live debugger for AI agents. Attaches while it's happening.**
 
-[graphmind.ai](https://graphmind.ai) · [Quick start](#quick-start) · [How it compares](#how-it-compares) · [MCP](#use-it-from-claude-code-or-cursor) · [Telemetry](#telemetry)
+[graphmind.ai](https://graphmind.ai) · [Docs](https://graphmind.ai/docs) · [Quick start](#quick-start) · [How it compares](#how-it-compares) · [MCP](#use-it-from-claude-code-or-cursor) · [Telemetry](#telemetry)
 
 [![npm version](https://img.shields.io/npm/v/graphmind-ai?label=npm&color=4ade80)](https://www.npmjs.com/package/graphmind-ai) [![CI](https://github.com/Hegazy360/GraphMind/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Hegazy360/GraphMind/actions/workflows/ci.yml) [![license](https://img.shields.io/npm/l/graphmind-ai)](./LICENSE) [![node](https://img.shields.io/node/v/graphmind-ai)](https://nodejs.org) [![PRs welcome](https://img.shields.io/badge/PRs-welcome-4ade80)](#contributing)
 <!-- Re-enable once npm's downloads API has data for the fresh package (shows a red error until then):
@@ -122,15 +122,16 @@ error genuinely pauses the run, and from the viewer you can **inject** a
 corrected result (the agent finishes happily), **continue** (it apologizes),
 **retry**, or **abort**.
 
-### 2. Debug your own agent (Vercel AI SDK)
+### 2. Debug your own agent
 
-Start the debugger:
+Not sure what to add? Let it read your project:
 
 ```sh
-npx graphmind-ai
+npx graphmind-ai init
 ```
 
-Instrument your app - wrap the model and tools, nothing else changes:
+It finds your framework, prints the install command and the lines to add.
+For the Vercel AI SDK that is:
 
 ```ts
 import { graphmind } from '@graphmind-ai/sdk';
@@ -150,9 +151,22 @@ tool-`execute` decoration), no fork, no monkey-patching. See
 (gates, fail-open guarantees, streaming and provider-executed tools, timeout
 neutralization).
 
-> Install it with `npm i @graphmind-ai/sdk` - published alongside
-> [`@graphmind-ai/client`](https://www.npmjs.com/package/@graphmind-ai/client)
-> and [`@graphmind-ai/schema`](https://www.npmjs.com/package/@graphmind-ai/schema).
+Other frameworks work the same way - wrap what you already have:
+
+| You write agents with | Install | Instrument |
+|---|---|---|
+| [Vercel AI SDK](https://graphmind.ai/docs/integrations/vercel-ai-sdk/) | `@graphmind-ai/sdk` | `gm.wrapModel(model)` + `gm.wrapTools({...})` |
+| [Anthropic SDK](https://graphmind.ai/docs/integrations/anthropic/) | `@graphmind-ai/anthropic` | `gm.wrapClient(new Anthropic())` + `gm.wrapTools({...})` |
+| [OpenAI SDK](https://graphmind.ai/docs/integrations/openai/) | `@graphmind-ai/openai` | `gm.wrapClient(new OpenAI())` + `gm.wrapTools({...})` |
+| [LangGraph / LangChain](https://graphmind.ai/docs/integrations/langgraph/) | `@graphmind-ai/langgraph` | `callbacks: [gm.handler()]` + `gm.wrapTools({...})` |
+| [Python](https://graphmind.ai/docs/integrations/python/) | `pip install graphmind-ai` | `graphmind.instrument_openai(client)` + `@gm.tool` |
+
+How much you can pause depends on what the framework lets an adapter await.
+Wrapped clients and tools give the full set (pause, step, inject, retry,
+abort); callback-based integrations can hold execution but cannot substitute a
+return value, which is why tool wrapping is offered alongside them;
+provider-executed tools are observe-only. Each integration page carries its own
+capability matrix rather than a checkmark grid.
 
 ### 3. Import traces from any other framework
 
@@ -207,6 +221,10 @@ exact JSON record: [packages/cli/TELEMETRY.md](./packages/cli/TELEMETRY.md).
 | [`packages/schema`](./packages/schema) | Versioned wire contract (Zod + JSON Schema export) - the envelope/event/control protocol |
 | [`packages/client`](./packages/client) | SDK-agnostic runtime: transport, ring-buffer replay, the gate engine, fail-open logic |
 | [`packages/ai-sdk`](./packages/ai-sdk) | Vercel AI SDK adapter (model middleware + tool wrapping) |
+| [`packages/anthropic`](./packages/anthropic) | Anthropic SDK adapter (client proxy + tool wrapping) |
+| [`packages/openai`](./packages/openai) | OpenAI SDK adapter (chat.completions + Responses API) |
+| [`packages/langgraph`](./packages/langgraph) | LangChain / LangGraph adapter (callback handler + tool wrapping) |
+| [`python`](./python) | The Python SDK (`pip install graphmind-ai`), sync and async |
 | [`packages/cli`](./packages/cli) | `graphmind-ai` (bin `graphmind`): local server, SQLite storage, demo, trace importer, MCP server, viewer host |
 | [`apps/viewer`](./apps/viewer) | The graph debugger UI (ships built inside the CLI package) |
 | [`apps/web`](./apps/web) | graphmind.ai |
