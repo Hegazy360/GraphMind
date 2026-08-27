@@ -1,6 +1,132 @@
 ---
-title: TODO
-description: TODO
+title: FAQ
+description: Production safety, overhead, privacy, framework support, how GraphMind relates to tracing tools, and what it deliberately does not do.
+sidebar:
+  order: 6
 ---
 
-TODO
+import { Aside } from '@astrojs/starlight/components';
+
+## Is it safe to leave in production code?
+
+Yes, and that is the design intent.
+
+Under `NODE_ENV=production` instrumentation is **disabled** unless you explicitly set
+`GRAPHMIND=1`. A disabled session opens no sockets, buffers nothing and logs nothing, and
+`wrapClient` / `wrapModel` / `wrapTools` are identity functions — you get your own objects back.
+
+For certainty regardless of how `NODE_ENV` is set, put `GRAPHMIND_DISABLED=1` in the production
+environment. Nothing overrides it.
+
+## What does it cost when nothing is attached?
+
+Effectively nothing. An awaited gate short-circuits to a shared resolved promise — the test suite
+asserts an average under 1 ms, and the design spike measured 0.03 ms worst case. Events go to an
+in-memory ring buffer and no further.
+
+Fully disabled, the cost is zero: the wrappers are the identity function.
+
+## Can it break my app?
+
+The client is built so that it cannot. Every public method catches its own internal errors,
+degrades to a no-op, and logs one rate-limited warning. The one thing that propagates untouched
+is an error thrown by *your* function inside `gm.run` — that is yours.
+
+If the debugger disconnects while gates are held, every gate releases with `continue` within
+milliseconds and your agent finishes as though nothing had attached.
+
+## Where does my data go?
+
+Nowhere. The server binds `127.0.0.1` and runs are stored in `~/.graphmind/graphmind.db` on your
+machine. Prompts, tool arguments and outputs never leave it.
+
+The only outbound request is an anonymous [telemetry](/reference/telemetry/) ping naming the CLI
+command you ran — one environment variable to turn off.
+
+## Do I need an API key?
+
+Not for GraphMind. `npx graphmind-ai demo` replays a bundled recording with no key at all. Your
+own agent obviously needs whatever keys it already needed.
+
+## Is this a replacement for Langfuse / Phoenix / LangSmith?
+
+No — different halves of the loop. Those record what happened across many runs: aggregate
+analytics, evals, cost dashboards, production monitoring, team-wide history. GraphMind attaches
+to *one* run while it is happening and can stop it.
+
+Keep your tracing tool. Reach for GraphMind when a specific run is doing something you cannot
+explain. The [full comparison](/start/what-is-graphmind/#the-honest-comparison) is on the
+overview page.
+
+## Does it support my framework?
+
+Adapters ship for the Vercel AI SDK, the Anthropic SDK, the OpenAI SDK, LangGraph/LangChain (JS)
+and Python (`openai`, `anthropic`, `langgraph`). See [integrations](/integrations/).
+
+If yours is not listed: `graphmind import` reads OTel and OpenInference trace exports as
+history-only runs, and the [adapter guide](/contributing/writing-an-adapter/) covers writing a
+real one — the protocol is nine event types over one WebSocket.
+
+## Can I use it with a hosted or serverless app?
+
+Locally, yes — run the app in dev and the debugger on the same machine. From a container, point
+`GRAPHMIND_URL` at `host.docker.internal` (see [environment](/reference/environment/)).
+
+Against a *deployed* app, no. The adapter dials `127.0.0.1`, there is no auth on the ingest
+socket, and exposing it would hand anyone who reached it your prompts and control of your agent.
+Debug locally; use a tracing tool for production.
+
+## Does holding a gate cost me an API timeout?
+
+Adapters await the `before` gate **before** the provider request goes out, so a hold has nothing
+in flight. While a debugger is attached, adapters also chain — never replace — abort signals and
+filter out timeout-driven aborts.
+
+There is a known limit with the Vercel AI SDK's outer loop (`totalMs` / `stepMs` / `chunkMs` can
+still abort the surrounding run after a very long hold); see
+[the details](/integrations/vercel-ai-sdk/#timeouts-while-debugging). Prefer removing `timeout`
+configs while debugging.
+
+## Can two people debug the same run?
+
+Two viewers can watch the same server, and breakpoints and mode are shared server-side — a
+change from one broadcasts to the other. But the server is loopback-only, so "two people" means
+two windows on one machine, not two laptops.
+
+## Does it work with streaming?
+
+Yes. Adapters tee the provider stream and emit batched token deltas (about 30 per second per
+node) without disturbing what your code consumes. You see `text`, `reasoning` and `tool-args`
+channels live.
+
+Streaming *tools* (`async function*`) are gated at before-start only — chunks are observed, not
+paused mid-stream.
+
+## What about provider-executed tools (MCP, server-side tools)?
+
+They run on the provider's side, so they cannot be gated. The adapter observes them from the
+stream and marks their events `providerExecuted: true` and `ungated: true`, so the viewer shows
+them honestly as ungated rather than pretending you can break on them.
+
+## Why is nothing appearing in the viewer?
+
+Almost always a port mismatch or a process that exits before the handshake lands. Work through
+[troubleshooting](/reference/troubleshooting/).
+
+## What does it deliberately not do?
+
+- No evals, scoring or dataset management.
+- No cost dashboards or aggregate analytics.
+- No hosted service, no accounts, no team history.
+- No production monitoring.
+- No prompt management or versioning.
+
+<Aside type="note" title="One product, one job">
+GraphMind is a debugger. Everything on that list is another tool's job, and most of them do it
+well. Keeping the scope narrow is what lets a solo maintainer keep the debugging half sharp.
+</Aside>
+
+## Is it really MIT?
+
+Yes — MIT, all of it, [on GitHub](https://github.com/Hegazy360/GraphMind). No open-core split, no
+feature gating, no licence that changes when it gets popular.

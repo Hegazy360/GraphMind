@@ -1,6 +1,189 @@
 ---
-title: TODO
-description: TODO
+title: Wire protocol
+description: The versioned JSON contract between an instrumented app and a GraphMind viewer — the envelope, every event and control type, and the forward-compatibility rules adapters must follow.
+sidebar:
+  order: 3
 ---
 
-TODO
+import { Aside } from '@astrojs/starlight/components';
+
+`@graphmind-ai/schema` is the wire contract. Everything else in GraphMind — the CLI, the viewer,
+every adapter, in any language — is an implementation of this document.
+
+If you are writing an adapter, this is what you target. The package also exports the whole
+contract as a **JSON Schema** (draft 2020-12) via `exportJsonSchema()`, so non-JavaScript
+implementations can validate against it directly.
+
+## Transport
+
+One WebSocket. The **app dials the viewer** at `ws://127.0.0.1:4747/ingest` (override with
+`GRAPHMIND_URL`). Every message is a single JSON text frame containing one envelope.
+
+## The envelope
+
+```ts
+{
+  gm: 1,              // protocol MAJOR version
+  seq: 0,             // per-sender, monotonically increasing
+  ts: 1756254187512,  // sender wall clock, epoch ms
+  runId: 'run_01H8…', // the run, or '*' for run-independent messages
+  type: 'node.started',
+  payload: { /* type-specific */ }
+}
+```
+
+| Field | Rule |
+| --- | --- |
+| `gm` | Protocol major version, currently **1**. Peers MUST reject envelopes whose `gm` differs from theirs. |
+| `seq` | Per-sender counter. Receivers deduplicate replays on `(runId, seq)` and can detect gaps. |
+| `ts` | Sender's epoch milliseconds. |
+| `runId` | The run this belongs to, or `*` (`WILDCARD_RUN_ID`) for handshake, breakpoints and mode. |
+| `type` | The message type. |
+| `payload` | Type-specific; every payload object is **loose**. |
+
+## Forward compatibility
+
+Three rules, and they are the reason the protocol can grow without a flag day:
+
+1. **New event types and new payload fields do NOT bump `gm`.** Only an incompatible change does.
+2. **Receivers must tolerate unknown types.** An envelope with an unfamiliar `type` is
+   structurally valid; treat its payload as opaque, do not error.
+3. **Receivers must tolerate unknown fields.** Every object schema is loose — unknown fields are
+   preserved, never stripped or rejected. This is how adapters attach extras like
+   `providerExecuted`, `injected` or provider-specific usage counters.
+
+The reference parser resolves in this order: not envelope-shaped → `invalid`; `gm` mismatch →
+`version-mismatch`; unknown `type` → `unknown-type` (tolerate); known type with a bad payload →
+`invalid`; otherwise `ok`. It never throws.
+
+## Handshake
+
+The app dials; the viewer answers. Until the ack lands, the app must consider itself **detached**
+— which means every gate fails open.
+
+```text
+app  ──► viewer   hello       { versions: { protocol, client }, capabilities, app?, sdk? }
+app  ◄── viewer   hello.ack   { versions: { protocol, viewer }, capabilities, breakpoints, mode }
+```
+
+The ack carries the viewer's **full desired debug state**, so an app that reconnects — or
+attaches mid-run — is re-armed in one message.
+
+Capabilities are plain strings on the wire so future clients can announce ones this version does
+not know. The known set:
+
+| Capability | The client… |
+| --- | --- |
+| `pause` | can hold execution at gates and honours `exec.resume` |
+| `step` | honours `mode.set` with mode `step` |
+| `inject` | honours `exec.resume` with action `inject` + `output` |
+| `retry` | honours `exec.resume` with action `retry` |
+| `abort` | honours `exec.resume` with action `abort` |
+
+## Events (app → viewer)
+
+| Type | Payload |
+| --- | --- |
+| `run.started` | `{ app, sdk, meta? }` |
+| `run.finished` | `{ status, error? }` |
+| `graph.hint` | `{ nodes: GraphNodeHint[] }` — static structure, pre-rendered grey |
+| `node.started` | `{ nodeId, parentId?, kind, name, instanceId, input? }` |
+| `node.token` | `{ nodeId, deltas: TokenDelta[] }` — batched by the sender |
+| `node.finished` | `{ nodeId, instanceId?, output?, usage?, durationMs, status }` |
+| `node.error` | `{ nodeId, instanceId?, error }` |
+| `exec.paused` | `{ pauseId, nodeId, point }` |
+| `exec.resumed` | `{ pauseId, action }` |
+
+<Aside type="caution" title="Always send instanceId">
+`instanceId` is required on `node.started` and optional on `node.finished` / `node.error` for
+backwards compatibility — but senders **should** always set it. Without it a receiver has to
+attribute a completion to the most recent open instance, which mis-attributes whenever the same
+logical node runs concurrently.
+</Aside>
+
+`exec.resumed` is emitted even when the client releases a gate on its own — fail-open
+auto-continue, pause timeout, dispose — so a viewer can always reconstruct the full pause
+history.
+
+## Controls (viewer → app)
+
+| Type | Payload | Effect |
+| --- | --- | --- |
+| `exec.resume` | `{ pauseId, action, output? }` | Release a held gate. `output` is meaningful only for `inject`. |
+| `breakpoint.set` | `{ matcher }` | Add a breakpoint. Matchers dedupe by exact field equality. |
+| `breakpoint.clear` | `{ matcher }` | Remove a breakpoint set with an identical matcher. |
+| `mode.set` | `{ mode }` | Switch between `run` and `step`. |
+
+Control envelopes use `runId: '*'` except `exec.resume`, which the server routes to the app
+socket owning that run.
+
+## Primitives
+
+```ts
+type NodeKind    = 'agent' | 'llm' | 'tool' | 'chain' | 'retriever' | 'custom';
+type RunStatus   = 'ok' | 'error' | 'aborted';
+type PausePoint  = 'before' | 'after' | 'error';
+type ResumeAction = 'continue' | 'retry' | 'inject' | 'abort';
+type RunMode     = 'run' | 'step';
+
+interface ErrorInfo   { name: string; message: string; stack?: string }
+interface TokenUsage  { inputTokens: number; outputTokens: number }
+interface TokenDelta  { t: 'text' | 'reasoning' | 'tool-args'; v: string }
+interface SdkInfo     { name: string; version: string }
+
+interface GraphNodeHint { nodeId: string; kind: NodeKind; name: string; parentId?: string }
+
+interface BreakpointMatcher {
+  kind?: NodeKind;
+  name?: string;
+  point?: PausePoint;   // defaults to 'before'
+}
+```
+
+Every field present on a `BreakpointMatcher` must match; absent fields match anything. An empty
+matcher `{}` therefore means "pause before every node".
+
+`stack` on `ErrorInfo` is optional and may be redacted by the sender.
+
+## Node identity
+
+The convention every adapter follows (and the reason graphs stay legible):
+
+| Node | `nodeId` | `instanceId` |
+| --- | --- | --- |
+| Agent (a run) | `agent:<runName>` | the run id |
+| Model step | `llm:step` | `<invocationId>:s<N>` |
+| Tool call | `tool:<toolName>` | the tool call id |
+| Chain / graph node | `chain:<name>` | the framework's run id |
+| Retriever | `retriever:<name>` | the framework's run id |
+
+`nodeId` is stable per **logical** node — one place in your code. `instanceId` is unique per
+**execution**. The viewer draws one node per `nodeId` and lights it up per instance.
+
+## Replay
+
+Clients keep a bounded ring buffer of emitted events. On attach, the whole buffer is replayed
+oldest-first **with the original `seq` values**. Receivers deduplicate on `(runId, seq)` — the
+CLI's storage does it with `INSERT OR IGNORE` on that key, so re-ingesting a run is idempotent.
+
+## Using the JSON Schema
+
+```ts
+import { exportJsonSchema, exportJsonSchemaString } from '@graphmind-ai/schema';
+
+const schema = exportJsonSchema();          // draft 2020-12 document
+const text = exportJsonSchemaString();      // deterministic pretty-printed form
+```
+
+The build writes it to `schema.json` at the package root, and a golden-file test pins its exact
+content so accidental contract drift fails CI.
+
+## Versioning
+
+`PROTOCOL_VERSION` is a single integer acting as the MAJOR version. It bumps only on an
+incompatible change. Additions — new event types, new payload fields — are made under the
+existing version and absorbed by the tolerance rules above. Peers reject a mismatched `gm`
+rather than guessing.
+
+Next: [writing an adapter](/contributing/writing-an-adapter/) walks the whole implementation
+against this contract.

@@ -183,12 +183,9 @@ async function runGatedRequest(
       if (isThenable(api)) track(api);
       value = await (api as PromiseLike<unknown>);
     } catch (error) {
-      // A debugger-driven abort surfacing from the SDK is terminal.
-      if (ctx?.signal.aborted === true && isAbortError(error)) {
-        reporter.finish(undefined, 'aborted');
-        throw error;
-      }
-      if (isAbortError(error)) {
+      // Aborts are terminal: never gate them, never retry them (a
+      // debugger-driven abort would otherwise loop back into the error gate).
+      if (isAbortError(error) || isUserAbort(error)) {
         reporter.finish(undefined, 'aborted');
         throw error;
       }
@@ -208,7 +205,7 @@ async function runGatedRequest(
     }
 
     if (isStreamLike(value)) {
-      const teed = teeStream(core, value);
+      const teed = teeStream(value);
       if (teed === undefined) {
         // Exotic stream implementation: hand it over untouched, unobserved.
         core.warner.warn(
@@ -272,17 +269,22 @@ function beginStep(
   }
 }
 
-function teeStream(
-  core: AdapterCore,
-  stream: StreamLike,
-): { forCaller: StreamLike; forObserver: StreamLike } | undefined {
+/** The OpenAI SDK's own abort error (`client.APIUserAbortError`). */
+function isUserAbort(error: unknown): boolean {
+  return error instanceof Error && error.name === 'APIUserAbortError';
+}
+
+/**
+ * `Stream.tee()` gives both branches the identical chunk sequence (it pulls the
+ * underlying iterator once and fans out), so what GraphMind observes is
+ * byte-for-byte what the caller consumes.
+ */
+function teeStream(stream: StreamLike): { forCaller: StreamLike; forObserver: StreamLike } | undefined {
   try {
     const [forCaller, forObserver] = stream.tee();
     if (forCaller === undefined || forObserver === undefined) return undefined;
     return { forCaller, forObserver };
-  } catch (error) {
-    void core;
-    void error;
+  } catch {
     return undefined;
   }
 }

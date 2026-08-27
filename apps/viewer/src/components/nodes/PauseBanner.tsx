@@ -87,22 +87,20 @@ function PauseBannerInner({ runId, node, pause }: PauseBannerProps & { pause: Pa
           {error.name}: {error.message}
         </div>
       )}
-      <div className="gm-actions" style={{ marginBottom: 5 }}>
-        <button className="gm-action gm-action--primary" onClick={() => resume('continue')}>
+      <div className="gm-actions">
+        <button className="gm-action gm-action--primary" onClick={() => resume('continue')} title="Release this gate (c)">
           Continue
         </button>
-        <button className="gm-action" onClick={step}>
+        <button className="gm-action" onClick={step} title="Resume and pause at the next gate">
           Step
         </button>
-        <button className="gm-action" onClick={() => resume('retry')}>
+        <button className="gm-action" onClick={() => resume('retry')} title="Run this call again">
           Retry
         </button>
-      </div>
-      <div className="gm-actions">
-        <button className="gm-action" onClick={openInject}>
+        <button className="gm-action" onClick={openInject} title="Substitute a result and continue">
           Inject…
         </button>
-        <button className="gm-action gm-action--danger" onClick={() => resume('abort')}>
+        <button className="gm-action gm-action--danger" onClick={() => resume('abort')} title="Abort the run">
           Abort
         </button>
       </div>

@@ -16,7 +16,7 @@
  *
  * FAIL-OPEN: if the scope never opened or has already closed, `run()` executes
  * the task immediately, outside the run context — attribution degrades to the
- * session's implicit run, execution never stalls. `run()` never rejects.
+ * session's implicit run, execution never stalls.
  */
 import type { RunContext, Session } from '@graphmind-ai/client';
 
@@ -59,19 +59,19 @@ export class RunScope {
 
   /**
    * Execute `fn` inside the run context and resolve with its result.
-   * Resolves with `fallback` if `fn` throws — this is instrumentation, never
-   * the host's own work.
+   * Rejects if `fn` does: the caller (the handler's `guard`) decides what is
+   * fail-open and what is a deliberate abort that must reach the host.
    */
-  run<T>(fn: () => T | Promise<T>, fallback: T): Promise<T> {
-    if (!this.open) return this.runDetached(fn, fallback);
-    return new Promise<T>((resolve) => {
+  run<T>(fn: () => T | Promise<T>): Promise<T> {
+    if (!this.open) return (async () => fn())();
+    return new Promise<T>((resolve, reject) => {
       this.pending.push(() => {
         // Called by the pump, i.e. from inside `session.run`'s ALS scope.
         void (async () => {
           try {
             resolve(await fn());
-          } catch {
-            resolve(fallback);
+          } catch (error) {
+            reject(error);
           }
         })();
       });
@@ -103,15 +103,7 @@ export class RunScope {
     }
   }
 
-  private async runDetached<T>(fn: () => T | Promise<T>, fallback: T): Promise<T> {
-    try {
-      return await fn();
-    } catch {
-      return fallback;
-    }
-  }
-
-  /** The loop that lives inside the run context. Never throws. */
+  /** The loop that lives inside the run context. */
   private async pump(): Promise<void> {
     for (;;) {
       const next = this.pending.shift();

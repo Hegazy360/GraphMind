@@ -26,7 +26,6 @@ import {
   isObject,
   parseToolInput,
   toolRoster,
-  type RequestOptionsLike,
   type ResponseOutputItemLike,
   type UsageWithExtras,
 } from './sdk-types.js';
@@ -255,9 +254,10 @@ export class AdapterCore {
   prepareRequestOptions(options: unknown): unknown {
     try {
       if (!this.session.attached) return options;
-      const opts = isObject(options) ? (options as RequestOptionsLike) : undefined;
-      const original = opts?.signal ?? undefined;
-      const chained = this.chainSignal(original ?? undefined);
+      const opts = isObject(options) ? options : undefined;
+      const raw = opts?.['signal'];
+      const original = raw instanceof AbortSignal ? raw : undefined;
+      const chained = this.chainSignal(original);
       if (chained === undefined || chained === original) return options;
       return { ...(opts ?? {}), signal: chained };
     } catch {

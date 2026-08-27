@@ -117,7 +117,7 @@ export const INTEGRATIONS: Integration[] = [
     pkg: '@graphmind-ai/sdk',
     triggers: ['ai', '@ai-sdk/anthropic', '@ai-sdk/openai', '@ai-sdk/react'],
     snippet: NODE_SNIPPET_AI_SDK,
-    docs: 'https://docs.graphmind.ai/integrations/vercel-ai-sdk/',
+    docs: 'https://graphmind.ai/docs/integrations/vercel-ai-sdk/',
   },
   {
     id: 'anthropic',
@@ -126,7 +126,7 @@ export const INTEGRATIONS: Integration[] = [
     pkg: '@graphmind-ai/anthropic',
     triggers: ['@anthropic-ai/sdk'],
     snippet: NODE_SNIPPET_ANTHROPIC,
-    docs: 'https://docs.graphmind.ai/integrations/anthropic/',
+    docs: 'https://graphmind.ai/docs/integrations/anthropic/',
   },
   {
     id: 'openai',
@@ -135,7 +135,7 @@ export const INTEGRATIONS: Integration[] = [
     pkg: '@graphmind-ai/openai',
     triggers: ['openai'],
     snippet: NODE_SNIPPET_OPENAI,
-    docs: 'https://docs.graphmind.ai/integrations/openai/',
+    docs: 'https://graphmind.ai/docs/integrations/openai/',
   },
   {
     id: 'langgraph',
@@ -144,7 +144,7 @@ export const INTEGRATIONS: Integration[] = [
     pkg: '@graphmind-ai/langgraph',
     triggers: ['@langchain/langgraph', '@langchain/core', 'langchain'],
     snippet: NODE_SNIPPET_LANGGRAPH,
-    docs: 'https://docs.graphmind.ai/integrations/langgraph/',
+    docs: 'https://graphmind.ai/docs/integrations/langgraph/',
   },
   {
     id: 'py-openai',
@@ -153,7 +153,7 @@ export const INTEGRATIONS: Integration[] = [
     pkg: 'graphmind-ai',
     triggers: ['openai'],
     snippet: PY_SNIPPET_OPENAI,
-    docs: 'https://docs.graphmind.ai/integrations/python/',
+    docs: 'https://graphmind.ai/docs/integrations/python/',
   },
   {
     id: 'py-anthropic',
@@ -162,7 +162,7 @@ export const INTEGRATIONS: Integration[] = [
     pkg: 'graphmind-ai',
     triggers: ['anthropic'],
     snippet: PY_SNIPPET_ANTHROPIC,
-    docs: 'https://docs.graphmind.ai/integrations/python/',
+    docs: 'https://graphmind.ai/docs/integrations/python/',
   },
   {
     id: 'py-langgraph',
@@ -171,7 +171,7 @@ export const INTEGRATIONS: Integration[] = [
     pkg: 'graphmind-ai',
     triggers: ['langgraph', 'langchain', 'langchain-core', 'crewai'],
     snippet: PY_SNIPPET_LANGGRAPH,
-    docs: 'https://docs.graphmind.ai/integrations/python/',
+    docs: 'https://graphmind.ai/docs/integrations/python/',
   },
 ];
 
@@ -313,7 +313,7 @@ export async function runInit(parsed: ParsedCli, io: InitIo = console): Promise<
     io.log('');
     io.log('Any other framework can still stream traces in:');
     io.log('  graphmind import trace.json     # OpenTelemetry / OpenInference export');
-    io.log('  https://docs.graphmind.ai/reference/schema/   # write an adapter (it is small)');
+    io.log('  https://graphmind.ai/docs/reference/schema/   # write an adapter (it is small)');
     return 0;
   }
 
@@ -347,7 +347,7 @@ export async function runInit(parsed: ParsedCli, io: InitIo = console): Promise<
   io.log('3. Start the debugger and run your app:\n');
   io.log('   npx graphmind-ai');
   io.log('');
-  io.log(`Docs: ${found[0]?.integration.docs ?? 'https://docs.graphmind.ai/'}`);
+  io.log(`Docs: ${found[0]?.integration.docs ?? 'https://graphmind.ai/docs/'}`);
 
   if (parsed.flags.write === true) {
     const target = join(dir, 'graphmind.example.ts');

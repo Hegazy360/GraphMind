@@ -281,21 +281,19 @@ export function toolRoster(tools: unknown): ToolRosterEntry[] {
 
 // -- guards ------------------------------------------------------------------
 
-export function isObject(value: unknown): value is Record<string, unknown> {
+export function isObject(value: unknown): value is Record<PropertyKey, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
 /** A `Stream<Item>`: async-iterable, teeable, and carrying an AbortController. */
 export function isStreamLike(value: unknown): value is StreamLike {
-  return (
-    isObject(value) &&
-    typeof (value as StreamLike)[Symbol.asyncIterator] === 'function' &&
-    typeof (value as StreamLike).tee === 'function'
-  );
+  if (!isObject(value)) return false;
+  return typeof value[Symbol.asyncIterator] === 'function' && typeof value['tee'] === 'function';
 }
 
 export function isThenable(value: unknown): value is ApiPromiseLike {
-  return isObject(value) && typeof (value as ApiPromiseLike).then === 'function';
+  if (!isObject(value)) return false;
+  return typeof value['then'] === 'function';
 }
 
 /** Parse a stringified tool input if possible; otherwise pass it through. */

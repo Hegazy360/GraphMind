@@ -1,6 +1,228 @@
 ---
-title: TODO
-description: TODO
+title: CLI reference
+description: Every graphmind command and flag — serve, demo, init, import, mcp, runs, record — plus the HTTP and WebSocket endpoints the server exposes.
+sidebar:
+  order: 1
 ---
 
-TODO
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+The `graphmind-ai` package installs the `graphmind` binary: the local server, SQLite storage,
+the keyless demo, the trace importer, the MCP server, and the bundled viewer UI.
+
+<Tabs syncKey="pkg">
+<TabItem label="npx">
+
+```sh
+npx graphmind-ai            # serve
+npx graphmind-ai demo       # keyless demo
+```
+
+</TabItem>
+<TabItem label="global">
+
+```sh
+npm i -g graphmind-ai
+graphmind
+```
+
+</TabItem>
+</Tabs>
+
+**Requires Node ≥ 22.13.** SQLite is built into Node, so there are no native dependencies.
+
+<Aside type="caution" title="Local only">
+The server binds `127.0.0.1` and has no authentication. It is a devtool, not a service — never
+expose the port.
+</Aside>
+
+## `graphmind serve` (default)
+
+Start the local server and open the viewer. Running `graphmind` with no command does this.
+
+```sh
+graphmind                # port 4747, open the browser
+graphmind --port 4848    # different port (always binds 127.0.0.1)
+graphmind --db ./x.db    # database file (default ~/.graphmind/graphmind.db)
+graphmind --no-open      # do not open a browser
+```
+
+## `graphmind demo`
+
+The keyless first-run experience. Replays a bundled recording of a trip-planner agent with a
+planted bug: `convertCurrency` inverts an exchange rate, and the budget check throws on the
+absurd total.
+
+The replay goes through the real ingest pipeline and honours the real control protocol — the
+planted error genuinely pauses, and `inject` / `continue` / `retry` / `abort` steer the replay
+onto the matching pre-recorded branch. It uses a server already running on the target port, or
+starts one in-process and keeps it up until <kbd>Ctrl</kbd>+<kbd>C</kbd>.
+
+```sh
+graphmind demo               # replay the recording (no API key)
+graphmind demo --live        # run the real demo agent with your API key
+graphmind demo --port 4848   # target a specific server port
+```
+
+`--live` needs a GraphMind monorepo checkout (or `GRAPHMIND_DEMO_AGENT_DIR` pointing at the demo
+agent) plus `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
+
+## `graphmind init [dir]`
+
+Look at a project, work out which agent framework it uses, and print the exact install command
+plus a copy-pasteable snippet that instruments it.
+
+```sh
+graphmind init              # detect and print the steps
+graphmind init --install    # also run the package-manager install
+graphmind init --write      # write a graphmind.example.ts snippet file
+```
+
+Detection is deliberately dumb and transparent: it reads the manifest, matches dependency names,
+and reports what it found. There are no prompts (so it is safe in CI and from coding agents) and
+nothing is written unless you pass `--write`.
+
+## `graphmind import <trace-file>`
+
+Convert an exported trace file into a run, stored with `source: "import"` and rendered with the
+viewer's "imported" treatment — history only, no live features. Best-effort; prints a summary
+(nodes, errors, duration, skipped spans) and a viewer deep link.
+
+```sh
+graphmind import trace.json
+graphmind import trace.json --db ./x.db
+```
+
+Accepted inputs: **OTLP/JSON** (OTel collector `file` exporter, SDK JSON exporters) and **flat
+span lists** (OpenInference / Arize Phoenix-style JSON or JSONL). Recognised span dialects:
+Vercel AI SDK OTel spans, OTel GenAI semantic conventions, and OpenInference. Unrecognised spans
+are imported as generic nodes or skipped with a note.
+
+## `graphmind mcp`
+
+Serve recorded runs to MCP clients (Claude Code, Cursor, …) over stdio. Read-only tools:
+`list_runs`, `get_run`, `get_node`, `find_errors` — each result carries a deep link into the
+viewer. Reads the SQLite database directly, so it works while the server and viewer are closed.
+
+```sh
+claude mcp add graphmind -- npx graphmind-ai mcp
+```
+
+`--db` selects the database; `--port` sets the port used in generated deep links (default 4747 —
+pass it if you run `graphmind` on a different port). Full detail: [MCP tools](/reference/mcp/).
+
+## `graphmind runs`
+
+List what is stored, and keep it from growing forever.
+
+```sh
+graphmind runs                      # list recent runs
+graphmind runs --keep 50            # show the 50 newest
+graphmind runs --prune              # apply the retention policy now
+graphmind runs --prune --keep 50    # ...keeping only the 50 newest
+graphmind runs --prune --days 7     # ...and only the last 7 days
+graphmind runs --rm <runId>         # delete one run
+graphmind runs --clear --yes        # delete every run
+```
+
+Default retention is **200 runs / 30 days**. `--clear` refuses to act without `--yes`.
+
+## `graphmind record <runId>`
+
+Export a persisted run's event stream to NDJSON — one wire envelope per line, the same shape
+`graphmind demo` replays and `WS /ingest` accepts.
+
+```sh
+graphmind record run_01H8… --out bug-4471.ndjson
+```
+
+Default output: `graphmind-run-<runId>.ndjson`. Lists recent run ids when the given one is not
+found. See [exporting a run](/debugging/recording-runs/).
+
+## Global flags
+
+| Flag | Meaning |
+| --- | --- |
+| `--port <n>` | Port (default 4747; the server always binds `127.0.0.1`) |
+| `--db <path>` | SQLite database file (default `~/.graphmind/graphmind.db`) |
+| `--no-open` / `--open` | Suppress / force opening the viewer in a browser |
+| `--live` | (`demo`) run the real demo agent instead of the replay |
+| `--install` | (`init`) run the package-manager install |
+| `--write` | (`init`) write a `graphmind.example.ts` snippet file |
+| `--out <file>` | (`record`) output NDJSON path |
+| `--prune` | (`runs`) apply the retention policy now |
+| `--keep <n>` | (`runs`) keep / show the n newest runs |
+| `--days <n>` | (`runs`) keep runs from the last n days |
+| `--rm <runId>` | (`runs`) delete one run |
+| `--clear` | (`runs`) delete all runs — requires `--yes` |
+| `--yes` | Confirm a destructive command |
+| `-v`, `--version` | Print the version and exit |
+| `-h`, `--help` | Show help |
+
+Flags accept both `--port 4848` and `--port=4848`.
+
+Environment variables live on their own page: [environment](/reference/environment/).
+
+## HTTP & WebSocket endpoints
+
+| Endpoint | Purpose |
+| --- | --- |
+| `WS /ingest` | Instrumented apps. Schema envelopes; `hello` → `hello.ack` handshake (the ack carries current breakpoints + mode). |
+| `WS /ws/ui` | Viewers. UI subprotocol (below). |
+| `GET /health` | `{ ok, name, version }` |
+| `GET /api/runs` | `{ runs: RunInfo[] }`, most recent first |
+| `GET /api/runs/:id/events` | Paginated events (`?afterSeq=&limit=`) |
+| `GET /*` | The built viewer (a placeholder page when the bundle is absent) |
+
+### `GET /api/runs`
+
+Each run: `{ id, app, startedAt, finishedAt, status, schemaVersion, source, eventCount,
+errorCount, live }`. `status` is `running | ok | error | aborted`; `source` is
+`live | import | demo`; `live` is whether the owning app socket is currently connected.
+Timestamps are epoch milliseconds; `finishedAt` is `null` while running.
+
+### `GET /api/runs/:id/events?afterSeq=N&limit=M`
+
+Returns `{ runId, total, events, nextAfterSeq }`. `events` are full wire envelopes in ascending
+`seq` order with `seq > afterSeq` (default: from the start). `limit` defaults to 1000 (max
+5000). `nextAfterSeq` is the cursor for the next page, or `null` on the last one. Unknown run:
+404 `{ error }`.
+
+### UI subprotocol (`WS /ws/ui`)
+
+JSON text frames, each an object with a `type` discriminant. Wire envelopes are never sent bare
+— they ride inside `event` / `control` messages. Types are exported from the package
+(`UiClientMessage`, `UiServerMessage`, `RunInfo`, `WireEnvelope`).
+
+**Server → viewer**
+
+| Message | When |
+| --- | --- |
+| `{ type: 'welcome', versions, breakpoints, mode }` | Immediately on connect |
+| `{ type: 'state', breakpoints, mode }` | Whenever debug state changes (from any viewer) |
+| `{ type: 'runs', runs }` | Reply to `subscribe` `'*'` |
+| `{ type: 'run.update', run }` | Pushed to `'*'` subscribers on run lifecycle changes |
+| `{ type: 'replay.start', runId, count }` | Reply to `subscribe` of a run |
+| `{ type: 'event', runId, envelope }` | One envelope — replayed history first, then live tail |
+| `{ type: 'replay.end', runId }` | History done; everything after is live |
+| `{ type: 'error', message, runId? }` | Bad request / unroutable control |
+
+**Viewer → server**
+
+| Message | Meaning |
+| --- | --- |
+| `{ type: 'subscribe', runId }` | A run id → replay-then-tail; `'*'` → run-list snapshot + updates |
+| `{ type: 'unsubscribe', runId }` | Stop that subscription |
+| `{ type: 'control', envelope }` | A full control envelope: `exec.resume` (routed to the app socket owning `envelope.runId`), or `breakpoint.set` / `breakpoint.clear` / `mode.set` (update server state, relay to all apps, broadcast `state`) |
+
+Replayed envelopes keep their original `seq`; dedupe on `(runId, seq)`. Control envelopes can be
+built with `createEnvelope` from `@graphmind-ai/schema` with any `seq` — the server re-mints
+sequence numbers when relaying to apps.
+
+## Storage
+
+`node:sqlite` (built into Node ≥ 22.13, zero native deps), WAL mode, at
+`~/.graphmind/graphmind.db` (override: `GRAPHMIND_DB` or `--db`). Events are keyed
+`(run_id, seq)` with `INSERT OR IGNORE`, so replay dedup falls out of the protocol. A single
+payload larger than 512 KB is stored as a marker so one enormous event cannot bloat the database
+or wedge the viewer.

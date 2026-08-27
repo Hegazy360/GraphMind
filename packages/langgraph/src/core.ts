@@ -66,6 +66,19 @@ export interface ToolAnnotation {
   aborted?: boolean;
 }
 
+/**
+ * What the callback handler knows about a tool run, published for the tool
+ * wrapper that is about to execute it: the node identity the handler already
+ * announced, and the run scope its events belong to. Without a link (no
+ * handler attached) a wrapper owns the node events itself.
+ */
+export interface ToolRunLink {
+  nodeId: string;
+  instanceId: string;
+  /** Executes instrumentation inside the owning run context. */
+  runIn: <T>(fn: () => T | Promise<T>) => Promise<T>;
+}
+
 const MAX_TOOL_ANNOTATIONS = 1000;
 
 export class AdapterCore {
@@ -85,6 +98,12 @@ export class AdapterCore {
 
   /** Per-tool-run notes left by a wrapper for the handler to attach. */
   private readonly toolAnnotations = new Map<string, ToolAnnotation>();
+
+  /** Node identity + run scope published by the handler, keyed by tool runId. */
+  private readonly toolLinks = new Map<string, ToolRunLink>();
+
+  /** Every run scope currently open, so un-linked wrappers can find the run. */
+  private readonly openScopes = new Set<{ runIn: <T>(fn: () => T | Promise<T>) => Promise<T> }>();
 
   /**
    * Errors already gated once. A LangGraph failure surfaces as
@@ -185,7 +204,7 @@ export class AdapterCore {
 
   // -- tool wrapper handshake ----------------------------------------------
 
-  annotateTool(runId: string | undefined, annotation: ToolAnnotation): void {
+  annotateTool(runId: string | undefined, annotation: ToolAnnotation & Record<string, unknown>): void {
     if (runId === undefined) return;
     if (this.toolAnnotations.size >= MAX_TOOL_ANNOTATIONS) this.toolAnnotations.clear();
     this.toolAnnotations.set(runId, { ...this.toolAnnotations.get(runId), ...annotation });
@@ -195,6 +214,45 @@ export class AdapterCore {
     const annotation = this.toolAnnotations.get(runId);
     if (annotation !== undefined) this.toolAnnotations.delete(runId);
     return annotation;
+  }
+
+  linkToolRun(runId: string, link: ToolRunLink): void {
+    if (this.toolLinks.size >= MAX_TOOL_ANNOTATIONS) this.toolLinks.clear();
+    this.toolLinks.set(runId, link);
+  }
+
+  unlinkToolRun(runId: string): void {
+    this.toolLinks.delete(runId);
+  }
+
+  toolLink(runId: string | undefined): ToolRunLink | undefined {
+    return runId === undefined ? undefined : this.toolLinks.get(runId);
+  }
+
+  openScope(scope: { runIn: <T>(fn: () => T | Promise<T>) => Promise<T> }): void {
+    this.openScopes.add(scope);
+  }
+
+  closeScope(scope: { runIn: <T>(fn: () => T | Promise<T>) => Promise<T> }): void {
+    this.openScopes.delete(scope);
+  }
+
+  /**
+   * The run scope to attribute un-linked instrumentation to (a plain wrapped
+   * function called from inside an auto-run graph). Unambiguous only while a
+   * single run is open; with several concurrent runs the caller falls back to
+   * the ambient AsyncLocalStorage context, which is what `gm.run()` provides.
+   */
+  soleScope(): { runIn: <T>(fn: () => T | Promise<T>) => Promise<T> } | undefined {
+    if (this.openScopes.size !== 1) return undefined;
+    return this.openScopes.values().next().value;
+  }
+
+  /** Run instrumentation in the right run context for a (maybe) tool runId. */
+  runIn<T>(runId: string | undefined, fn: () => T | Promise<T>): Promise<T> {
+    const target = this.toolLink(runId) ?? this.soleScope();
+    if (target === undefined) return (async () => fn())();
+    return target.runIn(fn);
   }
 
   // -- error gate de-duplication -------------------------------------------
@@ -225,5 +283,7 @@ export class AdapterCore {
       // never throw into the host
     }
     this.toolAnnotations.clear();
+    this.toolLinks.clear();
+    this.openScopes.clear();
   }
 }

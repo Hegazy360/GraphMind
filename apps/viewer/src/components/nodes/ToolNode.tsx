@@ -10,6 +10,7 @@ import { fmtDuration } from '../../lib/format.js';
 import { latestExecution } from '../../store/types.js';
 import { matcherKey, useUiStore } from '../../store/uiStore.js';
 import {
+  CollapseToggle,
   FlowHandles,
   InstanceBadge,
   StatusPill,
@@ -58,6 +59,7 @@ function ToolNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
     <div className={statusClass(status, selected)}>
       <FlowHandles />
       <div className="gm-node-head">
+        <CollapseToggle runId={runId} nodeId={nodeId} />
         {node.ungated === true ? (
           <span
             className="gm-ungated"

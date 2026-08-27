@@ -1,6 +1,136 @@
 ---
-title: TODO
-description: TODO
+title: MCP tools
+description: Serve recorded runs to Claude Code, Cursor and other MCP clients — four read-only tools that read the local database directly, each result carrying a deep link into the viewer.
+sidebar:
+  order: 4
 ---
 
-TODO
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+```sh
+graphmind mcp
+```
+
+Serves your recorded runs to MCP clients over stdio. Four **read-only** tools, each result
+carrying a deep link back into the viewer so your coding agent can cite the exact run or node it
+is talking about.
+
+It reads the SQLite database directly, so it works with the server and viewer closed.
+
+## Register it
+
+<Tabs syncKey="mcpclient">
+<TabItem label="Claude Code">
+
+```sh
+claude mcp add graphmind -- npx graphmind-ai mcp
+```
+
+</TabItem>
+<TabItem label="Cursor / generic">
+
+```json title=".cursor/mcp.json"
+{
+  "mcpServers": {
+    "graphmind": {
+      "command": "npx",
+      "args": ["graphmind-ai", "mcp"]
+    }
+  }
+}
+```
+
+</TabItem>
+<TabItem label="Custom port / db">
+
+```sh
+claude mcp add graphmind -- npx graphmind-ai mcp --port 4848 --db ./project.db
+```
+
+</TabItem>
+</Tabs>
+
+`--db` selects the database; `--port` sets the port used in generated deep links (default 4747 —
+pass it if you serve on another port, or the links will point at the wrong viewer).
+
+## The tools
+
+### `list_runs({ limit? })`
+
+Recent agent runs, most recently started first: id, app, status
+(`running` / `ok` / `error` / `aborted`), start and finish times, event and error counts, source
+(`live` / `import` / `demo`), and a viewer deep link.
+
+`limit` defaults to 20, capped at 100.
+
+### `get_run({ runId })`
+
+One run's summary plus its **logical nodes** — agents, LLM steps, tool calls: `nodeId`, kind,
+name, status, execution count, total duration, last error message, and a deep link per node.
+
+This is the map. Use it to find the node worth looking at, then call `get_node`.
+
+### `get_node({ runId, nodeId })`
+
+Everything recorded for one logical node: every execution instance with input and output, error
+and stack trace, timings and token usage.
+
+Payloads are truncated to a preview cap (about 4000 characters) with a note, and at most the 25
+most recent instances are listed, with an `instancesOmitted` count — so a node called 400 times
+still returns something an agent can read.
+
+### `find_errors({ limit? })`
+
+Recent node failures across all runs, newest runs first: run, node, error name and message, when
+it happened, and a deep link.
+
+**This is the right first call** for "why did my last run fail?" — it goes straight to the
+failures without walking the run list.
+
+## What it looks like in practice
+
+> **You:** why did my last support-agent run fail?
+
+The agent calls `find_errors`, gets the failing node and message, calls `get_node` for that
+node's inputs and stack, and answers with a link like
+`http://127.0.0.1:4747/#/run/run_01H8…/node/tool%3AissueRefund` that you can click to open the
+node in the viewer.
+
+Other things it is good at:
+
+- "Compare the last two runs of `support-agent` — which node first got different input?"
+- "What did `searchOrders` get called with across this run?"
+- "Which node is eating the tokens in run `run_01H8…`?"
+
+<Aside type="tip" title="Why this is more than convenience">
+Your coding agent gets to read what your *other* agent actually did — the real arguments, the
+real error — instead of you paraphrasing them into a prompt. It is the shortest path from "it
+broke" to a patch that addresses the actual cause.
+</Aside>
+
+## Deep links
+
+Links follow the viewer's hash router:
+
+```text
+http://127.0.0.1:4747/#/run/<runId>
+http://127.0.0.1:4747/#/run/<runId>/node/<nodeId>
+```
+
+Both segments are URI-component encoded, so a `nodeId` like `tool:issueRefund` becomes
+`tool%3AissueRefund`.
+
+## Safety
+
+- **Read-only.** Every tool is annotated `readOnlyHint: true`; nothing writes, deletes or
+  resumes. MCP cannot control a live run.
+- **Local.** It reads a local SQLite file over stdio. No network, no `openWorld`.
+- **Your data stays yours.** Payloads reach your MCP client — the same client you are already
+  pasting code into — and nowhere else.
+
+## Errors
+
+User-facing failures (unknown run, bad argument, unknown node) come back as tool results marked
+`isError`, with a helpful message — an unknown `runId` suggests `list_runs`, an unknown `nodeId`
+lists the node ids that do exist in that run — rather than as protocol errors that leave the
+agent stuck.

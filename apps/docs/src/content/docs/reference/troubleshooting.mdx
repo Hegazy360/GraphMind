@@ -1,6 +1,176 @@
 ---
-title: TODO
-description: TODO
+title: Troubleshooting
+description: Nothing appears, the port is in use, gates never pause, the process exits early — the specific failure modes and their fixes.
+sidebar:
+  order: 7
 ---
 
-TODO
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+## Nothing appears in the viewer
+
+Work down this list; it is ordered by how often each one is the answer.
+
+<Steps>
+
+1. **Is the server actually up?**
+
+   ```sh
+   curl -s http://127.0.0.1:4747/health
+   # {"ok":true,"name":"graphmind","version":"0.1.0"}
+   ```
+
+   No response means `graphmind` is not running, or is on another port.
+
+2. **Do the ports match?** The app dials `ws://127.0.0.1:4747/ingest` by default. If you started
+   the server with `--port 4848`, tell the app:
+
+   ```sh
+   GRAPHMIND_URL=ws://127.0.0.1:4848/ingest node agent.js
+   ```
+
+3. **Is GraphMind disabled?** Print what the session thinks:
+
+   ```ts
+   console.log(gm.session.stats());
+   // { enabled, attached, buffered, dropped, heldGates, seq }
+   ```
+
+   `enabled: false` means a kill switch fired — `GRAPHMIND_DISABLED=1`, or `NODE_ENV=production`
+   without `GRAPHMIND=1`. See [environment](/reference/environment/).
+
+4. **Did the process exit before the handshake?** The transport is lazy and the handshake takes
+   up to ~1.3 s. A script that finishes immediately can exit first. Add `await gm.ready()` before
+   the work and `await gm.dispose()` after it.
+
+5. **Are you actually emitting?** `enabled: true, attached: false, seq: 0` means the session
+   connected to nothing and nothing was emitted — usually an un-wrapped model or un-wrapped
+   tools. Check you are using the values `wrapModel` / `wrapClient` / `wrapTools` *returned*, not
+   the originals.
+
+6. **Look for a warning.** The client warns once per failure kind per minute with a `[graphmind]`
+   prefix. It never throws, so the warning is the only signal.
+
+</Steps>
+
+## Port 4747 is already in use
+
+Another `graphmind` is probably still running.
+
+```sh
+lsof -nP -iTCP:4747 -sTCP:LISTEN     # macOS / Linux
+netstat -ano | findstr :4747         # Windows
+```
+
+Kill it, or move both sides:
+
+```sh
+graphmind --port 4848
+GRAPHMIND_URL=ws://127.0.0.1:4848/ingest node agent.js
+```
+
+If you use MCP, pass `--port 4848` there too or its deep links will point at the wrong viewer.
+
+## Gates never pause
+
+<Steps>
+
+1. **Is a viewer attached?** Gates fail open by design: detached means no holds, ever. Check
+   `gm.session.stats().attached`, and the connection indicator in the run bar.
+
+2. **Did the run start before the handshake landed?** This is the classic one. The transport is
+   lazy, so an agent that starts in the same tick as `graphmind()` can run past its first gates
+   before attaching. Fix:
+
+   ```ts
+   await gm.ready();                                    // explicit
+   const gm = graphmind({ app: 'x', waitForAttach: true }); // or automatic
+   ```
+
+3. **Does anything match?** In run mode, only `{ point: 'error' }` is armed by default. To break
+   before a node you need a breakpoint on it, or step mode.
+
+4. **Is the matcher right?** `name` matches the node's name, not your variable name. Check the
+   exact label in the viewer — for a tool it is the tool's registered name.
+
+</Steps>
+
+## The agent is stuck / not progressing
+
+Almost certainly held at a gate you did not notice. Look at the run bar for a pause banner and
+resume it, or clear the breakpoint chips.
+
+If you closed the viewer, gates should already have auto-continued — that is the fail-open
+guarantee. If your agent is still stuck after the viewer is gone, GraphMind is not what is
+holding it; look at your own retry loop or your provider.
+
+Guard the case in advance with `pauseTimeoutMs`:
+
+```ts
+const gm = graphmind({ app: 'nightly-batch', pauseTimeoutMs: 5 * 60_000 });
+```
+
+## Timeout errors while debugging
+
+A held gate can burn an SDK timeout budget. Adapters neutralise this while attached, but the
+Vercel AI SDK's outer loop watches its own merged signal, so `totalMs` / `stepMs` / `chunkMs` can
+still abort the surrounding run after a long hold.
+
+Fix: remove `timeout` configs while debugging.
+[Details](/integrations/vercel-ai-sdk/#timeouts-while-debugging).
+
+## "Version mismatch" or events being rejected
+
+The envelope's `gm` field is the protocol major version, and peers reject a mismatch rather than
+guessing. It means your adapter and CLI are from incompatible protocol generations. Update both:
+
+```sh
+npm i -D @graphmind-ai/sdk@latest
+npx graphmind-ai@latest
+```
+
+## The viewer loads but says the bundle is missing
+
+You are running from a source checkout without a built viewer. The published package bundles it;
+in a monorepo run `pnpm build:viewer` first, or point `GRAPHMIND_VIEWER_DIST` at a build. The API
+and sockets work either way.
+
+## Node version errors
+
+GraphMind needs **Node ≥ 22.13** — it uses the built-in `node:sqlite` module.
+
+```sh
+node -v
+```
+
+On an older Node you will see a module-not-found for `node:sqlite`. Upgrade; there is no
+polyfill and adding a native SQLite dependency is a trade the project deliberately does not make.
+
+## Concurrent runs are merged into one
+
+Model steps are grouped into invocations by the run context. Outside `gm.run` all steps share one
+scope, so two *concurrent* calls with the same first message can merge. Wrap each concurrent unit
+in its own `gm.run`.
+
+## An imported trace looks sparse
+
+`graphmind import` is best-effort across dialects. Spans it does not recognise become generic
+nodes or are skipped with a note — the command prints the count. Recognised dialects: Vercel AI
+SDK OTel spans, OTel GenAI semantic conventions, OpenInference.
+
+An imported run is history-only by definition: nothing is running, so there is nothing to pause.
+
+## Still stuck
+
+<Aside type="tip" title="What to include in an issue">
+Export the run and attach it — an NDJSON file is the actual run, not a description of it:
+
+```sh
+graphmind record <runId> --out bug.ndjson
+```
+
+Plus `node -v`, your adapter and `graphmind-ai` versions, and any `[graphmind]` warning. Read the
+export before posting it publicly: it contains your real prompts and payloads.
+
+[github.com/Hegazy360/GraphMind/issues](https://github.com/Hegazy360/GraphMind/issues)
+</Aside>

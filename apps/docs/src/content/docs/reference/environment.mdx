@@ -1,6 +1,108 @@
 ---
-title: TODO
-description: TODO
+title: Environment variables
+description: Every variable GraphMind reads — the CLI's and the instrumented app's — plus the exact kill-switch precedence.
+sidebar:
+  order: 2
 ---
 
-TODO
+import { Aside } from '@astrojs/starlight/components';
+
+## Read by the CLI
+
+| Variable | Meaning |
+| --- | --- |
+| `GRAPHMIND_DB` | Database path (`--db` beats it; default `~/.graphmind/graphmind.db`) |
+| `GRAPHMIND_TELEMETRY` | `0` or `false` disables [telemetry](/reference/telemetry/) entirely (also auto-disabled when `CI` is set) |
+| `GRAPHMIND_TELEMETRY_URL` | Override the telemetry endpoint (used by tests) |
+| `GRAPHMIND_HOME` | Directory for the telemetry install id (default `~/.graphmind`) |
+| `GRAPHMIND_DEMO_AGENT_DIR` | Where `demo --live` finds the demo agent outside a monorepo checkout |
+| `GRAPHMIND_VIEWER_DIST` | Serve a different viewer build directory (development) |
+
+## Read by the instrumented app
+
+| Variable | Meaning |
+| --- | --- |
+| `GRAPHMIND_URL` | Ingest endpoint for adapters (default `ws://127.0.0.1:4747/ingest`) |
+| `GRAPHMIND_DISABLED` | `1` disables instrumentation — beats everything, including an explicit `enabled: true` |
+| `GRAPHMIND` | `1` re-enables instrumentation under `NODE_ENV=production` (disabled there by default) |
+
+## Kill-switch precedence
+
+Evaluated top to bottom; the first match wins:
+
+| Condition | Result |
+| --- | --- |
+| `GRAPHMIND_DISABLED=1` | **Disabled.** Beats everything, including `enabled: true`. |
+| `enabled` option passed | As given. |
+| `NODE_ENV=production` | **Disabled** unless `GRAPHMIND=1`. |
+| Otherwise | Enabled. |
+
+A disabled session no-ops everything: no sockets, no buffering, no warnings, and the adapter's
+`wrapClient` / `wrapModel` / `wrapTools` are identity functions. `gm.run` still executes your
+function and still hands it a working context (ids + abort signal), so your code never has to
+branch on whether GraphMind is on.
+
+<Aside type="tip" title="Production safety, in one line">
+You do not need to strip GraphMind from a production build — it is off there by default. If you
+want certainty regardless of how `NODE_ENV` is set, put `GRAPHMIND_DISABLED=1` in the production
+environment. Nothing overrides it.
+</Aside>
+
+## Non-standard ports
+
+Two sides have to agree. If you move the server, tell the app:
+
+```sh
+# terminal 1
+graphmind --port 4848
+
+# terminal 2
+GRAPHMIND_URL=ws://127.0.0.1:4848/ingest node agent.js
+```
+
+Or set it in code, which wins over the variable:
+
+```ts
+const gm = graphmind({ app: 'my-agent', url: 'ws://127.0.0.1:4848/ingest' });
+```
+
+If you also use MCP, pass the port there too so its deep links point at the right viewer:
+
+```sh
+claude mcp add graphmind -- npx graphmind-ai mcp --port 4848
+```
+
+## Docker & remote containers
+
+The adapter dials `127.0.0.1` inside its own network namespace. From a container, point it at
+the host:
+
+```sh
+# Docker Desktop (macOS / Windows)
+GRAPHMIND_URL=ws://host.docker.internal:4747/ingest
+
+# Linux, with --add-host=host.docker.internal:host-gateway
+GRAPHMIND_URL=ws://host.docker.internal:4747/ingest
+```
+
+The server still binds loopback on the host, so nothing is exposed to your network.
+
+<Aside type="caution">
+There is no auth on the ingest socket. If you make the port reachable beyond loopback (a
+tunnel, a bound interface, a shared dev box), anyone who can reach it can read your prompts and
+control your agent. Keep it local.
+</Aside>
+
+## Session options that shadow the environment
+
+Options passed to `graphmind({ … })` take precedence over the variables:
+
+| Option | Default | Environment equivalent |
+| --- | --- | --- |
+| `url` | `ws://127.0.0.1:4747/ingest` | `GRAPHMIND_URL` |
+| `enabled` | kill-switch logic | `GRAPHMIND_DISABLED` / `GRAPHMIND` |
+| `connectTimeoutMs` | `300` | — |
+| `handshakeTimeoutMs` | `1000` | — |
+| `retryIntervalMs` | `10000` | — |
+| `bufferSize` | `2000` | — |
+| `pauseTimeoutMs` | hold forever | — |

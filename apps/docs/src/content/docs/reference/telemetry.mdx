@@ -1,6 +1,82 @@
 ---
-title: TODO
-description: TODO
+title: Telemetry
+description: The complete, honest disclosure — one anonymous record per CLI command, what is in it, why it exists, and the one variable that turns it off.
+sidebar:
+  order: 5
 ---
 
-TODO
+import { Aside } from '@astrojs/starlight/components';
+
+The `graphmind` CLI sends one small **anonymous** record per command invocation. This page is the
+short version; the [full disclosure](https://github.com/Hegazy360/GraphMind/blob/master/packages/cli/TELEMETRY.md)
+ships in the package.
+
+<Aside type="tip" title="Opt out in one line">
+```sh
+export GRAPHMIND_TELEMETRY=0   # "false" also works
+```
+When disabled, **nothing happens at all** — no request is made and no install-id file is
+created. It is also disabled automatically whenever `CI` is set.
+</Aside>
+
+## What is sent
+
+```json
+{
+  "event": "serve",
+  "installId": "3f8a2c1e-9b4d-4e7a-8c2f-1d5e6a7b8c9d",
+  "version": "0.1.0",
+  "ts": "2026-08-26T14:03:07.512Z"
+}
+```
+
+That is the entire record.
+
+| Field | What it is |
+| --- | --- |
+| `event` | A short command name only — `serve`, `demo`, `init`, `import`, `mcp`, `runs`, `record`, `run-ingested`. Never arguments, file paths, prompts, traces, run data, or payloads of any kind. |
+| `installId` | A random UUID generated on this machine the first time telemetry fires, stored in `~/.graphmind/telemetry-id`. It identifies an *installation*, not a person: it is not derived from your username, hardware, email, or anything else about you. Delete the file to get a new one. |
+| `version` | The `graphmind-ai` package version. |
+| `ts` | When the event fired. |
+
+No cookies, no fingerprinting, no PII, and no IP logging beyond what any HTTPS request
+inherently carries.
+
+## What is never sent
+
+Your agents' data never leaves your machine through this channel — or any other. Runs, prompts,
+tool arguments and outputs live in your local SQLite database, and the GraphMind server binds
+`127.0.0.1` only.
+
+## Why it exists
+
+GraphMind is a solo project. Instead of asking you to fill out surveys or sit through interview
+calls, product decisions come from aggregate usage: which commands people actually run, whether
+installs come back on a second day, and which features are dead weight. Counting `serve`
+invocations is the whole purpose of this data — deciding what to build next.
+
+## Removing the install id
+
+```sh
+rm ~/.graphmind/telemetry-id
+```
+
+`GRAPHMIND_HOME` moves the directory the id lives in.
+
+## Mechanics
+
+- Events are sent fire-and-forget to `https://graphmind.ai/api/telemetry` with a 3-second
+  timeout. Failures are silent, and the request can never block, slow down, or hold open the CLI
+  process.
+- Records are stored in a private blob store (not publicly readable) and used only in aggregate:
+  per-day event counts, unique installs, returning installs.
+- The implementation is small and open — see
+  [`packages/cli/src/telemetry.ts`](https://github.com/Hegazy360/GraphMind/blob/master/packages/cli/src/telemetry.ts)
+  for the client and
+  [`apps/web/api/telemetry.ts`](https://github.com/Hegazy360/GraphMind/blob/master/apps/web/api/telemetry.ts)
+  for the receiving end.
+
+## Adapters send nothing
+
+Telemetry is a **CLI-only** feature. `@graphmind-ai/sdk`, `@graphmind-ai/client` and the other
+adapters make no outbound requests except the WebSocket to your own local server.

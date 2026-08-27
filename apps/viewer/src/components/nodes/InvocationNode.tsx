@@ -8,6 +8,7 @@ import { fmtDuration } from '../../lib/format.js';
 import { latestExecution } from '../../store/types.js';
 import { useRunStore } from '../../store/runStore.js';
 import {
+  CollapseToggle,
   FlowHandles,
   InstanceBadge,
   StatusDot,
@@ -58,11 +59,12 @@ function InvocationNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
     <div className={statusClass(status, selected)}>
       <FlowHandles />
       <div className="gm-node-head">
+        <CollapseToggle runId={runId} nodeId={nodeId} />
         <StatusDot status={status} />
         <span className="gm-node-title">{node.name}</span>
         <InstanceBadge node={node} />
         <span className="gm-node-kind" style={{ marginLeft: 'auto' }}>
-          agent
+          {node.kind}
         </span>
       </div>
       <div className="gm-node-meta">
