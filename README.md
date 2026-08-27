@@ -49,8 +49,9 @@ fix and resume the run.
 
 **Local-first**
 
-One command, no account. The server binds `127.0.0.1` only; runs live in a
-local SQLite file. Your prompts and payloads never leave your machine.
+One command, no account. The server binds `127.0.0.1` only and refuses
+foreign browser origins. Your prompts stay on your machine, and your API keys
+never enter the recording at all.
 
 </td>
 <td width="33%" valign="top">
@@ -101,8 +102,12 @@ code location; executions light it up.
 - **MCP for coding agents** - `graphmind mcp` serves your runs to Claude
   Code or Cursor over stdio (read-only: list runs, inspect nodes, find
   recent errors, deep-link into the viewer).
-- **Local-first** - `127.0.0.1` only, no auth, no account, no cloud. SQLite
-  via `node:sqlite`, so there are no native dependencies to compile.
+- **Local-first, and checked** - binds `127.0.0.1` only, refuses browser
+  connections from foreign origins, and stores runs in a local SQLite file
+  (`node:sqlite`, so nothing to compile) created owner-only. Your API keys
+  never enter the recording: a dedicated credential-leak audit asserts that no
+  key, auth header or token reaches the database, the API, the WebSocket, an
+  export, or telemetry.
 - **Fail-open everywhere** - detached instrumentation short-circuits (the
   test suite asserts sub-millisecond gate overhead); the adapter never
   throws into your app; `NODE_ENV=production` disables it unless you opt in
@@ -234,6 +239,32 @@ exact JSON record: [packages/cli/TELEMETRY.md](./packages/cli/TELEMETRY.md).
 | [`apps/web`](./apps/web) | graphmind.ai |
 | [`examples/demo-agent`](./examples/demo-agent) | The planted-bug trip-planner demo agent |
 | [`examples/e2e`](./examples/e2e) | Full-stack smoke test against a running server |
+| [`examples/live-check`](./examples/live-check) | Validation against real Anthropic and OpenAI APIs |
+| [`examples/soak`](./examples/soak) | Production-scale soak battery with a published baseline |
+| [`security`](./security) | The credential-leak audit |
+| [`apps/docs`](./apps/docs) | The documentation site |
+
+## How it is tested
+
+Around 830 tests. Beyond the unit suites, the ones worth knowing about:
+
+- a **credential-leak audit** ([`security/`](./security)) that plants fake API
+  keys, auth headers and tokens everywhere a secret really lives, runs real
+  instrumented agents, then greps the database, the API, the WebSocket frames,
+  both export formats and telemetry for them
+- **browser tests** driving the built viewer through streaming, pause-on-error,
+  inject-and-resume, the palette and both themes
+- a **live-provider suite** ([`examples/live-check`](./examples/live-check))
+  that runs every adapter against the real Anthropic and OpenAI APIs — it is
+  how we learned that both SDKs swallow `AbortError` inside their stream
+  iterators, which no mock would have shown
+- a **soak battery** ([`examples/soak`](./examples/soak)) at 10k+ events with a
+  published baseline, so a performance regression is visible
+- an **SDK version matrix** in CI pinning the floor and ceiling of every peer
+  range, plus a weekly canary against the latest releases
+
+CI runs the lot on Linux, Windows and macOS across Node 22 and 24, plus Python
+3.10 and 3.13.
 
 ## Contributing
 
