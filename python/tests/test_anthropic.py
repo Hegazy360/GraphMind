@@ -7,12 +7,12 @@ import threading
 import time
 from typing import Any
 
-import httpx
 import pytest
 
 from graphmind.errors import GraphMindAbortError
 
 from .helpers.providers import (
+    ANTHROPIC_HTTPX as httpx,
     ANTHROPIC_MESSAGE,
     ANTHROPIC_STREAM_EVENTS,
     anthropic_sse,

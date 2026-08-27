@@ -270,12 +270,14 @@ async def test_the_async_handler_records_a_graph(attached: Any) -> None:
     assert finished["chain:add_one"]["output"] == 43
 
 
-async def test_a_nested_ainvoke_without_config_is_not_traced(attached: Any) -> None:
-    """Documented LangChain behaviour, pinned so the README stays honest.
+async def test_a_nested_ainvoke_follows_langchain_context_propagation(attached: Any) -> None:
+    """Whether a manual nested ``.ainvoke`` is traced is LangChain's call, not ours.
 
-    LangChain does not propagate the run config into a manual ``.ainvoke``
-    made *inside* an async lambda body, so that child produces no callbacks —
-    for anyone but LangChain itself. Compose with ``|`` or pass ``config=``.
+    Older runtimes did not propagate the run config into an ``.ainvoke`` made
+    inside an async lambda body, so the child produced no callbacks; current
+    langchain-core on Python 3.11+ propagates it through contextvars and the
+    child *is* traced. Both are correct; what must hold either way is that the
+    outer chain is traced and any child hangs off it rather than floating.
     """
     instance, viewer = attached()
     handler = instance.async_callback_handler()
@@ -291,9 +293,12 @@ async def test_a_nested_ainvoke_without_config_is_not_traced(attached: Any) -> N
         assert await outer.ainvoke(21, config={"callbacks": [handler]}) == 42
 
     await viewer.wait_for_type_async("run.finished")
-    node_ids = {f["payload"]["nodeId"] for f in viewer.of_type("node.started")}
-    assert "chain:outer" in node_ids
-    assert "chain:inner" not in node_ids
+    started = {f["payload"]["nodeId"]: f["payload"] for f in viewer.of_type("node.started")}
+    assert "chain:outer" in started
+
+    if "chain:inner" in started:
+        # Propagated: the child must be parented to the outer chain, not orphaned.
+        assert started["chain:inner"].get("parentId") == "chain:outer"
 
 
 async def test_async_abort_terminates_the_chain(attached: Any) -> None:

@@ -11,6 +11,8 @@ import json
 from collections.abc import Callable
 from typing import Any
 
+import importlib
+
 import httpx
 
 # -- OpenAI -------------------------------------------------------------------
@@ -216,32 +218,57 @@ ANTHROPIC_STREAM_EVENTS: list[dict[str, Any]] = [
 ]
 
 
+
+def _provider_httpx(module_name: str) -> Any:
+    """The httpx flavour a provider SDK will accept.
+
+    Recent `anthropic` releases moved to httpx2 and reject an `httpx.Client`
+    outright, while older ones (and `openai`) still take httpx. Ask the SDK's
+    own base client which module it holds rather than pinning either side.
+    """
+    try:
+        base = importlib.import_module(f"{module_name}._base_client")
+    except Exception:  # pragma: no cover - SDK layout changed
+        return httpx
+    for attr in ("httpx2", "httpx"):
+        mod = getattr(base, attr, None)
+        if mod is not None:
+            return mod
+    return httpx
+
+
+#: The httpx flavour the installed `anthropic` accepts (httpx2 since 0.12x).
+#: Tests build their canned Responses with this so the SDK's transport matches.
+ANTHROPIC_HTTPX: Any = _provider_httpx("anthropic")
+
+
 def make_anthropic(
     responder: Callable[[httpx.Request, Recorder], httpx.Response],
     is_async: bool = False,
 ) -> Any:
     from anthropic import Anthropic, AsyncAnthropic
 
+    hx = ANTHROPIC_HTTPX
     recorder = Recorder()
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: Any) -> Any:
         recorder.requests.append(request)
         return responder(request, recorder)
 
-    transport = httpx.MockTransport(handler)
+    transport = hx.MockTransport(handler)
     if is_async:
         client: Any = AsyncAnthropic(
             api_key="test",
             base_url="http://provider.test",
             max_retries=0,
-            http_client=httpx.AsyncClient(transport=transport),
+            http_client=hx.AsyncClient(transport=transport),
         )
     else:
         client = Anthropic(
             api_key="test",
             base_url="http://provider.test",
             max_retries=0,
-            http_client=httpx.Client(transport=transport),
+            http_client=hx.Client(transport=transport),
         )
     return client, recorder
 
