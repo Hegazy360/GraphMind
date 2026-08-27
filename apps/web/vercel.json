@@ -33,6 +33,14 @@
       "destination": "https://graphmind-docs.vercel.app/docs"
     },
     {
+      "source": "/docs/",
+      "destination": "https://graphmind-docs.vercel.app/docs/"
+    },
+    {
+      "source": "/docs/:path+/",
+      "destination": "https://graphmind-docs.vercel.app/docs/:path+/"
+    },
+    {
       "source": "/docs/:path*",
       "destination": "https://graphmind-docs.vercel.app/docs/:path*"
     }
