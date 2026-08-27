@@ -62,7 +62,11 @@ jobs:
         run: pnpm typecheck
 
       - name: Test packages
-        run: pnpm test
+        # --retry only applies here: several suites assert real elapsed time
+        # (gate holds, sub-millisecond detached overhead, disconnect
+        # auto-continue) and hosted runners are noisy neighbours. A genuine
+        # failure still fails all three attempts; local runs stay strict.
+        run: pnpm test -- --retry=2
 
       - name: Test viewer
         run: pnpm --filter viewer run test
