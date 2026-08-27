@@ -4,8 +4,14 @@
  * and its protocol types for embedding and for the viewer.
  */
 export { startServer, type ServerOptions, type GraphMindServer } from './server.js';
-export { Hub, type LogFn } from './hub.js';
-export { DebugState } from './debug-state.js';
+export { Hub, DEFAULT_ABANDON_GRACE_MS, type HubOptions, type LogFn } from './hub.js';
+export {
+  DebugState,
+  parsePauseOnError,
+  DEFAULT_BREAKPOINTS,
+  PAUSE_ON_ERROR_VALUES,
+  type PauseOnErrorResult,
+} from './debug-state.js';
 export { SqliteStorage } from './sqlite-storage.js';
 export {
   type Storage,

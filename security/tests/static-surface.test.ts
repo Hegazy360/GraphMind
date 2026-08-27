@@ -95,6 +95,12 @@ describe('the client and the CLI read only documented environment variables', ()
     'GRAPHMIND_TELEMETRY',
     'GRAPHMIND_TELEMETRY_URL',
     'GRAPHMIND_DEMO_AGENT_DIR',
+    // Added in 0.3.2. Neither carries user data: one scopes the default
+    // pause-on-error breakpoint, the other sets how long a dropped app has to
+    // reconnect before its run is marked abandoned. Both documented in
+    // packages/cli/README.md and the CLI reference page.
+    'GRAPHMIND_PAUSE_ON_ERROR',
+    'GRAPHMIND_ABANDON_GRACE_MS',
     'CI',
   ];
 

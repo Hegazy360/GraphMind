@@ -23,6 +23,7 @@ import type { Duplex } from 'node:stream';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { WebSocketServer } from 'ws';
+import { parsePauseOnError } from './debug-state.js';
 import { startBundledDemoReplay, type DemoReplay } from './demo/replayer.js';
 import { Hub, type LogFn } from './hub.js';
 import { openBrowser } from './open-browser.js';
@@ -51,6 +52,18 @@ export interface ServerOptions {
   log?: LogFn;
   /** Environment override (tests). Default process.env. */
   env?: EnvLike;
+  /**
+   * Which errors the default breakpoint covers: `on` (default, every node),
+   * `off` (start with no breakpoints), or a node kind (`tool`, `llm`, ...).
+   * Beats `GRAPHMIND_PAUSE_ON_ERROR`.
+   */
+  pauseOnError?: string;
+  /**
+   * Grace period before a run whose app disconnected is reconciled to
+   * `abandoned`. Default 15s (`GRAPHMIND_ABANDON_GRACE_MS`); 0 reconciles on
+   * the next tick.
+   */
+  abandonGraceMs?: number;
 }
 
 export interface GraphMindServer {
@@ -150,7 +163,28 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
     }
   };
 
-  const hub = new Hub(storage, log);
+  /**
+   * Pause-on-error stays default-on (internal/decisions.md #8). This only
+   * lets a user narrow or remove it without editing code — an explicit
+   * `--pause-on-error` / `GRAPHMIND_PAUSE_ON_ERROR` value. A bad env value is
+   * a warning + the default, because an unusable env var must not stop a
+   * server from starting; a bad flag is rejected earlier, in args.ts.
+   */
+  const pauseOnError = parsePauseOnError(options.pauseOnError ?? env['GRAPHMIND_PAUSE_ON_ERROR']);
+  if (!pauseOnError.ok) log(`graphmind: ${pauseOnError.error}; using the default`);
+  const breakpoints = pauseOnError.ok ? pauseOnError.breakpoints : undefined;
+
+  const rawGrace = env['GRAPHMIND_ABANDON_GRACE_MS'];
+  // `Number('')` is 0, so an empty variable must not read as "no grace".
+  const envGrace =
+    rawGrace === undefined || rawGrace.trim() === '' ? Number.NaN : Number(rawGrace);
+  const abandonGraceMs =
+    options.abandonGraceMs ?? (Number.isFinite(envGrace) && envGrace >= 0 ? envGrace : undefined);
+
+  const hub = new Hub(storage, log, {
+    ...(breakpoints === undefined ? {} : { breakpoints }),
+    ...(abandonGraceMs === undefined ? {} : { abandonGraceMs }),
+  });
   const originPolicy = parseOriginPolicy(env);
 
   let boundPort = requestedPort; // reassigned once the listener is up
@@ -292,7 +326,24 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
   });
   retentionTimer = setTimeout(() => {
     retentionTimer = undefined;
-    if (!closed) runStartupRetention();
+    if (!closed) {
+      // Order matters: reconciliation has to run BEFORE the prune. Retention
+      // deliberately protects runs that are still streaming (`finishedAt IS
+      // NULL`), which is exactly what a phantom row looks like — so an
+      // unreconciled orphan is un-prunable as well as un-finishable.
+      try {
+        const orphans = hub.reconcileOrphanedRuns();
+        if (orphans.length > 0) {
+          log(
+            `Reconciled ${orphans.length} run(s) left in flight by a previous session ` +
+              `(marked abandoned).`,
+          );
+        }
+      } catch {
+        // housekeeping: never take the server down over it
+      }
+      runStartupRetention();
+    }
     settleRetention();
   }, 0);
   retentionTimer.unref();
@@ -308,6 +359,10 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
     clearInterval(pingTimer);
     activeDemo?.stop();
     await hub.closeAll(500);
+    // After closeAll: closing the ingest sockets arms one reconciliation
+    // timer per open run, and a server going down is not the moment to
+    // declare them abandoned — the next startup sweep does that honestly.
+    hub.dispose();
     ingestWss.close();
     uiWss.close();
     await new Promise<void>((resolve) => {

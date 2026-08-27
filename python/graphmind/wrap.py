@@ -59,6 +59,104 @@ def _signature_of(fn: Callable[..., Any]) -> inspect.Signature | None:
         return None
 
 
+#: How far to follow ``functools.partial(...).func`` chains. A handful is
+#: plenty; the cap only exists so a pathological/cyclic object cannot spin.
+_UNWRAP_DEPTH = 8
+
+
+def _innermost(fn: Any) -> Any:
+    """Follow ``functools.partial``/``partialmethod`` ``.func`` down to the real callable."""
+    target = fn
+    try:
+        for _ in range(_UNWRAP_DEPTH):
+            inner = getattr(target, "func", None)
+            if inner is None or inner is target or not callable(inner):
+                break
+            target = inner
+    except Exception:
+        return fn
+    return target
+
+
+def _callable_name(fn: Any) -> str:
+    """A readable, *stable* node name for anything callable.
+
+    ``functools.partial`` has no ``__name__`` — and binding per-run state with
+    a partial is an ordinary pattern — so does an instance of a class with
+    ``__call__``. Falling back to ``repr`` used to put a memory address in the
+    node id (``tool:functools.partial(<function load at 0x10a3f7c40>, 'prod')``),
+    which is unreadable *and* changes on every run, so the viewer drew a brand
+    new node each time instead of lighting up the same one.
+    """
+    try:
+        name = getattr(fn, "__name__", None)
+        if isinstance(name, str) and name:
+            return name
+        name = getattr(_innermost(fn), "__name__", None)
+        if isinstance(name, str) and name:
+            return name
+        cls_name = type(fn).__name__
+        if isinstance(cls_name, str) and cls_name:
+            return cls_name
+    except Exception:
+        pass
+    return "callable"
+
+
+def _annotations_from(signature: inspect.Signature | None) -> dict[str, Any]:
+    """Annotations describing the *bound* call rather than ``(*args, **kwargs)``.
+
+    ``functools.wraps`` finds no ``__annotations__`` on a partial, so the wrapper
+    keeps its own — and because this module uses PEP 563 those are the *strings*
+    ``"Any"``, which resolve against the wrong module. Schema builders that read
+    type hints (LangChain's ``StructuredTool.from_function``, pydantic's
+    ``validate_arguments``) then fail with ``NameError: name 'Any' is not
+    defined``. Rebuild them from the signature the caller actually sees.
+    """
+    out: dict[str, Any] = {}
+    if signature is None:
+        return out
+    empty = inspect.Signature.empty
+    for parameter in signature.parameters.values():
+        if parameter.annotation is not empty:
+            out[parameter.name] = parameter.annotation
+    if signature.return_annotation is not empty:
+        out["return"] = signature.return_annotation
+    return out
+
+
+def _copy_metadata(
+    wrapper: Any, fn: Any, resolved_name: str, signature: inspect.Signature | None
+) -> None:
+    """``functools.wraps(fn)``, plus a usable identity for nameless callables.
+
+    Normal functions take the first line and nothing else: behaviour is exactly
+    ``@functools.wraps(fn)``. For a partial or a callable object ``wraps``
+    silently skips the attributes that are missing, leaving the wrapper called
+    ``sync_wrapper``, documented as ``functools.partial`` and annotated
+    ``(*args, **kwargs)``; those are repaired from the underlying function.
+    """
+    try:
+        functools.wraps(fn)(wrapper)
+    except Exception:  # pragma: no cover - wraps only skips missing attributes
+        pass
+    if isinstance(getattr(fn, "__name__", None), str):
+        return
+    try:
+        inner = _innermost(fn)
+        wrapper.__name__ = resolved_name
+        qualname = getattr(inner, "__qualname__", None)
+        wrapper.__qualname__ = qualname if isinstance(qualname, str) and qualname else resolved_name
+        doc = getattr(inner, "__doc__", None)
+        wrapper.__doc__ = doc if isinstance(doc, str) else None
+        module = getattr(inner, "__module__", None)
+        if isinstance(module, str) and module:
+            wrapper.__module__ = module
+        wrapper.__annotations__ = _annotations_from(signature)
+    except Exception:  # pragma: no cover - never break a wrap over cosmetics
+        pass
+
+
 class _Wrapper:
     """Shared state between the sync and async gate loops."""
 
@@ -93,8 +191,12 @@ def gate_callable(
     node_id: str | None = None,
     parent_id: str | None = None,
 ) -> F:
-    """Wrap ``fn`` with before/error/after gates. Async functions stay async."""
-    resolved_name = name or getattr(fn, "__name__", None) or repr(fn)
+    """Wrap ``fn`` with before/error/after gates. Async functions stay async.
+
+    ``name`` always wins, so a caller that wants two partials of the same
+    function on two nodes can say so: ``gm.tool(partial(load, "eu"), name="load_eu")``.
+    """
+    resolved_name = name or _callable_name(fn)
     state = _Wrapper(
         session_of=session_of,
         name=resolved_name,
@@ -106,23 +208,23 @@ def gate_callable(
 
     if inspect.iscoroutinefunction(fn):
 
-        @functools.wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             session = state.session_of()
             if session is None or not session.enabled or session.disposed:
                 return await fn(*args, **kwargs)
             return await _run_async(state, session, fn, args, kwargs)
 
+        _copy_metadata(async_wrapper, fn, resolved_name, state.signature)
         _mark(async_wrapper, fn, state)
         return async_wrapper  # type: ignore[return-value]
 
-    @functools.wraps(fn)
     def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
         session = state.session_of()
         if session is None or not session.enabled or session.disposed:
             return fn(*args, **kwargs)
         return _run_sync(state, session, fn, args, kwargs)
 
+    _copy_metadata(sync_wrapper, fn, resolved_name, state.signature)
     _mark(sync_wrapper, fn, state)
     return sync_wrapper  # type: ignore[return-value]
 

@@ -15,7 +15,7 @@ pnpm --filter docs preview      # serve the build locally
 pnpm --filter docs check:links  # post-build link check (run after build)
 ```
 
-`check:links` walks `dist/` and fails on a link to a missing page, a missing anchor, a page that
+`check:links` walks `dist/docs/` (the `outDir`, which already carries the base path) and fails on a link to a missing page, a missing anchor, a page that
 never got the `base` prefix, or a page nothing links to (usually one missing from the sidebar).
 No dependencies — run it after any content change.
 

@@ -159,6 +159,12 @@ export class AdapterCore {
    * Errors already gated once. A LangGraph failure surfaces as
    * handleToolError -> handleChainError (node) -> handleChainError (root);
    * pausing three times on one error would be hostile.
+   *
+   * The claim is taken by whichever gate reaches the error FIRST, which — for
+   * a tool wrapped with `gm.wrapTools()` / `gm.wrapStructuredTool()` — is the
+   * wrapper, the only position that can actually inject or retry. Every gate
+   * the error passes on its way out (the LangGraph node, the root chain) then
+   * skips it, so releasing one gate releases the failure.
    */
   private readonly gatedErrors = new WeakSet<object>();
 
@@ -329,6 +335,16 @@ export class AdapterCore {
     if (this.gatedErrors.has(error)) return false;
     this.gatedErrors.add(error);
     return true;
+  }
+
+  /**
+   * Un-claim an error so the next gate to see it stops again. Used when a
+   * wrapper honours `retry`: the re-run may throw the very same object (a
+   * cached or module-level Error), and that new failure deserves its own
+   * pause rather than sliding through on the previous attempt's claim.
+   */
+  releaseError(error: unknown): void {
+    if (typeof error === 'object' && error !== null) this.gatedErrors.delete(error);
   }
 
   // -- abort ----------------------------------------------------------------

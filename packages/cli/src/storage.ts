@@ -16,8 +16,17 @@ import type { RunStatus } from '@graphmind-ai/schema';
 /** Where a run's events came from. */
 export type RunSource = 'live' | 'import' | 'demo';
 
-/** `running` until a `run.finished` event arrives; then its terminal status. */
-export type RunLifecycleStatus = 'running' | RunStatus;
+/**
+ * `running` until a `run.finished` event arrives; then its terminal status.
+ *
+ * `abandoned` is the server's own terminal state, not something an app can
+ * report: the connection that owned the run went away without ever sending
+ * `run.finished` (the process was killed, often while holding a gate). It is
+ * deliberately distinct from `aborted` — nobody decided to stop this run, we
+ * simply stopped hearing about it — and it exists so the runs list cannot
+ * accumulate phantom rows that claim to be in flight forever.
+ */
+export type RunLifecycleStatus = 'running' | 'abandoned' | RunStatus;
 
 export interface RunRecord {
   id: string;
@@ -81,6 +90,29 @@ export interface Storage {
 
   /** Apply `run.finished`: terminal status + finish time. */
   markRunFinished(id: string, status: RunStatus, finishedAt: number): void;
+
+  /**
+   * Reconcile a run whose owning app vanished without sending `run.finished`:
+   * `status` becomes `abandoned` and `finishedAt` the timestamp of the run's
+   * last stored event — the last moment the run is known to have been alive —
+   * falling back to `fallbackFinishedAt` for a run with no events.
+   *
+   * Guarded on `status = 'running'`, so a run that genuinely reported `ok` /
+   * `error` / `aborted` is never relabelled. Returns false when nothing
+   * changed (unknown run, or already terminal).
+   */
+  markRunAbandoned(id: string, fallbackFinishedAt: number): boolean;
+
+  /**
+   * Undo `markRunAbandoned` because the app reconnected and is streaming the
+   * same run again — a run may legitimately span a reconnect. Guarded on
+   * `status = 'abandoned'`, so it can never revive a genuinely finished run.
+   * Returns false when nothing changed.
+   */
+  markRunResumed(id: string): boolean;
+
+  /** Ids of every run still marked `running`. */
+  listRunningRunIds(): string[];
 
   /**
    * Persist one event. Returns false when an event with the same

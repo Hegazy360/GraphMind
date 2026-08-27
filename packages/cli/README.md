@@ -40,6 +40,28 @@ graphmind --db ./x.db    # database file (default ~/.graphmind/graphmind.db)
 graphmind --no-open      # do not open a browser
 ```
 
+#### Pause-on-error (default on)
+
+A fresh session arms one breakpoint, `{ point: 'error' }`: execution holds at
+the first error in any node. That is the product's headline mechanic and it
+stays on by default — but it is unscoped, so in a chatty agent an incidental
+tool failure can hold the run before the failure you actually care about.
+
+`--pause-on-error` narrows or removes it at startup (the viewer can still add
+and remove breakpoints live):
+
+```
+graphmind                          # default: pause on every node error
+graphmind --pause-on-error off     # start with no breakpoints at all
+graphmind --pause-on-error tool    # pause only on tool errors
+GRAPHMIND_PAUSE_ON_ERROR=off graphmind
+```
+
+Accepted values: `on` (the default), `off`, or a node kind — `agent`, `llm`,
+`tool`, `chain`, `retriever`, `custom`. The flag beats the environment
+variable. `graphmind serve` prints what it armed, and an unrecognised value
+is refused rather than quietly falling back to the sharpest setting.
+
 ### `graphmind demo`
 
 The keyless first-run experience: replays a bundled recording of a
@@ -108,6 +130,7 @@ one is not found.
 | `--port <n>` | Port (default 4747; the server always binds `127.0.0.1`) |
 | `--db <path>` | SQLite database file (default `~/.graphmind/graphmind.db`) |
 | `--no-open` / `--open` | Suppress / force opening the viewer in a browser |
+| `--pause-on-error <on\|off\|kind>` | Scope the default error breakpoint (default `on` = every node; `off` = none; or one node kind) |
 | `--live` | (`demo`) run the real demo agent instead of the replay |
 | `--out <file>` | (`record`) output NDJSON path |
 | `-v`, `--version` | Print the version and exit |
@@ -123,6 +146,8 @@ one is not found.
 | `GRAPHMIND_HOME` | CLI | Directory for the telemetry install id (default `~/.graphmind`) |
 | `GRAPHMIND_DEMO_AGENT_DIR` | CLI | Where `demo --live` finds the demo agent outside a monorepo checkout |
 | `GRAPHMIND_VIEWER_DIST` | CLI | Serve a different viewer build directory (development) |
+| `GRAPHMIND_PAUSE_ON_ERROR` | CLI | `on` (default), `off`, or a node kind — scope of the default error breakpoint (`--pause-on-error` beats it) |
+| `GRAPHMIND_ABANDON_GRACE_MS` | CLI | How long a run keeps `status: running` after its app disconnects before being marked `abandoned` (default 15000) |
 | `GRAPHMIND_URL` | instrumented app | Ingest endpoint for adapters (default `ws://127.0.0.1:4747/ingest`) |
 | `GRAPHMIND_DISABLED` | instrumented app | `1` disables instrumentation — beats everything, including explicit `enabled: true` |
 | `GRAPHMIND` | instrumented app | `1` re-enables instrumentation under `NODE_ENV=production` (disabled there by default) |
@@ -148,11 +173,32 @@ disclosure, including the exact JSON record and delivery mechanics, is in
 
 ### `GET /api/runs`
 
-Each run: `{ id, app, startedAt, finishedAt, status, schemaVersion, source,
-eventCount, errorCount, live }` — `status` is `running | ok | error |
-aborted`, `source` is `live | import | demo`, `live` is whether the owning
-app socket is currently connected. Timestamps are epoch ms; `finishedAt` is
-`null` while running.
+Each run: `{ id, app, startedAt, finishedAt, durationMs, status,
+schemaVersion, source, eventCount, errorCount, live }` — `source` is
+`live | import | demo`, `live` is whether the owning app socket is currently
+connected. Timestamps are epoch ms; `finishedAt` and `durationMs`
+(`finishedAt - startedAt`, served here so consumers need not subtract
+envelope timestamps) are `null` while the run is in flight.
+
+`status` is one of:
+
+| Status | Meaning |
+| --- | --- |
+| `running` | in flight: `run.started` seen, no `run.finished` yet |
+| `ok` / `error` / `aborted` | the run reported this terminal status itself |
+| `abandoned` | the server's own terminal state: the connection owning this run went away without ever sending `run.finished` — the instrumented process died, often while holding a gate |
+
+`abandoned` exists so the runs list cannot fill up with phantom rows that
+claim to be in flight forever. It is deliberately not `aborted`: nobody
+decided to stop the run, the server simply stopped hearing about it.
+`finishedAt` is then the run's last event — the last moment it is known to
+have been alive.
+
+A run is only marked `abandoned` after `GRAPHMIND_ABANDON_GRACE_MS` (default
+15s, comfortably longer than the client's reconnect burst), so a socket blip
+never marks a live run dead; if the app reconnects and keeps streaming the
+same run, the run goes back to `running`. Runs left `running` by a previous
+server process are reconciled the same way at startup.
 
 ### `GET /api/runs/:id/events?afterSeq=N&limit=M`
 
@@ -176,7 +222,7 @@ Server -> viewer:
 | `{ type: 'welcome', versions: { protocol, server }, breakpoints, mode }` | immediately on connect |
 | `{ type: 'state', breakpoints, mode }` | whenever debug state changes (any viewer changed it) |
 | `{ type: 'runs', runs: RunInfo[] }` | reply to `subscribe` `'*'` |
-| `{ type: 'run.update', run: RunInfo }` | pushed to `'*'` subscribers on run lifecycle changes (created / finished / app connect+disconnect) |
+| `{ type: 'run.update', run: RunInfo }` | pushed to `'*'` subscribers on run lifecycle changes (created / finished / abandoned / app connect+disconnect) |
 | `{ type: 'replay.start', runId, count }` | reply to `subscribe` of a run |
 | `{ type: 'event', runId, envelope }` | one envelope — replayed history first, then live tail |
 | `{ type: 'replay.end', runId }` | history done; everything after is live |

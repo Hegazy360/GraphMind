@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import threading
 import time
 from typing import Any
@@ -294,6 +295,64 @@ async def test_async_streaming_is_teed(attached: Any) -> None:
     )
     assert finished["payload"]["output"]["text"] == "Lisbon"
     assert finished["payload"]["usage"] == {"inputTokens": 7, "outputTokens": 3}
+
+
+async def test_the_async_tee_adds_no_async_generator_to_your_loop(attached: Any) -> None:
+    """GraphMind must put nothing on the loop's async-generator shutdown list.
+
+    ``openai>=3`` ships ``httpcore2``, whose connection-pool async generator makes
+    ``loop.shutdown_asyncgens()`` print a ``GeneratorExit`` / "generator didn't
+    stop after athrow()" traceback at loop close. That is upstream — it
+    reproduces on a bare ``AsyncOpenAI`` stream with GraphMind absent — and is
+    documented in the README. The tee is a plain class-based proxy exactly so we
+    never add a second one to be finalized; rewriting it as an ``async def`` +
+    ``yield`` generator would break that, so pin it.
+    """
+    instance, _viewer = attached()
+    client, _ = make_openai(stream_responder(sse(CHAT_STREAM_CHUNKS)), is_async=True)
+    instance.instrument_openai(client)
+
+    async with instance.run("agent"):
+        stream = await client.chat.completions.create(
+            model="gpt-test", messages=MESSAGES, stream=True
+        )
+        assert not inspect.isasyncgen(stream)
+        assert not inspect.isasyncgenfunction(type(stream).__aiter__)
+        assert not inspect.isasyncgenfunction(type(stream).__anext__)
+        async for _chunk in stream:
+            pass
+
+
+async def test_the_async_tee_closes_the_provider_stream_once() -> None:
+    """`close()` reaches the provider stream, and the node is finished exactly once."""
+    from graphmind.integrations._common import AsyncStreamTee
+
+    class Inner:
+        def __init__(self) -> None:
+            self.closed = False
+            self._chunks = iter(["a", "b"])
+
+        def __aiter__(self) -> Any:
+            return self
+
+        async def __anext__(self) -> str:
+            try:
+                return next(self._chunks)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+        async def close(self) -> None:
+            self.closed = True
+
+    inner = Inner()
+    ended: list[BaseException | None] = []
+    tee = AsyncStreamTee(inner, lambda _chunk: None, ended.append)
+
+    assert [chunk async for chunk in tee] == ["a", "b"]
+    await tee.close()
+
+    assert inner.closed is True
+    assert ended == [None]
 
 
 def test_a_full_agent_loop_produces_a_coherent_graph(attached: Any) -> None:

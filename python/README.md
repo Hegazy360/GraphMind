@@ -135,6 +135,9 @@ LangChain's `parent_run_id`, with token streaming from `on_llm_new_token`.
 ### Plain functions — where `inject` and `retry` really work
 
 ```python
+from functools import partial
+
+
 @gm.tool
 def search_flights(origin: str, destination: str) -> list[dict]: ...
 
@@ -144,7 +147,18 @@ async def fetch(url: str) -> str: ...
 
 
 tools = gm.wrap_tools({"search": search, "book": book})  # or a list, or one callable
+
+# functools.partial is a normal way to bind per-run state, and it works:
+# the node is named after the function underneath -> `tool:load_region`.
+load_eu = gm.tool(partial(load_region, "eu"))
+load_us = gm.tool(partial(load_region, "us"), name="load_us")  # ...unless you say otherwise
 ```
+
+The node name is the callable's `__name__`. A `functools.partial` has none, so
+the name comes from the function it wraps; an instance of a class with
+`__call__` is named after its class. Two partials of the same function are
+therefore *one* node — same code location — which is usually what you want; pass
+`name=` (or a key in `wrap_tools({...})`) when you want them apart.
 
 ### Anything else: spans
 
@@ -182,7 +196,8 @@ and treats them as `continue`. To inject or retry a result, wrap the call site �
 replace. Same story for Anthropic's `messages.stream`: GraphMind cannot
 fabricate a provider stream object, so it holds and warns rather than lying.
 
-**Holding really holds — verified, not assumed.** Against `langchain_core` 0.3:
+**Holding really holds — verified, not assumed.** Against the `langchain_core`
+the suite installs (1.6 at the time of writing; the floor is 0.3):
 sync callbacks are invoked inline by `handle_event` on the executing thread, so
 blocking there holds the chain; async callbacks are `await`ed directly by
 `ahandle_event`. (A *sync* handler inside an *async* chain is dispatched to the
@@ -278,17 +293,25 @@ touches your objects: `instrument_openai` returns the client untouched.
 
 ## Overhead
 
-Measured by `tests/test_overhead.py` on an M-series laptop (CPython 3.9, 2000
-iterations, per call):
+Measured by `tests/test_overhead.py` — median of seven runs on an Apple-silicon
+laptop, **CPython 3.13.15**, 2 000 iterations per wrapped call and 20 000 for
+the bare gate check. CPython 3.12.14 lands within run-to-run noise of these
+numbers; anything below 3.10 is unsupported and untested.
 
 | state | overhead per wrapped call |
 |---|---|
-| disabled (kill switch) | **0.2 µs** |
-| enabled but detached | **18 µs** (two envelopes into the replay ring buffer) |
-| detached gate check | **0.37 µs** |
+| disabled (kill switch) | **0.09 µs** |
+| enabled but detached | **9.5 µs** (two envelopes into the replay ring buffer) |
+| detached gate check | **0.12 µs** |
 
-The suite asserts budgets of 20 µs / 1 ms / 20 µs respectively, so a regression
-that puts real work on the hot path fails CI.
+Reproduce them yourself: `make install && .venv/bin/python -m pytest
+tests/test_overhead.py -s` prints exactly the lines above. (If your default
+`python3` predates 3.10, point the venv at a supported interpreter —
+`make install PY=python3.13`.)
+
+The suite asserts budgets of 20 µs / 1 ms / 20 µs respectively — deliberately
+loose, because CI runners are noisy — so a regression that puts real work on the
+hot path fails CI without the budgets flapping on a slow machine.
 
 ---
 
@@ -344,6 +367,58 @@ that puts real work on the hot path fails CI.
 - **CrewAI / LlamaIndex** are not yet instrumented directly. Both run on top of
   provider clients, so `instrument_openai` / `instrument_anthropic` plus
   `gm.span` already give you a usable graph today.
+
+---
+
+## Not ours: the `GeneratorExit` traceback at loop shutdown
+
+If you stream from `AsyncOpenAI`, you may see this printed *after* your program
+has finished, on the way out of `asyncio.run(...)`:
+
+```
+an error occurred during closing of asynchronous generator
+<async_generator object PoolByteStream.__aiter__ at 0x…>
+  File ".../httpcore2/_async/http11.py", line 313, in __aiter__
+    yield chunk
+GeneratorExit
+...
+RuntimeError: generator didn't stop after athrow()
+```
+
+It looks alarming and it names none of your code, so it is easy to blame the
+debugger. **It is not GraphMind.** `openai>=3` ships `httpcore2`, whose
+connection-pool async generator is still open when `asyncio.run` calls
+`loop.shutdown_asyncgens()`; the generator re-raises while being thrown into,
+and `contextlib` reports that. Verified on CPython 3.12.14 and 3.13.15 with
+`openai` 3.5.0 / `httpcore2` 2.12.0: the same traceback appears, unchanged,
+with GraphMind attached, with `GRAPHMIND_DISABLED=1`, and with GraphMind not
+installed at all. The exit code is 0 and your response arrived in full.
+
+The workaround is to give the pool one real tick to finalize itself before the
+loop closes:
+
+```python
+async def main() -> None:
+    client = gm.instrument_openai(AsyncOpenAI())
+    try:
+        ...
+    finally:
+        await client.close()
+        await asyncio.sleep(0.05)   # let httpcore2 finalize its own generator
+
+asyncio.run(main())
+```
+
+`await asyncio.sleep(0)` is **not** enough — measured; a zero-length sleep still
+leaves the traceback. Any small non-zero sleep clears it (1 ms was enough here);
+the `python-analyst` sample uses 0.25 s for margin.
+
+GraphMind adds nothing to that shutdown path of its own: the stream tee is a
+plain class-based proxy, never an `async def … yield` generator, so
+`shutdown_asyncgens()` has nothing of ours to finalize (pinned by
+`tests/test_openai.py::test_the_async_tee_adds_no_async_generator_to_your_loop`).
+GraphMind's own transport lives on a separate daemon thread with its own loop
+and is never touched by your loop's shutdown.
 
 ---
 

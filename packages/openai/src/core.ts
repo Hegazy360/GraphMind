@@ -31,6 +31,8 @@ import {
 } from './sdk-types.js';
 
 const MAX_TRACKED_PROVIDER_CALLS = 1000;
+/** How many runs keep a record of the `graph.hint` nodes they were sent. */
+const MAX_HINTED_RUNS = 256;
 
 export interface StartNodeInput {
   nodeId: string;
@@ -62,6 +64,12 @@ export class AdapterCore {
   readonly gatedToolNames = new Set<string>();
 
   private readonly providerToolStarts = new Map<string, number>();
+
+  /**
+   * The `graph.hint` nodes each run has already been told about, so a roster
+   * that adds nothing is not announced again (see `emitGraphHint`).
+   */
+  private readonly hintedByRun = new Map<string, Set<string>>();
 
   /** Shared one-shot attach wait (the `waitForAttach` option). */
   private attachWait: Promise<void> | undefined;
@@ -153,6 +161,15 @@ export class AdapterCore {
    * through `wrapTools`, emitted on an invocation's first step so the viewer
    * can pre-render the whole graph grey. Provider-executed (built-in) tools
    * carry `providerExecuted`/`ungated` extra fields.
+   *
+   * Per INVOCATION is the right trigger — a second invocation can legitimately
+   * bring tools the first one never mentioned, and the viewer has to hear
+   * about them — but per invocation is not the right *rate*. An app that
+   * drives its tool loop with `chat.completions` and then writes its summary
+   * with the Responses API starts a second invocation with the same roster,
+   * and the run picked up a verbatim duplicate hint. So a run is only told
+   * about nodes it has not already been told about; a roster that adds
+   * nothing is silence.
    */
   emitGraphHint(tools: unknown, ctx: RunContext | undefined): void {
     const nodes: (GraphNodeHint & Record<string, unknown>)[] = [];
@@ -189,7 +206,34 @@ export class AdapterCore {
       seen.add(name);
       nodes.push({ nodeId: toolNodeId(name), kind: 'tool', name, parentId: LLM_NODE_ID });
     }
+    if (!this.claimHint(ctx, nodes)) return;
     this.session.emit('graph.hint', { nodes });
+  }
+
+  /**
+   * False when every node in this roster has already been announced to this
+   * run. Scoped by run, so a new run is pre-rendered from scratch even with
+   * the roster the previous run used, and keyed on the node's whole payload,
+   * so a node that changes (a tool that stops being `ungated`, say) still
+   * counts as news.
+   */
+  private claimHint(ctx: RunContext | undefined, nodes: unknown[]): boolean {
+    let keys: string[];
+    try {
+      keys = nodes.map((node) => JSON.stringify(node));
+    } catch {
+      return true; // unserializable: never suppress a hint on a guess
+    }
+    const runId = ctx?.runId ?? this.session.currentRun()?.runId ?? 'no-run';
+    let announced = this.hintedByRun.get(runId);
+    if (announced === undefined) {
+      if (this.hintedByRun.size >= MAX_HINTED_RUNS) this.hintedByRun.clear();
+      announced = new Set<string>();
+      this.hintedByRun.set(runId, announced);
+    }
+    if (keys.every((key) => announced.has(key))) return false;
+    for (const key of keys) announced.add(key);
+    return true;
   }
 
   // -- provider-executed tools (observe-only, decisions.md #4) --------------

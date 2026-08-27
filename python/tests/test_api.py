@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
+import typing
 from typing import Any
 
 import pytest
@@ -68,6 +71,126 @@ def test_wrap_tools_accepts_mappings_lists_and_callables(make_gm: Any) -> None:
 
     with pytest.raises(TypeError):
         instance.wrap_tools(42)
+
+
+def test_a_partial_is_named_after_the_function_it_wraps(attached: Any) -> None:
+    """Binding per-run state with a partial is an ordinary pattern.
+
+    Partials have no ``__name__``; the old fallback was ``repr(fn)``, which put
+    a memory address in the node id — unreadable, and different on every run, so
+    the viewer drew a new node instead of lighting up the same one.
+    """
+    instance, viewer = attached()
+
+    def load_region(dataset: str, region: str) -> str:
+        """Load one region out of a dataset."""
+        return f"{dataset}/{region}"
+
+    bound = instance.tool(functools.partial(load_region, "sales-2026"))
+
+    assert bound.__graphmind_node_id__ == "tool:load_region"
+    assert "0x" not in bound.__graphmind_node_id__
+    assert bound.__name__ == "load_region"
+    assert bound.__doc__ == "Load one region out of a dataset."
+    # `wraps` targets the partial, so the reported signature stays the *bound* one.
+    assert list(inspect.signature(bound).parameters) == ["region"]
+
+    # Same code location, two constructions: one node, not two.
+    twin = instance.tool(functools.partial(load_region, "sales-2026"))
+    assert twin.__graphmind_node_id__ == bound.__graphmind_node_id__
+
+    with instance.run("agent"):
+        assert bound("EMEA") == "sales-2026/EMEA"
+
+    started = viewer.wait_for(
+        lambda f: f.get("type") == "node.started" and f["payload"]["nodeId"] == "tool:load_region"
+    )
+    assert started["payload"]["name"] == "load_region"
+    assert started["payload"]["input"] == {"region": "EMEA"}
+
+
+def test_a_partial_can_still_be_given_an_explicit_name(make_gm: Any) -> None:
+    instance = make_gm(url="ws://127.0.0.1:1/ingest", connect_timeout=0.05)
+
+    def load_region(dataset: str, region: str) -> str:
+        return f"{dataset}/{region}"
+
+    eu = instance.tool(functools.partial(load_region, "eu"), name="load_eu")
+    us = instance.wrap_tools({"load_us": functools.partial(load_region, "us")})["load_us"]
+
+    assert eu.__graphmind_node_id__ == "tool:load_eu"
+    assert us.__graphmind_node_id__ == "tool:load_us"
+    assert eu("DE") == "eu/DE"
+
+
+def test_an_async_partial_stays_async_and_keeps_its_name(make_gm: Any) -> None:
+    instance = make_gm(url="ws://127.0.0.1:1/ingest", connect_timeout=0.05)
+
+    async def fetch(base: str, path: str) -> str:
+        return base + path
+
+    bound = instance.tool(functools.partial(fetch, "https://api/"))
+
+    assert asyncio.iscoroutinefunction(bound)
+    assert bound.__graphmind_node_id__ == "tool:fetch"
+    assert asyncio.run(bound("orders")) == "https://api/orders"
+
+
+def test_a_wrapped_partial_still_reports_resolvable_type_hints(make_gm: Any) -> None:
+    """A named node is no use if the tool then explodes in a schema builder.
+
+    ``functools.wraps`` finds no ``__annotations__`` on a partial, so the wrapper
+    kept its own — and ``graphmind.wrap`` uses PEP 563, so those were the strings
+    ``"Any"``, resolved against the *host's* module. Anything that reads type
+    hints (LangChain's ``StructuredTool.from_function``, pydantic's
+    ``validate_arguments``) then died with ``NameError: name 'Any' is not
+    defined``.
+    """
+    instance = make_gm(url="ws://127.0.0.1:1/ingest", connect_timeout=0.05)
+
+    def load_region(dataset: str, region: str) -> str:
+        return f"{dataset}/{region}"
+
+    bound = instance.tool(functools.partial(load_region, "sales"))
+
+    assert typing.get_type_hints(bound) == {"region": str, "return": str}
+    assert "args" not in bound.__annotations__ and "kwargs" not in bound.__annotations__
+
+
+def test_a_callable_object_is_named_after_its_class(make_gm: Any) -> None:
+    instance = make_gm(url="ws://127.0.0.1:1/ingest", connect_timeout=0.05)
+
+    class Retriever:
+        """A callable object — also has no ``__name__``."""
+
+        def __call__(self, query: str) -> str:
+            return query
+
+    wrapped = instance.tool(Retriever())
+
+    assert wrapped.__graphmind_node_id__ == "tool:Retriever"
+    assert wrapped.__name__ == "Retriever"
+    assert wrapped("docs") == "docs"
+
+
+def test_wrapping_a_plain_function_is_exactly_functools_wraps(make_gm: Any) -> None:
+    """The partial repair must not disturb the normal path."""
+    instance = make_gm(url="ws://127.0.0.1:1/ingest", connect_timeout=0.05)
+
+    def search(query: str, limit: int = 5) -> str:
+        """Search the index."""
+        return query
+
+    search.custom_attribute = "kept"  # type: ignore[attr-defined]
+    wrapped = instance.tool(search)
+
+    assert wrapped.__name__ == "search"
+    assert wrapped.__qualname__ == search.__qualname__
+    assert wrapped.__module__ == search.__module__
+    assert wrapped.__doc__ == "Search the index."
+    assert wrapped.__wrapped__ is search
+    assert wrapped.custom_attribute == "kept"
+    assert inspect.signature(wrapped) == inspect.signature(search)
 
 
 def test_the_tool_input_payload_binds_argument_names(attached: Any) -> None:

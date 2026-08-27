@@ -12,6 +12,8 @@ import { Aside } from '@astrojs/starlight/components';
 | Variable | Meaning |
 | --- | --- |
 | `GRAPHMIND_DB` | Database path (`--db` beats it; default `~/.graphmind/graphmind.db`) |
+| `GRAPHMIND_PAUSE_ON_ERROR` | Scope the default error breakpoint: `on` (default, every node), `off`, or a node kind (`tool`, `llm`, `chain`, `retriever`, `agent`, `custom`). `--pause-on-error` beats it. |
+| `GRAPHMIND_ABANDON_GRACE_MS` | How long a run whose app disconnected mid-flight waits to reconnect before it is marked abandoned rather than left "running" forever. |
 | `GRAPHMIND_TELEMETRY` | `0` or `false` disables [telemetry](/reference/telemetry/) entirely (also auto-disabled when `CI` is set) |
 | `GRAPHMIND_TELEMETRY_URL` | Override the telemetry endpoint (used by tests) |
 | `GRAPHMIND_HOME` | Directory for the telemetry install id (default `~/.graphmind`) |

@@ -293,12 +293,21 @@ not touched at all.
 
 ## Version support
 
-Primary target: `openai` v6 (validated against 6.49.0). The peer range is
-`>=5 <7`; **v5 is untested** — it ships the same resources, `Stream.tee()` and
-`APIPromise._thenUnwrap`, so it is expected to work, but nothing here proves it.
-Every SDK shape the adapter reads is duck-typed in `src/sdk-types.ts` and there
-is **no runtime import of `openai`** at all — the package only ever touches
-objects you hand it, so a new SDK major needs at most that one file revisited.
+The peer range is **`openai >=5 <8`**, and every edge of it is executed in CI
+(`.github/workflows/sdk-compat.yml` pins the SDK and runs this package's own
+suite against each cell):
+
+| `openai` | result |
+| --- | --- |
+| **7.x** (7.0.0, 7.7.0) | full suite green — this is what `npm i openai` installs today |
+| **6.45.0 – 6.49.0** | full suite green |
+| **5.0.0 – 6.44.0** | green except two `responses.stream()` assertions, and those are an upstream gap, not ours: a raw, unwrapped `new OpenAI()` on those versions also returns `finalResponse().output_text === undefined`. 6.45.0 is the first version that populates it. |
+
+Every SDK shape the adapter reads is duck-typed in `src/sdk-types.ts`, and the
+package never imports `openai`'s runtime code — it only ever touches the
+objects you hand it (the sole exception is resolving the installed version to
+label your runs in the viewer, which reads a manifest and executes nothing).
+So a new SDK major needs at most that one file revisited.
 
 One fidelity note: a gated `create()` returns a `Promise` subclass that
 re-implements `APIPromise`'s helpers (`asResponse()`, `withResponse()`,

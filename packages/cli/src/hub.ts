@@ -7,7 +7,8 @@
  *  - Persist every run-scoped envelope (unknown types included, stored
  *    opaquely) with `(runId, seq)` dedup; fan live events out to subscribers.
  *  - Track which ingest socket owns which runId so `exec.resume` routes back
- *    to the right app.
+ *    to the right app — and reconcile a run to a terminal `abandoned` state
+ *    when that socket goes away without a `run.finished`.
  *  - Replay-then-tail for UI subscriptions (race-free: storage is
  *    synchronous, so the whole subscribe handler runs in one tick).
  *  - ws-level ping/pong bookkeeping so the server can reap stale sockets.
@@ -20,17 +21,42 @@ import {
   parseEnvelope,
   parseEnvelopeJson,
   serializeEnvelope,
+  type BreakpointMatcher,
   type Envelope,
   type MessagePayloadMap,
   type MessageType,
 } from '@graphmind-ai/schema';
 import type { WebSocket } from 'ws';
 import { DebugState } from './debug-state.js';
-import { serializePayload, type RunSource, type Storage, type StoredEvent } from './storage.js';
+import {
+  serializePayload,
+  type RunSource,
+  type RunSummary,
+  type Storage,
+  type StoredEvent,
+} from './storage.js';
 import type { RunInfo, UiServerMessage, WireEnvelope } from './ui-protocol.js';
 import { VERSION } from './version.js';
 
 export type LogFn = (message: string) => void;
+
+/**
+ * How long a run keeps its `running` status after its owning ingest socket
+ * drops, before the server calls it abandoned.
+ *
+ * Sized against the client transport: it retries at 200/400/800ms after an
+ * established attachment drops and then settles on a 10s interval, so 15s
+ * covers even the slow path. A blip therefore never marks a live run dead —
+ * the reconnect re-claims the run and cancels the timer.
+ */
+export const DEFAULT_ABANDON_GRACE_MS = 15_000;
+
+export interface HubOptions {
+  /** Breakpoints a fresh debug session arms. Default: `{point:'error'}`. */
+  breakpoints?: readonly BreakpointMatcher[];
+  /** See DEFAULT_ABANDON_GRACE_MS. 0 reconciles on the next tick (tests). */
+  abandonGraceMs?: number;
+}
 
 interface IngestConn {
   readonly ws: WebSocket;
@@ -75,6 +101,23 @@ function extractNodeId(payload: unknown): string | null {
   return null;
 }
 
+/**
+ * A stored run row as `GET /api/runs` (and the UI socket) serve it.
+ *
+ * `durationMs` is derived here rather than carried on the wire: the row
+ * already has both timestamps, and every consumer was otherwise subtracting
+ * envelope timestamps by hand. `null` while the run is in flight. Clamped at
+ * zero because `startedAt` is rewritten by `run.started` and a machine whose
+ * clock steps backwards must not produce a negative duration.
+ */
+function toRunInfo(run: RunSummary, live: boolean): RunInfo {
+  return {
+    ...run,
+    live,
+    durationMs: run.finishedAt === null ? null : Math.max(0, run.finishedAt - run.startedAt),
+  };
+}
+
 function toWireEnvelope(event: StoredEvent): WireEnvelope {
   return {
     gm: PROTOCOL_VERSION,
@@ -92,12 +135,20 @@ export class Hub {
   private readonly runOwners = new Map<string, IngestConn>();
   /** runId -> viewers tailing it. (WILDCARD subscribers are found via subs.) */
   private readonly runSubs = new Map<string, Set<UiConn>>();
-  readonly state = new DebugState();
+  /** runId -> pending "mark abandoned" timer armed by a disconnect. */
+  private readonly abandonTimers = new Map<string, NodeJS.Timeout>();
+  private readonly abandonGraceMs: number;
+  private disposed = false;
+  readonly state: DebugState;
 
   constructor(
     private readonly storage: Storage,
     private readonly log: LogFn,
-  ) {}
+    options: HubOptions = {},
+  ) {
+    this.state = new DebugState(options.breakpoints);
+    this.abandonGraceMs = Math.max(0, options.abandonGraceMs ?? DEFAULT_ABANDON_GRACE_MS);
+  }
 
   // -- ingest side ----------------------------------------------------------
 
@@ -180,6 +231,13 @@ export class Hub {
       previousOwner?.ownedRuns.delete(envelope.runId);
       this.runOwners.set(envelope.runId, conn);
       conn.ownedRuns.add(envelope.runId);
+      // A run may legitimately span a reconnect (the client replays its
+      // buffer and keeps going), so re-claiming a run cancels any pending
+      // reconciliation and un-marks one that already landed. Guarded inside
+      // storage on `status = 'abandoned'`, so this can never revive a run
+      // that genuinely finished.
+      this.cancelAbandon(envelope.runId);
+      this.storage.markRunResumed(envelope.runId);
     }
 
     this.storage.ensureRun({
@@ -245,12 +303,75 @@ export class Hub {
       if (this.runOwners.get(runId) === conn) {
         this.runOwners.delete(runId);
         this.pushRunUpdate(runId);
+        this.scheduleAbandon(runId);
       }
     }
     conn.ownedRuns.clear();
     if (conn.attached) {
       this.log(`app detached${conn.appName === undefined ? '' : `: ${conn.appName}`}`);
     }
+  }
+
+  // -- orphan reconciliation ------------------------------------------------
+
+  /**
+   * The owning connection is gone. After the grace period — long enough for
+   * the client's reconnect burst — a run that never sent `run.finished` is
+   * reconciled to `abandoned`, so the runs list cannot fill up with rows that
+   * claim to be in flight forever.
+   *
+   * Re-armed on every disconnect, so a run that reconnects and dies again is
+   * reconciled again rather than reverting to a phantom.
+   */
+  private scheduleAbandon(runId: string): void {
+    this.cancelAbandon(runId);
+    if (this.disposed) return;
+    const reconcile = (): void => {
+      this.abandonTimers.delete(runId);
+      if (this.runOwners.has(runId)) return; // re-claimed in the meantime
+      if (this.storage.markRunAbandoned(runId, Date.now())) this.pushRunUpdate(runId);
+    };
+    // Always deferred, even at grace 0: `removeIngest` runs inside a socket
+    // 'close' handler and a reconnecting client can be mid-handshake.
+    const timer = setTimeout(reconcile, this.abandonGraceMs);
+    // Never keep the process alive for housekeeping; the HTTP server holds
+    // the loop open for as long as this matters.
+    timer.unref?.();
+    this.abandonTimers.set(runId, timer);
+  }
+
+  private cancelAbandon(runId: string): void {
+    const timer = this.abandonTimers.get(runId);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    this.abandonTimers.delete(runId);
+  }
+
+  /**
+   * Reconcile runs left `running` by a *previous* server process. Nothing can
+   * still be streaming them — this process has never seen their apps — so
+   * without this sweep they stay in-flight forever across restarts, and
+   * retention refuses to prune them (it protects unfinished runs on purpose).
+   *
+   * Runs this process already owns are skipped, so a second server sharing
+   * the same database file cannot kill a live run.
+   */
+  reconcileOrphanedRuns(): string[] {
+    const now = Date.now();
+    const reconciled: string[] = [];
+    for (const runId of this.storage.listRunningRunIds()) {
+      if (this.runOwners.has(runId)) continue;
+      if (this.storage.markRunAbandoned(runId, now)) reconciled.push(runId);
+    }
+    for (const runId of reconciled) this.pushRunUpdate(runId);
+    return reconciled;
+  }
+
+  /** Drop pending reconciliation timers. Called when the server closes. */
+  dispose(): void {
+    this.disposed = true;
+    for (const timer of this.abandonTimers.values()) clearTimeout(timer);
+    this.abandonTimers.clear();
   }
 
   // -- UI side --------------------------------------------------------------
@@ -416,12 +537,12 @@ export class Hub {
   // -- shared ---------------------------------------------------------------
 
   listRunInfos(): RunInfo[] {
-    return this.storage.listRuns().map((run) => ({ ...run, live: this.runOwners.has(run.id) }));
+    return this.storage.listRuns().map((run) => toRunInfo(run, this.runOwners.has(run.id)));
   }
 
   getRunInfo(id: string): RunInfo | undefined {
     const run = this.storage.getRun(id);
-    return run === undefined ? undefined : { ...run, live: this.runOwners.has(id) };
+    return run === undefined ? undefined : toRunInfo(run, this.runOwners.has(id));
   }
 
   /** Ping every socket; terminate those that missed the previous ping. */

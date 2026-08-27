@@ -135,6 +135,9 @@ export class SqliteStorage implements Storage {
   private readonly stmtEnsureRun: StatementSync;
   private readonly stmtRunStarted: StatementSync;
   private readonly stmtRunFinished: StatementSync;
+  private readonly stmtRunAbandoned: StatementSync;
+  private readonly stmtRunResumed: StatementSync;
+  private readonly stmtRunningRunIds: StatementSync;
   private readonly stmtInsertEvent: StatementSync;
   private readonly stmtGetRun: StatementSync;
   private readonly stmtListRuns: StatementSync;
@@ -175,6 +178,24 @@ export class SqliteStorage implements Storage {
     this.stmtRunFinished = this.db.prepare(
       `UPDATE runs SET status = ?, finished_at = ? WHERE id = ?`,
     );
+    // `status = 'running'` in the WHERE clause is the honesty guard: a run
+    // that actually reported ok/error/aborted is never rewritten. The finish
+    // time is the run's last event, i.e. the last moment we know it was
+    // alive — not the moment the server got around to noticing.
+    this.stmtRunAbandoned = this.db.prepare(
+      `UPDATE runs
+          SET status = 'abandoned',
+              finished_at = COALESCE(
+                (SELECT MAX(e.ts) FROM events e WHERE e.run_id = runs.id),
+                ?
+              )
+        WHERE id = ? AND status = 'running'`,
+    );
+    this.stmtRunResumed = this.db.prepare(
+      `UPDATE runs SET status = 'running', finished_at = NULL
+        WHERE id = ? AND status = 'abandoned'`,
+    );
+    this.stmtRunningRunIds = this.db.prepare(`SELECT id FROM runs WHERE status = 'running'`);
     this.stmtInsertEvent = this.db.prepare(
       `INSERT OR IGNORE INTO events (run_id, seq, ts, type, node_id, payload_json)
        VALUES (?, ?, ?, ?, ?, ?)`,
@@ -219,6 +240,18 @@ export class SqliteStorage implements Storage {
 
   markRunFinished(id: string, status: RunStatus, finishedAt: number): void {
     this.stmtRunFinished.run(status, finishedAt, id);
+  }
+
+  markRunAbandoned(id: string, fallbackFinishedAt: number): boolean {
+    return this.stmtRunAbandoned.run(fallbackFinishedAt, id).changes > 0;
+  }
+
+  markRunResumed(id: string): boolean {
+    return this.stmtRunResumed.run(id).changes > 0;
+  }
+
+  listRunningRunIds(): string[] {
+    return (this.stmtRunningRunIds.all() as unknown as { id: string }[]).map((row) => row.id);
   }
 
   insertEvent(event: StoredEvent): boolean {

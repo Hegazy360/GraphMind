@@ -4,7 +4,7 @@
  * local server; future subcommands (`import`, `mcp`, `record`) slot into
  * the command table below.
  */
-import { parseCliArgs, type ParsedCli } from './args.js';
+import { OPTION_HELP, parseCliArgs, type ParsedCli } from './args.js';
 import { runDemo } from './commands/demo.js';
 import { runImport } from './commands/import.js';
 import { runInit } from './commands/init.js';
@@ -12,7 +12,6 @@ import { runMcp } from './commands/mcp.js';
 import { runRecord } from './commands/record.js';
 import { runRuns } from './commands/runs.js';
 import { openBrowser } from './open-browser.js';
-import { DEFAULT_PORT } from './paths.js';
 import { startServer } from './server.js';
 import { recordTelemetry } from './telemetry.js';
 import { VERSION } from './version.js';
@@ -63,21 +62,7 @@ function printHelp(): void {
     ...Object.entries(commands).map(([name, def]) => `  ${name.padEnd(10)}${def.summary}`),
     '',
     'Options:',
-    `  --port <n>     Port to listen on (default ${DEFAULT_PORT}; always binds 127.0.0.1)`,
-    '  --db <path>    SQLite database file (default ~/.graphmind/graphmind.db,',
-    '                 or GRAPHMIND_DB)',
-    '  --no-open      Do not open the viewer in a browser',
-    '  --live         (demo) run the real demo agent with your API key',
-    '  --install      (init) run the package-manager install',
-    '  --write        (init) write a graphmind.example.ts snippet file',
-    '  --out <file>   (record) output path',
-    '  --html         (record) export a shareable self-contained HTML page',
-    '  --prune        (runs) apply the retention policy now',
-    '  --keep <n>     (runs) keep/show the n newest runs',
-    '  --days <n>     (runs) keep runs from the last n days',
-    '  --rm <runId>   (runs) delete one run   --clear --yes  delete all',
-    '  -v, --version  Print the version and exit',
-    '  -h, --help     Show this help',
+    ...OPTION_HELP,
   ];
   console.log(lines.join('\n'));
 }
@@ -92,6 +77,9 @@ async function runServe(parsed: ParsedCli): Promise<number> {
     server = await startServer({
       ...(parsed.flags.port === undefined ? {} : { port: parsed.flags.port }),
       ...(parsed.flags.db === undefined ? {} : { dbPath: parsed.flags.db }),
+      ...(parsed.flags.pauseOnError === undefined
+        ? {}
+        : { pauseOnError: parsed.flags.pauseOnError }),
     });
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
@@ -105,6 +93,15 @@ async function runServe(parsed: ParsedCli): Promise<number> {
   console.log(`  ingest   ws://127.0.0.1:${server.port}/ingest`);
   console.log(`  ui ws    ws://127.0.0.1:${server.port}/ws/ui`);
   console.log(`  db       ${server.dbPath}`);
+  // Pause-on-error is default-on and the single most surprising thing the
+  // server does to a run, so say what is armed and how to change it.
+  const errorScopes = server.hub.state.breakpoints
+    .filter((matcher) => matcher.point === 'error')
+    .map((matcher) => (matcher.kind === undefined ? 'every node' : `${matcher.kind} nodes`));
+  console.log(
+    `  pause    on error: ${errorScopes.length === 0 ? 'off' : errorScopes.join(', ')}` +
+      ' (--pause-on-error <on|off|kind>)',
+  );
   console.log('Press Ctrl+C to stop.');
 
   if (parsed.flags.open) openBrowser(server.url);

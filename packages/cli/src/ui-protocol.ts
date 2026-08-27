@@ -44,6 +44,12 @@ export interface WireEnvelope {
 /** A run row plus whether its app connection is currently attached. */
 export interface RunInfo extends RunSummary {
   live: boolean;
+  /**
+   * `finishedAt - startedAt`, or null while the run is in flight. Derived
+   * server-side so consumers do not have to subtract envelope timestamps —
+   * `run.finished` carries only `{status}` on the wire.
+   */
+  durationMs: number | null;
 }
 
 export type UiClientMessage =

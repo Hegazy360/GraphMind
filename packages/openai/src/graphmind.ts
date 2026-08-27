@@ -13,7 +13,6 @@
  * gates; the adapter never throws into the host app; a debugger that
  * disconnects mid-hold auto-continues every held gate.
  */
-import { createRequire } from 'node:module';
 import {
   createSession,
   isAbortError,
@@ -26,6 +25,7 @@ import {
 } from '@graphmind-ai/client';
 import { AdapterCore } from './core.js';
 import { agentNodeId } from './ids.js';
+import { peerVersion } from './peer-version.js';
 import { wrapClient } from './wrap-client.js';
 import { wrapToolMap } from './wrap-tools.js';
 
@@ -81,14 +81,14 @@ export interface Graphmind {
   dispose(): Promise<void>;
 }
 
+/**
+ * The installed `openai` version, for the `sdk` field the viewer shows.
+ * `openai`'s `exports` map does not list `./package.json`, so this goes
+ * through `peerVersion`, which falls back to the manifest on disk. Degrades
+ * to `'unknown'` rather than failing.
+ */
 function detectOpenAiVersion(): string {
-  try {
-    const require = createRequire(import.meta.url);
-    const pkg = require('openai/package.json') as { version?: string };
-    return typeof pkg.version === 'string' ? pkg.version : 'unknown';
-  } catch {
-    return 'unknown';
-  }
+  return peerVersion('openai', import.meta.url) ?? 'unknown';
 }
 
 /**

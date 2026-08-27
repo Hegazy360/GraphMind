@@ -12,13 +12,17 @@
  * Neither could be caught by running the suite on one major, so both are
  * asserted structurally here.
  */
-import { readdirSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, relative } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { graphmind } from '../src/index.js';
 import { AdapterCore } from '../src/core.js';
 import { createDebugMiddleware, MIDDLEWARE_SPEC_VERSION } from '../src/middleware.js';
+import { peerVersion } from '../src/peer-version.js';
+import { FakeViewer, waitUntil } from './helpers/fake-viewer.js';
 import { MockLanguageModel, aiVersion, supportsToolTimeout } from './helpers/sdk-compat.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -102,5 +106,68 @@ describe('cross-major fixtures', () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * The `sdk` field the viewer labels every run with.
+ *
+ * The sibling OpenAI adapter reported `openai@unknown` for its whole life
+ * because it read the peer's version through `require('openai/package.json')`
+ * and `openai`'s `exports` map does not list that subpath. `ai` does list it
+ * today, so this adapter was never wrong — but nothing stops `ai` from
+ * dropping it in a minor, and the failure is silent. Both halves are pinned
+ * here: what the run actually carries, and the on-disk fallback that makes it
+ * independent of any exports map.
+ */
+describe('the SDK version reported to the viewer', () => {
+  it('is the installed `ai` version, not "unknown"', async () => {
+    const viewer = await FakeViewer.start();
+    const gm = graphmind({ url: viewer.url, enabled: true, retryIntervalMs: 60_000 });
+    cleanups.push(async () => {
+      await gm.dispose();
+      await viewer.close();
+    });
+
+    await gm.run('version-check', async () => undefined);
+    await waitUntil(() => viewer.ofType('run.started').length > 0, 8000, 'run.started');
+
+    const sdk = viewer.ofType('run.started')[0]?.payload['sdk'] as {
+      name: string;
+      version: string;
+    };
+    expect(sdk).toEqual({ name: 'ai', version: aiVersion });
+    expect(sdk.version).not.toBe('unknown');
+    // Inside the peer range this package advertises (>=6 <8).
+    expect(Number(sdk.version.split('.')[0])).toBeGreaterThanOrEqual(6);
+    expect(Number(sdk.version.split('.')[0])).toBeLessThan(8);
+  });
+
+  it('survives an exports map that hides ./package.json (the openai shape)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gm-peer-'));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    const pkgDir = join(root, 'node_modules', 'hidden-manifest-sdk');
+    mkdirSync(pkgDir, { recursive: true });
+    writeFileSync(
+      join(pkgDir, 'package.json'),
+      JSON.stringify({
+        name: 'hidden-manifest-sdk',
+        version: '9.9.9',
+        type: 'commonjs',
+        exports: { '.': './index.js' },
+      }),
+    );
+    writeFileSync(join(pkgDir, 'index.js'), 'module.exports = {};\n');
+    const from = pathToFileURL(join(root, 'consumer.js')).href;
+
+    // The old implementation, verbatim — proves the fixture reproduces it.
+    expect(() => createRequire(from)('hidden-manifest-sdk/package.json')).toThrow(
+      /ERR_PACKAGE_PATH_NOT_EXPORTED|not defined by "exports"/,
+    );
+    expect(peerVersion('hidden-manifest-sdk', from)).toBe('9.9.9');
+  });
+
+  it('degrades to undefined for a peer that is not installed', () => {
+    expect(peerVersion('definitely-not-installed-sdk', import.meta.url)).toBeUndefined();
   });
 });

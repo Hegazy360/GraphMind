@@ -7,6 +7,7 @@ import { simulateReadableStream, tool } from 'ai';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { graphmind, type Graphmind, type GraphmindOptions } from '../src/index.js';
+import { AdapterCore } from '../src/core.js';
 import { FakeViewer, tick, waitUntil, type FakeViewerOptions } from './helpers/fake-viewer.js';
 import { attach, makeMockModel, makeTools, runScenario, Marks } from './helpers/scenario.js';
 import {
@@ -93,6 +94,68 @@ describe('stream tee', () => {
 });
 
 describe('graph.hint', () => {
+  /**
+   * The hint fires on each INVOCATION's first step, which is right — a second
+   * `streamText` in the same run can bring new tools. What it must not do is
+   * announce the same roster twice: the sibling OpenAI adapter did exactly
+   * that for any run that used two APIs, and the duplicate is pure noise in
+   * the run's event stream.
+   */
+  describe('a second invocation in the same run', () => {
+    const roster = (viewer: FakeViewer, index: number): string[] =>
+      (viewer.ofType('graph.hint')[index]?.payload['nodes'] as { nodeId: string }[]).map(
+        (n) => n.nodeId,
+      );
+
+    const params = (...tools: string[]) => ({
+      prompt: 'plan it',
+      tools: tools.map((name) => ({ type: 'function', name })),
+    });
+
+    it('is silent when the roster adds nothing', async () => {
+      const { viewer, gm } = await setup();
+      await attach(gm);
+      const core = new AdapterCore(gm.session);
+
+      await gm.run('reconcile', async (ctx) => {
+        core.emitGraphHint(params('searchFlights'), ctx); // invocation 1
+        core.emitGraphHint(params('searchFlights'), ctx); // invocation 2, same tools
+      });
+
+      await waitUntil(() => viewer.ofType('run.finished').length >= 1, 8000, 'run.finished');
+      expect(viewer.ofType('graph.hint')).toHaveLength(1);
+      expect(roster(viewer, 0)).toEqual(['agent:reconcile', 'llm:step', 'tool:searchFlights']);
+    });
+
+    it('speaks up when the roster gains a tool', async () => {
+      const { viewer, gm } = await setup();
+      await attach(gm);
+      const core = new AdapterCore(gm.session);
+
+      await gm.run('reconcile', async (ctx) => {
+        core.emitGraphHint(params('searchFlights'), ctx);
+        core.emitGraphHint(params('searchFlights', 'flagForApproval'), ctx);
+      });
+
+      await waitUntil(() => viewer.ofType('graph.hint').length === 2, 8000, 'second hint');
+      expect(roster(viewer, 1)).toContain('tool:flagForApproval');
+    });
+
+    it('pre-renders every run from scratch', async () => {
+      const { viewer, gm } = await setup();
+      await attach(gm);
+      const core = new AdapterCore(gm.session);
+
+      for (const name of ['run-one', 'run-two']) {
+        await gm.run(name, async (ctx) => core.emitGraphHint(params('searchFlights'), ctx));
+      }
+
+      await waitUntil(() => viewer.ofType('graph.hint').length === 2, 8000, 'one hint per run');
+      expect(roster(viewer, 0)[0]).toBe('agent:run-one');
+      expect(roster(viewer, 1)[0]).toBe('agent:run-two');
+    });
+  });
+
   it('emits the full node roster from params.tools on the first step', async () => {
     const { viewer, gm } = await setup();
     await attach(gm);

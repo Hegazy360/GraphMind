@@ -637,10 +637,20 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       this.emitFinish(record, undefined, aborted ? 'aborted' : 'error', { extra });
     }
     if (aborted || record.gatedByWrapper) return;
-    // One pause per failure: the same error bubbles through every ancestor.
+    // One pause per failure: the same error bubbles through every ancestor —
+    // and a wrapper that already gated it claimed it before rethrowing, so
+    // releasing a wrapped tool's error gate does not stop the user again at
+    // every chain above it.
     if (!this.core.claimError(error)) return;
     const decision = await this.core.session.gate('error', gateNode(record));
-    if (decision.action === 'abort') await this.performAbort(record, 'error-gate');
+    if (decision.action === 'abort') {
+      await this.performAbort(record, 'error-gate');
+      return;
+    }
+    // `inject`/`retry` are as impossible here as at `before`/`after` — a
+    // callback cannot swallow the failure or re-run what threw. Saying so is
+    // the whole difference between "unsupported" and "broken".
+    this.warnUnsupported(decision.action, record, 'error');
   }
 
   private async gateBefore(record: RunRecord): Promise<void> {
@@ -649,7 +659,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       await this.performAbort(record, 'before-gate');
       return;
     }
-    this.warnUnsupported(decision.action, record);
+    this.warnUnsupported(decision.action, record, 'before');
   }
 
   /**
@@ -665,17 +675,31 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       await this.performAbort(record, 'after-gate');
       return;
     }
-    this.warnUnsupported(decision.action, record);
+    this.warnUnsupported(decision.action, record, 'after');
   }
 
-  private warnUnsupported(action: string, record: RunRecord): void {
+  /**
+   * Say out loud that a callback-only gate cannot honour `inject` / `retry`.
+   * Once per (action, gate point) per `graphmind()` instance: the error gate
+   * is the one a user is most likely to be sitting at, and it needs its own
+   * budget rather than being silenced by an earlier `before`-gate warning.
+   */
+  private warnUnsupported(
+    action: string,
+    record: RunRecord,
+    point: 'before' | 'after' | 'error',
+  ): void {
     if (action !== 'inject' && action !== 'retry') return;
+    const consequence =
+      point === 'error'
+        ? 'the error kept propagating'
+        : 'execution continued with the real result';
     this.core.warner.warn(
-      `callback-${action}`,
-      `the debugger asked to ${action} at "${record.name}", but LangChain callbacks have no ` +
-        'return channel — a handler cannot substitute or re-run what it observes, so execution ' +
-        'continued. Wrap that tool with gm.wrapStructuredTool() / gm.tool() to get inject and ' +
-        'retry.',
+      `callback-${action}-${point}`,
+      `the debugger asked to ${action} at the ${point} gate of "${record.name}", but LangChain ` +
+        'callbacks have no return channel — a handler cannot substitute or re-run what it ' +
+        `observes, so ${consequence}. Wrap that tool with gm.wrapStructuredTool() / gm.tool() ` +
+        'to get inject and retry.',
     );
   }
 

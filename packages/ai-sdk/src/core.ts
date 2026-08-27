@@ -30,6 +30,8 @@ import {
 } from './sdk-types.js';
 
 const MAX_TRACKED_PROVIDER_CALLS = 1000;
+/** How many runs keep a record of the `graph.hint` nodes they were sent. */
+const MAX_HINTED_RUNS = 256;
 
 export interface StartNodeInput {
   nodeId: string;
@@ -57,6 +59,12 @@ export class AdapterCore {
   readonly warner: OnceWarner;
 
   private readonly providerToolStarts = new Map<string, number>();
+
+  /**
+   * The `graph.hint` nodes each run has already been told about (see
+   * `emitGraphHint`).
+   */
+  private readonly hintedByRun = new Map<string, Set<string>>();
 
   /** Shared one-shot attach wait (the `waitForAttach` option). */
   private attachWait: Promise<void> | undefined;
@@ -142,6 +150,13 @@ export class AdapterCore {
    * `graph.hint` from the step's tool roster (emitted on an invocation's
    * first step) so the viewer can pre-render the full graph grey.
    * Provider-executed tools carry `providerExecuted`/`ungated` extra fields.
+   *
+   * Per INVOCATION is the right trigger — a second `streamText` in the same
+   * run can bring tools the first never mentioned — but a run that makes two
+   * calls with the same tool set does not need to be told the same roster
+   * twice, so a hint that adds nothing is not sent. (The sibling OpenAI
+   * adapter emitted the duplicate for real: one loop on chat.completions, one
+   * summary on the Responses API, two identical hints in one run.)
    */
   emitGraphHint(params: CallParamsLike, ctx: RunContext | undefined): void {
     const nodes: (GraphNodeHint & Record<string, unknown>)[] = [];
@@ -170,7 +185,32 @@ export class AdapterCore {
       }
       nodes.push(hint);
     }
+    if (!this.claimHint(ctx, nodes)) return;
     this.session.emit('graph.hint', { nodes });
+  }
+
+  /**
+   * False when every node in this roster has already been announced to this
+   * run. Scoped by run, so a new run is pre-rendered from scratch, and keyed
+   * on the node's whole payload, so a node that changes still counts as news.
+   */
+  private claimHint(ctx: RunContext | undefined, nodes: unknown[]): boolean {
+    let keys: string[];
+    try {
+      keys = nodes.map((node) => JSON.stringify(node));
+    } catch {
+      return true; // unserializable: never suppress a hint on a guess
+    }
+    const runId = ctx?.runId ?? this.session.currentRun()?.runId ?? 'no-run';
+    let announced = this.hintedByRun.get(runId);
+    if (announced === undefined) {
+      if (this.hintedByRun.size >= MAX_HINTED_RUNS) this.hintedByRun.clear();
+      announced = new Set<string>();
+      this.hintedByRun.set(runId, announced);
+    }
+    if (keys.every((key) => announced.has(key))) return false;
+    for (const key of keys) announced.add(key);
+    return true;
   }
 
   // -- provider-executed tools (observe-only, decisions.md #4) --------------

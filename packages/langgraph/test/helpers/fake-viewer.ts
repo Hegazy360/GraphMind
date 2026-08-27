@@ -42,6 +42,8 @@ export class FakeViewer {
     pred: (f: ReceivedFrame) => boolean;
     resolve: (f: ReceivedFrame) => void;
   }[] = [];
+  /** Callbacks run on every received frame (see `releaseEveryPause`). */
+  private readonly autoReleasers = new Set<(f: ReceivedFrame) => void>();
   private seq = 0;
 
   private constructor(
@@ -120,6 +122,25 @@ export class FakeViewer {
     for (const socket of this.sockets) socket.send(frame);
   }
 
+  /**
+   * Auto-release every gate as it opens (a user holding down "Release this
+   * gate"), so a test can assert HOW MANY times it was stopped instead of
+   * deadlocking on the pause it did not expect.
+   */
+  releaseEveryPause(action: ResumeAction): { stop: () => void } {
+    const seen = new Set<string>();
+    const release = (frame: ReceivedFrame): void => {
+      if (frame.type !== 'exec.paused') return;
+      const pauseId = frame.payload['pauseId'];
+      if (typeof pauseId !== 'string' || seen.has(pauseId)) return;
+      seen.add(pauseId);
+      this.resume(pauseId, action);
+    };
+    for (const frame of this.received) release(frame);
+    this.autoReleasers.add(release);
+    return { stop: () => this.autoReleasers.delete(release) };
+  }
+
   resume(pauseId: string, action: ResumeAction, output?: unknown): void {
     this.sendControl('exec.resume', {
       pauseId,
@@ -154,6 +175,7 @@ export class FakeViewer {
     socket.on('message', (raw) => {
       const frame = JSON.parse(String(raw)) as ReceivedFrame;
       this.received.push(frame);
+      for (const release of this.autoReleasers) release(frame);
       for (let i = this.waiters.length - 1; i >= 0; i -= 1) {
         const waiter = this.waiters[i];
         if (waiter !== undefined && waiter.pred(frame)) {

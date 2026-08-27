@@ -8,7 +8,13 @@ import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { graphmind, type Graphmind, type GraphmindOptions } from '../src/index.js';
 import { FakeViewer, tick, waitUntil, type FakeViewerOptions } from './helpers/fake-viewer.js';
-import { attach, buildGraph, Marks, type ScenarioFlags } from './helpers/graph.js';
+import {
+  attach,
+  buildFailingGraph,
+  buildGraph,
+  Marks,
+  type ScenarioFlags,
+} from './helpers/graph.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -277,5 +283,177 @@ describe('callback-only gate limits', () => {
     expect(bodyCount(marks, 'searchFlights')).toBe(1);
     expect(warnings.some((w) => w.includes('no return channel'))).toBe(true);
     expect(warnings.some((w) => w.includes('wrapStructuredTool'))).toBe(true);
+  });
+});
+
+/**
+ * One failure, one pause.
+ *
+ * The docs-qa sample surfaced this: releasing the `tool:gradeChunks` error
+ * gate stopped the user AGAIN at `chain:grade`, because the same error
+ * re-fired the gate at every level it climbed. The second gate is a callback,
+ * so it cannot inject or retry — it is a pause with nothing behind it.
+ *
+ * The gate that CAN do something is the innermost one (the wrapper is a real
+ * position in the call stack), so it claims the error and every ancestor lets
+ * that same failure past.
+ */
+describe('error cascade through the run tree', () => {
+  function runFailing(gm: Graphmind, flags: Parameters<typeof buildFailingGraph>[1] = {}) {
+    const { graph, marks, attempts } = buildFailingGraph(gm, flags);
+    const promise = graph
+      .invoke({ topic: 'team-plan' }, { callbacks: [gm.handler()] })
+      .catch((error: unknown) => ({ failed: error }));
+    return { marks, promise, attempts };
+  }
+
+  const errorPauses = (viewer: FakeViewer) =>
+    viewer.ofType('exec.paused').filter((f) => f.payload['point'] === 'error');
+
+  it('pauses ONCE at the wrapper, not again at every ancestor', async () => {
+    const { viewer, gm } = await setup({ breakpoints: [{ point: 'error' }] });
+    await attach(gm);
+    // Release every gate the moment it opens, the way a user hammering
+    // "Release this gate" would — so a cascade shows up as extra pauses
+    // rather than as a hang.
+    const released = viewer.releaseEveryPause('continue');
+
+    const { promise } = runFailing(gm);
+    const paused = await viewer.waitFor(
+      (f) => f.type === 'exec.paused' && f.payload['nodeId'] === 'tool:gradeChunks',
+    );
+    expect(paused.payload['point']).toBe('error');
+
+    await promise;
+    released.stop();
+    await waitUntil(() => viewer.ofType('run.finished').length >= 1, 8000, 'run.finished');
+    await tick(150); // any late ancestor gate would have landed by now
+
+    expect(errorPauses(viewer).map((f) => f.payload['nodeId'])).toEqual(['tool:gradeChunks']);
+    // The failure still reached the graph and the chain nodes still report it.
+    const errored = viewer
+      .ofType('node.finished')
+      .filter((f) => f.payload['status'] === 'error')
+      .map((f) => f.payload['nodeId']);
+    expect(errored).toContain('chain:grade');
+  });
+
+  it('still pauses once per failure when the tool is only callback-gated', async () => {
+    const { viewer, gm } = await setup({ breakpoints: [{ point: 'error' }] });
+    await attach(gm);
+
+    const released = viewer.releaseEveryPause('continue');
+    const { promise } = runFailing(gm, { wrapTools: false });
+    await viewer.waitFor((f) => f.type === 'exec.paused');
+
+    await promise;
+    released.stop();
+    await waitUntil(() => viewer.ofType('run.finished').length >= 1, 8000, 'run.finished');
+    await tick(150);
+
+    expect(errorPauses(viewer).map((f) => f.payload['nodeId'])).toEqual(['tool:gradeChunks']);
+  });
+
+  it('re-arms the gate for each RETRY, even when the tool rethrows one Error object', async () => {
+    const { viewer, gm } = await setup({ breakpoints: [{ point: 'error' }] });
+    await attach(gm);
+
+    // Attempts 1 and 2 throw the SAME Error instance; attempt 3 succeeds.
+    const { promise, attempts } = runFailing(gm, { failures: 2, sameErrorObject: true });
+
+    const first = await viewer.waitFor((f) => f.type === 'exec.paused');
+    viewer.resume(first.payload['pauseId'] as string, 'retry');
+    const second = await viewer.waitForNth((f) => f.type === 'exec.paused', 2);
+    viewer.resume(second.payload['pauseId'] as string, 'retry');
+
+    await promise;
+    await waitUntil(() => viewer.ofType('run.finished').length >= 1, 8000, 'run.finished');
+
+    expect(attempts()).toBe(3);
+    // Two failures, two pauses — the claim from attempt 1 must not swallow
+    // attempt 2's identical Error.
+    expect(errorPauses(viewer).map((f) => f.payload['nodeId'])).toEqual([
+      'tool:gradeChunks',
+      'tool:gradeChunks',
+    ]);
+  });
+});
+
+/**
+ * A callback-only gate cannot inject or retry. It has always said so at
+ * `before` and `after`; at `error` — the gate a user is most likely to be
+ * sitting at, since pause-on-error is armed by default — it said nothing and
+ * simply continued, which reads as a broken button.
+ */
+describe('inject / retry at a callback-only ERROR gate', () => {
+  it('warns and names the wrapper instead of silently continuing', async () => {
+    const { viewer, gm, warnings } = await setup({ breakpoints: [{ point: 'error' }] });
+    await attach(gm);
+
+    // wrapTools: false -> only the callback handler gates this failure.
+    const { graph } = buildFailingGraph(gm, { wrapTools: false });
+    const promise = graph
+      .invoke({ topic: 'team-plan' }, { callbacks: [gm.handler()] })
+      .catch((error: unknown) => ({ failed: error }));
+
+    const paused = await viewer.waitFor((f) => f.type === 'exec.paused');
+    expect(paused.payload['point']).toBe('error');
+    viewer.resume(paused.payload['pauseId'] as string, 'inject', '{"verdict":"grounded"}');
+
+    const result = (await promise) as { failed?: unknown };
+    // Nothing was substituted: the error still propagated out of the graph.
+    expect(result.failed).toBeInstanceOf(Error);
+    expect((result.failed as Error).message).toContain('contradictory');
+
+    const warning = warnings.find((w) => w.includes('error gate'));
+    expect(warning).toBeDefined();
+    expect(warning).toContain('no return channel');
+    expect(warning).toContain('wrapStructuredTool');
+    expect(warning).toContain('the error kept propagating');
+  });
+
+  it('warns for retry at an error gate too', async () => {
+    const { viewer, gm, warnings } = await setup({ breakpoints: [{ point: 'error' }] });
+    await attach(gm);
+
+    const { graph, marks } = buildFailingGraph(gm, { wrapTools: false });
+    const promise = graph
+      .invoke({ topic: 'team-plan' }, { callbacks: [gm.handler()] })
+      .catch(() => undefined);
+
+    const paused = await viewer.waitFor((f) => f.type === 'exec.paused');
+    viewer.resume(paused.payload['pauseId'] as string, 'retry');
+    await promise;
+
+    // The body ran once: a callback cannot re-run what it observed.
+    expect(bodyCount(marks, 'gradeChunks')).toBe(1);
+    expect(warnings.some((w) => w.includes('retry') && w.includes('error gate'))).toBe(true);
+  });
+
+  it('warns separately at the before gate and the error gate', async () => {
+    const { viewer, gm, warnings } = await setup({
+      breakpoints: [{ kind: 'tool', name: 'gradeChunks' }, { point: 'error' }],
+    });
+    await attach(gm);
+
+    const { graph } = buildFailingGraph(gm, { wrapTools: false });
+    const promise = graph
+      .invoke({ topic: 'team-plan' }, { callbacks: [gm.handler()] })
+      .catch(() => undefined);
+
+    const before = await viewer.waitFor(
+      (f) => f.type === 'exec.paused' && f.payload['point'] === 'before',
+    );
+    viewer.resume(before.payload['pauseId'] as string, 'inject', 'nope');
+    const onError = await viewer.waitFor(
+      (f) => f.type === 'exec.paused' && f.payload['point'] === 'error',
+    );
+    viewer.resume(onError.payload['pauseId'] as string, 'inject', 'nope');
+    await promise;
+
+    // An earlier `before` warning must not spend the error gate's budget:
+    // they are different situations and the second is the one that matters.
+    expect(warnings.filter((w) => w.includes('before gate')).length).toBe(1);
+    expect(warnings.filter((w) => w.includes('error gate')).length).toBe(1);
   });
 });

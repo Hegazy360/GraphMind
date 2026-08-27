@@ -25,6 +25,7 @@
  * node events itself, so a wrapped tool is useful on its own.
  */
 import {
+  CONTINUE_DECISION,
   isAbortError,
   type GateDecision,
   type GateNode,
@@ -208,13 +209,20 @@ async function runGated(
         await runIn(() => finish(undefined, 'aborted'));
         throw error;
       }
-      // The error gate fires BEFORE LangChain (and the graph) sees the failure.
+      // Exactly one PAUSE per failure, here. A wrapper is a real position in
+      // the call stack, so this is the only error gate that can substitute or
+      // re-run anything; claiming the error means the handler's ancestor gates
+      // (the LangGraph node, the root chain) let the same failure past on its
+      // way out instead of stopping the user again at every level for an error
+      // they already released. An inner wrapper that claimed it first keeps
+      // the pause, and this one behaves as `continue`.
+      const owned = core.claimError(error);
       // Exactly one `node.error` per failure: the handler reports the ones
       // LangChain gets to see (continue / abort), and the wrapper reports the
       // ones it swallows (inject / retry), which would otherwise be invisible.
       const decision = await runIn(async () => {
         if (ownsEvents) core.errorNode(nodeId, instanceId, error);
-        return core.session.gate('error', node);
+        return owned ? core.session.gate('error', node) : CONTINUE_DECISION;
       });
       const swallowed = decision.action === 'inject' || decision.action === 'retry';
       if (swallowed && !ownsEvents) await runIn(() => core.errorNode(nodeId, instanceId, error));
@@ -223,7 +231,12 @@ async function runGated(
         await runIn(() => finish(decision.output, 'ok', { injected: true }));
         return decision.output;
       }
-      if (decision.action === 'retry') continue;
+      if (decision.action === 'retry') {
+        // The re-run may throw this very object again; that is a new failure
+        // and deserves its own pause.
+        core.releaseError(error);
+        continue;
+      }
       if (decision.action === 'abort') {
         note({ aborted: true, attempts });
         await runIn(() => finish(undefined, 'aborted'));

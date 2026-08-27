@@ -1,11 +1,11 @@
 ---
 title: Python
-description: Debug Python agents built on openai, anthropic or langgraph — instrument the client, open a run, decorate your tools, and use the same viewer.
+description: Debug Python agents built on openai, anthropic or langchain — instrument the client, open a run, decorate your tools, and use the same viewer.
 sidebar:
   order: 6
 ---
 
-import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
 
 The Python package speaks the same wire protocol as the TypeScript adapters and connects to the
 same `graphmind` CLI, so a Python agent and a TypeScript one look identical in the viewer.
@@ -14,15 +14,16 @@ same `graphmind` CLI, so a Python agent and a TypeScript one look identical in t
 pip install graphmind-ai
 ```
 
-<Aside type="caution" title="Newest adapter">
-The Python package lands alongside the 0.1.0 TypeScript adapters and is the least exercised of
-the set. The surface below is what `graphmind init` prints for a Python project, and it is
-stable; if something here does not match what you installed, please
-[open an issue](https://github.com/Hegazy360/GraphMind/issues) — that is a bug in one of the two.
-</Aside>
+- **Distribution name** `graphmind-ai`, **import name** `graphmind`.
+- **Python 3.10+**, one runtime dependency (`websockets`), MIT licensed.
+- Provider SDKs are optional extras: `pip install 'graphmind-ai[openai]'`, `[anthropic]`,
+  `[langchain]`, or `[all]`.
 
 The API is idiomatic Python rather than a transliteration: a context manager for runs, a
-decorator for tools, and one `instrument_*` call per client.
+decorator for tools, and one `instrument_*` call per client. Everything below has a module-level
+form (`import graphmind as gm`, then `gm.tool`) and an instance form
+(`gm = graphmind.init(...)`, then `gm.tool`) — `init` sets the process-wide default, so the two
+refer to the same session and can be mixed freely.
 
 ## End to end (OpenAI)
 
@@ -86,7 +87,7 @@ def main():
 
         for _ in range(8):
             response = client.responses.create(
-                model="gpt-5.1", tools=TOOL_SPECS, input=messages
+                model="gpt-5.4", tools=TOOL_SPECS, input=messages
             )
 
             calls = [item for item in response.output if item.type == "function_call"]
@@ -111,6 +112,13 @@ main()
 
 Run `graphmind` in one terminal, `python support_agent.py` in another.
 
+`instrument_openai` patches `chat.completions.create` (and `.parse`) and `responses.create` **on
+the instance** — no library monkey-patching, no import hooks. It is idempotent, and clients
+created *after* the call are not instrumented, so call it on each client you build. Streaming
+responses are teed: your code receives exactly the provider's stream while GraphMind observes the
+deltas. A `tools=[...]` argument is pre-announced as a `graph.hint`, so the viewer draws the tool
+roster grey before anything runs.
+
 ## Anthropic
 
 Swap one line:
@@ -133,9 +141,16 @@ with gm.run("handle-ticket"):
 
 Everything else — `@gm.tool`, `gm.run`, `gm.ready` — is identical.
 
-## LangGraph / LangChain
+`messages.stream` is instrumented too. There the HTTP request happens in `__enter__`, so that is
+where the gate holds, and the proxy observes both consumption styles (raw event iteration and
+`.text_stream`). It is the one *provider* attachment point where `inject` and `retry` are
+unavailable: GraphMind cannot fabricate a provider stream object, so it holds, warns, and
+continues rather than lying about having substituted one.
 
-Attach the callback handler, exactly like the JS adapter:
+## LangChain / LangGraph
+
+Attach a callback handler — the sync one for sync chains, the async one for `ainvoke` and
+LangGraph:
 
 ```python
 import graphmind
@@ -144,6 +159,16 @@ from langgraph.prebuilt import create_react_agent
 gm = graphmind.init(app="support-agent")
 gm.ready()
 
+
+# Decorate the tools to get inject and retry — the handler alone cannot do those.
+@gm.tool
+def search_orders(email: str) -> list[dict]:
+    """Find a customer's recent orders."""
+    return db.orders.find(email=email)
+
+
+# LangChain builds its schema from the decorated function's name, docstring and
+# signature, all of which `@gm.tool` preserves — so hand it the wrapper directly.
 agent = create_react_agent(model, tools=[search_orders, issue_refund])
 
 with gm.run("handle-ticket"):
@@ -155,45 +180,179 @@ with gm.run("handle-ticket"):
 gm.dispose()
 ```
 
-Chains, LLM calls, tools and retrievers each get their own node kind, and LangChain's run tree
-becomes the parent/child structure on the canvas.
+```python
+# async graphs / LangGraph — use the async handler
+await gm.ready_async()
+result = await agent.ainvoke(payload, config={"callbacks": [gm.async_handler()]})
+```
+
+Chains, LLM calls, chat models, tools and retrievers each get their own node kind, and
+LangChain's `parent_run_id` becomes the parent/child structure on the canvas.
+
+| LangChain concept | node kind | node id |
+| --- | --- | --- |
+| chain / runnable | `chain` | `chain:<name>` |
+| LLM / chat model | `llm` | `llm:<name>` |
+| tool | `tool` | `tool:<name>` |
+| retriever | `retriever` | `retriever:<name>` |
+
+<Aside type="caution" title="Callbacks pause; they cannot inject">
+LangChain callbacks are **observers**: the framework ignores a handler's return value, so nothing
+in a callback can substitute a chain's result. GraphMind accepts `inject` and `retry` at a
+callback-only gate, warns once naming the wrapper you need, and treats them as `continue`. It
+never pretends to have substituted something.
+
+Pausing, on the other hand, genuinely works: sync callbacks are invoked inline on the executing
+thread and async ones are `await`ed, so blocking there really does stop the clock. To *change* a
+result, wrap the call site — `@gm.tool` / `gm.wrap_tools` on the tool function, or `gm.span`
+around the code you want to be able to replace.
+
+A *sync* handler inside an *async* chain still holds (it is dispatched to the default executor
+and awaited), but it parks a thread-pool thread per concurrent run — prefer
+`gm.async_callback_handler()` there.
+</Aside>
+
+## Anything else: spans
+
+For the parts of a graph GraphMind cannot see by itself — a LangGraph node body, a hand-rolled
+planner loop, a retrieval step in your own framework:
+
+```python
+with gm.span("plan", kind="chain") as span:   # `async with` too
+    plan = build_plan(state)
+    span.set_output(plan)
+```
+
+A span has a `before` gate and honours `abort`. It owns no return value, so an injected value is
+surfaced as the span's **output** rather than silently dropped.
+
+## Capability matrix
+
+What each attachment point can actually do. Every ✅ is covered by a test in the package's
+`tests/`.
+
+| | observe | `before` hold | `error` hold | `after` hold | `inject` | `retry` | `abort` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `@gm.tool` / `gm.wrap_tools` (sync + async) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `gm.span` (sync + async) | ✅ | ✅ | — | — | as span output | — | ✅ |
+| OpenAI `chat.completions` / `responses` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Anthropic `messages.create` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Anthropic `messages.stream` | ✅ | ✅ (in `__enter__`) | ✅ | — | ❌ | ❌ | ✅ |
+| LangChain sync handler | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
+| LangChain async handler | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
+
+Same shape as the [LangGraph JS matrix](/integrations/langgraph/#capability-matrix), and for the
+same reason: a callback observes, a wrapper owns the call site.
 
 ## The surface
 
 | Call | What it does |
 | --- | --- |
-| `graphmind.init(app=...)` | Create the session. Same options as the TS adapters. |
-| `graphmind.instrument_openai(client)` | Gate every OpenAI request; returns the client. |
-| `graphmind.instrument_anthropic(client)` | Gate every Anthropic request; returns the client. |
-| `gm.handler()` | LangChain `BaseCallbackHandler` for LangGraph / LCEL runs. |
-| `@gm.tool` | Decorate a function so its calls become gated `tool:<name>` nodes. |
-| `with gm.run("name"):` | Open a run — the context manager closes it, error or not. |
-| `gm.ready(timeout=2.0)` | Wait for the handshake. Returns `False` if no debugger — not an error. |
-| `gm.dispose()` | Release held gates, flush events, close the socket. |
+| `graphmind.init(app=...)` — alias `configure` | Create (or replace) the process-wide instance. |
+| `graphmind.instrument_openai(client)` — alias `wrap_openai` | Gate every OpenAI request; returns the client. |
+| `graphmind.instrument_anthropic(client)` — alias `wrap_anthropic` | Gate every Anthropic request; returns the client. |
+| `gm.callback_handler()` — alias `gm.handler` | `BaseCallbackHandler` for sync chains. |
+| `gm.async_callback_handler()` — alias `gm.async_handler` | `AsyncCallbackHandler` for async chains / LangGraph. |
+| `@gm.tool` | Gate a function: a `tool:<name>` node with inject / retry / abort. |
+| `gm.wrap_tools({...})` | The same, for a mapping, a list, or one callable. |
+| `with gm.run("name"):` | Open a run. `async with` works on the same object. |
+| `with gm.span("name", kind=...):` | A gated node for anything else. `async with` too. |
+| `gm.ready(timeout=2.0)` / `await gm.ready_async(timeout=2.0)` | Wait for the handshake. `False` means detached, not an error. |
+| `gm.stats()` | Diagnostics: enabled, attached, buffered, dropped, held gates, seq. |
+| `gm.dispose()` | Release held gates, flush events, close the socket. Idempotent, no arguments. |
+
+Every call above also exists as a method on an explicit instance (`graphmind.GraphMind(app=...)`),
+which is what you want when one process debugs more than one agent.
 
 <Aside type="note" title="async">
-`async def` tools work with the same `@gm.tool` decorator, and `async with gm.run(...)` opens a
-run in an async context. Run scoping uses `contextvars`, so concurrent `asyncio` tasks stay
-correctly attributed.
+Sync and async are both first-class, and nothing here requires an event loop. `async def` tools
+work with the same `@gm.tool` decorator; `async with gm.run(...)` and `async with gm.span(...)`
+open a run or span in an async context; `await gm.ready_async()` is the async twin of
+`gm.ready()`.
+
+The transport lives on one dedicated daemon thread with its own event loop, so **your** loop is
+never touched — no `nest_asyncio`, no `run_until_complete`, no hijacking. Run scoping uses
+`contextvars`, which propagates to `asyncio` tasks (so concurrent tasks stay correctly
+attributed) but **not** across a bare `ThreadPoolExecutor.submit` — use
+`contextvars.copy_context().run(...)`, or open a `gm.run(...)` inside the worker.
 </Aside>
+
+## Naming nodes
+
+One node per *code location*; executions light it up. The node name is the callable's
+`__name__` — and for the two common callables that have none, GraphMind falls back to something
+stable rather than a `repr` with a memory address in it:
+
+```python
+from functools import partial
+
+load_eu = gm.tool(partial(load_region, "eu"))                 # -> tool:load_region
+load_us = gm.tool(partial(load_region, "us"), name="load_us") # -> tool:load_us
+```
+
+A `functools.partial` is named after the function it wraps; an instance of a class with
+`__call__` is named after its class. Two partials of the same function are therefore *one* node,
+which is usually what you want — pass `name=` (or a key in `gm.wrap_tools({...})`) when you want
+them apart.
 
 ## Same guarantees
 
 The Python package holds the identical contract:
 
-- **Never raises into your app.** Internal failures degrade to a no-op plus one warning.
-- **Free when detached.** No debugger, no cost — gates return immediately.
-- **Fails open.** A debugger that disconnects mid-hold releases every gate with `continue`.
-- **Off in production.** `GRAPHMIND_DISABLED=1` disables everything; production environments
-  need `GRAPHMIND=1` to opt in.
+- **Never raises into your app.** Internal failures degrade to a rate-limited warning on stderr
+  and uninstrumented behaviour. Your own exceptions propagate untouched.
+- **Cheap when detached.** Measured by the package's own `tests/test_overhead.py`: ~0.09 µs per
+  wrapped call when disabled, ~9.5 µs when enabled but detached (two envelopes into the replay
+  ring buffer), ~0.12 µs for a detached gate check.
+- **Fails open.** A debugger that disconnects mid-hold releases every gate with `continue` in
+  well under 100 ms. An `atexit` hook does the same at interpreter exit, and the transport thread
+  is a daemon, so GraphMind can never keep a process alive.
+- **Bounded memory and payloads.** Events emitted while detached go into a ring buffer (default
+  2000) and are replayed with their original `seq` when a viewer attaches. Prompts, arguments and
+  results are depth-, width- and length-capped before serialization.
+- **`fork()`-safe.** The loop thread is re-created in the child, so pre-forking servers
+  (gunicorn, uvicorn workers, Celery) keep working.
+- **Off in production.** See below.
 - **Local-first.** Events go to `ws://127.0.0.1:4747/ingest` and no further.
 
 ## Environment
 
-The same variables the TypeScript adapters read:
-
 | Variable | Meaning |
 | --- | --- |
 | `GRAPHMIND_URL` | Ingest endpoint (default `ws://127.0.0.1:4747/ingest`) |
-| `GRAPHMIND_DISABLED` | `1` disables instrumentation — beats everything |
-| `GRAPHMIND` | `1` re-enables it in a production environment |
+| `GRAPHMIND_DISABLED` | `1` disables instrumentation — beats an explicit `enabled=True` in code |
+| `GRAPHMIND` | `1` re-enables it in a production-looking environment |
+
+"Production-looking" is a deliberately boring, documented rule rather than a heuristic: the
+**first** variable that is set out of `GRAPHMIND_ENV`, `ENVIRONMENT`, `APP_ENV`, `PYTHON_ENV`,
+`ENV`, `DJANGO_ENV`, `FLASK_ENV`, `NODE_ENV` decides, and it counts as production when its value
+is `production` or `prod` (case-insensitive). No hostname sniffing, no cloud metadata probes.
+
+A disabled session never opens a socket, never allocates a buffer and never touches your objects:
+`instrument_openai` returns the client untouched.
+
+## Known limits
+
+<Aside type="caution">
+- **`inject` / `retry` are unavailable at observer-only attachment points** — LangChain callbacks
+  and Anthropic's `messages.stream`. Wrap the call site to get them.
+- **No mid-stream gates.** A streamed response is observed, not pausable, once it has started.
+  The gate is at the start of the call, matching the TypeScript adapters.
+- **No provider-side timeout neutralization yet.** The TypeScript adapters neutralize SDK
+  `timeout` configs while a debugger is attached; the Python SDKs' timeouts are still live, so a
+  long hold can trip a client-side timeout after the gate releases. Remove aggressive `timeout=`
+  settings while debugging.
+- **Streaming usage needs the provider to send it.** For OpenAI chat streams, pass
+  `stream_options={"include_usage": True}` or the node shows no token counts.
+- **LangChain child-config propagation is LangChain's.** A manual `.ainvoke()` made *inside* an
+  async lambda body inherits no run config, so that child produces no callbacks — for any
+  handler, not just this one. Compose with `|` or pass `config=` explicitly.
+- **CrewAI / LlamaIndex** are not instrumented directly yet. Both run on top of provider clients,
+  so `instrument_openai` / `instrument_anthropic` plus `gm.span` already give you a usable graph.
+- **A `GeneratorExit` traceback at loop shutdown is not ours.** `openai>=3` ships `httpcore2`,
+  whose connection-pool async generator makes `asyncio` print
+  `RuntimeError: generator didn't stop after athrow()` on the way out of `asyncio.run`. It
+  reproduces on a bare `AsyncOpenAI` stream with GraphMind absent. Give the pool a real tick to
+  finalize — `await client.close()` then `await asyncio.sleep(0.05)` — and it goes away
+  (`asyncio.sleep(0)` is not enough).
+</Aside>

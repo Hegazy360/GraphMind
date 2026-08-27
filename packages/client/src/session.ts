@@ -306,8 +306,18 @@ class SessionImpl implements Session {
           this.readyWaiters.delete(settle);
           resolve(attached);
         };
+        // Deliberately NOT unref'd, unlike every other timer in this client.
+        //
+        // Elsewhere unref is right: background reconnects must never keep a
+        // finished process alive. Here it is fatal. `await gm.ready()` before
+        // the agent starts is often the ONLY pending work in the process, so
+        // an unref'd timer lets the event loop drain, and Node exits with
+        // code 13 ("unsettled top-level await") printing nothing — the exact
+        // shape of a user starting their agent before starting the debugger.
+        // Failing open means resolving false, which cannot happen if the
+        // process dies first. The timer is cleared the moment we settle, so
+        // it holds the loop for at most `timeoutMs`.
         const timer = setTimeout(() => settle(false), timeoutMs);
-        timer.unref?.();
         this.readyWaiters.add(settle);
       });
     } catch (error) {

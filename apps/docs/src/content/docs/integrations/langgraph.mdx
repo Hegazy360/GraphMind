@@ -36,8 +36,8 @@ yarn add -D @graphmind-ai/langgraph graphmind-ai
 </TabItem>
 </Tabs>
 
-Peer ranges: `@langchain/core >=0.3 <2` (validated against 1.2.9) and an optional
-`@langchain/langgraph >=0.2 <2` (validated against 1.4.13).
+Peer ranges: `@langchain/core >=0.3.40 <2` (validated against 1.2.9) and an optional
+`@langchain/langgraph >=0.3 <2` (validated against 1.4.13).
 
 ## The minimum
 
@@ -137,8 +137,12 @@ body had not started.
 
 **Why inject and retry cannot work through callbacks.** A handler is told what happened; it has
 no return channel into the thing it observed. If the debugger sends `inject` or `retry` at a
-callback-only gate, the adapter warns once — naming the wrapper you need — and continues. It
-never silently pretends to have substituted something.
+callback-only gate, the adapter degrades it to `continue` and warns, naming the wrapper you need.
+That happens at all three gate points — `before`, `after` and `error` — and each gets its own
+warning budget, so a warning at `before` earlier in the run does not silence the one at `error`,
+which is the gate you are most likely to be sitting at. It never pretends to have substituted
+something, which is why the answer is always to wrap the tool rather than to keep clicking
+`Inject` on the node.
 
 **Parallel branches gate independently.** LangGraph runs fan-out nodes concurrently and each
 holds its own gate; pausing one branch does not freeze the others.
@@ -282,7 +286,8 @@ const gm = graphmind({ app: 'research-agent', waitForAttach: true }); // or auto
 
 <Aside type="caution">
 - `inject` / `retry` need the tool wrappers. There is no callback-only path, and there cannot be
-  one.
+  one. The `error` gate is the one you are most likely to be sitting at, and it is callback-only
+  unless the tool is wrapped — so wrap anything you might want to fix by hand.
 - Aborting through a callback logs one `Error in handler GraphMindCallbackHandler…` line from
   LangChain itself (its manager logs before rethrowing). That is LangChain's message, not a
   GraphMind failure.

@@ -187,6 +187,71 @@ export async function attach(gm: Graphmind): Promise<void> {
   await waitUntil(() => gm.session.attached, 8000, 'session attach');
 }
 
+/* -- a failure that ESCAPES its node (the docs-qa shape) ------------------- */
+
+export interface FailingGraphFlags {
+  /** Wrap the tool with the full gate set (inject / retry). Default true. */
+  wrapTools?: boolean;
+  /** How many attempts throw before one succeeds. Default: every attempt. */
+  failures?: number;
+  /**
+   * Throw the SAME Error instance on every attempt — a cached or
+   * module-level error, which several real SDKs do. Any per-error
+   * bookkeeping has to survive it.
+   */
+  sameErrorObject?: boolean;
+}
+
+/**
+ * A graph shaped like the docs-qa sample: `grade` calls a wrapped tool that
+ * throws and does NOT catch, so one failure climbs the whole run tree —
+ * `tool:gradeChunks` -> `chain:grade` -> the root chain. Every other graph in
+ * these helpers swallows its tool errors inside the node, which is exactly
+ * why the cascade never showed up here.
+ */
+export function buildFailingGraph(gm: Graphmind, flags: FailingGraphFlags = {}, marks = new Marks()) {
+  const failures = flags.failures ?? Number.POSITIVE_INFINITY;
+  const cached = new Error('grader: evidence is contradictory');
+  let attempts = 0;
+
+  const gradeChunks = tool(
+    async ({ plan }: { plan: string }) => {
+      attempts += 1;
+      marks.mark('tool:body-start', { toolName: 'gradeChunks', attempt: attempts });
+      if (attempts <= failures) {
+        marks.mark('tool:body-throw', { toolName: 'gradeChunks', attempt: attempts });
+        throw flags.sameErrorObject === true
+          ? cached
+          : new Error('grader: evidence is contradictory');
+      }
+      return JSON.stringify({ verdict: 'grounded', plan });
+    },
+    {
+      name: 'gradeChunks',
+      description: 'Grade retrieved chunks',
+      schema: z.object({ plan: z.string() }),
+    },
+  );
+
+  const wrapped = flags.wrapTools === false ? gradeChunks : gm.wrapStructuredTool(gradeChunks);
+
+  const graph = new StateGraph(State)
+    .addNode('grade', async (state) => {
+      marks.mark('node:grade');
+      // No try/catch: the failure leaves the node and climbs the run tree.
+      const out = await (wrapped as { invoke: (i: unknown) => Promise<unknown> }).invoke({
+        plan: state.topic,
+      });
+      const content = (out as { content?: unknown })?.content;
+      return { findings: [String(content ?? out)] };
+    })
+    .addEdge(START, 'grade')
+    .addEdge('grade', END)
+    .compile();
+
+  return { graph, marks, attempts: () => attempts };
+}
+
 /* -- the agent loop: conditional edges + a streaming tool-calling model ----- */
 
 /**

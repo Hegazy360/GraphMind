@@ -5,7 +5,13 @@
  * `.parse()` helpers routing through the same gated `create`.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { chunked, FakeOpenAI, responseEvents, responseObject } from './helpers/fake-openai.js';
+import {
+  chatCompletion,
+  chunked,
+  FakeOpenAI,
+  responseEvents,
+  responseObject,
+} from './helpers/fake-openai.js';
 import { tick, waitUntil } from './helpers/fake-viewer.js';
 import { attach } from './helpers/scenario.js';
 import { framesFor, observedText, setup } from './helpers/setup.js';
@@ -227,5 +233,107 @@ describe('invocation chaining', () => {
     expect(instances).toEqual([`${invocation}:s0`, `${invocation}:s1`]);
     // One invocation -> exactly one graph.hint.
     expect(viewer.ofType('graph.hint').length).toBe(1);
+  });
+});
+
+/**
+ * A run that drives its tool loop with `chat.completions` and then writes its
+ * summary with the Responses API is two invocations with one tool roster, and
+ * it used to emit `graph.hint` twice — the same nodes, verbatim, because the
+ * hint fires on each invocation's FIRST step. Per-invocation is still the
+ * right trigger (a new roster has to be announced); an unchanged roster is
+ * not news.
+ */
+describe('graph.hint across two APIs in one run', () => {
+  const TOOLS = [
+    {
+      type: 'function' as const,
+      function: { name: 'searchFlights', description: 'find flights', parameters: {} },
+    },
+  ];
+
+  /**
+   * The invoice-reconciler sample's shape: tools registered through
+   * `gm.wrapTools`, so BOTH invocations produce a byte-identical roster (the
+   * registered names are merged into every hint regardless of what the
+   * request body declares).
+   */
+  async function mixedApiHarness() {
+    const server = new FakeOpenAI()
+      .onChat(() => ({ kind: 'json', body: chatCompletion({ text: 'loop done' }) }))
+      .onResponses(() => ({ kind: 'json', body: responseObject({ text: 'file note' }) }));
+    const harness = await setup(server, {}, {}, cleanups);
+    harness.gm.wrapTools({ searchFlights: async () => 'TP1234' });
+    await attach(harness.gm);
+    return harness;
+  }
+
+  it('announces the roster once per run, not once per invocation', async () => {
+    const { viewer, gm, client } = await mixedApiHarness();
+
+    await gm.run('reconcile', async () => {
+      await client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'reconcile it' }],
+        tools: TOOLS,
+      });
+      await client.responses.create({ model: 'gpt-4o-mini', input: 'write the note' });
+    });
+
+    await waitUntil(
+      () => framesFor(viewer, 'node.finished', 'llm:step').length === 2,
+      5000,
+      'two llm finishes',
+    );
+    await tick(50); // a late second hint would have landed by now
+
+    const hints = viewer.ofType('graph.hint');
+    expect(hints.length).toBe(1);
+    expect((hints[0]?.payload['nodes'] as { nodeId: string }[]).map((n) => n.nodeId)).toEqual([
+      'agent:reconcile',
+      'llm:step',
+      'tool:searchFlights',
+    ]);
+  });
+
+  it('DOES re-announce when the second invocation brings a new tool', async () => {
+    const { viewer, gm, client } = await mixedApiHarness();
+
+    await gm.run('reconcile', async () => {
+      await client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'reconcile it' }],
+        tools: TOOLS,
+      });
+      await client.responses.create({
+        model: 'gpt-4o-mini',
+        input: 'write the note',
+        tools: [{ type: 'function', name: 'flagForApproval', parameters: {}, strict: null }],
+      });
+    });
+
+    await waitUntil(() => viewer.ofType('graph.hint').length === 2, 5000, 'second hint');
+    const second = viewer.ofType('graph.hint')[1]?.payload['nodes'] as { nodeId: string }[];
+    expect(second.map((n) => n.nodeId)).toContain('tool:flagForApproval');
+  });
+
+  it('pre-renders each new run from scratch', async () => {
+    const { viewer, gm, client } = await mixedApiHarness();
+
+    for (const name of ['run-one', 'run-two']) {
+      await gm.run(name, async () => {
+        await client.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [{ role: 'user', content: 'reconcile it' }],
+          tools: TOOLS,
+        });
+      });
+    }
+
+    await waitUntil(() => viewer.ofType('graph.hint').length === 2, 5000, 'one hint per run');
+    const agents = viewer
+      .ofType('graph.hint')
+      .map((f) => (f.payload['nodes'] as { nodeId: string }[])[0]?.nodeId);
+    expect(agents).toEqual(['agent:run-one', 'agent:run-two']);
   });
 });

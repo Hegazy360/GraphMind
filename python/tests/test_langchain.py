@@ -8,6 +8,7 @@ genuinely cannot substitute a result there.
 from __future__ import annotations
 
 import asyncio
+import functools
 import itertools
 import threading
 import time
@@ -317,3 +318,50 @@ async def test_async_abort_terminates_the_chain(attached: Any) -> None:
     with pytest.raises(GraphMindAbortError):
         await asyncio.wait_for(task, timeout=5)
     assert marks == []
+
+
+def test_a_gm_tool_is_usable_as_a_langchain_structured_tool(attached: Any) -> None:
+    """The pattern the docs recommend for inject/retry under LangGraph.
+
+    Callbacks cannot substitute a result, so the docs tell people to put
+    ``@gm.tool`` on the function and hand *that* to LangChain. If LangChain
+    cannot build a schema from the wrapper, that advice is worthless — and for a
+    ``functools.partial`` it could not, because the wrapper carried unresolvable
+    PEP-563 ``(*args, **kwargs)`` annotations.
+    """
+    from langchain_core.tools import StructuredTool
+
+    instance, viewer = attached()
+
+    @instance.tool
+    def search_orders(email: str, limit: int = 5) -> str:
+        """Find a customer's recent orders."""
+        return f"{email}/{limit}"
+
+    def load_region(dataset: str, region: str) -> str:
+        """Load one region out of a dataset."""
+        return f"{dataset}/{region}"
+
+    bound = instance.tool(functools.partial(load_region, "sales-2026"))
+
+    plain_tool = StructuredTool.from_function(search_orders)
+    partial_tool = StructuredTool.from_function(bound)
+
+    assert plain_tool.name == "search_orders"
+    assert plain_tool.description == "Find a customer's recent orders."
+    assert set(plain_tool.args) == {"email", "limit"}
+
+    assert partial_tool.name == "load_region"
+    assert partial_tool.description == "Load one region out of a dataset."
+    assert set(partial_tool.args) == {"region"}
+
+    with instance.run("agent"):
+        assert plain_tool.invoke({"email": "a@b.c"}) == "a@b.c/5"
+        assert partial_tool.invoke({"region": "EMEA"}) == "sales-2026/EMEA"
+
+    # Both went through the gate, so both are nodes the debugger owns.
+    for node_id in ("tool:search_orders", "tool:load_region"):
+        started = viewer.wait_for(
+            lambda f, n=node_id: f.get("type") == "node.started" and f["payload"]["nodeId"] == n
+        )
+        assert started["payload"]["kind"] == "tool"

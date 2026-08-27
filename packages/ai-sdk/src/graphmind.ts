@@ -13,7 +13,6 @@
  * gates; the adapter never throws into the host app; a debugger that
  * disconnects mid-hold auto-continues every held gate.
  */
-import { createRequire } from 'node:module';
 import {
   createSession,
   isAbortError,
@@ -28,6 +27,7 @@ import { wrapLanguageModel, type ToolSet } from 'ai';
 import { AdapterCore } from './core.js';
 import { agentNodeId } from './ids.js';
 import { createDebugMiddleware } from './middleware.js';
+import { peerVersion } from './peer-version.js';
 import { wrapToolSet } from './wrap-tools.js';
 
 /** Anything `wrapLanguageModel` accepts (a V2/V3/V4 language model). */
@@ -85,14 +85,15 @@ export interface Graphmind {
   dispose(): Promise<void>;
 }
 
+/**
+ * The installed `ai` version, for the `sdk` field the viewer shows. `ai` does
+ * expose `./package.json` today, but nothing obliges it to keep doing so —
+ * `openai` removed exactly that subpath and every run since reported
+ * `openai@unknown` — so this goes through the same `peerVersion` helper,
+ * which falls back to the manifest on disk.
+ */
 function detectAiVersion(): string {
-  try {
-    const require = createRequire(import.meta.url);
-    const pkg = require('ai/package.json') as { version?: string };
-    return typeof pkg.version === 'string' ? pkg.version : 'unknown';
-  } catch {
-    return 'unknown';
-  }
+  return peerVersion('ai', import.meta.url) ?? 'unknown';
 }
 
 /**

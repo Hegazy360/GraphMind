@@ -5,6 +5,49 @@ this repo (`graphmind-ai`, `@graphmind-ai/sdk`, `@graphmind-ai/client`,
 `@graphmind-ai/schema`, `@graphmind-ai/anthropic`, `@graphmind-ai/openai`,
 `@graphmind-ai/langgraph`, and the Python `graphmind-ai` distribution).
 
+## 0.3.2
+
+Five sample projects were built against the published packages and run against
+real Anthropic and OpenAI APIs. They found these, which is exactly what a new
+user would have found.
+
+### Fixed — first-run blockers
+
+- **`gm.ready()` never settled when no debugger was listening, and the process
+  died silently** (exit 13, no output). Its timeout timer was `unref`'d, so
+  when awaiting the debugger was the only pending work — a user starting their
+  agent before starting GraphMind — the event loop drained first. Failing open
+  means resolving `false`, which cannot happen if the process dies. The same
+  path broke `waitForAttach`, where the entire run body silently never ran.
+- **A published README told users to run `npx graphmind serve`.** The CLI is
+  `graphmind-ai`; `graphmind` is an unrelated third-party package, so anyone
+  following those instructions downloaded and executed a stranger's code.
+  Corrected, and every published README swept for the same mistake.
+
+### Fixed — correctness
+
+- Every OpenAI-adapter run reported `sdk: openai@unknown`: the version was read
+  through a subpath `openai` has never exposed. All adapters now resolve peer
+  versions in a way an `exports` map cannot hide.
+- A run whose app died mid-pause stayed `running` forever. Runs now reconcile
+  to an explicit abandoned state after a grace period, without disturbing a
+  legitimate reconnect.
+- LangGraph: `inject`/`retry` at a callback-only error gate were silently
+  ignored, despite the README promising a warning. And one failure produced a
+  cascade of pauses, one per ancestor — now one failure, one pause, at the one
+  gate that can actually act.
+- Duplicate `graph.hint` when a run used two invocations.
+- `graphmind --pause-on-error <on|off|kind>` (and `GRAPHMIND_PAUSE_ON_ERROR`)
+  scopes the default error breakpoint, which was unscoped enough that an
+  incidental tool failure could hold a run before the interesting one.
+
+### Fixed — documentation that misled
+
+- The OpenAI adapter README stated a narrower peer range than it supports.
+- The Python README cited benchmarks from an interpreter the package no longer
+  supports; re-measured on a supported one.
+- Integration pages verified against the five real samples rather than specs.
+
 ## 0.3.1
 
 Two fixes CI found on Linux that macOS hid.

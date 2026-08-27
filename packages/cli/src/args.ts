@@ -4,6 +4,8 @@
  * positional selects a command (default `serve`), so `import` / `mcp` /
  * `record` can be added to the command table without redesign.
  */
+import { parsePauseOnError } from './debug-state.js';
+import { DEFAULT_PORT } from './paths.js';
 
 export interface CliFlags {
   port: number | undefined;
@@ -34,7 +36,44 @@ export interface CliFlags {
   rm: string | undefined;
   /** `graphmind record --html`: export a self-contained viewer page. */
   html: boolean;
+  /**
+   * `graphmind --pause-on-error <on|off|kind>`: scope (or remove) the default
+   * error breakpoint. Undefined means "not given" — the default stays armed.
+   */
+  pauseOnError: string | undefined;
 }
+
+/**
+ * The `Options:` block of `graphmind --help`.
+ *
+ * It lives next to the parser on purpose: a flag the parser accepts but the
+ * help never mentions is a flag nobody finds. `--pause-on-error` is the case
+ * that made this matter — pause-on-error is default-on and unscoped, so the
+ * way to narrow it has to be visible from `graphmind --help`.
+ */
+export const OPTION_HELP: readonly string[] = [
+  `  --port <n>     Port to listen on (default ${DEFAULT_PORT}; always binds 127.0.0.1)`,
+  '  --db <path>    SQLite database file (default ~/.graphmind/graphmind.db,',
+  '                 or GRAPHMIND_DB)',
+  '  --no-open      Do not open the viewer in a browser',
+  '  --pause-on-error <on|off|kind>',
+  '                 Scope the default pause-on-error breakpoint. Default: on',
+  '                 (pause on every node error). "off" starts with no',
+  '                 breakpoints; a node kind (agent, llm, tool, chain,',
+  '                 retriever, custom) pauses only on that kind. The viewer can',
+  '                 change it live. Env: GRAPHMIND_PAUSE_ON_ERROR',
+  '  --live         (demo) run the real demo agent with your API key',
+  '  --install      (init) run the package-manager install',
+  '  --write        (init) write a graphmind.example.ts snippet file',
+  '  --out <file>   (record) output path',
+  '  --html         (record) export a shareable self-contained HTML page',
+  '  --prune        (runs) apply the retention policy now',
+  '  --keep <n>     (runs) keep/show the n newest runs',
+  '  --days <n>     (runs) keep runs from the last n days',
+  '  --rm <runId>   (runs) delete one run   --clear --yes  delete all',
+  '  -v, --version  Print the version and exit',
+  '  -h, --help     Show this help',
+];
 
 export interface ParsedCli {
   command: string;
@@ -68,6 +107,7 @@ export function defaultFlags(): CliFlags {
     days: undefined,
     rm: undefined,
     html: false,
+    pauseOnError: undefined,
   };;
 }
 
@@ -165,6 +205,14 @@ export function parseCliArgs(argv: string[]): ParsedCli {
       case '--rm': {
         const raw = takeValue('--rm', inline, next);
         if (raw !== undefined) flags.rm = raw;
+        break;
+      }
+      case '--pause-on-error': {
+        const raw = takeValue('--pause-on-error', inline, next);
+        if (raw === undefined) break;
+        const parsed = parsePauseOnError(raw);
+        if (!parsed.ok) errors.push(`--${parsed.error}`);
+        else flags.pauseOnError = raw;
         break;
       }
       case '--out': {

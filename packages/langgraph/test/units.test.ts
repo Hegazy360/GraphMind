@@ -3,10 +3,18 @@
  * LangChain shape normalization, payload hygiene, the run tree, the abort
  * marker, and the run scope's fail-open behavior.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSession } from '@graphmind-ai/client';
 import { isDeliberateAbort, markDeliberate } from '../src/abort.js';
 import { nodeIdFor } from '../src/ids.js';
+import { peerVersion } from '../src/peer-version.js';
+import { FakeViewer, waitUntil } from './helpers/fake-viewer.js';
+import { graphmind } from '../src/index.js';
 import {
   compactMessages,
   parseToolInput,
@@ -329,5 +337,71 @@ describe('TokenBatcher', () => {
     batcher.flushNode('llm:x'); // nothing left
     expect(batches).toEqual(['llm:x']);
     batcher.dispose();
+  });
+});
+
+/**
+ * Peer version detection. `@langchain/core` exposes `./package.json` today,
+ * so this adapter never showed the `openai@unknown` symptom its sibling did —
+ * but it reads the version the same way, and an `exports` map is the
+ * package's to change. Both the real reading and the on-disk fallback are
+ * pinned so a future LangChain release cannot silently blank the label.
+ */
+describe('peer version detection', () => {
+  const cleanups: (() => Promise<void> | void)[] = [];
+  afterEach(async () => {
+    while (cleanups.length > 0) await cleanups.pop()?.();
+  });
+
+  function installed(name: string): string {
+    const manifest = new URL(`../node_modules/${name}/package.json`, import.meta.url);
+    return (JSON.parse(readFileSync(manifest, 'utf8')) as { version: string }).version;
+  }
+
+  it('labels the run with the installed @langchain/core and langgraph versions', async () => {
+    const viewer = await FakeViewer.start();
+    const gm = graphmind({ url: viewer.url, enabled: true, retryIntervalMs: 60_000 });
+    cleanups.push(async () => {
+      await gm.dispose();
+      await viewer.close();
+    });
+
+    await gm.run('version-check', async () => undefined);
+    await waitUntil(() => viewer.ofType('run.started').length > 0, 8000, 'run.started');
+
+    const payload = viewer.ofType('run.started')[0]?.payload as {
+      sdk: { name: string; version: string };
+      meta: Record<string, unknown>;
+    };
+    expect(payload.sdk).toEqual({ name: 'langchain', version: installed('@langchain/core') });
+    expect(payload.sdk.version).not.toBe('unknown');
+    expect(payload.meta['langgraph']).toBe(installed('@langchain/langgraph'));
+  });
+
+  it('reads a version through an exports map that hides ./package.json', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gm-peer-'));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    const pkgDir = join(root, 'node_modules', '@scope', 'hidden-manifest');
+    mkdirSync(pkgDir, { recursive: true });
+    writeFileSync(
+      join(pkgDir, 'package.json'),
+      JSON.stringify({
+        name: '@scope/hidden-manifest',
+        version: '9.9.9',
+        type: 'commonjs',
+        exports: { '.': './index.js' },
+      }),
+    );
+    writeFileSync(join(pkgDir, 'index.js'), 'module.exports = {};\n');
+    const from = pathToFileURL(join(root, 'consumer.js')).href;
+
+    expect(() => createRequire(from)('@scope/hidden-manifest/package.json')).toThrow(
+      /ERR_PACKAGE_PATH_NOT_EXPORTED|not defined by "exports"/,
+    );
+    expect(peerVersion('@scope/hidden-manifest', from)).toBe('9.9.9');
+  });
+
+  it('degrades to undefined for a peer that is not installed', () => {
+    expect(peerVersion('definitely-not-installed-sdk', import.meta.url)).toBeUndefined();
   });
 });

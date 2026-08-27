@@ -11,7 +11,6 @@
  * (except the one abort it is asked to raise); a debugger that disconnects
  * mid-hold auto-continues every held gate.
  */
-import { createRequire } from 'node:module';
 import {
   createSession,
   isAbortError,
@@ -25,6 +24,7 @@ import {
 import { AdapterCore, type AbortMode, type ChainPolicy } from './core.js';
 import { GraphMindCallbackHandler, type HandlerOptions } from './handler.js';
 import { agentNodeId } from './ids.js';
+import { peerVersion } from './peer-version.js';
 import {
   gateFunction,
   wrapStructuredTool as wrapStructuredToolImpl,
@@ -150,14 +150,14 @@ export interface Graphmind {
   dispose(): Promise<void>;
 }
 
-function detectVersion(specifier: string): string | undefined {
-  try {
-    const require = createRequire(import.meta.url);
-    const pkg = require(specifier) as { version?: string };
-    return typeof pkg.version === 'string' ? pkg.version : undefined;
-  } catch {
-    return undefined;
-  }
+/**
+ * The installed version of a LangChain peer. Both `@langchain/core` and
+ * `@langchain/langgraph` expose `./package.json` today; `peerVersion` falls
+ * back to the manifest on disk if a future release stops (which is what left
+ * the OpenAI adapter reporting `openai@unknown`).
+ */
+function detectVersion(name: string): string | undefined {
+  return peerVersion(name, import.meta.url);
 }
 
 /**
@@ -177,8 +177,8 @@ export function graphmind(options: GraphmindOptions = {}): Graphmind {
     ...sessionOptions
   } = options;
 
-  const coreVersion = detectVersion('@langchain/core/package.json');
-  const langgraphVersion = detectVersion('@langchain/langgraph/package.json');
+  const coreVersion = detectVersion('@langchain/core');
+  const langgraphVersion = detectVersion('@langchain/langgraph');
 
   const session = createSession({
     ...sessionOptions,

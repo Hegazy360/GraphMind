@@ -20,7 +20,7 @@ npm i -D @graphmind-ai/anthropic graphmind-ai
 ```
 
 `@anthropic-ai/sdk` is a peer dependency (`>=0.60.0 <1`; the suite runs against
-both 0.60.0 and 0.121.0). Run the debugger with `npx graphmind serve` and open
+both 0.60.0 and 0.121.0). Run the debugger with `npx graphmind-ai` and open
 the viewer.
 
 ## Usage

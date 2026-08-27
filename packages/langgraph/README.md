@@ -72,9 +72,19 @@ the tests hold a tool for a full second and assert its body had not started.
 **Why inject/retry do not work through callbacks.** A handler is told what
 happened; it has no return channel into the thing it observed. It cannot hand
 back a different tool result or ask for the call to be made again. If the
-debugger sends `inject` or `retry` at a callback-only gate, the adapter warns
-once (naming the wrapper you need) and continues — it never silently pretends
-to have substituted something.
+debugger sends `inject` or `retry` at a callback-only gate — `before`, `after`
+or `error` — the adapter warns once per gate point (naming the wrapper you
+need) and continues; at an `error` gate "continues" means the error keeps
+propagating. It never silently pretends to have substituted something.
+
+**One pause per failure.** A LangGraph failure surfaces at every level it
+climbs (`tool:gradeChunks` → `chain:grade` → the root run). The gate fires at
+the innermost level only — for a wrapped tool, at the wrapper, which is the
+one position that can actually inject or retry — and the same error passes
+every gate above it. Releasing a gate releases the failure; you are not
+stopped again on the way out. A `retry` re-arms it, so the next attempt's
+failure gets its own pause even if the tool throws the very same `Error`
+object.
 
 **How abort works.** Two mechanisms, both on by default:
 
