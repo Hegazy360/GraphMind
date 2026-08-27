@@ -95,7 +95,9 @@ code location; executions light it up.
 
 - **Every run is kept** - history persists in SQLite; reopen any past run and
   inspect each node's inputs, outputs, errors, timings, and token usage.
-  Export any run to a replayable NDJSON fixture with `graphmind record`.
+  Export any run with `graphmind record`: `--html` writes a single
+  self-contained page (viewer included, no server) you can attach to an issue
+  or send to a colleague, and the default NDJSON is a replayable fixture.
 - **MCP for coding agents** - `graphmind mcp` serves your runs to Claude
   Code or Cursor over stdio (read-only: list runs, inspect nodes, find
   recent errors, deep-link into the viewer).
