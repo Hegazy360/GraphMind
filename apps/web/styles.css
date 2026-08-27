@@ -800,3 +800,7 @@ p code, li code {
   .fw-grid code { color: #15803d; }
   .teams-cta a { color: #15803d; }
 }
+
+.trynow-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.trynow-link:hover { color: var(--text); }
+@media (prefers-color-scheme: light) { .trynow-link { color: #15803d; } }

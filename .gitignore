@@ -30,3 +30,5 @@ python/**/__pycache__/
 python/.pytest_cache/
 python/.ruff_cache/
 python/.mypy_cache/
+
+apps/viewer/dist-try/

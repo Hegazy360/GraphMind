@@ -43,6 +43,22 @@
     {
       "source": "/docs/:path*",
       "destination": "https://graphmind-docs.vercel.app/docs/:path*"
+    },
+    {
+      "source": "/try",
+      "destination": "https://graphmind-try.vercel.app/try/"
+    },
+    {
+      "source": "/try/",
+      "destination": "https://graphmind-try.vercel.app/try/"
+    },
+    {
+      "source": "/try/:path+/",
+      "destination": "https://graphmind-try.vercel.app/try/:path+/"
+    },
+    {
+      "source": "/try/:path*",
+      "destination": "https://graphmind-try.vercel.app/try/:path*"
     }
   ]
 }
