@@ -62,11 +62,10 @@ jobs:
         run: pnpm typecheck
 
       - name: Test packages
-        # --retry only applies here: several suites assert real elapsed time
-        # (gate holds, sub-millisecond detached overhead, disconnect
-        # auto-continue) and hosted runners are noisy neighbours. A genuine
-        # failure still fails all three attempts; local runs stay strict.
-        run: pnpm test -- --retry=2
+        # Retries for timing-sensitive suites are configured per package in
+        # vitest.config.ts, keyed off CI — a flag here would reach pnpm, not
+        # vitest.
+        run: pnpm test
 
       - name: Test viewer
         run: pnpm --filter viewer run test
