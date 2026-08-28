@@ -36,6 +36,35 @@ export interface FlowNodeSpec {
   height: number;
 }
 
+/**
+ * May a previously-rendered canvas node be reused verbatim instead of being
+ * rebuilt? Reuse keeps React Flow from re-rendering a card that has not moved.
+ *
+ * The subtle part is `data`: it is the card's POINTER INTO THE STORE
+ * (`{runId, nodeId}`), and the card reads its own status, badges and error
+ * through it. Two runs of the same agent have identical node ids and an
+ * identical shape, so every position matches and a purely geometric check
+ * would reuse the OLD run's node — leaving the canvas showing the previous
+ * run's results underneath the new run's header. In a debugger that is not a
+ * cosmetic bug: it shows you someone else's answers.
+ */
+export function canReuseFlowNode(
+  old: { position: { x: number; y: number }; width?: number | undefined; height?: number | undefined; type?: string | undefined; className?: string | undefined; data: FlowNodeData },
+  next: { position: { x: number; y: number }; width: number; height: number; type: string; data: FlowNodeData },
+  className: string | undefined,
+): boolean {
+  return (
+    old.data.runId === next.data.runId &&
+    old.data.nodeId === next.data.nodeId &&
+    old.position.x === next.position.x &&
+    old.position.y === next.position.y &&
+    old.width === next.width &&
+    old.height === next.height &&
+    old.type === next.type &&
+    old.className === className
+  );
+}
+
 export interface FlowEdgeSpec {
   id: string;
   source: string;

@@ -14,6 +14,13 @@ import { DEFAULT_PORT } from '../paths.js';
 import { recordTelemetry } from '../telemetry.js';
 import { VERSION } from '../version.js';
 
+/**
+ * How long to wait for the debugger before reporting whether it picked up.
+ * Long enough for a local server that is already listening, short enough that
+ * the answer arrives while the developer is still looking at the terminal.
+ */
+const ATTACH_NOTICE_MS = 1_500;
+
 export interface McpProxyIo {
   stdin: Readable;
   stdout: Writable;
@@ -54,10 +61,7 @@ export async function runMcpProxy(parsed: ParsedCli, io: McpProxyIo = defaultIo(
     parsed.flags.port === undefined ? undefined : `ws://127.0.0.1:${parsed.flags.port}/ingest`;
   const effectiveUrl = resolveUrl(url, process.env as Record<string, string | undefined>);
   err(`graphmind mcp-proxy v${VERSION}: proxying ${argv.join(' ')}`);
-  err(
-    `graphmind mcp-proxy: reporting to ${effectiveUrl} ` +
-      '(run `graphmind` to watch; nothing breaks if it is not up)',
-  );
+  err(`graphmind mcp-proxy: reporting to ${effectiveUrl}`);
 
   const handle = startMcpProxy({
     command,
@@ -76,6 +80,34 @@ export async function runMcpProxy(parsed: ParsedCli, io: McpProxyIo = defaultIo(
       ? {}
       : { maxFrameBytes: parsed.flags.maxFrameBytes }),
   });
+
+  // Say whether the debugger actually picked up, once, as soon as we know.
+  //
+  // The proxy is deliberately invisible when GraphMind is not running — that
+  // is what makes it safe to leave in an `mcpServers` config forever — but
+  // "invisible" and "you forgot to start it" look identical from the outside,
+  // and someone who wanted a graph gets a normal-looking session and no
+  // graph. The old line said "run `graphmind` to watch; nothing breaks if it
+  // is not up", which is true and is not an answer to "will I get a graph".
+  //
+  // Reported here rather than at exit because an MCP host does not close the
+  // pipe on shutdown, it KILLS the child — so an exit-time message is the one
+  // message that never prints where it is needed.
+  void handle.session
+    .ready({ timeoutMs: ATTACH_NOTICE_MS })
+    .then((attached) => {
+      if (attached) {
+        err(`graphmind mcp-proxy: attached — watch it at http://127.0.0.1:${port}`);
+        return;
+      }
+      // Deliberately "not yet": the client keeps retrying and replays its
+      // buffer, so starting the debugger now still captures this session.
+      err(
+        `graphmind mcp-proxy: GraphMind is not running at ${effectiveUrl}, so nothing is ` +
+          'being recorded yet. Start it and this session will attach: npx graphmind-ai',
+      );
+    })
+    .catch(() => undefined);
 
   return await handle.done;
 }

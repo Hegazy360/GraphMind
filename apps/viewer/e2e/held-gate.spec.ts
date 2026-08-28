@@ -137,3 +137,83 @@ test('`c` continues, and the shortcuts are inert once nothing is held', async ({
   await expect(runStatusPill(page)).toHaveText('done');
   expect(await page.locator('.react-flow__node').count()).toBe(before);
 });
+
+/**
+ * The resume buttons must stay inside the card that owns them.
+ *
+ * They did not. `.gm-action` used `flex: 1`, which looks like it shrinks its
+ * items — but a flex item's default `min-width: auto` floors it at min-content,
+ * and `white-space: nowrap` makes min-content the whole label. So five buttons
+ * needing ~341px sat in a 240px card and simply overflowed it: `Abort`
+ * rendered ~100px outside its own border, over whatever was behind it.
+ *
+ * Asserted geometrically rather than by screenshot, because the failure is a
+ * measurement ("is it outside the box") and a pixel diff would go red for
+ * every unrelated restyle.
+ */
+test('every resume button stays inside the card, on both variants', async ({ page }) => {
+  await openFixtureRun(page);
+  await waitForPlantedPause(page);
+
+  const card = nodeCard(page, FIXTURE_NODES.currency);
+  await expect(card.locator('.gm-action--danger')).toBeVisible();
+
+  /*
+   * Every rectangle is read in ONE evaluate, and only once the canvas has
+   * stopped moving.
+   *
+   * Opening a gate re-frames the camera, so the card is under a running
+   * transform for a few hundred milliseconds. Taking the card's box and each
+   * button's box as separate round trips samples them at different moments of
+   * that animation, and the test then reports a 20px "overflow" that is
+   * really just the canvas having moved between two measurements. The bug
+   * being guarded here is ~100px and geometric, so measuring atomically costs
+   * nothing and removes the only way this test can lie.
+   */
+  const cameraTransform = async (): Promise<string> =>
+    page.evaluate(() => {
+      const el = document.querySelector('.react-flow__viewport');
+      return el === null ? '' : getComputedStyle(el).transform;
+    });
+  let previous = await cameraTransform();
+  await expect
+    .poll(
+      async () => {
+        const now = await cameraTransform();
+        const settled = now === previous;
+        previous = now;
+        return settled;
+      },
+      { message: 'the camera should settle before measuring', timeout: 15_000, intervals: [200] },
+    )
+    .toBe(true);
+
+  const measured = await card.evaluate((cardEl) => {
+    const box = cardEl.getBoundingClientRect();
+    const buttons = [...cardEl.querySelectorAll('.gm-actions .gm-action')].map((b) => {
+      const r = b.getBoundingClientRect();
+      return {
+        name: (b.textContent ?? '').trim(),
+        left: r.left,
+        right: r.right,
+        width: r.width,
+        danger: b.classList.contains('gm-action--danger'),
+        primary: b.classList.contains('gm-action--primary'),
+      };
+    });
+    return { left: box.left, right: box.right, buttons };
+  });
+
+  expect(measured.buttons.length, 'continue/step/retry/inject/abort').toBe(5);
+  for (const b of measured.buttons) {
+    // A sub-pixel bleed is layout rounding; 100px is the bug.
+    expect(b.left, `${b.name} starts left of the card`).toBeGreaterThanOrEqual(measured.left - 1);
+    expect(b.right, `${b.name} overflows the card`).toBeLessThanOrEqual(measured.right + 1);
+  }
+
+  // Abort must never become the widest thing on its line: a destructive verb
+  // should not be the easiest target to hit.
+  const abort = measured.buttons.find((b) => b.danger);
+  const primary = measured.buttons.find((b) => b.primary);
+  expect(abort?.width ?? 0).toBeLessThan(primary?.width ?? 0);
+});

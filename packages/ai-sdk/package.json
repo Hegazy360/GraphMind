@@ -1,6 +1,6 @@
 {
   "name": "@graphmind-ai/sdk",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Vercel AI SDK adapter for the GraphMind live agent debugger: wrap models and tools to stream execution events and honour pause / step / inject / retry / abort gates.",
   "license": "MIT",
   "type": "module",

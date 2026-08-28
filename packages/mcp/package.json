@@ -1,6 +1,6 @@
 {
   "name": "@graphmind-ai/mcp",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "In-process MCP server adapter for the GraphMind live agent debugger: wrap your McpServer to stream tool / resource / prompt / sampling events and honour pause / step / inject / retry / abort gates.",
   "license": "MIT",
   "author": "Mohamed Hegazy",

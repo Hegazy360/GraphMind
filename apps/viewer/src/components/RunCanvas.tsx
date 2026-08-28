@@ -73,6 +73,7 @@ import { autoCollapseRoots } from '../store/collapse.js';
 import { isFilterActive, matchingNodeIds } from '../store/filters.js';
 import {
   edgeVisual,
+  canReuseFlowNode,
   runStateToFlow,
   type FlowEdgeSpec,
   type FlowNodeData,
@@ -416,17 +417,19 @@ export function RunCanvas({ runId }: { runId: string }) {
       return positioned.map((p) => {
         const old = byId.get(p.id);
         const className = matching !== undefined && !matching.has(p.id) ? 'gm-dim' : undefined;
-        if (
-          old !== undefined &&
-          old.position.x === p.position.x &&
-          old.position.y === p.position.y &&
-          old.width === p.width &&
-          old.height === p.height &&
-          old.type === p.type &&
-          old.className === className
-        ) {
-          return old;
-        }
+        // `data` is the card's POINTER INTO THE STORE ({runId, nodeId}) — the
+        // card reads its own state through it. Reusing the previous node to
+        // avoid a re-render is only sound while that pointer is unchanged.
+        //
+        // Two runs of the same agent have the same node ids and the same
+        // shape, so the layout is identical and every position matches: the
+        // fast path below would hand back the OLD run's node wholesale and
+        // the canvas would render the previous run's results under the new
+        // run's header. Cheap to compare, and not comparing it made the
+        // debugger show you someone else's answers.
+        const sameRun =
+          old !== undefined && old.data.runId === p.data.runId && old.data.nodeId === p.data.nodeId;
+        if (old !== undefined && canReuseFlowNode(old, p, className)) return old;
         const style =
           old?.style ??
           (() => {
@@ -441,7 +444,7 @@ export function RunCanvas({ runId }: { runId: string }) {
           id: p.id,
           type: p.type,
           position: p.position,
-          data: old?.data ?? p.data,
+          data: sameRun && old !== undefined ? old.data : p.data,
           width: p.width,
           height: p.height,
           style,

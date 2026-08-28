@@ -6,6 +6,58 @@ this repo (`graphmind-ai`, `@graphmind-ai/sdk`, `@graphmind-ai/client`,
 `@graphmind-ai/langgraph`, `@graphmind-ai/mcp`, the Python `graphmind-ai`
 distribution, and the Ruby `graphmind` gem).
 
+## 0.4.4
+
+Three things found by the founder using it, which is the only way some of
+these get found.
+
+### Fixed — the canvas could show you another run's results
+
+Switching runs left every card pointing at the **previous** run. A card's
+`data` is its pointer into the store (`{runId, nodeId}`) and the canvas reused
+a rendered node whenever its geometry was unchanged — but two runs of the same
+agent have the same node ids and the same shape, so the geometry always
+matched. The header read the route directly and was correct, so the run said
+`PAUSED · 1 error` while the canvas underneath showed `compute_metric DONE
+injected 5ms` from a different, successful run. In a debugger that is not a
+cosmetic bug. Reuse now also requires the pointer to be unchanged
+(`canReuseFlowNode`, unit-tested).
+
+### Fixed — the resume buttons overflowed their own card
+
+`Continue / Step / Retry / Inject… / Abort` need ~341px of label; the card is
+240px. `flex: 1` looks like it shrinks them, but a flex item's default
+`min-width: auto` floors it at min-content and `white-space: nowrap` makes
+min-content the whole label — so instead of shrinking, the row overflowed by
+~100px and `Abort` rendered outside its own border. The row wraps now, and
+`Abort` still never stretches to fill its line.
+
+### Changed — the proxy says whether the debugger picked up
+
+`graphmind mcp-proxy` printed "reporting to ws://…" whether or not anything
+was listening, so running it with no debugger looked exactly like running it
+with one — and produced no graph. It now reports which happened, ~1.5s in,
+while the session is still alive:
+
+```text
+graphmind mcp-proxy: attached — watch it at http://127.0.0.1:4747
+graphmind mcp-proxy: GraphMind is not running at ws://…, so nothing is being
+  recorded yet. Start it and this session will attach: npx graphmind-ai
+```
+
+Reported during the session rather than at exit, because an MCP host does not
+close the pipe on shutdown — it kills the child, so an exit-time message is
+the one message that never prints when it is needed.
+
+### Known, not fixed — edges cross the cards above them
+
+With five or more childless siblings the layout packs them into a grid, and
+the parent's edges to rows two and three are drawn straight through the cards
+in row one. Measured on a real MCP session: 6 of 11 edges pass through another
+card, which is why they read as floating or detached. The fix is edge routing
+through the column gutters, which is a layout change worth doing deliberately
+rather than in a patch release.
+
 ## 0.4.3
 
 - **`graphmind init` told an MCP-server developer "No supported agent
