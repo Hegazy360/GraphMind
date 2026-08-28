@@ -11,6 +11,7 @@
     "test": "pnpm -r --filter './packages/**' --filter './apps/viewer' run test",
     "test:security": "pnpm --filter security-audit run test",
     "test:floor": "node scripts/check-node-floor.mjs pnpm run test:security",
+    "verify:published": "node scripts/verify-published.mjs",
     "test:e2e": "pnpm --filter viewer run test:e2e",
     "test:all": "pnpm test && pnpm --filter web test",
     "soak": "pnpm --filter soak run start",

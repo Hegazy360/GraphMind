@@ -99,4 +99,10 @@ for (const entry of readdirSync(join(root, 'packages'), { withFileTypes: true })
 }
 
 console.log(`\n${changed} package(s) set to ${version}.`);
-console.log('Next: pnpm install && pnpm -r build && pnpm test && pnpm -r publish --access public');
+console.log(
+  'Next:\n' +
+    '  pnpm install && pnpm -r build && pnpm build:viewer\n' +
+    '  pnpm test && pnpm test:security && pnpm test:floor\n' +
+    '  pnpm -r publish --access public\n' +
+    '  node scripts/verify-published.mjs      <- the release is not done until this passes',
+);
