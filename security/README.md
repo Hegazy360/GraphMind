@@ -193,169 +193,108 @@ every batch:
 **Non-vacuity, again.** Every attack file opens with a plain `it(...)` proving
 the attack machinery actually worked — the control run really is streaming, the
 victim really did reach a gate, both peers really did send their events —
-before any `it.fails(...)` claims something is broken. Without it a
-`describe` block whose setup silently stopped working would keep reporting the
-defect it no longer reproduces.
+before anything asserts that the attack failed. This matters more now that the
+defects are fixed than it did when they were open: without those guards, an
+attack setup that silently stopped working would make every property below it
+pass for the wrong reason, and the suite would report safety it never tested.
 
 ---
 
 ## Findings
 
-### Open defects (fixes live outside this package)
+### Closed in 0.4.0 — the protocol-boundary pass
 
-Ordered by damage. Every one is pinned by a test here; the ones whose fix has
-to land in `packages/**` are written as `it.fails(...)`, so they run green
-today and turn red the moment someone fixes them.
+Nine defects were found by fuzzing `/ingest` and by running a real attack
+against a real session holding a real gate. **All nine are fixed**, and every
+test that reported one now asserts the property instead of the defect — so
+each is a regression test, not a note. They are kept here in full because the
+reasoning is the durable part: what the boundary is for, and why each answer
+is the one it is.
 
-**1. Any `/ingest` connection can claim any run — critical.**
-`Hub.handleIngestFrame` assigns run ownership to the last writer:
+All of them are local-only. The server binds 127.0.0.1, so the attacker is
+another process on the same machine — a postinstall script, a compromised
+dependency, a second project's dev server.
 
-```ts
-const previousOwner = this.runOwners.get(envelope.runId);
-if (previousOwner !== conn) { /* ... */ this.runOwners.set(envelope.runId, conn); }
-```
+**1. Any `/ingest` connection could claim any run — critical.**
+`Hub.handleIngestFrame` assigned run ownership to the last writer, with no
+check that the writer had anything to do with the run. One frame naming
+someone else's run bought: fabricated nodes rendered inside it; the operator's
+next `exec.resume` delivered to the attacker, *including the value they
+injected*; the victim's gate never released (fail-open does not cover this —
+the client believes the debugger is attached and simply has not answered); and
+a forged `run.finished` marking a live run failed.
+*Fixed:* a run is claimed by the token that first wrote to it. `hello.ack`
+mints a `sessionToken`, the client echoes it as `hello.resumeToken`, and
+writes from any other token are refused. The compatibility seam — a client
+older than the `run-claim` capability cannot prove continuity across a
+reconnect, so its claim is enforced only while it is connected — is documented
+in `internal/decisions.md` and is the one place identity is assumed rather
+than proven. `tests/run-isolation.test.ts` runs the whole attack and asserts
+it lands nothing.
 
-Nothing checks that `conn` has anything to do with `envelope.runId`. The
-comment above it explains why — a reconnecting client must be able to re-claim
-its own run, which is a real requirement — but the consequence is that *any*
-connected peer can claim *any* run by naming it once. Demonstrated end to end
-against a real `@graphmind-ai/client` session holding a real gate, in
-`tests/run-isolation.test.ts`. One frame buys all four of these:
+**2. `seq` squatting silently deleted a real app's events — high.**
+`(runId, seq)` INSERT OR IGNORE means whoever writes a seq first owns it, so a
+peer pre-claiming a run's low sequence numbers deleted the start of that run
+with no error anywhere. *Fixed by the same claim check* — a run already
+claimed cannot be written by anyone else. Residual and inherent: whoever names
+a *never-seen* run id first owns it. Run ids are random, so that needs a
+guess.
 
-- **fabrication.** An attacker-chosen tool node appears inside the victim's run
-  and renders on the canvas, indistinguishable from something the app did.
-- **control theft.** The operator's next `exec.resume` is delivered to the
-  attacker instead of the app — *including the value they injected*. A peer
-  that never ran anything reads what the developer typed into the debugger for
-  someone else's agent.
-- **a wedged agent.** The victim's gate is never released. Fail-open does not
-  cover this: from the client's point of view the debugger is still attached
-  and simply has not answered yet, so it waits forever.
-- **forged lifecycle.** A `run.finished` from the attacker sets the run's
-  terminal status while the real app is still executing it. `GET /api/runs`,
-  the run list and the viewer all report a failure that never happened.
+**3. The 512 KB guard destroyed fields a payload's own schema requires — high,
+and no attacker needed.**
+`truncateFields` replaced an oversized field with a marker *object*. When the
+biggest field was one the schema requires to be a string, the stored envelope
+stopped validating and the viewer dropped it on replay. The realistic case is
+`node.error` with a large provider error body: a debugger silently losing
+precisely the error event.
+*Fixed:* truncation is type-preserving (`shrinkValue`) — a string stays a
+shorter string, an array stays an array, an object keeps its own fields with
+the marker merged in. `tests/ingest-fuzz.test.ts` pins five envelope shapes
+where a required field is the biggest field.
 
-*Fix:* record which connection created a run and only let that identity write
-to it. A per-run token minted in `hello.ack` and echoed on every envelope is
-the smallest change that still survives reconnects. At an absolute minimum,
-refuse `exec.resume` routing and `run.finished` from a connection that is not
-the run's original owner.
+**4. The wire had no protocol-appropriate frame cap — medium (availability).**
+Neither `WebSocketServer` passed `maxPayload`, so the wire accepted `ws`'s
+default of 100 MiB against a 512 KB storage budget, and the guard only ran
+after the frame was buffered, decoded and parsed. One 64 MB frame took the
+server from 95 MB RSS to ~500 MB, permanently.
+*Fixed:* `MAX_FRAME_BYTES` (16 MiB) on both sockets — 32x the storage budget,
+so every payload worth a preview still degrades gracefully, and anything
+larger is refused during frame assembly.
 
-**2. `seq` squatting silently deletes a real app's events — high.**
-Same root cause, different lever. Dedup is `(runId, seq)` with `INSERT OR
-IGNORE` (decisions.md #5), which is what makes replay-on-attach safe — and also
-means whoever writes a `seq` first owns it. A peer that pre-claims the low
-sequence numbers of a run id erases the beginning of that run: the real app's
-frames are dropped, nothing errors, and the stored run looks complete. Pinned
-in `tests/run-isolation.test.ts`.
+**5. Every dropped frame cost the operator one log line — medium.**
+Measured at exactly 1.00 lines per garbage frame, unthrottled, written
+synchronously to the operator's TTY.
+*Fixed:* `Hub.throttledLog` rate-limits per message kind and reports what it
+suppressed. The soak now measures 0.00 lines/frame over 5,000 garbage frames.
 
-**3. The 512 KB guard destroys fields a payload's own schema requires — high,
-and no attacker is needed.**
-`serializePayload` (packages/cli/src/storage.ts) trims an oversized payload by
-replacing its **largest** fields with a marker object, largest first. Its own
-comment says why it trims fields rather than the whole payload:
+**6. The liveness reaper killed the peer it was busiest with, silently — medium.**
+A pong arrives *behind* that peer's own frames in the same TCP stream, so a
+peer with a backlog was terminated **because** the server was busy with it:
+26,570 of 60,000 events lost, with no error, no gap marker, and one
+`app detached` line.
+*Fixed:* liveness is "we read bytes from this socket recently". The soak now
+drains all 60,000 with the socket intact.
 
-> a payload replaced wholesale by a marker no longer satisfies its own schema —
-> the viewer's parser rejects the replayed envelope and the node is stuck
-> "running" forever on reload.
+**7. `subscribe` replayed a whole run, unbounded, on every frame — medium.**
+Including repeats of a run the viewer was already tailing. *Fixed:* a repeat
+is acknowledged with an empty replay pair.
 
-That reasoning holds only while the biggest field is an optional one. When it
-is a field the schema requires to be a string, the stored envelope stops
-validating and the viewer drops it on replay. Five shapes are pinned in
-`tests/ingest-fuzz.test.ts`. The one that matters is `node.error`, whose
-payload is `{ nodeId, error }`: a >512 KB error message makes `error` the
-biggest field, `ErrorInfoSchema` rejects the stored envelope, and **a debugger
-loses precisely the error event**. `run.finished` with a large error, and
-`node.started` / `node.finished` with an oversized `nodeId`, `name` or
-`instanceId`, fail the same way. A provider returning a large error body
-reaches this without anyone attacking anything.
+**8. `parseEnvelope` required the `payload` key to be present — low.**
+`JSON.stringify` drops a key whose value is `undefined`, so an accepted
+unknown-type envelope with no payload did not survive being written down and
+read back — a hole in the stated forward-compatibility contract. *Fixed:*
+`payload` is optional.
 
-*Fix:* in `truncateFields`, truncate a long **string** to a shorter string
-(with a marker suffix) rather than replacing it with an object — or skip fields
-whose replacement would not type-check.
+**9. `ts` was unbounded, and it is what the run list sorts by — low.**
+One frame with `ts: 1e300` pinned that run to the top of the operator's list
+until it was pruned. *Fixed:* `ts` must be a non-negative safe integer, which
+is what epoch milliseconds are.
 
-**4. The wire has no protocol-appropriate frame cap — medium (availability).**
-`MAX_PAYLOAD_BYTES` is 512 KB, but that guard runs *after* the frame has been
-buffered, decoded to a string and JSON-parsed. The only limit on the socket is
-`ws`'s default `maxPayload`, 100 MiB — 200x the storage budget. Measured out of
-process by `pnpm --filter soak start -- --scenario=adversarial`:
+**10. A lone surrogate in a `runId` was silently rewritten — low.**
+SQLite's text binding substitutes U+FFFD, so the app streamed under one id and
+the server stored another; subscribing with the original tailed an empty run.
+*Fixed:* refused at the parse boundary. Nothing legitimate generates one.
 
-| frame | peak server RSS |
-| --- | --- |
-| idle | 96.3 MB |
-| 1 MB | 105 MB |
-| 8 MB | 157 MB |
-| 32 MB | 261 MB |
-| 64 MB | 563 MB |
-| after a forced GC | **486 MB — 390 MB above idle, permanently** |
-
-Repeating the 64 MB frame does not climb further (a plateau, not a leak), but
-it never comes back down either. Connections are cheap by comparison: 500
-simultaneous ingest sockets cost 1.63 KB each.
-
-*Fix:* pass `maxPayload` to both `WebSocketServer`s in
-`packages/cli/src/server.ts` — a few MB is already generous against a 512 KB
-budget — so an oversized frame is refused at the socket (close 1009) instead of
-being materialised first.
-
-**5. Every dropped frame costs the operator one log line — medium.**
-`Hub.handleIngestFrame` logs on every invalid frame; `graphmind serve` hands it
-`console.log`, which is a synchronous write to the operator's TTY. Measured at
-exactly **1.00 log lines per garbage frame**, unthrottled and unaggregated
-(`tests/ingest-abuse.test.ts` and the soak scenario). A peer sending garbage at
-line rate spends the operator's event loop and buries the log they were
-reading. Repeated `hello` frames behave the same way, and additionally get a
-`hello.ack` allocated and sent for each one.
-
-*Fix:* rate-limit and aggregate — `session.guard()` in the client already has
-the shape.
-
-**6. The liveness reaper kills the peer it is busiest with, silently — medium.**
-`Hub.pingAll` sets `alive = false`, pings, and terminates any socket that has
-not ponged by the next tick. The pong arrives on the same TCP stream as that
-peer's own frames, *behind* them, so the server only sees it after draining
-that peer's whole backlog. A peer with more than ~two ping intervals of queued
-work is therefore reaped **because** the server is busy with it, and everything
-still in flight is dropped: no error to the app, no gap in the viewer, one
-`app detached` line in the log. Measured at a 200 ms ping interval: **26,610 of
-60,000 events lost**. At the shipped 30 s interval this needs roughly a million
-queued events, so it is not an everyday failure — but it is reachable on
-purpose, it is the same silent-loss class as the ring-buffer overflow in the
-soak report, and it becomes trivial for anyone who lowers `pingIntervalMs`.
-
-*Fix:* judge liveness on "have we read anything from this socket recently"
-rather than on a pong specifically.
-
-**7. `subscribe` replays a whole run, unbounded, on every frame — medium.**
-`Hub.handleSubscribe` calls `storage.listEvents(runId)` with no limit and
-pushes every event in one tick, and does it again for every `subscribe` frame,
-including repeats of one already active. The REST route for the same data caps
-a page at 5,000 (`PAGE_LIMIT_MAX`) and paginates; the socket route has no cap
-at all. Twenty `subscribe` frames against a 2,000-event run produce twenty full
-replays (`tests/ui-protocol-fuzz.test.ts`). The origin guard keeps browsers
-out; any local process can still do it.
-
-**8. `parseEnvelope` requires the `payload` key to be present — low.**
-Found by the round-trip property in `tests/protocol-fuzz.test.ts`. An
-`unknown-type` envelope whose payload is absent is accepted, but
-`JSON.stringify` drops the key, so parse → serialize → parse is not idempotent.
-Harmless in the shipped pipeline (such a frame is `invalid` on arrival and
-never reaches storage), but it is a hole in the stated forward-compatibility
-contract: a future v1.x message type carrying no payload would be rejected
-rather than tolerated. One character in `packages/schema/src/parse.ts`
-(`payload: z.unknown().optional()`).
-
-**9. `ts` is unbounded, and it is what the run list sorts by — low.**
-`z.number()` accepts any finite double and `ensureRun` uses `envelope.ts` as
-the run's `startedAt`, so one frame with `ts: 1e300` pins that run to the top
-of the operator's run list until it is pruned. Non-finite values are correctly
-rejected. Pinned in `tests/ingest-fuzz.test.ts`.
-
-**10. A lone surrogate in a `runId` is silently replaced — low.**
-SQLite's text binding substitutes U+FFFD, so the app streams under one run id
-and the server stores another; a viewer subscribing with the original id tails
-an empty run. Nothing in GraphMind chooses this, but nothing rejects it either.
-Pinned in `tests/ingest-fuzz.test.ts`.
 
 ### Fixed since this file was first written
 
