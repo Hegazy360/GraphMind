@@ -243,23 +243,30 @@ lines, and the run's `AbortSignal` becomes the one your handler already receives
 You can run both at once — the adapter for what happens inside, the proxy for the exact bytes —
 and they will show up as two runs of the same session.
 
-## Try it on a server that is already broken
+## Try it on a server you have not written
 
-The `mcp-server` sample is built for exactly this: a project tracker with four tools, two
-resources and a prompt, and a status filter that quietly returns the wrong rows. It ships with
-a scripted MCP host, so you can reproduce the bug on demand without a real assistant, and it
-needs no API key.
+You do not need your own server to see what this looks like. The MCP project publishes a
+reference server that exercises the whole protocol — tools, resources, prompts, sampling —
+so point the proxy at that:
 
 ```sh
-cd mcp-server && npm install
+npx graphmind-ai   # terminal 1: the debugger
 
-npx graphmind-ai                                                            # terminal 1
-npm start -- --server "npx graphmind-ai mcp-proxy -- npx tsx src/server.ts" # terminal 2
+# terminal 2: your MCP host, with the proxy wrapping the reference server
+claude mcp add everything-debug -- npx -y graphmind-ai mcp-proxy -- \
+  npx -y @modelcontextprotocol/server-everything
 ```
 
-`sprint_summary` says two tasks are blocked. `list_tasks` with `status: "blocked"` returns
-three, and every one of them says `"status": "backlog"`. Both nodes are on the canvas at the
-same time, which is the whole point.
+Then ask your assistant to use one of its tools. The session appears in the viewer as it
+happens: the handshake, the catalogue the server advertises, and every call your assistant
+actually makes — a server whose source you have never opened, debugged with no code changes.
+That is the whole claim, and it is the fastest way to check it.
+
+<Aside type="tip" title="No host handy?">
+`graphmind mcp-proxy --trace -- npx -y @modelcontextprotocol/server-everything` prints one
+line per relayed frame on stderr and needs nothing else running — useful for confirming the
+proxy is wired up before you involve a client.
+</Aside>
 
 ## Limits worth knowing
 
