@@ -2,7 +2,7 @@
   "name": "viewer",
   "version": "0.1.0",
   "private": true,
-  "description": "GraphMind debugger UI — live React Flow canvas for agent runs.",
+  "description": "GraphMind debugger UI \u2014 live React Flow canvas for agent runs.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:try": "vite build --base=/try/ --outDir=dist-try/try --emptyOutDir",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
