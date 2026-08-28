@@ -169,7 +169,7 @@ Other frameworks work the same way - wrap what you already have:
 | [OpenAI SDK](https://graphmind.ai/docs/integrations/openai/) | `@graphmind-ai/openai` | `gm.wrapClient(new OpenAI())` + `gm.wrapTools({...})` |
 | [LangGraph / LangChain](https://graphmind.ai/docs/integrations/langgraph/) | `@graphmind-ai/langgraph` | `callbacks: [gm.handler()]` + `gm.wrapTools({...})` |
 | [Python](https://graphmind.ai/docs/integrations/python/) | `pip install graphmind-ai` | `graphmind.instrument_openai(client)` + `@gm.tool` |
-| [Ruby](https://graphmind.ai/docs/integrations/ruby/) | `gem install graphmind` | `Graphmind.instrument_openai(client)` + `Graphmind.tool` |
+| [Ruby](https://graphmind.ai/docs/integrations/ruby/) | [`ruby/`](./ruby) — not on RubyGems yet | `Graphmind.instrument_openai(client)` + `Graphmind.tool` |
 | [MCP server (yours)](https://graphmind.ai/docs/integrations/mcp/) | `@graphmind-ai/mcp` | `gm.wrapServer(new McpServer(...))` |
 | [MCP server (any language)](https://graphmind.ai/docs/integrations/mcp-proxy/) | nothing to install | `graphmind mcp-proxy -- <your server>` |
 
@@ -266,7 +266,7 @@ exact JSON record: [packages/cli/TELEMETRY.md](./packages/cli/TELEMETRY.md).
 | [`packages/langgraph`](./packages/langgraph) | LangChain / LangGraph adapter (callback handler + tool wrapping) |
 | [`packages/mcp`](./packages/mcp) | In-process MCP server adapter (`wrapServer`) |
 | [`python`](./python) | The Python SDK (`pip install graphmind-ai`), sync and async |
-| [`ruby`](./ruby) | The Ruby SDK (`gem install graphmind`), ruby-openai + ruby_llm |
+| [`ruby`](./ruby) | The Ruby SDK (ruby-openai + ruby_llm); builds and installs, not yet published to RubyGems |
 | [`packages/cli`](./packages/cli) | `graphmind-ai` (bin `graphmind`): local server, SQLite storage, demo, trace importer, MCP server, MCP debugging proxy, viewer host |
 | [`apps/viewer`](./apps/viewer) | The graph debugger UI (ships built inside the CLI package) |
 | [`apps/web`](./apps/web) | graphmind.ai |

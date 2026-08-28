@@ -261,7 +261,8 @@
           you already wrote. Wrap your model and tools, run your agent, and the debugger
           attaches. There are adapters for the Vercel AI SDK, the Anthropic and OpenAI SDKs,
           LangGraph/LangChain and Python, plus generic OpenTelemetry and OpenInference
-          trace import.
+          trace import — and a proxy that debugs an MCP server in any language with no code
+          changes at all.
         </p>
         <ol class="steps">
           <li><code>npx graphmind-ai init</code> detects your framework and prints the snippet to add.</li>
@@ -303,6 +304,7 @@
         <li><span class="fw-name">OpenAI SDK</span><code>@graphmind-ai/openai</code></li>
         <li><span class="fw-name">LangGraph &middot; LangChain</span><code>@graphmind-ai/langgraph</code></li>
         <li><span class="fw-name">Python</span><code>pip install graphmind-ai</code></li>
+        <li><span class="fw-name">MCP servers &middot; any language</span><code>graphmind mcp-proxy -- your-server</code></li>
         <li><span class="fw-name">Everything else</span><code>npx graphmind-ai import trace.json</code></li>
       </ul>
       <p class="fw-note">Not sure which you need? <code>npx graphmind-ai init</code> reads your project and tells you.</p>
