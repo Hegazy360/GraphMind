@@ -190,8 +190,18 @@ hung server from the client's side, so the proxy says so on stderr — `HOLDING
 tools/call #5 at the error gate — resume it in http://127.0.0.1:4747` — and if
 you never resume, the MCP client times out on its own and the session carries
 on. Start the server with `--pause-on-error off` if you want to watch without
-ever stopping traffic. An injected object carrying its own
-`jsonrpc` field replaces the whole frame, which is how you hand a client a
+ever stopping traffic.
+
+**Injected values are lifted into the shape the method has to return.** MCP
+results are typed, so relaying a bare value verbatim handed the host a
+`CallToolResult` with no content — silently, on the headline feature. Type the
+answer, not the envelope: `{"tasks": []}` at a `tools/call` gate arrives as a
+valid result with your object as both the text content and
+`structuredContent`. The same lifting applies to `resources/read`,
+`prompts/get` and `sampling/createMessage`; a method GraphMind does not model
+is relayed exactly as typed. A value that already looks like the right result
+shape is passed through untouched, and an injected object carrying its own
+`jsonrpc` field replaces the whole frame — which is how you hand a client a
 specific JSON-RPC error. On a notification (no id, no answer) `inject`
 replaces the forwarded notification and `abort` swallows it.
 
