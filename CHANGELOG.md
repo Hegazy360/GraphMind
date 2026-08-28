@@ -6,6 +6,21 @@ this repo (`graphmind-ai`, `@graphmind-ai/sdk`, `@graphmind-ai/client`,
 `@graphmind-ai/langgraph`, `@graphmind-ai/mcp`, the Python `graphmind-ai`
 distribution, and the Ruby `graphmind` gem).
 
+## 0.4.2
+
+- **A `runId` containing a NUL byte was silently mangled on Node 22.**
+  `node:sqlite` round-trips a string containing U+0000 on Node 24 and does not
+  on Node 22, so the app streamed under one run id while the server stored
+  another — the run looked permanently empty to anyone who subscribed with the
+  id they sent. Same identity hazard as the lone surrogate closed in 0.4.0, and
+  now refused the same way, at the parse boundary, on every runtime. A wire
+  contract that is correct only on some patch versions of Node is not a
+  contract.
+
+  Found because CI runs Node 22 and this machine runs Node 24 — the version
+  matrix earning its keep. The security suite is now also run locally on the
+  CI Node version before a release.
+
 ## 0.4.1
 
 - `@graphmind-ai/mcp` raises its `@modelcontextprotocol/sdk` peer floor from

@@ -162,11 +162,13 @@ describe('an `ok` result really is a valid envelope', () => {
   });
 
   it('accepts any string as a runId except one that cannot be stored', () => {
-    // A run id has to survive a round trip through SQLite unchanged. Every
-    // hostile string here does — RTL overrides, `__proto__`, NUL bytes, 2 MB
-    // of text — EXCEPT a lone surrogate, which SQLite's text binding rewrites
-    // to U+FFFD, so the app would stream under one id and the server would
-    // keep another. That one is refused at the parse boundary.
+    // A run id has to survive a round trip through SQLite unchanged. Most of
+    // these hostile strings do — RTL overrides, `__proto__`, 2 MB of text —
+    // and are accepted as ordinary text. Two do not, and are refused at the
+    // parse boundary: a lone surrogate (SQLite's text binding rewrites it to
+    // U+FFFD) and a NUL byte (`node:sqlite` mangles it on Node 22 and not on
+    // Node 24). Both would leave the app streaming under one id while the
+    // server stored another.
     for (const runId of NASTY_STRINGS) {
       const result = parseEnvelope({
         gm: PROTOCOL_VERSION,
@@ -176,7 +178,9 @@ describe('an `ok` result really is a valid envelope', () => {
         type: 'node.token',
         payload: { nodeId: 'n', deltas: [] },
       });
-      const storable = !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(runId);
+      const storable =
+        !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(runId) &&
+        !runId.includes('\u0000');
       expect(result.kind, `runId of ${runId.length} chars`).toBe(storable ? 'ok' : 'invalid');
     }
   });

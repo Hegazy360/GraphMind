@@ -366,14 +366,16 @@ describe('the 512 KB guard preserves the fields the schema requires', () => {
 describe('hostile values in the fields the server itself reads', () => {
   it('a run id full of unicode nastiness round-trips through storage and REST', async () => {
     await reconnectAttackerIfNeeded();
-    // Deliberately excludes lone surrogates: SQLite normalises those (pinned
-    // separately below), so they are not a round-trip case.
+    // Deliberately excludes the ids storage cannot round-trip — a lone
+    // surrogate and a NUL byte — which are refused at the parse boundary and
+    // pinned separately below. Everything else here IS a round-trip case: RTL
+    // overrides, line separators, SQL injection, path traversal and prototype
+    // keys are all just text, and must be stored and served back verbatim.
     const ids = [
       'run  ',
       'run‮gnp.exe',
       "run'; DROP TABLE events; --",
       'run../../etc/passwd',
-      'run mid',
       '__proto__',
       'constructor',
     ];
@@ -389,6 +391,27 @@ describe('hostile values in the fields the server itself reads', () => {
       expect(events.length).toBe(1);
       expect(parseEnvelope(events[0] as WireFrame).kind).toBe('ok');
     }
+    expect(await server.alive()).toBe(true);
+  }, 60_000);
+
+  it('a NUL byte in a run id is refused, not silently mangled', async () => {
+    // `node:sqlite` mangles a string containing U+0000 on Node 22 and
+    // round-trips it on Node 24 — so the app streamed under one id and the
+    // server stored another, on some runtimes and not others. Found because
+    // this suite runs on Node 22 in CI and Node 24 on the dev machine, which
+    // is exactly the disagreement a wire contract must not have.
+    await reconnectAttackerIfNeeded();
+    attacker.send(
+      `{"gm":${PROTOCOL_VERSION},"seq":0,"ts":1,"runId":"run\\u0000mid","type":"node.started",` +
+        '"payload":{"nodeId":"n","kind":"tool","name":"x","instanceId":"i","input":null}}',
+    );
+    await settle();
+    const runs = await server.runs();
+    // Neither the id as sent, nor the truncated form Node 22 would store.
+    const ids = runs.map((run) => run.id);
+    expect(ids.filter((id) => id.includes('\u0000'))).toEqual([]);
+    expect(ids).not.toContain('run');
+    expect(ids).not.toContain('run\u0000mid');
     expect(await server.alive()).toBe(true);
   }, 60_000);
 
