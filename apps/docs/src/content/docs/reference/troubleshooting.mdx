@@ -17,7 +17,7 @@ Work down this list; it is ordered by how often each one is the answer.
 
    ```sh
    curl -s http://127.0.0.1:4747/health
-   # {"ok":true,"name":"graphmind-ai","version":"0.3.1"}
+   # {"ok":true,"name":"graphmind-ai","version":"0.3.2"}
    ```
 
    No response means `graphmind` is not running, or is on another port.
@@ -42,6 +42,11 @@ Work down this list; it is ordered by how often each one is the answer.
 4. **Did the process exit before the handshake?** The transport is lazy and the handshake takes
    up to ~1.3 s. A script that finishes immediately can exit first. Add `await gm.ready()` before
    the work and `await gm.dispose()` after it.
+
+   If your process dies *silently* at `await gm.ready()` with no debugger listening — no output,
+   a non-zero exit, the run body never entered — you are on a version before **0.3.2**, where
+   `ready()`'s own timer could not hold the event loop open. Upgrade; no workaround is needed
+   any more.
 
 5. **Are you actually emitting?** `enabled: true, attached: false, seq: 0` means the session
    connected to nothing and nothing was emitted — usually an un-wrapped model or un-wrapped
@@ -129,6 +134,27 @@ npm i -D @graphmind-ai/sdk@latest
 npx graphmind-ai@latest
 ```
 
+## 403 Forbidden, or a WebSocket that closes immediately
+
+Since 0.3.0 the server checks the `Origin` of every request and upgrade, and requires a loopback
+`Host`. Clients that send no `Origin` at all — the SDK, `curl`, the CLI — are unaffected; a
+browser page from another origin gets a 403.
+
+You will hit this in one ordinary situation: **running the viewer from its own dev server**
+(`apps/viewer` on Vite port 5199). Allow it explicitly:
+
+```sh
+GRAPHMIND_ALLOWED_ORIGINS=http://localhost:5199,http://127.0.0.1:5199 graphmind
+```
+
+You will also hit it if you reach the server through a hostname that is not a loopback name —
+a `.local` alias, a container hostname, a rebinding domain. Use `127.0.0.1` or `localhost`, or
+tunnel (an SSH tunnel presents as loopback and works).
+
+`GRAPHMIND_ALLOWED_ORIGINS='*'` turns the check off. That is a real hole — a page you visit can
+then read every recorded run and resume a paused one with an injected result — so only do it on
+a machine and network you fully control.
+
 ## The viewer loads but says the bundle is missing
 
 You are running from a source checkout without a built viewer. The published package bundles it;
@@ -163,10 +189,11 @@ An imported run is history-only by definition: nothing is running, so there is n
 ## Still stuck
 
 <Aside type="tip" title="What to include in an issue">
-Export the run and attach it — an NDJSON file is the actual run, not a description of it:
+Export the run and attach it — an export is the actual run, not a description of it:
 
 ```sh
-graphmind record <runId> --out bug.ndjson
+graphmind record <runId> --out bug.ndjson     # machine-readable
+graphmind record <runId> --html               # one page, opens with no server
 ```
 
 Plus `node -v`, your adapter and `graphmind-ai` versions, and any `[graphmind]` warning. Read the

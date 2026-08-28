@@ -1,0 +1,206 @@
+---
+title: Ruby
+description: Debug a Ruby agent — the graphmind gem instruments ruby-openai and RubyLLM, gates plain callables and methods, and holds the calling thread so one Rails request pauses and the rest keep serving.
+sidebar:
+  order: 9
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The Ruby SDK speaks the same wire protocol as every other adapter, so the same `graphmind`
+server and the same viewer debug a Ruby agent with no special mode. What is different is the
+shape Ruby code actually takes: there is no dominant agent framework, so the gem leads with
+**gated callables** — wrap a block, a `Proc`, a `Method`, or a hash of them — and adds
+client instrumentation for the two libraries people do use.
+
+```ruby
+require "graphmind"
+
+gm = Graphmind.configure(app: "support-agent")
+
+search = gm.tool("search_orders") { |email:| Order.where(email: email).limit(5).as_json }
+
+gm.run("handle-ticket") do
+  search.call(email: "alex@example.com")
+end
+```
+
+Run `npx graphmind-ai` in another terminal and open `http://127.0.0.1:4747`. With nothing
+attached, every line above is a no-op.
+
+The gem is called **`graphmind`**, needs **Ruby ≥ 3.1** (verified on 3.3), and has **no runtime
+dependencies** — the WebSocket client is hand-rolled over stdlib sockets, so adding a debugger to
+someone else's `Gemfile` cannot force a resolution on `faraday`, `websocket-driver` or
+`eventmachine`.
+
+<Aside type="caution" title="Not on RubyGems yet">
+The Ruby SDK lives in the repository and passes its suite, but it has not been published. This
+page documents the API as it stands; `gem "graphmind"` will work the moment it ships. Until then,
+point your `Gemfile` at a checkout:
+
+```ruby
+gem "graphmind", path: "../GraphMind/ruby"
+```
+
+If you are picking a stack today and want something already published, the
+[Python SDK](/integrations/python/) covers the same ground.
+</Aside>
+
+## API
+
+| | |
+| --- | --- |
+| `Graphmind.configure(app:, **opts)` | Create (and become) the process-wide instance. Returns a `Graphmind::Client`. |
+| `gm.run(name) { \|ctx\| … }` | One run boundary — one `AbortController`, one agent node. |
+| `gm.tool(name) { \|**args\| … }` | Wrap a block as a gated callable. Call it with `.call(...)`. |
+| `gm.wrap(callable, name:)` | The same for a `Proc`, a `Method`, or anything with `#call`. |
+| `gm.wrap_tools(hash_or_array)` | Wrap a `{name => callable}` hash, an array, or one callable. |
+| `gm.wrap_method(obj, :name)` | Gate one method on one object, in place. |
+| `gm.span(name, kind:, input:) { \|s\| … }` | An arbitrary node on the canvas — a retrieval step, a planner loop, a Sidekiq job body. |
+| `gm.instrument_openai(client)` | Instrument a `ruby-openai` `OpenAI::Client` in place. |
+| `gm.instrument_ruby_llm(chat)` | Instrument a `RubyLLM::Chat` and its tools in place. |
+| `gm.ready(timeout = 2.0)` | Attach guarantee. `false` means "carry on detached", never an error. |
+| `gm.stats` / `gm.dispose` | Session stats; release held gates and close the socket. |
+
+Every method is also available on the module itself — `Graphmind.run`, `Graphmind.tool`,
+`Graphmind.span` — delegating to a default instance created on first use. Use `configure` when
+you want to name the app or pass options; use the module-level shorthand in a script.
+
+## Gated callables
+
+`gm.tool` is the sharp end of the debugger, because only a wrapper that owns the call site can
+substitute a result:
+
+```ruby
+refund = gm.tool("issue_refund") { |order_id:, cents:| Payments.refund(order_id, cents) }
+
+gm.run("handle-ticket") do
+  refund.call(order_id: "4471", cents: 2400)
+end
+```
+
+| Gate | Behaviour |
+| --- | --- |
+| `before` | Fires before the block runs. `inject` returns the debugger's value **without calling it at all** — nothing happens, no side effect. |
+| `after` | Post-body, pre-return. Step mode, or an explicit `after` breakpoint. |
+| `error` | Fires when the block raises, **before the caller sees it**. `inject` swallows the error and returns a value; `retry` re-runs the body; `continue` re-raises the original; `abort` aborts the run. |
+
+<Aside type="note" title="Gates hold the calling thread">
+A held gate blocks the thread that made the call and nothing else. A wrapped tool called from a
+Puma worker holds exactly that request; the rest of the pool keeps serving. This is the
+behaviour you want and the one to keep in mind if you ever gate something on a shared thread.
+</Aside>
+
+## Spans
+
+For the parts of the graph nothing can infer — a retrieval step, a hand-rolled planner loop, a
+background job:
+
+```ruby
+gm.span("retrieve", kind: "retriever", input: { query: query }) do |span|
+  docs = Index.search(query, k: 8)
+  span.output = { count: docs.size, ids: docs.map(&:id) }
+  docs
+end
+```
+
+The block's value is the span's value; `span.output =` sets what the node *shows* when the two
+should differ (a big result you do not want in the debugger, or a summary that reads better).
+
+## Client instrumentation
+
+Both integrations `prepend` a module to **that object's singleton class**. Nothing global is
+monkey-patched: another client or chat in the same process is untouched, and neither gem is
+loaded unless you ask for it.
+
+### `ruby-openai`
+
+```ruby
+client = gm.instrument_openai(OpenAI::Client.new(access_token: ENV['OPENAI_API_KEY']))
+client.chat(parameters: { model: 'gpt-4o-mini', messages: [...] })
+```
+
+An `llm:step` node per `chat` / `responses.create`, with the model, the trimmed messages, the
+reply and token usage. The `before` gate means the debugger can pause and `inject` a response
+**without the request ever leaving the process**; the `error` gate catches a 429 or a timeout, and
+`retry` re-sends. Streamed deltas reach the canvas when you pass `stream:`.
+
+Tool *execution* is your code, not the gem's — gate it with `gm.tool` / `gm.wrap_tools`.
+
+### RubyLLM
+
+```ruby
+chat = gm.instrument_ruby_llm(RubyLLM.chat.with_tool(Weather))
+chat.ask("what's the weather in Cairo?")
+```
+
+An `llm:step` node per provider round-trip — one per API call, not one per `ask` — and a
+`tool:<name>` node per `RubyLLM::Tool#call` with real `inject` and `retry`, so the debugger can
+replace a tool result and let the model carry on with it. Gates at before / error / after on
+both.
+
+The LLM hook is `provider_completion`, which is one HTTP round-trip. It is private, so if a
+future version renames it the adapter falls back to `complete_once` and then to the public
+`complete` (coarser: one node for the whole turn). Whichever hook was used is reported on the
+node as `hook`, so you are never guessing which one you got.
+
+## Rails
+
+`require "graphmind"` loads a Railtie when Rails is present, so an initializer is all you need:
+
+```ruby
+# config/initializers/graphmind.rb
+Graphmind.configure(app: "checkout")
+```
+
+The app name defaults to your Rails application's name, and the production kill switch keys off
+`RAILS_ENV` (below), so a debugger left in the Gemfile does nothing in production.
+
+## Kill switches
+
+Precedence, first match wins — the same rule as the JS and Python clients, with a Ruby-flavoured
+production check because there is no `NODE_ENV`:
+
+| Condition | Result |
+| --- | --- |
+| `GRAPHMIND_DISABLED=1` | **Disabled.** Beats everything, including `enabled: true`. |
+| `enabled:` passed | As given. |
+| Looks like production | **Disabled** unless `GRAPHMIND=1`. |
+| Otherwise | Enabled. |
+
+"Looks like production" is the first variable that is *set* out of `GRAPHMIND_ENV`,
+`ENVIRONMENT`, `APP_ENV`, `RAILS_ENV`, `RACK_ENV`, `ENV`, `NODE_ENV`, counting `production` /
+`prod` (case-insensitive) as production. A boring documented list rather than a heuristic, on
+purpose.
+
+`GRAPHMIND_URL` moves the ingest endpoint, exactly as elsewhere.
+
+## Options
+
+`Graphmind.configure` accepts `app:`, `sdk:` and every session option:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `url:` | `ws://127.0.0.1:4747/ingest` | Ingest endpoint (or `GRAPHMIND_URL`) |
+| `enabled:` | kill-switch logic | Force on/off (`GRAPHMIND_DISABLED=1` still wins) |
+| `meta:` | — | Extra metadata on every `run.started` |
+| `pause_timeout:` | hold forever | Auto-continue a gate nobody resumes |
+| `buffer_size:` | 2000 | Replay ring buffer |
+| `logger:` | `warn` | Where the rate-limited warnings go |
+
+## Fail-open invariants
+
+The same four promises the rest of GraphMind makes:
+
+- **Disabled**: wrapping is identity, nothing is emitted, no socket is opened.
+- **Enabled but detached**: gates resolve `continue` immediately; events go to the ring buffer
+  only and replay when a debugger attaches.
+- **The gem never raises into your app.** Internal failures degrade to a rate-limited warning.
+  Errors raised by *your* code inside a run propagate untouched — they are your errors.
+- **A debugger that disconnects mid-hold releases every held gate** with `continue`.
+
+## See also
+
+- [Concepts](/start/concepts/) — runs, nodes, gates and the four actions.
+- [Writing an adapter](/contributing/writing-an-adapter/) — the wire contract, if you want to
+  instrument a Ruby library the gem does not cover yet.

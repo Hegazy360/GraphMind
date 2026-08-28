@@ -1,0 +1,299 @@
+---
+title: Debugging MCP servers
+description: On a stdio MCP server stdout is the protocol, so you cannot printf-debug it. Put GraphMind between the host and the server — see every request, hold one, inject a response, and resume.
+sidebar:
+  order: 9
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+You wrote an MCP server. Your assistant calls a tool and gets back something wrong. Now find
+out why.
+
+The usual first move is not available to you. **On a stdio server, stdout _is_ the protocol.**
+A single `console.log` in a handler puts a non-JSON line into the JSON-RPC stream, the host's
+parser gives up, and the session dies — so the debugging tool everyone reaches for first is the
+one thing you must never do. What is left is stderr, which the host may or may not show you,
+which arrives with no request attached to it, and which cannot stop time so you can look at
+something properly.
+
+And the loop is slow. Add a line, rebuild, restart the host — because the host owns the child
+process, so you cannot restart the server without restarting the thing that spawned it — ask
+the question again, read the log, discover you logged the wrong variable.
+
+<Aside type="note" title="Two different things are called “mcp” here">
+`graphmind mcp-proxy` **debugs your MCP server** — this page. `graphmind mcp` is the opposite
+direction: it makes GraphMind itself an MCP server so Claude Code can read your recorded runs.
+See [MCP tools](/reference/mcp/) for that one.
+</Aside>
+
+## Two ways in
+
+| | [`graphmind mcp-proxy`](/integrations/mcp-proxy/) | [`@graphmind-ai/mcp`](/integrations/mcp/) |
+| --- | --- | --- |
+| Code changes | none | two lines |
+| Server language | any | TypeScript / JavaScript |
+| A server you did not write | yes | no |
+| Every request and response | yes | yes |
+| Server stderr, in the timeline | yes | your own logging |
+| Work inside a handler that never reaches the wire | no | yes |
+| Outbound sampling / elicitation | as wire frames | with the handler's context |
+| `abort` | answers the caller with an error | cancels the handler's own `AbortSignal` |
+| Frames sent before your server finishes starting | yes | no |
+| One run is | the whole session | one incoming request |
+
+That last row is the difference you will notice first in the run list, and it follows from
+where each one sits. The proxy **is** the pipe, so it can see a session begin and end, and it
+gives you one run containing the whole conversation — the handshake, the discovery calls, and
+every request, on one canvas. The adapter lives inside a long-running server that does not own
+its transport and may serve several clients at once, so it scopes a run to the thing it can
+honestly delimit: one incoming request. Neither is a workaround; they are answers to different
+questions ("what did this client do?" versus "what happened in this call?").
+
+Start with the proxy. It costs nothing and it is the honest reproduction: it debugs the server
+your host is really running. Reach for the adapter when you need what only the inside can tell
+you.
+
+## The proxy in one command
+
+The proxy is a program that speaks MCP on both sides. Your host spawns *it*, and it spawns your
+server. Put it in front of whatever command you already have:
+
+```sh
+# before
+node build/server.js
+
+# after
+npx graphmind-ai mcp-proxy -- node build/server.js
+```
+
+Then, in another terminal, the debugger:
+
+```sh
+npx graphmind-ai
+```
+
+<Steps>
+
+1. **Start the debugger.** `npx graphmind-ai` opens the viewer on
+   <code>http://127.0.0.1:4747</code>.
+
+2. **Point your host at the proxy** instead of at your server.
+
+   <Tabs syncKey="host">
+   <TabItem label="Claude Code">
+
+   ```sh
+   claude mcp add tracker -- npx graphmind-ai mcp-proxy -- node /abs/path/build/server.js
+   ```
+
+   </TabItem>
+   <TabItem label="Config file">
+
+   ```json
+   {
+     "mcpServers": {
+       "tracker": {
+         "command": "npx",
+         "args": ["graphmind-ai", "mcp-proxy", "--", "node", "/abs/path/build/server.js"]
+       }
+     }
+   }
+   ```
+
+   Use absolute paths: the host does not spawn the child in your project directory.
+
+   </TabItem>
+   <TabItem label="Python server">
+
+   ```json
+   {
+     "mcpServers": {
+       "tracker": {
+         "command": "npx",
+         "args": ["graphmind-ai", "mcp-proxy", "--", "uv", "run", "python", "-m", "tracker"]
+       }
+     }
+   }
+   ```
+
+   The proxy does not care what is on the other side of the pipe — it is JSON-RPC either way.
+
+   </TabItem>
+   </Tabs>
+
+3. **Ask your assistant the question that goes wrong.** The session appears in the viewer as it
+   happens: the handshake, the listings, then a node per request.
+
+</Steps>
+
+## What the graph shows
+
+Every JSON-RPC request becomes a node under one session node. The three that matter get their
+own kinds, so a tool call looks like a tool call:
+
+| Method | Node | Kind |
+| --- | --- | --- |
+| `tools/call` | `tool:<name>` | `tool` |
+| `resources/read` | `resource:<uri>` | `resource` |
+| `prompts/get` | `prompt:<name>` | `prompt` |
+| `sampling/createMessage` (server → host) | `llm:sampling` | `llm` |
+| the session itself | `mcp:session` | `server` |
+| everything else — `initialize`, `tools/list`, `ping`, `logging/*`, notifications | `mcp:<method>` | `custom` |
+
+Node identity follows the same rule as every other adapter: `nodeId` is stable per *logical*
+node, so one `tool:list_tasks` box lights up on every call, and `instanceId` separates the
+executions. Ten calls to one tool are ten instances of one node, not ten boxes.
+
+Two things fall out of this that are hard to get any other way:
+
+**A request that never gets an answer stays open.** The node does not resolve, and you can see
+exactly which request your server forgot to reply to. It only turns into an error when the child
+process dies, because that is the first moment anyone can honestly say no answer is coming.
+
+**Your server's stderr lands in the run**, attached to the session and interleaved with the
+frames — so the logging you *are* allowed to write finally sits next to the request it was about.
+
+## Holding a request
+
+Breakpoints work the same way they do everywhere else in GraphMind: set one on the node, and
+the frame stops.
+
+- **Break `before` a request** and it stops at the proxy. Your server never receives it. Nothing
+  is in flight, nothing is burning a timeout, and the host is simply waiting for an answer.
+- **Break `after` a response** and it stops on the way back. Your server has done the work; the
+  host has not seen the result yet.
+- **Errors are armed by default.** A JSON-RPC error, and an MCP tool result carrying
+  `isError: true`, both hold — you do not have to configure anything to catch the failing case.
+
+## Injecting a response
+
+This is the move the whole thing exists for. Hold a `tools/call`, then answer it yourself:
+
+<Steps>
+
+1. Hold the request at its `before` gate.
+
+2. Click **`Inject…`** and type the result the tool *should* have produced. Type the
+   answer, not the envelope — a bare value is lifted into the result shape the method
+   has to return:
+
+   ```json
+   { "tasks": [{ "id": "PAY-102", "status": "blocked" }] }
+   ```
+
+   ...arrives at the host as a valid `CallToolResult` with your object as the text
+   content *and* as `structuredContent`, so it satisfies a tool that declares an
+   `outputSchema` too.
+
+3. **`Inject & resume`.** The request is never forwarded — your server does not run — and the
+   host receives your value as the JSON-RPC `result`.
+
+</Steps>
+
+You have now answered the question "if this tool returned the right thing, would the rest work?"
+without editing a line, rebuilding, or restarting the host. If the assistant's answer comes out
+right, the bug is in that handler. If it still comes out wrong, it never was.
+
+Injecting on the way back works too — hold the *response* and rewrite it. Same effect, one step
+later, and useful when you want the server's real work to happen and only the answer to change.
+
+<Aside type="tip" title="When you want the exact bytes instead">
+A value that already looks like the right result shape is passed through untouched, so you
+keep full control when you want it: send a complete `CallToolResult` (including
+`isError: true`, to test how the host handles a tool failure) and it is relayed as typed.
+Send a whole JSON-RPC frame — one with a `jsonrpc` key — and the proxy relays that verbatim,
+which is how you answer with an `error` instead of a `result`. The same lifting rules apply
+to `resources/read`, `prompts/get` and `sampling/createMessage`; a method GraphMind does not
+model is always relayed exactly as you typed it.
+</Aside>
+
+<Aside type="tip" title="What `retry` does here">
+At a held response, `retry` drops it and re-sends the **original request bytes** to your server,
+verbatim. The node stays open until the new answer arrives. That is the "I just fixed something,
+run it again" button — though note the server process is the one the host already spawned, so a
+source change needs a restart before `retry` can pick it up.
+</Aside>
+
+## What each action means on the wire
+
+Because the proxy sits on a protocol rather than inside a function call, the four actions map
+onto protocol actions:
+
+| | Held request (`before`) | Held response (`after` / `error`) |
+| --- | --- | --- |
+| `continue` | Forward it unchanged | Forward it unchanged |
+| `inject` | Do not forward; answer the sender with your value | Forward a rewritten frame carrying your value |
+| `retry` | Same as continue — nothing has run yet | Drop it and re-send the original request |
+| `abort` | Do not forward; answer the sender with a JSON-RPC error | Drop it and answer the requester with an error |
+
+A notification has no id and no answer, so it only has a `before` gate: `continue` forwards,
+`inject` forwards your object in its place, `abort` swallows it.
+
+## When the proxy is not enough
+
+The proxy sees the wire. That is a complete account of what your host and your server said to
+each other, and it is usually all you need — but it stops at the boundary of your process. It
+cannot see a slow database call *inside* a handler, or which of three branches your handler took,
+and `abort` can only answer the caller, not cancel work your handler is already doing.
+
+[`@graphmind-ai/mcp`](/integrations/mcp/) instruments the server from the inside instead. Two
+lines, and the run's `AbortSignal` becomes the one your handler already receives.
+
+You can run both at once — the adapter for what happens inside, the proxy for the exact bytes —
+and they will show up as two runs of the same session.
+
+## Try it on a server that is already broken
+
+The `mcp-server` sample is built for exactly this: a project tracker with four tools, two
+resources and a prompt, and a status filter that quietly returns the wrong rows. It ships with
+a scripted MCP host, so you can reproduce the bug on demand without a real assistant, and it
+needs no API key.
+
+```sh
+cd mcp-server && npm install
+
+npx graphmind-ai                                                            # terminal 1
+npm start -- --server "npx graphmind-ai mcp-proxy -- npx tsx src/server.ts" # terminal 2
+```
+
+`sprint_summary` says two tasks are blocked. `list_tasks` with `status: "blocked"` returns
+three, and every one of them says `"status": "backlog"`. Both nodes are on the canvas at the
+same time, which is the whole point.
+
+## Limits worth knowing
+
+<Aside type="caution">
+- **stdio only.** The proxy pipes a child process's stdin/stdout. An MCP server you reach over
+  HTTP (Streamable HTTP or SSE) is not proxied — instrument it in-process instead, or put your
+  own capture in front of it.
+- **One session per proxy process.** The host spawns one child; that child is one session. Two
+  hosts talking to the same server are two proxies and two runs.
+- **A frame larger than the framing ceiling degrades to a byte pipe.** Observation stops for the
+  rest of that stream; the session keeps working. You lose the debugger, never the session.
+- **A held request is invisible to your host's own timeout.** Hosts differ in how long they wait
+  for a tool result. If yours gives up while you are staring at a paused node, that is the host,
+  not the proxy — resume sooner, or raise its timeout.
+</Aside>
+
+<Aside type="caution" title="Leave the proxy in your config and your agent can hang">
+Pause-on-error is armed by default, and at the proxy a held gate stops that direction of the
+conversation. So if you add the proxy to `.mcp.json`, leave `graphmind serve` running and close
+the viewer tab, the first failing tool call **holds with nobody watching** — from your agent's
+side the server has simply stopped answering. The proxy says so on its stderr, which is where
+MCP clients surface server logs:
+
+```text
+graphmind mcp-proxy: HOLDING tools/call #5 at the error gate — resume it in http://127.0.0.1:4747
+```
+
+Three ways out, in order of how much you want the debugger:
+
+- open the viewer and resume it — this is the feature working;
+- run `graphmind serve --pause-on-error off` to observe without ever stopping (breakpoints
+  live on the server, not on the proxy, so that is the flag that disarms them);
+- take the proxy back out of the config when you are done debugging.
+
+The in-process adapter has a milder version of the same thing: it holds, but only your handler
+is stopped, and it prints the same warning once.
+</Aside>

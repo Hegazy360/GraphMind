@@ -111,7 +111,10 @@ export default defineConfig({
             { slug: 'integrations/anthropic' },
             { slug: 'integrations/openai' },
             { slug: 'integrations/langgraph' },
+            { slug: 'integrations/mcp-proxy' },
+            { slug: 'integrations/mcp' },
             { slug: 'integrations/python' },
+            { slug: 'integrations/ruby' },
             { slug: 'integrations/other-frameworks' },
           ],
         },
@@ -126,6 +129,7 @@ export default defineConfig({
             { slug: 'debugging/large-graphs' },
             { slug: 'debugging/comparing-runs' },
             { slug: 'debugging/recording-runs' },
+            { slug: 'debugging/mcp-servers' },
           ],
         },
         {

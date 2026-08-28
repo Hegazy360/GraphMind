@@ -12,6 +12,7 @@
  * `statusVersion`, which the reducer already maintains for exactly this kind
  * of "what changed?" question.
  */
+import { kindMeta } from '../lib/kinds.js';
 import type { RunState } from './types.js';
 import { childIndex, summarizeGroup, type GroupSummary } from './collapse.js';
 
@@ -61,9 +62,13 @@ export function agentCountsOf(run: RunState): Map<string, { steps: number; tools
 
   const children = childrenIndexOf(run);
   const agentCounts = new Map<string, { steps: number; tools: number }>();
+  // Every kind drawn as an invocation card needs the rollup — an agent, a
+  // chain, and an MCP server session all say "n steps · m calls" on their face.
   for (const nodeId of run.order) {
     const node = run.nodes[nodeId];
-    if (node?.kind === 'agent') agentCounts.set(nodeId, { steps: 0, tools: 0 });
+    if (node !== undefined && kindMeta(node.kind).card === 'invocation') {
+      agentCounts.set(nodeId, { steps: 0, tools: 0 });
+    }
   }
 
   // Walk each agent's subtree once. Subtrees are small relative to the run
@@ -78,8 +83,9 @@ export function agentCountsOf(run: RunState): Map<string, { steps: number; tools
       const child = run.nodes[id];
       if (child === undefined) continue;
       if (!child.ghost) {
-        if (child.kind === 'llm') counts.steps += child.executions.length;
-        else if (child.kind === 'tool') counts.tools += child.executions.length;
+        const card = kindMeta(child.kind).card;
+        if (card === 'llmStep') counts.steps += child.executions.length;
+        else if (card === 'tool') counts.tools += child.executions.length;
       }
       for (const grandchild of children.get(id) ?? []) stack.push(grandchild);
     }

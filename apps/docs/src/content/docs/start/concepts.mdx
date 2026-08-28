@@ -50,8 +50,11 @@ receiver has to attribute a result to the most recent open instance — which mi
 the same logical node runs concurrently, exactly the case you most want to debug.
 </Aside>
 
-Node kinds are `agent`, `llm`, `tool`, `chain`, `retriever` and `custom`. The extra kinds exist
-so LangChain-shaped runs (chains, retrievers) render as themselves rather than as generic boxes.
+Node kinds are `agent`, `llm`, `tool`, `chain`, `retriever`, `server`, `resource`, `prompt` and
+`custom`. The extra kinds exist so a run renders as itself rather than as generic boxes:
+`chain` / `retriever` for LangChain-shaped runs, and `server` / `resource` / `prompt` for
+[MCP servers](/debugging/mcp-servers/). MCP tool calls and sampling reuse `tool` and `llm` —
+they are the same concepts.
 
 ## The graph is a projection of your code
 

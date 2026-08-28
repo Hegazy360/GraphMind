@@ -29,13 +29,29 @@ export interface RawEnvelope {
   payload: unknown;
 }
 
+/**
+ * A `runId` must survive a round trip through storage unchanged.
+ *
+ * A lone surrogate does not: SQLite's text binding replaces it with U+FFFD,
+ * so an app would stream under one id while the server stored another, and
+ * subscribing with the original id tails an empty run. Rejecting the frame is
+ * the honest outcome — nothing legitimate generates one (ids are hex).
+ */
+const NO_LONE_SURROGATES = /^(?:[^\uD800-\uDFFF]|[\uD800-\uDBFF][\uDC00-\uDFFF])*$/u;
+
 const RawEnvelopeSchema = z.looseObject({
   gm: z.number().int(),
   seq: z.number().int().nonnegative(),
-  ts: z.number(),
-  runId: z.string(),
+  // Epoch milliseconds, so: an integer, and one JavaScript can represent
+  // exactly. `1e300` is neither — and it used to become a run's `startedAt`,
+  // which the run list sorts by, pinning that run to the top of the
+  // operator's list until it was pruned.
+  ts: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  runId: z.string().regex(NO_LONE_SURROGATES, 'runId must not contain lone surrogates'),
   type: z.string(),
-  payload: z.unknown(),
+  // The KEY may be absent: an envelope of an unknown future type need not
+  // carry one, and parse -> serialize -> parse must be idempotent for it.
+  payload: z.unknown().optional(),
 });
 
 export interface ParseIssue {

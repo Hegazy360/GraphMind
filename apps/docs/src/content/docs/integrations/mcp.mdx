@@ -1,0 +1,248 @@
+---
+title: MCP server (in-process)
+description: Debug your own TypeScript MCP server from the inside — @graphmind-ai/mcp wraps the server object, gates every tool, resource, prompt and sampling call, and never touches stdout.
+sidebar:
+  order: 7
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+`@graphmind-ai/mcp` instruments an MCP server written with
+`@modelcontextprotocol/sdk`. `wrapServer` returns a **Proxy** of your server — your object is
+never mutated — and decorates the callbacks you register, so every `tools/call`,
+`resources/read`, `prompts/get` and outbound `sampling/createMessage` becomes a gated node.
+
+The gate sits **inside the request**: after the SDK has routed and validated it, and before a
+single line of your handler body runs. That is the whole reason to instrument in-process instead
+of [proxying the protocol](/integrations/mcp-proxy/) from outside.
+
+<Tabs syncKey="pkg">
+<TabItem label="npm">
+
+```sh
+npm i -D @graphmind-ai/mcp graphmind-ai
+```
+
+</TabItem>
+<TabItem label="pnpm">
+
+```sh
+pnpm add -D @graphmind-ai/mcp graphmind-ai
+```
+
+</TabItem>
+<TabItem label="yarn">
+
+```sh
+yarn add -D @graphmind-ai/mcp graphmind-ai
+```
+
+</TabItem>
+</Tabs>
+
+`@modelcontextprotocol/sdk` is a peer dependency (`>=1.20.0 <2`).
+
+<Aside type="note" title="Wrap first, register second">
+The adapter gates a tool by decorating its callback **as it is registered**. Anything registered
+on the unwrapped server object is invisible to the debugger, so `wrapServer` has to come before
+your first `registerTool`.
+</Aside>
+
+## End to end
+
+Two lines. Register everything on the value `wrapServer` returns, and connect through it:
+
+```ts title="server.ts"
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { graphmind } from '@graphmind-ai/mcp';
+import { z } from 'zod';
+
+// `waitForAttach` makes connect() await the handshake, so gates are armed
+// before the host's very first request. Fail-open: on timeout, carry on.
+const gm = graphmind({ app: 'project-tracker', waitForAttach: true });
+
+// A Proxy view of your server — your object is never mutated.
+// Register everything on THIS value, not on the object you passed in.
+const server = gm.wrapServer(
+  new McpServer({ name: 'project-tracker', version: '1.0.0' }),
+);
+
+server.registerTool(
+  'list_tasks',
+  {
+    description: 'List the tasks on a sprint board.',
+    inputSchema: { sprint: z.string().optional(), status: z.string().optional() },
+  },
+  async (args) => ({
+    content: [{ type: 'text', text: JSON.stringify(await tracker.listTasks(args)) }],
+  }),
+);
+
+server.registerResource(
+  'current-sprint',
+  'tracker://sprints/current',
+  { mimeType: 'application/json' },
+  async (uri) => ({ contents: [{ uri: uri.href, text: await tracker.currentSprintJson() }] }),
+);
+
+await server.connect(new StdioServerTransport());
+```
+
+Run `graphmind` in another terminal, then let your host spawn the server as it already does.
+
+<Aside type="caution" title="Never write to stdout">
+On a stdio server, stdout **is** the protocol — one `console.log` corrupts the stream and kills
+the session. GraphMind never writes to stdout (its warnings go to stderr), and neither should
+your handlers. This is the constraint that makes a debugger worth having here; see
+[debugging MCP servers](/debugging/mcp-servers/).
+</Aside>
+
+## API
+
+| | |
+| --- | --- |
+| `graphmind(options?)` | Create an adapter instance. Never throws. |
+| `gm.wrapServer(server)` | Instrumented **view** of an `McpServer` or a low-level `Server` (a Proxy). |
+| `gm.ready(opts?)` | Attach guarantee — resolves `true` once the handshake lands. |
+| `gm.run(name, fn)` | Optional explicit run boundary for work you drive yourself. |
+| `gm.session` | The underlying session (stats, custom events). |
+| `gm.dispose()` | Release held gates, flush, close the socket. Idempotent. |
+
+Wrapping twice is a no-op rather than a double gate, so passing an already-wrapped server
+through `wrapServer` again is safe.
+
+## What gets instrumented
+
+| Seam | What happens |
+| --- | --- |
+| `registerTool` / `registerResource` / `registerPrompt` | The callback is decorated before the SDK ever sees it. The deprecated `tool` / `resource` / `prompt` overloads get the same treatment. |
+| `server.setRequestHandler(...)` on the low-level `Server` | The same, for `tools/call`, `resources/read` and `prompts/get`. Any other method is forwarded with one extra function call and nothing else. |
+| `server.createMessage(...)` and the `extra.sendRequest` handed to your handler | A `sampling/createMessage` becomes a gated `llm` node **nested under the request that issued it**. |
+| `connect(transport)` | Emits `graph.hint`, so the viewer draws your whole surface — every tool, resource and prompt — before the first request arrives. |
+
+Everything else is forwarded to the real object, with methods bound to it.
+
+## Node identity
+
+The logical nodes are the things you **registered** — one node per tool, per resource
+*registration* (so a templated resource stays one node however many URIs it serves), per prompt
+— plus the server itself and the one sampling node:
+
+| Node | `nodeId` | `instanceId` |
+| --- | --- | --- |
+| The server | `server:<serverName>` | the request's id (it lights up once per request) |
+| Tool call | `tool:<toolName>` | the JSON-RPC request id, namespaced by connection |
+| Resource read | `resource:<registrationName>` | as above |
+| Prompt get | `prompt:<promptName>` | as above |
+| Sampling | `llm:sampling` | as above |
+
+Request ids restart at 0 on every connection, which is why they are namespaced —
+`conn_8e511b_2:9`, so two sessions in one process can never collide.
+
+### One run per request
+
+An MCP server has no natural "run" boundary the way an agent does: it sits there and answers
+questions. So **each request is its own run**, named for the method it served —
+`tools/call:list_tasks`, `resources/read:current-sprint`, `prompts/get:standup` — with the
+`server:<name>` node as the parent and the handler's node underneath it. Six requests, six rows
+in the run list.
+
+That is also why `gm.run` is optional here: use it only to group work you drive yourself (a
+warm-up, a scheduled job). A request handled while such a run is open joins it instead of opening
+a second one.
+
+The [proxy](/integrations/mcp-proxy/) makes the opposite choice — one run for the whole session —
+because it can see the session start and end, and the in-process adapter cannot.
+
+## Gate points
+
+Every instrumented node runs the same loop, because the debugger's contract is the same for all
+four kinds:
+
+| Gate | Behaviour |
+| --- | --- |
+| `before` | Fires **before your handler is invoked**. Nothing is in flight, no side effect has happened, and `abort` costs nothing. |
+| `after` | Post-handler, pre-return. Fires in step mode or on an explicit `after` breakpoint. |
+| `error` | Fires when your handler throws, **before the error escapes into the SDK** — which would otherwise turn it into an `isError` tool result or a JSON-RPC error and lose the chance to recover it. |
+
+Actions:
+
+- **`continue`** proceeds, or rethrows the original error.
+- **`retry`** re-invokes your handler; the `before` gate fires again.
+- **`inject`** replaces the handler's result with your value.
+- **`abort`** aborts the run's `AbortController` and throws an `AbortError`-named reason. Because
+  the run signal is chained into the `signal` your handler already receives, in-flight work that
+  respects it is actually cancelled — not merely disowned.
+
+### Injecting into a typed result
+
+MCP results are typed (`CallToolResult`, `ReadResourceResult`, `GetPromptResult`,
+`CreateMessageResult`) and the SDK validates them on the way out, so a bare string would turn the
+best feature here into a schema error. The adapter lifts what you type into the smallest valid
+result that carries it:
+
+| You inject | The client receives |
+| --- | --- |
+| Something already shaped like the result (`{ content: [...] }`, `{ contents: [...] }`) | Exactly that — full control when you want it |
+| A string | `{ content: [{ type: 'text', text: "…" }] }` |
+| An object, on a tool | A text block with its JSON, **plus `structuredContent`** — so it satisfies a tool that declares an `outputSchema` |
+| An object, on a resource | `{ contents: [{ uri, mimeType: 'application/json', text: … }] }` |
+
+## Options
+
+`graphmind()` accepts every `@graphmind-ai/client` session option plus:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `app` | `mcp-server` | Shown in the viewer's run list |
+| `server` | the server's own `{ name, version }` | Override what the `server` node is called |
+| `sdk` | the installed MCP SDK version | Override the reported SDK info |
+| `waitForAttach` | `false` | `true` (2000 ms) or a number: the first `connect()` — or the first request, if already connected — awaits `ready()`, so gates are armed from the very first request |
+| `url` | `ws://127.0.0.1:4747/ingest` | Ingest endpoint (or `GRAPHMIND_URL`) |
+| `enabled` | kill-switch logic | Force on/off (`GRAPHMIND_DISABLED=1` still wins) |
+| `pauseTimeoutMs` | hold forever | Auto-continue a gate nobody resumes |
+
+## Fail-open invariants
+
+- **Disabled** (`enabled: false` or a kill switch): `wrapServer` returns its input unchanged —
+  identity, zero overhead, nothing emitted, no network.
+- **Enabled but detached**: gates resolve `continue` on a shared-resolved-promise fast path;
+  events go to the replay ring buffer only.
+- If `wrapServer` itself fails on a server shape it does not recognise, it warns once and returns
+  the server **uninstrumented** rather than throwing.
+- The adapter **never throws into your server**. Your results and your errors pass through
+  untouched.
+- A debugger that disconnects mid-hold releases every held gate with `continue`.
+
+## Known limits
+
+<Aside type="caution">
+- **Your host has its own timeout.** A held gate is invisible to it, and hosts differ in how long
+  they wait for a tool result. The adapter warns once when a hold outlasts a second, because the
+  failure it causes looks like *your* server hanging.
+- **Registration-time only.** Tools registered on the *unwrapped* server object are not gated —
+  register everything on the value `wrapServer` returned.
+- **Without `waitForAttach`, the first request may not be gated.** The transport is lazy; a host
+  that asks immediately can be answered before the handshake lands. This is the single most
+  common "why did nothing pause?" on an MCP server, because a host's first move is `initialize`
+  followed straight away by a listing and a call.
+- **A crash before `connect()` is invisible.** Nothing has attached yet. Use the
+  [proxy](/integrations/mcp-proxy/) for startup problems: it sees the frames your server managed
+  to emit before it died.
+</Aside>
+
+## Proxy or in-process?
+
+| | [proxy](/integrations/mcp-proxy/) | in-process |
+| --- | --- | --- |
+| Code changes | none | two lines |
+| Server language | any | TypeScript / JavaScript |
+| A server you did not write | yes | no |
+| Every request and response | yes | yes |
+| Work inside a handler | no | yes |
+| `abort` cancels in-flight handler work | answers the caller | the handler's own `AbortSignal` |
+| Frames sent before the server finishes starting | yes | no |
+| Exact bytes on the wire | yes | no — the SDK's serialisation |
+
+They compose: run both and you get two runs of the same session, one from each side.

@@ -60,8 +60,12 @@ overview page.
 
 ## Does it support my framework?
 
-Adapters ship for the Vercel AI SDK, the Anthropic SDK, the OpenAI SDK, LangGraph/LangChain (JS)
-and Python (`openai`, `anthropic`, `langgraph`). See [integrations](/integrations/).
+Adapters ship for the Vercel AI SDK, the Anthropic SDK, the OpenAI SDK, LangGraph/LangChain (JS),
+Python (`openai`, `anthropic`, `langgraph`) and Ruby. See [integrations](/integrations/).
+
+**MCP servers** are a special case with a better answer: `graphmind mcp-proxy` debugs one in
+**any language with no code changes at all**, because it sits on the protocol rather than inside
+your process. See [debugging MCP servers](/debugging/mcp-servers/).
 
 If yours is not listed: `graphmind import` reads OTel and OpenInference trace exports as
 history-only runs, and the [adapter guide](/contributing/writing-an-adapter/) covers writing a

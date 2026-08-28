@@ -25,15 +25,18 @@ pnpm --filter soak start -- --scenario=everything   # + the long run (~9 min)
 pnpm --filter soak start -- --scenario=throughput --events=50000 --nodes=800
 pnpm --filter soak start -- --scenario=longrun --gap=90 --gaps=4
 pnpm --filter soak start -- --scenario=viewer,retention --json=results/today.json
+pnpm --filter soak start -- --scenario=adversarial --max-frame=96
 ```
 
 Scenarios: `throughput`, `concurrent`, `payloads`, `reconnect`, `retention`,
-`viewer`, `longrun`. `--scenario=all` runs everything except `longrun` (which
-costs wall-clock minutes); `everything` includes it. Comma-separated lists work.
+`viewer`, `adversarial`, `longrun`. `--scenario=all` runs everything except
+`longrun` (which costs wall-clock minutes); `everything` includes it.
+Comma-separated lists work.
 
 Useful flags: `--events`, `--nodes`, `--rate` (cap emission, events/s),
 `--sessions`, `--runs-per-session`, `--viewers`, `--runs` (retention),
-`--gap` / `--gaps` / `--burst` (long run), `--verbose` (stream server logs),
+`--gap` / `--gaps` / `--burst` (long run), `--max-frame` / `--connections` /
+`--garbage` / `--reap-ping` (adversarial), `--verbose` (stream server logs),
 `--json=<path>` (machine-readable results), `--trace` (stack traces).
 
 The harness exits non-zero if any check fails, so it can gate a release.
@@ -54,6 +57,12 @@ Every scenario asserts correctness alongside the timings:
   get the whole run once, in order, no duplicates, no gaps.
 - **fail-open.** `session.emit` must never throw into the host app, whatever it
   is handed — 32 MB payloads, 100,000-deep JSON, cyclic objects.
+- **the server stays up and stays honest under attack.** The adversarial
+  scenario asserts that `/health` still answers while a peer floods, that an
+  honest run lands with 500 hostile connections attached and with 200 silent
+  TCP sockets held open, and that a real app can still connect through all of
+  it. Whether an attacker can *corrupt* anything is a different question,
+  answered by tests in `security/` rather than by numbers here.
 
 ---
 
@@ -145,6 +154,10 @@ app saw nothing — fail-open holds.
 
 ## Viewer — reducer and layout, no browser
 
+> **Stale as of the layout fix.** The `layoutGraph` numbers below are the
+> pre-fix curve; the scenario now reports 2.39 ms at 3,203 nodes and no crash
+> at 6,000-deep. See finding #5. The reducer numbers are unchanged in shape.
+
 Real run (12,008 events) read back out of the server and pushed through
 `ingestValue` → `runStateToFlow` → `layoutGraph`, the same path
 `useLiveConnection` takes.
@@ -188,6 +201,47 @@ Both of these need a graph the shipped adapters cannot produce: `ai-sdk`,
 node per distinct tool *name* (`packages/*/src/ids.ts`, `import/classify.ts`), so
 node count is bounded by the code, not by the run. Custom instrumentation and
 some imports can mint a node per step, and then this is reachable.
+
+## Adversarial — what a hostile peer costs
+
+Every other scenario measures GraphMind under load it was designed for. This
+one measures it under load designed to hurt: a raw peer on `/ingest` that is
+not the SDK and does not care about the protocol. Local-first with no auth
+means any process on the machine can be that peer, and the origin guard
+(`packages/cli/src/origin-guard.ts`) only stops *browsers*.
+
+The correctness half of that question — can a peer corrupt someone else's run,
+can a bad frame crash the parser — is a CI test suite, not a soak run: see
+`security/` and `pnpm test:security`. What only this harness can answer is how
+much an attack **costs**, because here the server is in its own process with an
+external RSS sampler.
+
+| lever | result |
+| --- | --- |
+| 1 MB frame | 96.3 → 105 MB |
+| 8 MB frame | 157 MB |
+| 32 MB frame | 261 MB |
+| 64 MB frame | 563 MB peak; **486 MB after a forced GC, 390 MB above idle** |
+| 64 MB frame x3 more | flat — a plateau, not a leak |
+| 500 simultaneous ingest connections | +1.63 KB each, `/health` in 2.9 ms |
+| 5,000 garbage frames | **exactly 1.00 log lines per frame**, drained in 78 ms, `/health` 30 ms during |
+| 60,000 queued frames at a 200 ms ping | **26,610 lost** — the pinger terminated the peer it was busiest with |
+| 200 silent TCP sockets + a stalled half-upgrade | +2.25 MB, `/health` 17 ms, a real app still streams |
+
+The shape of it: **connections are cheap, frames are not.** A peer cannot
+exhaust the server by connecting — 500 sockets cost less than a megabyte
+between them, and an honest run still lands while they are all attached — but a
+single frame three orders of magnitude larger than the storage budget moves the
+process to five times its idle size, permanently. The wire has no
+protocol-appropriate cap: `MAX_PAYLOAD_BYTES` is 512 KB and `ws`'s default
+`maxPayload` is 100 MiB, and the 512 KB guard only runs *after* the frame has
+been buffered, decoded and parsed.
+
+Floods themselves are survivable — 20,000 frames drain in 0.65 s with nothing
+lost and `/health` answering throughout — with two caveats: every dropped frame
+costs the operator a synchronous `console.log`, and a peer whose backlog
+outlives two ping intervals gets terminated by the liveness reaper with its
+in-flight events silently discarded.
 
 ## Long run — 3.8 minutes, three 75-second idle gaps
 
@@ -246,10 +300,20 @@ recursive. At the node counts the shipped adapters produce this is invisible
 change, and somewhere past 4,000 tree depth the canvas throws and renders
 nothing.
 
-**What did not break:** long idleness, ping/pong reaping, reconnect
-correctness, replay-on-attach, concurrent-run isolation, control routing after
-minutes of silence, memory over time, and the run list at 200 runs. Those were
-the likely suspects, and they held.
+**Fourth, and new: a hostile peer buys memory, not much else.** Connections are
+cheap — 500 of them cost 1.63 KB each and an honest run still lands through the
+crowd — and floods, slowloris and half-open upgrades are all survivable. What
+is not bounded is one frame: the wire accepts 100 MiB against a 512 KB storage
+budget, and a single 64 MB frame leaves the process at five times its idle
+size for good. That is the one lever worth closing, and it is one option
+object away.
+
+**What did not break:** long idleness, ping/pong reaping under normal load,
+reconnect correctness, replay-on-attach, concurrent-run isolation, control
+routing after minutes of silence, memory over time, the run list at 200 runs,
+and — under deliberate attack — the parser, the connection table, and the
+isolation of a healthy run from a flood of malformed frames. Those were the
+likely suspects, and they held.
 
 # Findings
 
@@ -264,14 +328,14 @@ gap. Suggested: emit a `gap` event (or a `run.gap` payload field) when
 and consider a shorter first retry (the current 10 s default is a whole
 generation of events at production rates).
 
-### 2. The fan-out path has no payload size cap — `packages/cli/src/hub.ts`
-**Repro** `pnpm --filter soak start -- --scenario=payloads`
-`hub.handleIngestFrame` stores `serializePayload(...)`'s trimmed result but
-calls `this.fanout(envelope)` with the *original* envelope. A 32 MB payload
-reaches every viewer in full (server RSS 95 → 303 MB) and then disagrees with
-what the same viewer sees on reload. Fixing it properly means `insertEvent`
-returning the effective payload so the hub can fan out exactly what it stored —
-an interface change, so it is reported rather than made here.
+### 2. ~~The fan-out path has no payload size cap~~ — FIXED
+`hub.handleIngestFrame` now fans out what it stored
+(`this.fanout(stored.truncated ? { ...envelope, payload: stored.payload } :
+envelope)`), so a live viewer and a reload agree and a 32 MB tool result is no
+longer relayed in full. Re-measured: every size on the ladder is now identical
+live and on replay, and the 32 MB case leaves the server at 264 MB rather than
+303 MB. The **"Payloads"** table above still shows the pre-fix "seen live"
+column; the "live vs replay" row in the scenario is the current answer.
 
 ### 3. `prune` never shrinks the database and nothing calls `vacuum()` — `packages/cli`
 **Repro** `pnpm --filter soak start -- --scenario=retention`
@@ -288,13 +352,58 @@ busy machine).
 works exactly as designed and the host app is untouched — but the event is gone
 with no per-event signal. Worth a documented depth limit.
 
-### 5. Viewer layout is ~O(n²) and recursive — `apps/viewer/src/layout/tidyTree.ts`
-**Repro** `pnpm --filter soak start -- --scenario=viewer`
-188 ms per layout at 3,203 nodes; stack overflow somewhere past 4,000 tree
-depth. Also `appendLayout` in `incremental.ts` rescans every placed rectangle
-(and recomputes the bounding box) per new node: 53 µs/node at 300 nodes rising
-to 221 µs/node at 1,763. Not reachable through the shipped adapters; reachable
-through imports and custom instrumentation.
+### 5. ~~Viewer layout is ~O(n²) and recursive~~ — LARGELY FIXED
+Originally: 188 ms per layout at 3,203 nodes and a stack overflow past ~4,000
+tree depth. Re-measured on the same scenario after the layout work landed:
+**2.39 ms at 3,203 nodes**, scaling 12x nodes → 12.2x time (linear or better),
+and a 6,000-deep chain lays out in 6.45 ms instead of throwing. The table under
+"Viewer" above predates that and is kept only for the shape of the old curve.
+What remains is `appendLayout` in `incremental.ts`, still rescanning placed
+rectangles per new node: 52 µs/node at 300 nodes rising to 191 µs/node at
+1,763 — a 3.7x per-node increase over 6x the canvas, which the scenario now
+accepts rather than flags.
+
+
+### 6. The wire has no protocol-appropriate frame cap — `packages/cli/src/server.ts`
+**Repro** `pnpm --filter soak start -- --scenario=adversarial`
+`MAX_PAYLOAD_BYTES` is 512 KB; the socket's limit is `ws`'s default
+`maxPayload`, 100 MiB. The guard runs after the frame has been buffered,
+decoded to a string and JSON-parsed, so a 64 MB frame moves the server from
+96 MB to 486 MB and it does not come back after a forced GC. Pass `maxPayload`
+to both `WebSocketServer`s — a few MB is already generous — so an oversized
+frame is refused at the socket (close 1009) instead of being materialised.
+
+### 7. Every dropped frame costs one unthrottled log line — `packages/cli/src/hub.ts`
+**Repro** `pnpm --filter soak start -- --scenario=adversarial`
+Measured at exactly 1.00 log lines per garbage frame. `graphmind serve` passes
+`console.log`, a synchronous write to the operator's TTY, so a peer sending
+garbage at line rate spends the operator's event loop and buries the log they
+were reading. Repeated `hello` frames do the same and additionally get a
+`hello.ack` allocated per frame. The client's `session.guard()` already has the
+rate-limited-warning shape to copy.
+
+### 8. The liveness reaper kills the peer it is busiest with — `packages/cli/src/hub.ts`
+**Repro** `pnpm --filter soak start -- --scenario=adversarial --reap-ping=200`
+`Hub.pingAll` terminates any socket that has not ponged since the previous
+tick. The pong arrives on the same TCP stream as that peer's own frames,
+*behind* them, so the server only sees it after draining that peer's entire
+backlog — a peer with more than ~two ping intervals of queued work is reaped
+**because** the server is busy with it. 26,610 of 60,000 events were lost, with
+no error to the app, no gap in the viewer, and one `app detached` line in the
+log: the same silent-loss class as finding #1. At the shipped 30 s interval
+this needs roughly a million queued events, so it is reachable on purpose
+rather than by accident — and trivial for anyone who lowers `pingIntervalMs`.
+Judge liveness on "have we read anything from this socket recently" instead.
+
+### Correctness findings from the same attack surface
+Not repeated here because they belong in a test suite, not a benchmark. From
+`security/` (`pnpm test:security`, all pinned as tests): any `/ingest`
+connection can claim any run — fabricating events into it, stealing the
+operator's `exec.resume` **including the injected value**, wedging the victim's
+gate forever and forging its `run.finished`; `seq` squatting silently deletes a
+real app's events; and the 512 KB guard can produce stored envelopes the viewer
+rejects when the oversized field is one the schema requires. See
+`security/README.md` for the full list.
 
 ### Fixed while here — `packages/cli/src/storage.ts`
 An oversized payload used to be replaced **wholesale** by the truncation

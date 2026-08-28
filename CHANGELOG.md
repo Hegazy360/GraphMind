@@ -3,7 +3,108 @@
 All notable changes to GraphMind. Versions are shared across every package in
 this repo (`graphmind-ai`, `@graphmind-ai/sdk`, `@graphmind-ai/client`,
 `@graphmind-ai/schema`, `@graphmind-ai/anthropic`, `@graphmind-ai/openai`,
-`@graphmind-ai/langgraph`, and the Python `graphmind-ai` distribution).
+`@graphmind-ai/langgraph`, `@graphmind-ai/mcp`, the Python `graphmind-ai`
+distribution, and the Ruby `graphmind` gem).
+
+## 0.4.0
+
+MCP server debugging, a Ruby SDK, and the fixes a deliberate attack on the
+protocol boundary turned up.
+
+### Added — debug an MCP server while your client is driving it
+
+The tools around MCP today are test clients: you replace your host and poke the
+server by hand. Nothing could watch a server *in situ*, hold a request, or
+answer one differently. Two shapes, because they see different things:
+
+- **`graphmind mcp-proxy -- <your server command>`** — a transparent stdio
+  man-in-the-middle. It spawns your real server, relays every JSON-RPC frame
+  byte-for-byte, and reports the conversation as a live graph. **Any language,
+  no code changes**, so it debugs a server you did not write. Gates at the
+  protocol boundary: hold a request before your server sees it, hold a response
+  before your host sees it, `inject` an answer, `retry` the original bytes,
+  `abort` with a JSON-RPC error. Errors hold by default, so a broken server
+  stops with zero configuration.
+- **`@graphmind-ai/mcp`** — two lines to instrument an `McpServer` you own, for
+  what only the inside can tell you: work that never reaches the wire, outbound
+  sampling with the handler's own context, and `abort` that cancels the
+  `AbortSignal` your handler already has.
+
+Both map MCP onto the graph: the session is a `server` node, `tools/call` a
+`tool`, `resources/read` a `resource`, `prompts/get` a `prompt`, and
+`sampling/createMessage` an `llm`. `server`, `resource` and `prompt` are new
+node kinds in the wire schema; the viewer draws each with its own glyph.
+
+### Added — Ruby
+
+`graphmind` (RubyGems), zero runtime dependencies, Ruby >= 3.1. Automatic
+instrumentation for **ruby-openai** and **ruby_llm**, plus `Graphmind.tool`,
+`.span` and `.wrap_method` for anything else. Fiber-local run context, so a
+Rails request or a Sidekiq job is a run without any wiring.
+
+### Fixed — security
+
+Found by fuzzing the ingest boundary. All are local-only (the server binds
+127.0.0.1), so the threat is another process on your machine — a postinstall
+script, a compromised dependency:
+
+- **Any process that could open `/ingest` could claim any other process's run
+  by naming it once.** One frame bought four things, each demonstrated end to
+  end against a real session holding a real gate: fabricated nodes rendered
+  inside the victim's run, the operator's next `exec.resume` delivered to the
+  attacker *including the value they injected*, the victim's gate never
+  released (fail-open does not cover this — the client believes the debugger is
+  still attached and simply has not answered), and a forged `run.finished`
+  marking a live run failed. A run is now claimed by the token that created it:
+  `hello.ack` mints one, and a client echoes it as `hello.resumeToken` so a
+  reconnect still proves it is the same app. The same fix closes `seq`
+  squatting, where a peer pre-claiming a run's low sequence numbers silently
+  deleted the start of that run.
+- The wire accepted 100 MiB frames against a 512 KB storage budget; one 64 MB
+  frame took the server from 95 MB RSS to ~500 MB, permanently. Capped at
+  16 MiB, refused during frame assembly.
+- One unthrottled log line per dropped frame, written synchronously to the
+  operator's terminal. Now rate-limited, with a suppressed count.
+- The liveness reaper judged a peer dead on a missing pong — which arrives
+  *behind* that peer's own frames — so a busy app was terminated **because**
+  the server was busy with it, dropping everything in flight silently (26,570
+  of 60,000 events at a 200 ms interval). Liveness is now "we read bytes from
+  this socket".
+- A repeated `subscribe` replayed the whole run again, every time.
+- A lone surrogate in a `runId` was silently rewritten by SQLite, so the app
+  streamed under one id and the server stored another. Refused now.
+- `ts` was unbounded, so one frame with `ts: 1e300` pinned that run to the top
+  of the run list until it was pruned.
+
+### Fixed
+
+- **The 512 KB payload guard destroyed fields the schema requires.** It
+  replaced an oversized field with a marker *object*, so a >512 KB error
+  message made `node.error` fail its own schema and the viewer dropped it on
+  replay — a debugger losing precisely the error event, with no attacker
+  involved. Truncation is now type-preserving: a string stays a (shorter)
+  string, an array stays an array, an object keeps its own fields.
+- Injecting a bare value at a proxy `tools/call` gate produced a tool result
+  with **no content** — no error, just an empty answer, on the headline
+  feature. Injected values are now lifted into the result shape the method has
+  to return, while anything already shaped like a result (or a whole JSON-RPC
+  frame) is relayed untouched.
+- An envelope with no `payload` key was rejected, contradicting the stated
+  forward-compatibility contract.
+- Proxy runs reported `sdk: mcp@stdio` — a transport, not a version.
+- Proxy run labels were full of absolute paths from the host's config;
+  arguments that are bare paths are now shown by basename.
+
+### Changed
+
+- The viewer's camera never leaves a held gate off screen: it re-frames on a
+  hold, sits above centre so the action row has room, and re-decides when the
+  canvas resizes. The inspector is a docked pane rather than an overlay, so it
+  can no longer cover the buttons it is explaining.
+- `c` / `s` / `r` / `i` release a held gate from the keyboard; focus lands on
+  Continue when one opens.
+- Motion carries meaning: cards animate in from their caller, and each state
+  change gets one short ring instead of a permanent pulse.
 
 ## 0.3.2
 

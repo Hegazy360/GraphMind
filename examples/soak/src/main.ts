@@ -3,6 +3,7 @@
  *
  *   pnpm --filter soak start                       # the default battery
  *   pnpm --filter soak start -- --scenario=throughput --events=50000
+ *   pnpm --filter soak start -- --scenario=adversarial
  *   pnpm --filter soak start -- --scenario=longrun --minutes=6
  *
  * Everything here drives the real pipeline: a real graphmind-ai server in its
@@ -20,6 +21,7 @@ import { concurrentScenario } from './scenarios/concurrent.ts';
 import { retentionScenario } from './scenarios/retention.ts';
 import { viewerScenario } from './scenarios/viewer.ts';
 import { longRunScenario } from './scenarios/longrun.ts';
+import { adversarialScenario } from './scenarios/adversarial.ts';
 
 type ScenarioFn = (flags: ReturnType<typeof parseFlags>) => Promise<Section>;
 
@@ -31,6 +33,7 @@ const SCENARIOS: Record<string, ScenarioFn> = {
   retention: retentionScenario,
   viewer: viewerScenario,
   longrun: longRunScenario,
+  adversarial: adversarialScenario,
 };
 
 /** `--scenario=all` runs these in order; longrun is opt-in (wall-clock minutes). */
@@ -41,6 +44,7 @@ const DEFAULT_BATTERY = [
   'reconnect',
   'retention',
   'viewer',
+  'adversarial',
 ];
 
 async function main(): Promise<void> {

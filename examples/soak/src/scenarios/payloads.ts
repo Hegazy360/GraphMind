@@ -254,7 +254,9 @@ export async function payloadsScenario(flags: Flags): Promise<Section> {
       divergedCases === 0
         ? 'identical for every case'
         : `${divergedCases} case(s) differ, first ${firstDivergence?.label}: live ${fmtBytes(firstDivergence?.live ?? 0)} vs stored ${fmtBytes(firstDivergence?.storedSize ?? 0)}`,
-      'the storage guard is not applied to the fan-out path',
+      divergedCases === 0
+        ? 'the fan-out path applies the same 512 KB guard as storage'
+        : 'the storage guard is not applied to the fan-out path',
     );
     if (divergedCases > 0) {
       finding(

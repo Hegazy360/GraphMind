@@ -43,6 +43,21 @@
   --err-strong: #fca5a5;
   --amber: #fbbf24;
   --amber-soft: rgba(251, 191, 36, 0.14);
+  --amber-text: #fbbf24;
+  --amber-tint: rgba(251, 191, 36, 0.07);
+
+  /* Kind identity. Deliberately unsaturated and used only on glyphs and
+     hairlines: green means alive and red means failed, and neither is
+     available to say "this is a resource". */
+  --kind-agent: #a8adb8;
+  --kind-llm: #6ee7a8;
+  --kind-tool: #7aa2f7;
+  --kind-chain: #b58ede;
+  --kind-retriever: #6fc3c9;
+  --kind-server: #8f9bf0;
+  --kind-resource: #79b6c9;
+  --kind-prompt: #c294c9;
+  --kind-custom: #8b8b95;
 
   --ghost: #33333d;
   --edge: #2a2a33;
@@ -104,6 +119,18 @@
     --err-strong: #b91c1c;
     --amber: #b45309;
     --amber-soft: rgba(180, 83, 9, 0.12);
+    --amber-text: #92400e;
+    --amber-tint: rgba(180, 83, 9, 0.06);
+
+    --kind-agent: #6b7280;
+    --kind-llm: #0f8a5f;
+    --kind-tool: #3b6fd4;
+    --kind-chain: #6d54b8;
+    --kind-retriever: #2b8790;
+    --kind-server: #4f5bd5;
+    --kind-resource: #2f7f95;
+    --kind-prompt: #8e4fa0;
+    --kind-custom: #6e6e78;
 
     --ghost: #c3c3cd;
     --edge: #d3d3db;
@@ -145,6 +172,18 @@
   --err-strong: #b91c1c;
   --amber: #b45309;
   --amber-soft: rgba(180, 83, 9, 0.12);
+  --amber-text: #92400e;
+  --amber-tint: rgba(180, 83, 9, 0.06);
+
+  --kind-agent: #6b7280;
+  --kind-llm: #0f8a5f;
+  --kind-tool: #3b6fd4;
+  --kind-chain: #6d54b8;
+  --kind-retriever: #2b8790;
+  --kind-server: #4f5bd5;
+  --kind-resource: #2f7f95;
+  --kind-prompt: #8e4fa0;
+  --kind-custom: #6e6e78;
 
   --ghost: #c3c3cd;
   --edge: #d3d3db;
@@ -238,11 +277,24 @@ button {
   min-width: 0;
   min-height: 0;
 }
+/*
+ * Two panes side by side: the graph/waterfall column, and the inspector.
+ * The inspector used to float over the whole workspace, which is how it
+ * ended up covering the timeline's zoom controls and the inject button of
+ * the very node it was explaining.
+ */
 .gm-workspace {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.gm-workspace-panes {
   position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-width: 0;
   min-height: 0;
 }
 .gm-workspace-graph {
@@ -730,7 +782,7 @@ button {
 }
 .gm-edge-paused .react-flow__edge-path {
   stroke: var(--amber);
-  stroke-width: 1.9;
+  stroke-width: 2.2;
 }
 .gm-edge-error .react-flow__edge-path {
   stroke: var(--err);
@@ -774,7 +826,6 @@ button {
 
 .gm-node--running {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  animation: gm-node-pulse 2.2s ease-in-out infinite;
 }
 .gm-node--error {
   border-color: color-mix(in srgb, var(--err) 70%, var(--border));
@@ -782,8 +833,7 @@ button {
 }
 .gm-node--paused {
   border-color: var(--amber);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--amber) 55%, transparent),
-    0 0 22px -6px color-mix(in srgb, var(--amber) 55%, transparent), var(--shadow);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--amber) 70%, transparent), var(--shadow);
   z-index: 5;
 }
 .gm-node--selected,
@@ -799,9 +849,9 @@ button {
   );
   border-style: solid;
 }
-/* the "stack" affordance behind a folded group */
-.gm-node--group::after {
-  content: '';
+/* the "stack" affordance behind a folded group. A real element, not
+   ::after: every card needs ::after for the state-change flash ring. */
+.gm-node--group .gm-group-stack {
   position: absolute;
   left: 7px;
   right: 7px;
@@ -814,18 +864,6 @@ button {
   opacity: 0.9;
 }
 
-@keyframes gm-node-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent),
-      0 0 20px -4px var(--accent-glow), var(--shadow);
-  }
-  50% {
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent),
-      0 0 6px -3px color-mix(in srgb, var(--accent) 12%, transparent), var(--shadow);
-  }
-}
-
 .gm-node-head {
   display: flex;
   align-items: center;
@@ -833,12 +871,33 @@ button {
   min-width: 0;
 }
 .gm-node-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 9.5px;
   font-weight: 620;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-faint);
   flex-shrink: 0;
+}
+/* The glyph carries kind, the word confirms it. Only the glyph is tinted —
+   the label stays on the one colour that is legible in both themes. */
+.gm-node-kind svg {
+  opacity: 0.9;
+  color: var(--kind-colour, var(--text-faint));
+}
+.gm-node-kind--trailing {
+  margin-left: auto;
+}
+.gm-node-ms {
+  margin-left: auto;
+}
+.gm-text-err {
+  color: var(--err);
+}
+.gm-token-idle {
+  opacity: 0.55;
 }
 .gm-node-title {
   font-size: var(--fs-base);
@@ -981,6 +1040,10 @@ button {
 
 /* kind badge (inspector header) */
 .gm-kind-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
   font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0.09em;
@@ -991,13 +1054,13 @@ button {
   background: var(--surface-2);
   border: 1px solid var(--border);
 }
-.gm-kind-badge--llm {
-  color: var(--accent-strong);
-  background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+.gm-kind-badge svg {
+  color: var(--kind-colour, var(--text-faint));
 }
-.gm-kind-badge--agent {
-  color: var(--text);
+.gm-inspect-name {
+  font-size: 14px;
+  flex: 1;
+  min-width: 0;
 }
 
 /* ungated (provider-executed) affordance */
@@ -1138,19 +1201,26 @@ button {
 }
 
 /* pause banner + actions */
+/*
+ * The held gate. This is the frame the whole product exists for, so the
+ * banner reads as its own surface rather than as more card: a tinted panel
+ * bleeding to the card's edges, hung off an amber rule.
+ */
 .gm-pause-banner {
-  margin-top: var(--sp-3);
+  margin: var(--sp-3) -11px -9px;
+  padding: 7px 11px 9px;
+  background: var(--amber-tint);
   border-top: 1px solid color-mix(in srgb, var(--amber) 35%, var(--border));
-  padding-top: 7px;
+  border-radius: 0 0 9px 9px;
 }
 .gm-pause-label {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 10.5px;
-  font-weight: 650;
-  color: var(--amber);
-  letter-spacing: 0.03em;
+  font-weight: 700;
+  color: var(--amber-text);
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   margin-bottom: 6px;
 }
@@ -1211,13 +1281,15 @@ button {
   border-color: var(--accent);
 }
 /* … except inside a held gate, where amber owns the moment. */
-.gm-pause-banner .gm-action--primary {
-  color: var(--amber);
+.gm-pause-banner .gm-action--primary,
+.gm-inspect-held .gm-action--primary {
+  color: var(--amber-text);
   border-color: color-mix(in srgb, var(--amber) 50%, var(--border-strong));
   background: var(--amber-soft);
 }
-.gm-pause-banner .gm-action--primary:hover {
-  color: var(--amber);
+.gm-pause-banner .gm-action--primary:hover,
+.gm-inspect-held .gm-action--primary:hover {
+  color: var(--amber-text);
   background: color-mix(in srgb, var(--amber) 22%, transparent);
   border-color: var(--amber);
 }
@@ -1720,13 +1792,12 @@ button {
   box-shadow: var(--shadow-pop);
 }
 .gm-inspector {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
+  position: relative;
+  flex-shrink: 0;
   z-index: 30;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 .gm-panel-resize {
   position: absolute;
@@ -2429,6 +2500,8 @@ button {
 }
 .gm-empty-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: var(--sp-2);
   margin-top: var(--sp-5);
 }
@@ -2470,5 +2543,425 @@ button {
   .gm-scrim {
     transition: none;
     animation: none;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   KIND IDENTITY
+
+   Eight node kinds now, three of them from MCP. Colour alone cannot carry
+   that — green and red are spoken for, and a colour-only language excludes
+   anyone who cannot separate two desaturated blues. So every kind gets a
+   glyph, and the glyph gets a low-saturation tint. The word stays on
+   --text-faint in both themes, which is the only thing here that has to pass
+   a contrast floor.
+   ═══════════════════════════════════════════════════════════════════════ */
+.gm-kind--agent {
+  --kind-colour: var(--kind-agent);
+}
+.gm-kind--llm {
+  --kind-colour: var(--kind-llm);
+}
+.gm-kind--tool {
+  --kind-colour: var(--kind-tool);
+}
+.gm-kind--chain {
+  --kind-colour: var(--kind-chain);
+}
+.gm-kind--retriever {
+  --kind-colour: var(--kind-retriever);
+}
+.gm-kind--server {
+  --kind-colour: var(--kind-server);
+}
+.gm-kind--resource {
+  --kind-colour: var(--kind-resource);
+}
+.gm-kind--prompt {
+  --kind-colour: var(--kind-prompt);
+}
+.gm-kind--custom {
+  --kind-colour: var(--kind-custom);
+}
+
+/* The MCP family reads as a family: the inspector badge picks up the tint on
+   its edge, so an MCP node is identifiable before you have read a word. */
+.gm-kind-badge.gm-kind--server,
+.gm-kind-badge.gm-kind--resource,
+.gm-kind-badge.gm-kind--prompt {
+  border-color: color-mix(in srgb, var(--kind-colour) 45%, var(--border));
+  background: color-mix(in srgb, var(--kind-colour) 9%, var(--surface-2));
+}
+
+/*
+ * An MCP server session is a *container of requests*, not another agent. The
+ * faintest wash of its family tint down the head of the card says so without
+ * spending another word, another glyph, or any of the two saturated colours.
+ * Background only: status owns the border and the rings.
+ */
+.gm-node.gm-kind--server:not(.gm-node--ghost) {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--kind-server) 8%, var(--surface)) 0%,
+    var(--surface) 62%
+  );
+}
+
+/* chips in the filter popover */
+.gm-chip--kind {
+  gap: 5px;
+}
+.gm-chip--kind svg {
+  color: var(--kind-colour, var(--text-faint));
+  opacity: 0.9;
+}
+
+/* timeline lanes inherit the same table */
+.gm-timeline-kind--chain {
+  background: var(--kind-chain);
+}
+.gm-timeline-kind--retriever {
+  background: var(--kind-retriever);
+}
+.gm-timeline-kind--server {
+  background: var(--kind-server);
+}
+.gm-timeline-kind--resource {
+  background: var(--kind-resource);
+}
+.gm-timeline-kind--prompt {
+  background: var(--kind-prompt);
+}
+.gm-bar--ok.gm-bar--server {
+  background: color-mix(in srgb, var(--kind-server) 55%, transparent);
+}
+.gm-bar--ok.gm-bar--resource {
+  background: color-mix(in srgb, var(--kind-resource) 55%, transparent);
+}
+.gm-bar--ok.gm-bar--prompt {
+  background: color-mix(in srgb, var(--kind-prompt) 55%, transparent);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MOTION
+
+   Three cues, and nothing else moves:
+
+     arrival    a card animates in *from its caller*, so a fan-out reads as
+                one node calling five rather than five cards materialising
+                out of the background. RunCanvas writes the vector into
+                --gm-in-x/y at layout time.
+     ongoing    running and held are the only two states that genuinely
+                continue, so they are the only two that loop — a 1px ring
+                breathing on opacity, which costs a composite and not a
+                shadow re-rasterisation. (The old running pulse animated
+                box-shadow on every live card at once; at 300 nodes that is
+                the single most expensive thing the canvas can do.)
+     transition every state change gets one short ring: green collapsing
+                inward as a call settles, red snapping shut when it throws,
+                amber opening when a gate holds. Then the card goes quiet.
+
+   All of it is off under prefers-reduced-motion, and the arrival and
+   transition cues are off on a big graph, where the frame budget is spent.
+   ═══════════════════════════════════════════════════════════════════════ */
+.react-flow__node .gm-node {
+  animation: gm-node-in 420ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+@keyframes gm-node-in {
+  from {
+    opacity: 0;
+    transform: translate3d(var(--gm-in-x, 0px), var(--gm-in-y, -18px), 0) scale(0.965);
+  }
+}
+
+/* the one-shot state-change ring */
+.gm-node::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 11px;
+  border: 1.5px solid transparent;
+  opacity: 0;
+  pointer-events: none;
+}
+.gm-node--settled::after {
+  border-color: var(--ok);
+  animation: gm-ring-in 620ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.gm-node--struck::after {
+  border-color: var(--err);
+  animation: gm-ring-in 620ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.gm-node--held::after {
+  border-color: var(--amber);
+  animation: gm-ring-open 760ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes gm-ring-in {
+  0% {
+    opacity: 0.9;
+    transform: scale(1.035);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+@keyframes gm-ring-open {
+  0% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.09);
+  }
+}
+
+/* the two ongoing states */
+.gm-node--running::before,
+.gm-node--paused::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 11px;
+  border: 1px solid var(--accent);
+  opacity: 0.5;
+  pointer-events: none;
+  animation: gm-breathe 2.4s ease-in-out infinite;
+}
+.gm-node--paused::before {
+  border-color: var(--amber);
+  opacity: 0.75;
+  animation-duration: 1.9s;
+}
+@keyframes gm-breathe {
+  50% {
+    opacity: 0.12;
+  }
+}
+
+/* an edge is a call being made: it fades in with the card it points at */
+.react-flow__edge {
+  animation: gm-fade 300ms ease;
+}
+
+/*
+ * Scale valve. Above ~90 cards React Flow virtualizes, which means panning
+ * mounts and unmounts nodes — replaying an entrance every time you scroll is
+ * both wrong and expensive. Big graphs keep the two ongoing states (they are
+ * information) and drop the flourishes.
+ */
+.gm-canvas--big .react-flow__node .gm-node,
+.gm-canvas--big .react-flow__edge,
+.gm-canvas--big .gm-node::after {
+  animation: none;
+}
+.gm-lod-dot .gm-node::after,
+.gm-lod-dot .gm-node--running::before {
+  animation: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE HELD GATE, IN THE INSPECTOR
+
+   The inspector is an overlay over the canvas, which used to mean the
+   natural flow — read *why* it failed, then inject a fix — ended with the
+   inject button underneath the panel that was explaining the failure. The
+   decision now lives in the same column as the evidence, pinned to the
+   bottom of the panel and always reachable, and the inject editor opens
+   inline where nothing can cover it.
+   ═══════════════════════════════════════════════════════════════════════ */
+.gm-inspect-held {
+  position: relative;
+  flex-shrink: 0;
+  padding: 10px var(--sp-4) 12px;
+  background: color-mix(in srgb, var(--amber-tint) 100%, var(--surface));
+  border-top: 1px solid color-mix(in srgb, var(--amber) 45%, var(--border));
+  box-shadow: 0 -10px 22px -18px rgba(0, 0, 0, 0.7);
+}
+.gm-inspect-held .gm-pause-label {
+  font-size: var(--fs-sm);
+  margin-bottom: 7px;
+}
+.gm-inspect-held .gm-pause-error {
+  white-space: normal;
+  line-height: 1.5;
+}
+/* Five verbs in a 320px column: let them size to their words and wrap when
+   they must, rather than each claiming a fifth of a row too narrow for any
+   of them. */
+.gm-actions--wrap {
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.gm-actions--wrap .gm-action {
+  flex: 1 1 auto;
+  min-width: 68px;
+  padding: 6px 7px;
+}
+/* Abort is the one irreversible verb here. When the row wraps it must not
+   inherit a full-width target on the second line — a destructive action
+   should never be the easiest thing to hit. */
+.gm-actions--wrap .gm-action--danger {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 6px 14px;
+}
+.gm-inject--panel {
+  position: static;
+  margin-top: var(--sp-3);
+  box-shadow: none;
+  padding: 9px;
+}
+.gm-inject-title {
+  margin-bottom: 6px;
+}
+.gm-inject-actions {
+  margin-top: 8px;
+}
+/*
+ * The inspector's own scroll gets bottom room for the pinned footer, so the
+ * last section is readable rather than tucked behind it.
+ */
+.gm-inspector--held .gm-inspect-body {
+  padding-bottom: var(--sp-3);
+}
+
+/* A key hint that does not become part of a button's accessible name. */
+.gm-kbd--inline {
+  margin-left: 5px;
+  padding: 0 4px;
+  font-size: 9px;
+  line-height: 1.5;
+  border-bottom-width: 1px;
+  opacity: 0.75;
+}
+/*
+ * A gate takes the keyboard, so the action row has to show where the
+ * keyboard is — including after a click. This is the one place the app uses
+ * :focus rather than :focus-visible, deliberately.
+ */
+.gm-pause-banner .gm-action:focus,
+.gm-inspect-held .gm-action:focus {
+  outline: 2px solid var(--amber);
+  outline-offset: 1px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   NARROW VIEWPORTS
+
+   A 244px rail plus a 392px inspector needs about 1,000px before the graph
+   gets any room at all. Below that the rail becomes an overlay drawer that
+   starts closed (App.tsx), the toolbars stop trying to fit on one line, and
+   the inspector takes the width it is given rather than the width it wants.
+   ═══════════════════════════════════════════════════════════════════════ */
+@media (max-width: 860px) {
+  .gm-app-body {
+    position: relative;
+  }
+  .gm-rail {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 60;
+    width: min(280px, 82vw);
+    box-shadow: var(--shadow-pop);
+    animation: gm-rail-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  @keyframes gm-rail-in {
+    from {
+      transform: translateX(-100%);
+    }
+  }
+  .gm-topbar {
+    gap: var(--sp-3);
+    padding: 0 var(--sp-3);
+  }
+  .gm-topbar-title h1 {
+    max-width: 140px;
+  }
+  .gm-topbar-actions {
+    margin-left: auto;
+  }
+  .gm-inspector {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(100%, 100vw) !important;
+    max-width: 100%;
+  }
+  .gm-runbar {
+    gap: var(--sp-3);
+    padding: 0 var(--sp-3);
+    overflow-x: auto;
+  }
+  .gm-runbar > * {
+    flex-shrink: 0;
+  }
+  .gm-runbar-endpoint,
+  .gm-runbar-divider {
+    display: none;
+  }
+  .gm-minimap {
+    display: none;
+  }
+}
+@media (max-width: 620px) {
+  /*
+   * At phone width the toolbar cannot hold seven controls and a run name.
+   * What survives is what only the toolbar can do — say what you are looking
+   * at, filter it, and search it. Folding and the waterfall are still one
+   * ⌘K away, which is where a cramped screen should send you anyway.
+   */
+  .gm-narrow-hide {
+    display: none !important;
+  }
+  .gm-topbar-title h1 {
+    max-width: none;
+  }
+}
+@media (max-width: 560px) {
+  .gm-toolbtn .gm-kbd {
+    display: none;
+  }
+  .gm-empty-card {
+    padding: 22px 20px 18px;
+  }
+  .gm-empty-actions {
+    flex-direction: column;
+  }
+  .gm-empty-foot {
+    flex-wrap: wrap;
+    gap: var(--sp-3);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   REDUCED MOTION — everything added above, switched off.
+   ═══════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__node .gm-node,
+  .react-flow__edge,
+  .gm-node::after,
+  .gm-node--running::before,
+  .gm-node--paused::before,
+  .gm-node--settled::after,
+  .gm-node--struck::after,
+  .gm-node--held::after,
+  .gm-rail {
+    animation: none;
+  }
+  /* The two ongoing states still have to be visible standing still. */
+  .gm-node--running::before {
+    opacity: 0.55;
+  }
+  .gm-node--paused::before {
+    opacity: 0.85;
   }
 }

@@ -163,6 +163,8 @@ class Session:
         self._lock = threading.RLock()
         self._buffer: RingBuffer[str] = RingBuffer(buffer_size)
         self._seq = 0
+        #: Identity handed out by the debugger in ``hello.ack``; see _build_hello.
+        self._session_token: str | None = None
         self._started = False
         self._disposed = False
         self._attached_mirror = False
@@ -558,22 +560,30 @@ class Session:
         with self._lock:
             seq = self._seq
             self._seq += 1
+            token = self._session_token
+        payload: dict[str, Any] = {
+            "versions": {"protocol": PROTOCOL_VERSION, "client": CLIENT_VERSION},
+            "capabilities": list(KNOWN_CAPABILITIES),
+            "app": self.app_name,
+            "sdk": self.sdk,
+        }
+        # Echoing the token from the last ``hello.ack`` is what lets the
+        # debugger recognise a reconnect as the SAME app, and so refuse writes
+        # to our runs from any other local process. Absent on first connect.
+        if token is not None:
+            payload["resumeToken"] = token
         return serialize_envelope(
-            create_envelope(
-                "hello",
-                {
-                    "versions": {"protocol": PROTOCOL_VERSION, "client": CLIENT_VERSION},
-                    "capabilities": list(KNOWN_CAPABILITIES),
-                    "app": self.app_name,
-                    "sdk": self.sdk,
-                },
-                seq,
-                WILDCARD_RUN_ID,
-            )
+            create_envelope("hello", payload, seq, WILDCARD_RUN_ID)
         )
 
     def _handle_attached(self, ack: dict[str, Any]) -> None:
         try:
+            # Kept across reconnects on purpose (see _build_hello). Only ever
+            # replaced, never cleared on detach: surviving the drop is the point.
+            token = ack.get("sessionToken")
+            if isinstance(token, str) and token:
+                with self._lock:
+                    self._session_token = token
             breakpoints = ack.get("breakpoints")
             mode = ack.get("mode")
             self._engine.arm(

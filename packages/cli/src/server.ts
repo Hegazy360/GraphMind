@@ -31,7 +31,7 @@ import { checkRequestHeaders, parseOriginPolicy, type Rejection } from './origin
 import { DEFAULT_PORT, resolveDbPath, resolveViewerDist, type EnvLike } from './paths.js';
 import { SqliteStorage } from './sqlite-storage.js';
 import { serveViewer } from './static-site.js';
-import { DEFAULT_RETENTION, type Storage, type StoredEvent } from './storage.js';
+import { DEFAULT_RETENTION, MAX_FRAME_BYTES, type Storage, type StoredEvent } from './storage.js';
 import type { WireEnvelope } from './ui-protocol.js';
 import { VERSION } from './version.js';
 
@@ -277,8 +277,17 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
   boundPort = port;
   const url = `http://${host}:${port}`;
 
-  const ingestWss = new WebSocketServer({ noServer: true });
-  const uiWss = new WebSocketServer({ noServer: true });
+  // `ws` defaults to a 100 MiB frame ceiling. Nothing here can use a frame
+  // that big: the storage budget is MAX_PAYLOAD_BYTES (512 KB), so everything
+  // above it is discarded down to a preview anyway — but the frame is
+  // buffered, decoded and parsed first, and one 64 MB frame took the server
+  // from 95 MB RSS to ~500 MB permanently. 16 MiB is 32x the storage budget,
+  // so every payload a developer could plausibly want a preview of still gets
+  // through and degrades gracefully; past it the frame is refused during
+  // assembly (close 1009) and the client reconnects and replays.
+  const maxPayload = MAX_FRAME_BYTES;
+  const ingestWss = new WebSocketServer({ noServer: true, maxPayload });
+  const uiWss = new WebSocketServer({ noServer: true, maxPayload });
   ingestWss.on('connection', (ws) => hub.addIngestSocket(ws));
   uiWss.on('connection', (ws) => hub.addUiSocket(ws));
 

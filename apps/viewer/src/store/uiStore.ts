@@ -107,6 +107,20 @@ export interface FocusRequest {
   nonce: number;
 }
 
+/**
+ * "Open the inject editor" as state rather than as a callback.
+ *
+ * The editor is rendered twice — once in the held card, once in the
+ * inspector's held-gate footer — and the keyboard has to be able to open
+ * whichever one the user is actually looking at without either component
+ * knowing the other exists.
+ */
+export interface InjectRequest {
+  pauseId: string;
+  variant: 'card' | 'panel';
+  nonce: number;
+}
+
 interface UiState {
   selectedRunId: string | undefined;
   selectedNodeId: string | undefined;
@@ -125,6 +139,16 @@ interface UiState {
   /** Set by the empty-state "load demo run" button. */
   demoRequested: boolean;
   focusRequest: FocusRequest | undefined;
+  injectRequest: InjectRequest | undefined;
+  /**
+   * Width of the inspector overlay, or 0 when it is closed.
+   *
+   * The camera needs it. The inspector is `position: absolute` over the
+   * canvas, so the canvas element is ~390px wider than the part of it anyone
+   * can see — and framing or centring against the element is exactly how a
+   * held node ends up hidden behind the panel describing it.
+   */
+  inspectorWidth: number;
 
   // ── scale ────────────────────────────────────────────────────────────────
   /** Collapsed group roots, per run — survives selection changes. */
@@ -152,6 +176,8 @@ interface UiState {
   setFixtureActive: (active: boolean) => void;
   requestDemo: () => void;
   requestFocus: (nodeId: string) => void;
+  requestInject: (pauseId: string, variant: 'card' | 'panel') => void;
+  setInspectorWidth: (px: number) => void;
 
   toggleCollapse: (runId: string, nodeId: string) => void;
   setCollapsed: (runId: string, nodeIds: readonly string[]) => void;
@@ -202,6 +228,8 @@ export const useUiStore = create<UiState>((set) => ({
   fixtureActive: false,
   demoRequested: false,
   focusRequest: undefined,
+  injectRequest: undefined,
+  inspectorWidth: 0,
 
   collapsedByRun: {},
   lod: 'full',
@@ -237,6 +265,10 @@ export const useUiStore = create<UiState>((set) => ({
   setFixtureActive: (active) => set({ fixtureActive: active }),
   requestDemo: () => set({ demoRequested: true }),
   requestFocus: (nodeId) => set({ focusRequest: { nodeId, nonce: ++focusNonce } }),
+  requestInject: (pauseId, variant) =>
+    set({ injectRequest: { pauseId, variant, nonce: ++focusNonce } }),
+  setInspectorWidth: (px) =>
+    set((s) => (s.inspectorWidth === px ? s : { inspectorWidth: Math.max(0, px) })),
 
   toggleCollapse: (runId, nodeId) =>
     set((s) => {

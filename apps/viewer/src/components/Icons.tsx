@@ -190,3 +190,81 @@ export const IconStack = (p: SVGProps<SVGSVGElement>) => (
     <rect x="3.5" y="12" width="17" height="8" rx="1.6" strokeOpacity="0.6" />
   </svg>
 );
+
+// ── node-kind glyphs ───────────────────────────────────────────────────────
+// Kind is carried by shape first and tint second: green and red are spoken
+// for (alive / failed), and a colour-only language excludes anyone who can't
+// separate two desaturated blues.
+
+export const IconKindAgent = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="5.5" r="2.3" />
+    <circle cx="5.5" cy="18" r="2.3" />
+    <circle cx="18.5" cy="18" r="2.3" />
+    <path d="M12 7.8 6.8 15.9M12 7.8l5.2 8.1" />
+  </svg>
+);
+
+export const IconKindLlm = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M12 3.2 13.7 9l5.8 1.7-5.8 1.7L12 18.2l-1.7-5.8L4.5 10.7 10.3 9 12 3.2Z" />
+    <path d="M18.4 16.6l.7 2.2 2.2.7-2.2.7-.7 2.2-.7-2.2-2.2-.7 2.2-.7.7-2.2Z" strokeOpacity="0.55" />
+  </svg>
+);
+
+export const IconKindTool = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M14.8 3.6a5 5 0 0 0-6 6.5l-5 5a2.1 2.1 0 0 0 3 3l5-5a5 5 0 0 0 6.5-6l-2.9 2.9-2.5-2.5 2.9-2.9Z" />
+  </svg>
+);
+
+export const IconKindChain = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <rect x="3" y="9.5" width="7.5" height="5" rx="2.5" />
+    <rect x="13.5" y="9.5" width="7.5" height="5" rx="2.5" />
+    <path d="M10.5 12h3" />
+  </svg>
+);
+
+export const IconKindRetriever = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <ellipse cx="12" cy="6" rx="7" ry="2.8" />
+    <path d="M5 6v6c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8V6" />
+    <path d="M5 12v5c0 1.5 3.1 2.8 7 2.8" strokeOpacity="0.55" />
+  </svg>
+);
+
+export const IconKindServer = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <rect x="3.5" y="4" width="17" height="6" rx="1.8" />
+    <rect x="3.5" y="14" width="17" height="6" rx="1.8" />
+    <path d="M7 7h.01M7 17h.01" />
+  </svg>
+);
+
+export const IconKindResource = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M13.5 3.5H7a1.8 1.8 0 0 0-1.8 1.8v13.4A1.8 1.8 0 0 0 7 20.5h10a1.8 1.8 0 0 0 1.8-1.8V8.8l-5.3-5.3Z" />
+    <path d="M13.4 3.6v5.2h5.2" strokeOpacity="0.6" />
+  </svg>
+);
+
+export const IconKindPrompt = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M20.5 12.6c0 3.6-3.8 6.5-8.5 6.5a10 10 0 0 1-2.7-.4L4.5 20.5l1.3-3.5A6.2 6.2 0 0 1 3.5 12.6c0-3.6 3.8-6.5 8.5-6.5s8.5 2.9 8.5 6.5Z" />
+    <path d="M9 12h6" strokeOpacity="0.6" />
+  </svg>
+);
+
+export const IconKindCustom = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <rect x="4" y="7" width="16" height="10" rx="2.4" strokeDasharray="3 3" />
+  </svg>
+);
+
+export const IconKeyboard = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <rect x="2.5" y="6" width="19" height="12" rx="2.2" />
+    <path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M7.5 14h9" />
+  </svg>
+);

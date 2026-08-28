@@ -175,6 +175,16 @@ export const DEFAULT_RETENTION: { keepRuns: number; keepDays: number } = {
  */
 export const MAX_PAYLOAD_BYTES = 512 * 1024;
 
+/**
+ * Largest WebSocket frame the local server will assemble, on either socket.
+ *
+ * Deliberately much larger than MAX_PAYLOAD_BYTES (so an oversized payload
+ * still arrives and degrades to a preview, which is the designed behaviour)
+ * and much smaller than the `ws` default of 100 MiB (so a single frame cannot
+ * permanently inflate the process). See the call site in `server.ts`.
+ */
+export const MAX_FRAME_BYTES = 16 * 1024 * 1024;
+
 export interface TruncatedPayload {
   __graphmindTruncated: true;
   bytes: number;
@@ -196,6 +206,59 @@ const PREVIEW_CHARS = 2000;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Appended to a string field that had to be cut short. */
+const TRUNCATION_SUFFIX = '…[graphmind: truncated]';
+
+/** How deep `shrinkValue` recurses before it gives up and marks the subtree. */
+const MAX_SHRINK_DEPTH = 6;
+
+/**
+ * Shrink one oversized field, PRESERVING ITS JSON TYPE.
+ *
+ * Type preservation is the whole contract. The obvious implementation —
+ * replace the offending value with a marker object — silently destroys the
+ * events that matter most: `node.error` carries `error: {name, message}`,
+ * both required strings, so a >512KB error message made `error` the biggest
+ * field, the marker object replaced it, the stored envelope stopped
+ * validating, and the viewer dropped it on replay. A debugger losing
+ * precisely the error event is the worst possible failure, and it needs no
+ * attacker — a provider returning a large error body is enough.
+ *
+ * So: a string stays a string (prefix + suffix), an array stays an array, an
+ * object stays an object with its own fields shrunk in turn and the marker
+ * fields merged in — schemas are loose, so the extra keys are preserved
+ * rather than rejected, and `isTruncatedPayload` still reports true.
+ *
+ * Only called on values that already serialized, so there are no cycles and
+ * the depth is one JSON.stringify has survived; the depth bound is belt and
+ * braces.
+ */
+function shrinkValue(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') {
+    return value.length <= PREVIEW_CHARS
+      ? value
+      : `${value.slice(0, PREVIEW_CHARS)}${TRUNCATION_SUFFIX}`;
+  }
+  if (Array.isArray(value)) return [];
+  if (!isPlainObject(value)) return value; // numbers, booleans, null: never the problem
+  if (depth >= MAX_SHRINK_DEPTH) {
+    return { __graphmindTruncated: true, bytes: 0, preview: '[deeply nested]' } satisfies TruncatedPayload;
+  }
+  const shrunk: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) shrunk[key] = shrinkValue(value[key], depth + 1);
+  // Marker only at the top of the field, not at every nesting level: one
+  // preview per shrunk field is informative, one per node would reintroduce
+  // the size problem the shrinking exists to solve.
+  if (depth > 0) return shrunk;
+  const encoded = safeStringify(value);
+  return {
+    ...shrunk,
+    __graphmindTruncated: true,
+    bytes: encoded === undefined ? 0 : encoded.length,
+    preview: encoded === undefined ? '[unserializable field]' : encoded.slice(0, PREVIEW_CHARS),
+  } satisfies TruncatedPayload & Record<string, unknown>;
 }
 
 function safeStringify(value: unknown): string | undefined {
@@ -241,17 +304,9 @@ function truncateFields(
   let remaining = totalBytes;
   for (const { key, bytes } of sizes) {
     if (remaining <= maxBytes / 2) break; // leave room for the marker itself
-    const value = payload[key];
-    // An array field keeps its type (an empty array still satisfies
-    // `z.array(...)`); anything else becomes a nested marker.
-    const encoded = safeStringify(value);
-    trimmed[key] = Array.isArray(value)
-      ? []
-      : ({
-          __graphmindTruncated: true,
-          bytes,
-          preview: encoded === undefined ? '[unserializable field]' : encoded.slice(0, PREVIEW_CHARS),
-        } satisfies TruncatedPayload);
+    // Type-preserving: see `shrinkValue`. A required string field must come
+    // back as a string or the envelope stops satisfying its own schema.
+    trimmed[key] = shrinkValue(payload[key]);
     dropped.push(key);
     remaining -= bytes;
   }

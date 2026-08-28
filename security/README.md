@@ -1,14 +1,30 @@
-# GraphMind secret-leak audit
+# GraphMind adversarial audit
 
-> **The one-line version.** GraphMind records what your agent **did** — prompts,
-> tool arguments, tool results. It records nothing about how your app
-> **authenticated**. An API key, an `Authorization` header, a token in a
-> gateway URL, or a value in your environment never enters a GraphMind
-> artifact. Everything you typed into a prompt does, on purpose.
+Two questions about the same product, asked by attacking it.
 
-This package is an adversarial audit that proves both halves of that sentence,
-on every artifact GraphMind can hand to a human. It is a private workspace
-package; it ships nothing.
+**1. Does a credential ever reach a recorded artifact?**
+
+> GraphMind records what your agent **did** — prompts, tool arguments, tool
+> results. It records nothing about how your app **authenticated**. An API key,
+> an `Authorization` header, a token in a gateway URL, or a value in your
+> environment never enters a GraphMind artifact. Everything you typed into a
+> prompt does, on purpose.
+
+**2. What can a hostile peer do to the server?**
+
+> Everything that reaches `graphmind serve` arrives over a WebSocket from a
+> process it does not control. The parser is contractually total — it *never
+> throws* — and the server must never crash, never wedge, never let one bad
+> frame kill a good connection, never let one peer corrupt another's run, and
+> never store an event the viewer cannot parse back.
+
+Question 1 is the secret-leak audit (canaries, six artifact surfaces, real
+agents against a mock provider). Question 2 is the protocol-boundary fuzzing
+(property-based generation plus a hand-written hostile corpus, driven at real
+sockets). Both live here because both are adversarial and both need the same
+thing: the real, shipped pipeline rather than a mock of it.
+
+It is a private workspace package; it ships nothing.
 
 ```bash
 pnpm build && pnpm --filter security-audit test
@@ -17,8 +33,16 @@ pnpm build && pnpm --filter security-audit test
 It deliberately imports the adapters and the CLI through their **published
 entry points** (`dist/`), not through `src/`, because the question is what the
 thing on npm does. Build first, or you are auditing a stale artifact. The suite
-is not wired into the root `pnpm test` script — run it explicitly, and it
-belongs in CI.
+is not wired into the root `pnpm test` script — run it with
+`pnpm test:security`; CI runs it on every push.
+
+The expensive half of question 2 — *how much does an attack cost the server* —
+is measured out of process by the soak harness, where the server's memory is
+not mixed with the test runner's:
+
+```bash
+pnpm --filter soak start -- --scenario=adversarial
+```
 
 ---
 
@@ -121,49 +145,229 @@ that test goes red and the rest of the suite is known to be untrustworthy again.
 
 ---
 
+## The protocol boundary
+
+`parseEnvelope` had never been fuzzed. The wire contract makes an unusually
+strong promise for a parser — *never throws*, total over every possible input —
+and the only thing that had ever spoken to it was the SDK, which cannot
+produce a malformed frame even on purpose.
+
+Two layers of generation, because the parser has two doors (`src/fuzz.ts`):
+
+- **`hostileTextArb`** — bytes that may not be JSON at all, or are JSON no
+  `JSON.stringify` would ever emit: truncated documents, JSON5-isms, a BOM
+  before the document, duplicate keys, `1e999`, `-0`, lone surrogates,
+  `__proto__` and `constructor.prototype`, 1,000,000-deep nesting, 2 MB
+  strings, a 1 MB run id.
+- **`deformedEnvelopeArb`** — decoded values shaped like an envelope but wrong
+  in one place: a missing field, a field of the wrong type, a fractional or
+  negative `seq`, a foreign `gm`, a payload that violates its own schema.
+
+Both are a mix: `fast-check` picks from a hand-written corpus as often as it
+generates. Property-based generation is good at breadth and bad at the specific
+pathological literal, and it is the literals (`"__proto__"`, `U+2028`, `1e999`)
+that break things.
+
+Those frames are then driven at the real thing. `src/wire.ts` boots a real
+`startServer()` on an ephemeral port with a throwaway database, and `RawIngest`
+/ `RawViewer` put **text** on `/ingest` and `/ws/ui` — no schema, no client, no
+serializer between the test and the socket. Two further doors come at the wire
+from the other end: `src/mcp-peer.ts` (a real MCP server instrumented by
+`@graphmind-ai/mcp`, driven by a real MCP client, so a hostile `tools/call`
+becomes a GraphMind envelope the way it would in production) and
+`src/proxy-peer.ts` (the shipped `graphmind mcp-proxy` spawned as a child
+process with a byte-faithful echo server behind it, so "the relay is
+invisible" can be asserted as a byte comparison rather than believed). Four invariants are asserted after
+every batch:
+
+1. the server does not die and does not wedge (`/health` still answers,
+   promptly — a frame that pins the event loop is a denial of service even if
+   nothing throws);
+2. one bad frame does not kill the connection it arrived on;
+3. a bad frame never touches an unrelated run — a healthy 40-event run
+   streaming on another socket keeps every event, in order;
+4. everything stored is still an envelope `parseEnvelope` accepts, because an
+   event the viewer rejects is an event that vanishes from the canvas on
+   reload.
+
+**Non-vacuity, again.** Every attack file opens with a plain `it(...)` proving
+the attack machinery actually worked — the control run really is streaming, the
+victim really did reach a gate, both peers really did send their events —
+before any `it.fails(...)` claims something is broken. Without it a
+`describe` block whose setup silently stopped working would keep reporting the
+defect it no longer reproduces.
+
+---
+
 ## Findings
 
 ### Open defects (fixes live outside this package)
 
-**1. `WS /ws/ui` accepts upgrades from any browser `Origin` — critical.**
-The WebSocket handshake is not covered by the browser same-origin policy, and
-`packages/cli/src/server.ts` does not inspect `Origin` on upgrade. While
-`graphmind serve` is running, **any web page the user visits** can:
+Ordered by damage. Every one is pinned by a test here; the ones whose fix has
+to land in `packages/**` are written as `it.fails(...)`, so they run green
+today and turn red the moment someone fixes them.
 
-- open `ws://127.0.0.1:4747/ws/ui`, `subscribe` to `*`, enumerate every run,
-  subscribe to each and receive all envelopes — every prompt, tool input and
-  tool output ever recorded; and
-- send `control` frames: `breakpoint.set`, `mode.set`, and `exec.resume` with
-  action `inject`, i.e. **substitute an attacker-chosen value for a tool result
-  in a live agent**.
+**1. Any `/ingest` connection can claim any run — critical.**
+`Hub.handleIngestFrame` assigns run ownership to the last writer:
 
-Both are demonstrated end to end in `tests/local-server-exposure.test.ts`.
+```ts
+const previousOwner = this.runOwners.get(envelope.runId);
+if (previousOwner !== conn) { /* ... */ this.runOwners.set(envelope.runId, conn); }
+```
 
-*Fix:* in the `httpServer.on('upgrade', ...)` handler in
-`packages/cli/src/server.ts`, read `request.headers.origin`. Destroy the socket
-unless it is absent (a non-browser client such as the SDK or a CLI) or its host
-is `127.0.0.1` / `localhost` on the server's own port. Apply it to `/ingest`
-too. The `it.fails(...)` tests in this package already state the wanted
-behaviour and will turn red the moment the fix lands.
+Nothing checks that `conn` has anything to do with `envelope.runId`. The
+comment above it explains why — a reconnecting client must be able to re-claim
+its own run, which is a real requirement — but the consequence is that *any*
+connected peer can claim *any* run by naming it once. Demonstrated end to end
+against a real `@graphmind-ai/client` session holding a real gate, in
+`tests/run-isolation.test.ts`. One frame buys all four of these:
 
-**2. No `Host` header check on the HTTP API — high, same class.**
-`GET /api/runs` sends no CORS headers, so a plain cross-origin `fetch` cannot
-read the body — but DNS rebinding makes an attacker's own origin resolve to
-`127.0.0.1`, at which point the request *is* same-origin and the body is
-readable. A `Host` allowlist (`127.0.0.1:<port>`, `localhost:<port>`) closes it.
-Same file, same handler.
+- **fabrication.** An attacker-chosen tool node appears inside the victim's run
+  and renders on the canvas, indistinguishable from something the app did.
+- **control theft.** The operator's next `exec.resume` is delivered to the
+  attacker instead of the app — *including the value they injected*. A peer
+  that never ran anything reads what the developer typed into the debugger for
+  someone else's agent.
+- **a wedged agent.** The victim's gate is never released. Fail-open does not
+  cover this: from the client's point of view the debugger is still attached
+  and simply has not answered yet, so it waits forever.
+- **forged lifecycle.** A `run.finished` from the attacker sets the run's
+  terminal status while the real app is still executing it. `GET /api/runs`,
+  the run list and the viewer all report a failure that never happened.
 
-**3. The recorded database is group/world readable — medium.**
-`packages/cli/src/sqlite-storage.ts` creates the database with
-`mkdirSync(dirname, { recursive: true })` and lets `node:sqlite` create the
-file, yielding `0755` on `~/.graphmind` and `0644` on `graphmind.db`. That file
-holds every prompt and tool payload the user ever recorded. On a shared or
-multi-account machine any local user can read it.
+*Fix:* record which connection created a run and only let that identity write
+to it. A per-run token minted in `hello.ack` and echoed on every envelope is
+the smallest change that still survives reconnects. At an absolute minimum,
+refuse `exec.resume` routing and `run.finished` from a connection that is not
+the run's original owner.
 
-*Fix:* `mkdirSync(dir, { recursive: true, mode: 0o700 })` and `chmodSync(path,
-0o600)` after opening. `packages/cli/src/telemetry.ts` already writes its
-install id with `mode: 0o600`, so the convention exists — the database just
-does not follow it.
+**2. `seq` squatting silently deletes a real app's events — high.**
+Same root cause, different lever. Dedup is `(runId, seq)` with `INSERT OR
+IGNORE` (decisions.md #5), which is what makes replay-on-attach safe — and also
+means whoever writes a `seq` first owns it. A peer that pre-claims the low
+sequence numbers of a run id erases the beginning of that run: the real app's
+frames are dropped, nothing errors, and the stored run looks complete. Pinned
+in `tests/run-isolation.test.ts`.
+
+**3. The 512 KB guard destroys fields a payload's own schema requires — high,
+and no attacker is needed.**
+`serializePayload` (packages/cli/src/storage.ts) trims an oversized payload by
+replacing its **largest** fields with a marker object, largest first. Its own
+comment says why it trims fields rather than the whole payload:
+
+> a payload replaced wholesale by a marker no longer satisfies its own schema —
+> the viewer's parser rejects the replayed envelope and the node is stuck
+> "running" forever on reload.
+
+That reasoning holds only while the biggest field is an optional one. When it
+is a field the schema requires to be a string, the stored envelope stops
+validating and the viewer drops it on replay. Five shapes are pinned in
+`tests/ingest-fuzz.test.ts`. The one that matters is `node.error`, whose
+payload is `{ nodeId, error }`: a >512 KB error message makes `error` the
+biggest field, `ErrorInfoSchema` rejects the stored envelope, and **a debugger
+loses precisely the error event**. `run.finished` with a large error, and
+`node.started` / `node.finished` with an oversized `nodeId`, `name` or
+`instanceId`, fail the same way. A provider returning a large error body
+reaches this without anyone attacking anything.
+
+*Fix:* in `truncateFields`, truncate a long **string** to a shorter string
+(with a marker suffix) rather than replacing it with an object — or skip fields
+whose replacement would not type-check.
+
+**4. The wire has no protocol-appropriate frame cap — medium (availability).**
+`MAX_PAYLOAD_BYTES` is 512 KB, but that guard runs *after* the frame has been
+buffered, decoded to a string and JSON-parsed. The only limit on the socket is
+`ws`'s default `maxPayload`, 100 MiB — 200x the storage budget. Measured out of
+process by `pnpm --filter soak start -- --scenario=adversarial`:
+
+| frame | peak server RSS |
+| --- | --- |
+| idle | 96.3 MB |
+| 1 MB | 105 MB |
+| 8 MB | 157 MB |
+| 32 MB | 261 MB |
+| 64 MB | 563 MB |
+| after a forced GC | **486 MB — 390 MB above idle, permanently** |
+
+Repeating the 64 MB frame does not climb further (a plateau, not a leak), but
+it never comes back down either. Connections are cheap by comparison: 500
+simultaneous ingest sockets cost 1.63 KB each.
+
+*Fix:* pass `maxPayload` to both `WebSocketServer`s in
+`packages/cli/src/server.ts` — a few MB is already generous against a 512 KB
+budget — so an oversized frame is refused at the socket (close 1009) instead of
+being materialised first.
+
+**5. Every dropped frame costs the operator one log line — medium.**
+`Hub.handleIngestFrame` logs on every invalid frame; `graphmind serve` hands it
+`console.log`, which is a synchronous write to the operator's TTY. Measured at
+exactly **1.00 log lines per garbage frame**, unthrottled and unaggregated
+(`tests/ingest-abuse.test.ts` and the soak scenario). A peer sending garbage at
+line rate spends the operator's event loop and buries the log they were
+reading. Repeated `hello` frames behave the same way, and additionally get a
+`hello.ack` allocated and sent for each one.
+
+*Fix:* rate-limit and aggregate — `session.guard()` in the client already has
+the shape.
+
+**6. The liveness reaper kills the peer it is busiest with, silently — medium.**
+`Hub.pingAll` sets `alive = false`, pings, and terminates any socket that has
+not ponged by the next tick. The pong arrives on the same TCP stream as that
+peer's own frames, *behind* them, so the server only sees it after draining
+that peer's whole backlog. A peer with more than ~two ping intervals of queued
+work is therefore reaped **because** the server is busy with it, and everything
+still in flight is dropped: no error to the app, no gap in the viewer, one
+`app detached` line in the log. Measured at a 200 ms ping interval: **26,610 of
+60,000 events lost**. At the shipped 30 s interval this needs roughly a million
+queued events, so it is not an everyday failure — but it is reachable on
+purpose, it is the same silent-loss class as the ring-buffer overflow in the
+soak report, and it becomes trivial for anyone who lowers `pingIntervalMs`.
+
+*Fix:* judge liveness on "have we read anything from this socket recently"
+rather than on a pong specifically.
+
+**7. `subscribe` replays a whole run, unbounded, on every frame — medium.**
+`Hub.handleSubscribe` calls `storage.listEvents(runId)` with no limit and
+pushes every event in one tick, and does it again for every `subscribe` frame,
+including repeats of one already active. The REST route for the same data caps
+a page at 5,000 (`PAGE_LIMIT_MAX`) and paginates; the socket route has no cap
+at all. Twenty `subscribe` frames against a 2,000-event run produce twenty full
+replays (`tests/ui-protocol-fuzz.test.ts`). The origin guard keeps browsers
+out; any local process can still do it.
+
+**8. `parseEnvelope` requires the `payload` key to be present — low.**
+Found by the round-trip property in `tests/protocol-fuzz.test.ts`. An
+`unknown-type` envelope whose payload is absent is accepted, but
+`JSON.stringify` drops the key, so parse → serialize → parse is not idempotent.
+Harmless in the shipped pipeline (such a frame is `invalid` on arrival and
+never reaches storage), but it is a hole in the stated forward-compatibility
+contract: a future v1.x message type carrying no payload would be rejected
+rather than tolerated. One character in `packages/schema/src/parse.ts`
+(`payload: z.unknown().optional()`).
+
+**9. `ts` is unbounded, and it is what the run list sorts by — low.**
+`z.number()` accepts any finite double and `ensureRun` uses `envelope.ts` as
+the run's `startedAt`, so one frame with `ts: 1e300` pins that run to the top
+of the operator's run list until it is pruned. Non-finite values are correctly
+rejected. Pinned in `tests/ingest-fuzz.test.ts`.
+
+**10. A lone surrogate in a `runId` is silently replaced — low.**
+SQLite's text binding substitutes U+FFFD, so the app streams under one run id
+and the server stores another; a viewer subscribing with the original id tails
+an empty run. Nothing in GraphMind chooses this, but nothing rejects it either.
+Pinned in `tests/ingest-fuzz.test.ts`.
+
+### Fixed since this file was first written
+
+The three defects this README originally reported are closed, and the tests
+that reported them now assert the fix instead:
+
+1. **Cross-origin WebSocket upgrades** and 2. **DNS rebinding on the HTTP API**
+   — closed by `packages/cli/src/origin-guard.ts`, applied to every request and
+   to both upgrade paths; `tests/local-server-exposure.test.ts` asserts the
+   refusals.
+3. **World-readable database** — `SqliteStorage` now creates `~/.graphmind`
+   0700 and `graphmind.db` 0600.
 
 ### Residual risks (not GraphMind defects, worth knowing)
 
@@ -183,20 +387,118 @@ the `_debug_echo` test in the same file.
 **Anything you put in a prompt or a tool payload is in the export.** By design.
 Treat a `--html` export like a screenshot of your terminal.
 
+**A loopback bind is not authentication.** The origin guard stops *browsers*.
+Every other process on the machine can open `/ingest` and `/ws/ui`, read every
+recorded run and drive a paused agent. That is the deliberate local-first
+posture for *reading* — the database is readable anyway — but findings 1 and 2
+show it is a far weaker posture for *writing* than it looks.
+
 ### Verified clean
 
-- Telemetry sends `{ event, installId, version, ts }` and nothing else, over a
-  fire-and-forget request; it is disabled whenever `CI` is set and by
-  `GRAPHMIND_TELEMETRY=0`.
-- The HTML export escapes `<`, `>`, U+2028 and U+2029, so a tool result
-  containing `</script><img onerror=…>` cannot become script in whoever opens
-  the shared file (`tests/export-hardening.test.ts`).
-- Failed provider requests record `Connection error.` / the provider's own
-  message; neither the SDK error message nor its stack carries the request URL,
-  so a token in a gateway `baseURL` does not leak through the error path.
-- No adapter reads any environment variable. The CLI copies the parent
-  environment into exactly one place — the child process spawned by
-  `graphmind demo --live` — and nowhere else.
+Attacked and held. These are results, not assumptions.
+
+- **The parser is total.** `parseEnvelope` and `parseEnvelopeJson` never throw,
+  for any input: thousands of generated hostile frames per property plus a
+  hand-written corpus of truncated JSON, JSON5-isms, BOM-prefixed documents,
+  `1e999`, `-0`, duplicate keys, 1,000,000-deep nesting, 2 MB strings and every
+  prototype key. An `ok` result is always a well-formed envelope of a known
+  type and always survives serialize → parse again.
+- **No prototype pollution**, in the parser or at either socket: `__proto__`
+  and `constructor.prototype` as payload fields, type names and message types
+  leave `Object.prototype` byte-for-byte unchanged.
+- **One bad frame never kills a good connection.** 100 garbage frames
+  interleaved with 100 valid ones: all 100 valid ones stored, socket still
+  open. The one exception is deliberate — a foreign `gm` closes *that*
+  connection with 1002 and touches nothing else.
+- **A bad frame never touches an unrelated run.** A 40-event control run
+  streaming on a second socket is identical, exactly once and in order, after
+  the whole hostile corpus and 400 generated frames.
+- **Everything stored is still a valid envelope**, apart from finding 3 —
+  including unknown types (tolerated by contract), 250 generated JSON payloads,
+  and every unicode class: NUL, lone surrogates, U+2028/9, RTL overrides,
+  noncharacters, zero-width joiners, combining-mark explosions.
+- **Ingest sockets are write-only for run data.** An attacker who claims a run
+  reads its control traffic (finding 1), never its events.
+- **Resource abuse held**: 500 simultaneous connections, a 20,000-frame flood
+  with zero loss and `/health` still answering in milliseconds, 200 silent TCP
+  sockets, a half-sent upgrade that stalls forever, and a peer that connects
+  and never speaks. An honest run streams through all of them.
+- **The viewer socket answers in-protocol under fuzzing.** Every reply to every
+  hostile frame is well-formed JSON of a known UI message type, the socket
+  stays open, and a second viewer and the app are unaffected. A viewer cannot
+  write into a run: an event type dressed up as a control is refused by name.
+- **Query parameters are validated**: non-integer, negative and out-of-range
+  `afterSeq` / `limit` are 400s, and a path-traversal run id is a 404.
+
+### The two MCP boundaries — covered, and clean
+
+Both landed during this work, and they are different shapes.
+
+**`@graphmind-ai/mcp` — the in-process adapter.** Not a proxy: it instruments
+an MCP server from the inside, so GraphMind has no JSON-RPC parser of its own
+here — the official SDK owns that. What it does own is the seam where somebody
+else's agent meets GraphMind's wire, and that seam has three inputs, all
+covered by `tests/mcp-boundary-fuzz.test.ts` against a real `McpServer` driven
+by a real `Client` over the SDK's in-memory transport:
+
+- **hostile request arguments.** Every string in `NASTY_STRINGS`, 120 generated
+  JSON values, a 4,000-deep object, a 2 MB string, `__proto__` and
+  `constructor.prototype`: all round-trip, none reach the host handler as an
+  exception, none pollute `Object.prototype`, and every resulting envelope is
+  still valid.
+- **a hostile host result.** A 900 KB result is truncated in *storage* (still a
+  valid envelope) while the MCP client receives it whole — GraphMind is on the
+  path, not in the way. A handler that throws still reaches the client as a
+  normal tool error; GraphMind does not swallow the host's own failure.
+- **the injected value.** This is the package's reason to exist and the
+  riskiest of the three: `coerceInjected` lifts whatever the operator typed
+  into the MCP result shape the request must return, and the SDK validates it
+  on the way out — so a bad coercion would fail a request the host never even
+  ran. Twelve shapes were injected through a real gate (bare string, number,
+  `null`, object, array, a hand-built `CallToolResult`, a lone surrogate,
+  U+2028 + an RTL override, a NUL byte, a nested object, a 1 MB string, a
+  `__proto__` key). All twelve produced a result the client accepted, the host
+  handler never ran, and nothing was polluted.
+
+**`graphmind mcp-proxy` — the man in the middle.** The only place in GraphMind
+where *both* peers are untrusted, and the one whose first contract is not
+"observe correctly" but *be invisible*. `tests/mcp-proxy-fuzz.test.ts` spawns
+the shipped `dist/cli.js` exactly as an `mcpServers` config would, puts a
+byte-faithful echo server behind it, and compares what came out with what went
+in — so anything the proxy normalises shows up as a diff rather than as a
+subtle behaviour change:
+
+- **90+ hostile frames relayed byte-for-byte**, with GraphMind attached: batches,
+  `id` as `null` / float / boolean / object / array, duplicate and colliding
+  ids, `"1"` vs `1`, a response nobody asked for, `result` *and* `error` in one
+  frame, `jsonrpc: "1.0"`, a numeric `method`, `9007199254740993`, `1e999`,
+  `-0`, `__proto__` in params and in a result, plus the general corpus.
+- **framing edge cases preserved**: a `\r` before the newline (the SDK's own
+  `ReadBuffer` strips it; the proxy must not), an empty frame, a NUL byte, and
+  a frame delivered one byte per write.
+- **a 4 MB frame** unchanged, and a frame over `--max-frame-bytes` still
+  delivered in full — the documented "stop observing, keep relaying"
+  degradation loses nothing.
+- **fail-open both ways**: perfect relay with no GraphMind running at all, and
+  perfect relay after the GraphMind server is killed mid-conversation.
+- **stdout carries only protocol bytes**, even when the proxy is fed garbage —
+  the contract that makes it usable at all, since one stray diagnostic line
+  would corrupt the client's stream.
+- **every envelope the proxy reports** is valid, whatever the conversation.
+
+**No defects found at either boundary.** One behaviour is worth a line in the
+docs, and it is not a bug: pause-on-error is armed by default
+(decisions.md #8), and in the proxy a held gate stops that *direction of the
+conversation* (`relay.ts` pauses the source for the whole drain). So a
+developer who puts `graphmind mcp-proxy` in an `mcpServers` config, leaves
+`graphmind serve` running and closes the viewer tab will see their agent hang
+on the first failing tool call. The proxy handles it about as well as it can —
+it prints `HOLDING … at the error gate — resume it in http://127.0.0.1:<port>
+(the MCP client is waiting…)` on stderr — and the hold is a pause, not a
+deadlock: `tests/mcp-proxy-fuzz.test.ts` releases it from a viewer and the exact
+bytes arrive. The same default has a milder version in the in-process adapter,
+where the symptom is a hung tool call in someone else's agent. `pauseTimeoutMs`
+opts out.
 
 ---
 
@@ -212,6 +514,12 @@ security/
     harness.ts         boots a real server + viewer socket, runs an agent,
                        collects all six artifact surfaces
     agents/            three instrumented agents, one per first-party adapter
+    fuzz.ts            hostile corpora + fast-check arbitraries for the wire
+    wire.ts            a real server plus raw sockets that can send anything
+    mcp-peer.ts        a real MCP server instrumented by @graphmind-ai/mcp,
+                       driven by a real MCP client over the SDK's transport
+    proxy-peer.ts      the shipped `graphmind mcp-proxy` as a child process,
+                       with a byte-faithful echo server behind it
   tests/
     adapter-leaks.test.ts           the main audit, per adapter, per surface
     harness-self-check.test.ts      proves the harness can detect a leak
@@ -219,7 +527,15 @@ security/
     local-server-exposure.test.ts   cross-origin access and file permissions
     export-hardening.test.ts        HTML export escaping + the sharing warning
     static-surface.test.ts          structural guard on the published builds
+    protocol-fuzz.test.ts           parseEnvelope: total, sound, stable, pure
+    ingest-fuzz.test.ts             the server's ingest path under bad frames
+    run-isolation.test.ts           can one peer reach into another's run?
+    ingest-abuse.test.ts            floods, giant frames, storms, slowloris
+    ui-protocol-fuzz.test.ts        the viewer socket under bad frames
+    mcp-boundary-fuzz.test.ts       hostile MCP requests, results and injects
+    mcp-proxy-fuzz.test.ts          byte-faithfulness of the JSON-RPC relay
 ```
+
 
 ## Adding a canary
 
@@ -230,3 +546,22 @@ security/
    suite proves it reached the provider before asserting it was not recorded.
 
 Nothing else needs changing: the scanner and the six surfaces are generic.
+
+## Adding a hostile frame
+
+1. A specific literal that should not break anything goes in `NASTY_STRINGS`,
+   `NASTY_NUMBERS` or `hostileText()` in `src/fuzz.ts`. Every corpus entry is
+   sent through both the parser and the real ingest socket automatically —
+   nothing else needs changing.
+2. A whole new *shape* of attack gets its own `it(...)` in the file that owns
+   that door: `ingest-fuzz.test.ts` for malformed input, `run-isolation.test.ts`
+   for one peer reaching into another's run, `ingest-abuse.test.ts` for
+   resource cost, `ui-protocol-fuzz.test.ts` for the viewer socket.
+3. If it demonstrates a defect whose fix lives in `packages/**`, write the
+   *wanted* behaviour as `it.fails(...)` and pair it with a plain `it(...)`
+   that proves the setup ran. The `it.fails` turns red the day it is fixed;
+   the plain one stops the pair from passing vacuously if the setup rots.
+4. Anything whose answer is a number rather than a boolean — memory, latency,
+   throughput — belongs in `examples/soak/src/scenarios/adversarial.ts`
+   instead, where the server is out of process and its RSS is sampled from
+   outside.

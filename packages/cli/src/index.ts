@@ -14,6 +14,8 @@ export {
 } from './debug-state.js';
 export { SqliteStorage } from './sqlite-storage.js';
 export {
+  MAX_PAYLOAD_BYTES,
+  MAX_FRAME_BYTES,
   type Storage,
   type StoredEvent,
   type RunRecord,

@@ -1,0 +1,68 @@
+{
+  "name": "@graphmind-ai/mcp",
+  "version": "0.4.0",
+  "description": "In-process MCP server adapter for the GraphMind live agent debugger: wrap your McpServer to stream tool / resource / prompt / sampling events and honour pause / step / inject / retry / abort gates.",
+  "license": "MIT",
+  "author": "Mohamed Hegazy",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "agents",
+    "debugger",
+    "devtools",
+    "observability",
+    "breakpoints",
+    "local-first"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "example",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "e2e": "node scripts/e2e.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@graphmind-ai/client": "workspace:*",
+    "@graphmind-ai/schema": "workspace:*"
+  },
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": ">=1.20.0 <2"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@types/node": "^26.3.0",
+    "@types/ws": "^8.18.1",
+    "mcp-sdk-1-20": "npm:@modelcontextprotocol/sdk@1.20.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "ws": "^8.21.3",
+    "zod": "^4.4.3",
+    "zod-3": "npm:zod@^3.25.76"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hegazy360/GraphMind.git",
+    "directory": "packages/mcp"
+  },
+  "homepage": "https://graphmind.ai"
+}

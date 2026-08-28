@@ -191,10 +191,12 @@ export function RunBar({
       <button
         className="gm-toolbtn"
         title={recorded ? RECORDED_HINT : 'Break before every node'}
+        aria-label="Break everywhere"
         onClick={pauseAll}
         disabled={recorded}
       >
-        <IconPause /> Break everywhere
+        <IconPause />
+        <span className="gm-toolbtn-label">Break everywhere</span>
       </button>
 
       <div className="gm-runbar-chips">

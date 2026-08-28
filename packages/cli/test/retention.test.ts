@@ -95,12 +95,52 @@ describe('payload guards', () => {
     expect(kept['status']).toBe('ok');
     expect(kept['durationMs']).toBe(1);
     expect(kept['fields']).toEqual(['output']);
-    expect(isTruncatedPayload(kept['output'])).toBe(true);
+    // Type-preserving: a string field comes back as a (short) string, not as
+    // a marker object. Replacing it wholesale is what used to make a large
+    // `node.error` fail its own schema and vanish from the viewer.
+    expect(typeof kept['output']).toBe('string');
+    expect(kept['output']).toMatch(/^x+…\[graphmind: truncated\]$/);
     expect(isTruncatedPayload(kept)).toBe(true);
     expect(Buffer.byteLength(result.json)).toBeLessThanOrEqual(MAX_PAYLOAD_BYTES);
 
     // The whole point: the trimmed envelope is still one the viewer parses.
     const envelope = { gm: 1, seq: 3, ts: 1_700_000_000_000, runId: 'r', type: 'node.finished', payload: kept };
+    expect(parseEnvelope(envelope).kind).toBe('ok');
+  });
+
+  /**
+   * The case that made type preservation non-negotiable, and it needs no
+   * attacker — a provider returning a large error body is enough.
+   *
+   * `node.error` carries `error: {name, message}`, both REQUIRED strings. A
+   * >512KB message made `error` the biggest field; replacing it with a marker
+   * object made the stored envelope fail `ErrorInfoSchema`, so the viewer
+   * dropped it on replay. A debugger silently losing precisely the error
+   * event is the worst failure this thing has.
+   */
+  it('keeps an oversized node.error valid: the debugger must not lose the error', () => {
+    const payload = {
+      nodeId: 'tool:fetch',
+      error: {
+        name: 'ProviderError',
+        message: `upstream said: ${'E'.repeat(600 * 1024)}`,
+        stack: 'at fetch (index.ts:1:1)',
+      },
+    };
+    const result = serializePayload(payload);
+
+    expect(result.truncated).toBe(true);
+    const kept = result.payload as Record<string, unknown>;
+    expect(kept['nodeId']).toBe('tool:fetch');
+    const error = kept['error'] as Record<string, unknown>;
+    // The shape survives: name intact, message still a string, stack intact.
+    expect(error['name']).toBe('ProviderError');
+    expect(typeof error['message']).toBe('string');
+    expect(error['message']).toMatch(/^upstream said: E+…\[graphmind: truncated\]$/);
+    expect(error['stack']).toBe('at fetch (index.ts:1:1)');
+    expect(Buffer.byteLength(result.json)).toBeLessThanOrEqual(MAX_PAYLOAD_BYTES);
+
+    const envelope = { gm: 1, seq: 4, ts: 1_700_000_000_000, runId: 'r', type: 'node.error', payload: kept };
     expect(parseEnvelope(envelope).kind).toBe('ok');
   });
 

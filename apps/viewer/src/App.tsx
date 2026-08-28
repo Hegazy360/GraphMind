@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { embeddedRun, useFixtureConnection } from './connection/FixtureConnection.js';
+import {
+  embeddedRun,
+  parseFixtureParam,
+  useFixtureConnection,
+  type FixtureName,
+} from './connection/FixtureConnection.js';
 import { useLiveConnection } from './connection/useLiveConnection.js';
 import { resolveServerUrl } from './connection/ServerConnection.js';
 import { parseStressParams, useStressRun } from './connection/StressConnection.js';
 import { formatHash, parseHash } from './router.js';
 import { canvasActions, copyText, deepLink } from './lib/commands.js';
+import { heldGate, resumeGate, stepGate } from './lib/gate.js';
 import { applyTheme, nextTheme, saveTheme } from './lib/theme.js';
 import { collapsibleRoots } from './store/collapse.js';
 import { useRunStore } from './store/runStore.js';
@@ -66,7 +72,7 @@ export default function App() {
   const { fixtureParam, serverUrl, stress } = useMemo(() => {
     const search = location.search;
     return {
-      fixtureParam: new URLSearchParams(search).get('fixture') === '1',
+      fixtureParam: parseFixtureParam(search),
       serverUrl: resolveServerUrl(search),
       stress: parseStressParams(search),
     };
@@ -74,9 +80,12 @@ export default function App() {
   const demoRequested = useUiStore((s) => s.demoRequested);
   // A run exported by `graphmind record --html` inlines itself into the page.
   const hasEmbeddedRun = useMemo(() => embeddedRun() !== null, []);
+  const offline = fixtureParam !== null || hasEmbeddedRun || stress !== null;
+  const fixture: FixtureName | null =
+    fixtureParam ?? (demoRequested || hasEmbeddedRun ? 'demo' : null);
 
-  useLiveConnection(fixtureParam || hasEmbeddedRun || stress !== null ? null : serverUrl);
-  useFixtureConnection(fixtureParam || demoRequested || hasEmbeddedRun);
+  useLiveConnection(offline ? null : serverUrl);
+  useFixtureConnection(fixture);
   useStressRun(stress);
 
   const selectedRunId = useUiStore((s) => s.selectedRunId);
@@ -90,7 +99,22 @@ export default function App() {
   );
   const firstRunId = useRunStore((s) => Object.keys(s.runs)[0]);
   const runCount = useRunStore((s) => Object.keys(s.runs).length);
-  const [railOpen, setRailOpen] = useState(true);
+  // Below the rail's own width plus a usable canvas there is nothing to show
+  // next to it, so a narrow window starts with the graph and reveals the run
+  // list as an overlay on demand (index.css does the overlay half).
+  const [railOpen, setRailOpen] = useState(
+    () => typeof matchMedia !== 'function' || !matchMedia('(max-width: 860px)').matches,
+  );
+  /** The gate holding the selected run, if any — drives the paused moment. */
+  const heldPauseId = useRunStore((s) => {
+    if (selectedRunId === undefined) return undefined;
+    const run = s.runs[selectedRunId];
+    if (run === undefined) return undefined;
+    for (const id of Object.keys(run.pauses)) {
+      if (run.pauses[id]?.active === true) return id;
+    }
+    return undefined;
+  });
 
   // theme: the store is seeded from storage; keep <html> and storage in sync
   useEffect(() => {
@@ -130,6 +154,26 @@ export default function App() {
     }
   }, [selectedRunId, firstRunId]);
 
+  /**
+   * A gate opening should arrive with its evidence already on screen.
+   *
+   * Execution is held: the next thing the user does is decide, and the
+   * inputs to that decision — the error, the exact input that produced it,
+   * the siblings that did not fail — all live in the inspector. Opening it
+   * for them removes a click from the only moment that is genuinely urgent.
+   *
+   * It never *takes* a selection: if you were already reading some other
+   * node, you stay there. The card's own banner is still the fallback.
+   */
+  useEffect(() => {
+    if (heldPauseId === undefined || selectedRunId === undefined) return;
+    const ui = useUiStore.getState();
+    if (ui.selectedNodeId !== undefined) return;
+    const nodeId = useRunStore.getState().runs[selectedRunId]?.pauses[heldPauseId]?.nodeId;
+    if (nodeId === undefined) return;
+    ui.selectNode(selectedRunId, nodeId);
+  }, [heldPauseId, selectedRunId]);
+
   // ── keyboard ─────────────────────────────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -157,6 +201,32 @@ export default function App() {
         return;
       }
       if (typing || meta || e.altKey) return;
+
+      // ── while a gate is held, the decision owns the keyboard ─────────────
+      // c/s/r/i are unbound the rest of the time, and a held run is a full
+      // stop: nothing else is more urgent than what happens next. Abort is
+      // deliberately not bound — an irreversible action should cost a click.
+      if (!e.shiftKey && ui.selectedRunId !== undefined) {
+        const pause = heldGate(ui.selectedRunId);
+        if (pause !== undefined) {
+          const runId = ui.selectedRunId;
+          const key1 = e.key.toLowerCase();
+          if (key1 === 'c' || key1 === 's' || key1 === 'r' || key1 === 'i') {
+            e.preventDefault();
+            if (key1 === 'c') resumeGate(runId, pause.pauseId, 'continue');
+            else if (key1 === 's') stepGate(runId, pause.pauseId);
+            else if (key1 === 'r') resumeGate(runId, pause.pauseId, 'retry');
+            else {
+              // Inject from the keyboard always opens the *panel* editor:
+              // it is the copy that can never be covered, and it sits beside
+              // the error and the input you are about to substitute for.
+              ui.selectNode(runId, pause.nodeId);
+              ui.requestInject(pause.pauseId, 'panel');
+            }
+            return;
+          }
+        }
+      }
 
       // Match on the lowercased key plus the shift flag rather than on the
       // shifted character: keyboard layouts (and some automation) disagree
@@ -229,6 +299,17 @@ export default function App() {
         <main className="gm-main">
           {showRun && <TopBar runId={selectedRunId} />}
           <div className="gm-workspace">
+            {/*
+              The inspector is a *pane*, not an overlay. It used to be
+              absolutely positioned over the whole workspace, which put it on
+              top of the timeline's controls, the minimap, and — the papercut
+              that mattered — the inject button on a held card. Docking it
+              costs some canvas width and removes a whole class of "the thing
+              I need is behind the thing describing it" bugs. Below the
+              narrow breakpoint it goes back to being an overlay, because at
+              phone width there is no room for two panes at all.
+            */}
+            <div className="gm-workspace-panes">
             <ReactFlowProvider>
               {showRun ? (
                 <>
@@ -259,13 +340,14 @@ export default function App() {
                 </>
               ) : (
                 <EmptyState
-                  fixtureAvailable={!demoRequested && !fixtureParam && stress === null}
+                  fixtureAvailable={!demoRequested && fixtureParam === null && stress === null}
                   runCount={runCount}
                   railOpen={railOpen}
                   onOpenRail={() => setRailOpen(true)}
                 />
               )}
             </ReactFlowProvider>
+            </div>
             <InspectorPanel />
           </div>
         </main>

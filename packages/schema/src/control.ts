@@ -59,6 +59,17 @@ export const HandshakePayloadSchemas = {
     capabilities: z.array(z.string()),
     app: z.string().optional(),
     sdk: SdkInfoSchema.optional(),
+    /**
+     * The `sessionToken` from a previous `hello.ack`, echoed back so this
+     * connection re-claims the runs it was streaming before the socket
+     * dropped. Absent on a first connection (and from clients older than the
+     * `run-claim` capability).
+     *
+     * This is what stops one local process from writing into another's run:
+     * a run is claimed by the token that created it, and `exec.resume` is
+     * routed to the claimant. See `Hub.claimRun`.
+     */
+    resumeToken: z.string().optional(),
   }),
 
   /** Viewer's reply. Until received, the app must consider itself detached. */
@@ -73,6 +84,12 @@ export const HandshakePayloadSchemas = {
     breakpoints: z.array(BreakpointMatcherSchema),
     /** Current execution mode to adopt immediately. */
     mode: RunModeSchema,
+    /**
+     * Opaque identity for this connection, to be echoed as `hello.resumeToken`
+     * on reconnect. Optional so a debugger that does not implement run claims
+     * still satisfies the schema.
+     */
+    sessionToken: z.string().optional(),
   }),
 } as const;
 

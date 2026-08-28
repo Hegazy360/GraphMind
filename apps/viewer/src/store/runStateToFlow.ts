@@ -17,6 +17,7 @@
  * graph stays connected at any zoom level (see collapse.ts).
  */
 import type { NodeKind } from '@graphmind-ai/schema';
+import { kindMeta } from '../lib/kinds.js';
 import { hiddenByCollapse } from './collapse.js';
 import { nodeStatus, type NodeState, type RunState } from './types.js';
 
@@ -51,15 +52,14 @@ export interface FlowOptions {
   collapsed?: readonly string[];
 }
 
+/**
+ * Which card draws a kind. The mapping lives in `lib/kinds.ts` so the canvas,
+ * the filter popover, the timeline and the inspector all read one table —
+ * that is what stops a newly-added kind (MCP's `server`) from silently
+ * rendering as an anonymous tool.
+ */
 export function flowNodeType(kind: NodeKind): FlowNodeType {
-  switch (kind) {
-    case 'agent':
-      return 'invocation';
-    case 'llm':
-      return 'llmStep';
-    default:
-      return 'tool';
-  }
+  return kindMeta(kind).card;
 }
 
 export const NODE_DIMENSIONS: Record<FlowNodeType, { width: number; height: number }> = {

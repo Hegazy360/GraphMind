@@ -6,7 +6,7 @@
  * Everything here is a pure projection of `RunState` — the collapsed set
  * itself lives in the UI store (per run), never in the reducer.
  */
-import type { NodeKind } from '@graphmind-ai/schema';
+import { isContainerKind, kindMeta } from '../lib/kinds.js';
 import { nodeStatus, type NodeLifeStatus, type RunState } from './types.js';
 
 /** parentId → child nodeIds, in first-seen order. */
@@ -131,8 +131,9 @@ export function summarizeGroup(
     const node = run.nodes[id];
     if (node === undefined) continue;
     summary.nodes += 1;
-    if (node.kind === 'llm') summary.steps += node.executions.length;
-    else if (node.kind === 'tool') summary.tools += node.executions.length;
+    const card = kindMeta(node.kind).card;
+    if (card === 'llmStep') summary.steps += node.executions.length;
+    else if (card === 'tool') summary.tools += node.executions.length;
     summary.executions += node.executions.length;
     for (const exec of node.executions) {
       if (exec.status === 'error') summary.errors += 1;
@@ -213,9 +214,9 @@ export function collapsibleRoots(run: RunState, minSize = 2): string[] {
   for (const nodeId of run.order) {
     const node = run.nodes[nodeId];
     if (node === undefined) continue;
-    // Only container-ish kinds group; a tool with children is rare but valid.
-    const kind: NodeKind = node.kind;
-    if (kind !== 'agent' && kind !== 'chain' && kind !== 'llm') continue;
+    // Only container-ish kinds group (agents, chains, llm steps, MCP server
+    // sessions); a tool with children is rare but valid, and stays unfolded.
+    if (!isContainerKind(node.kind)) continue;
     if (descendantsOf(run, nodeId, index).length < minSize) continue;
     roots.push(nodeId);
   }

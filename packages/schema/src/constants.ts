@@ -32,6 +32,13 @@ export const KNOWN_CAPABILITIES = [
   'retry',
   /** The client honours `exec.resume` with action `abort`. */
   'abort',
+  /**
+   * The client stores the `sessionToken` from `hello.ack` and echoes it as
+   * `hello.resumeToken` on reconnect. A debugger may therefore refuse writes
+   * to this client's runs from any other connection — including across a
+   * disconnect, which is otherwise the one window a claim cannot be proven in.
+   */
+  'run-claim',
 ] as const;
 
 export type KnownCapability = (typeof KNOWN_CAPABILITIES)[number];

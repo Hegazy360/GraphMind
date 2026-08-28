@@ -12,6 +12,7 @@
  */
 import { useEffect, useMemo, useRef } from 'react';
 import type { ControlType, MessagePayloadMap } from '@graphmind-ai/schema';
+import { generateMcpRun } from '../store/mcpFixture.js';
 import { useRunStore } from '../store/runStore.js';
 import { tokenBuffers } from '../store/tokenBuffers.js';
 import { useUiStore } from '../store/uiStore.js';
@@ -62,8 +63,25 @@ const MAX_GAP_MS = 1400;
 /** Synthetic seqs (exec.resumed, aborted run.finished) start well clear of the recording. */
 const SYNTHETIC_SEQ_BASE = 100000;
 
+/**
+ * Which bundled run to replay. `demo` is the recorded trip-planner session
+ * every screenshot and e2e test uses; `mcp` is a generated MCP server session
+ * (see store/mcpFixture.ts) — there is no recorded MCP run to ship yet, and
+ * an MCP-shaped canvas has to be designable and testable regardless.
+ */
+export type FixtureName = 'demo' | 'mcp';
+
+export function parseFixtureParam(search: string): FixtureName | null {
+  const value = new URLSearchParams(search).get('fixture');
+  if (value === null || value === '') return null;
+  if (value === 'mcp') return 'mcp';
+  return 'demo';
+}
+
 export class FixtureConnection implements ServerConnection {
   readonly source = 'fixture' as const;
+
+  constructor(private readonly fixture: FixtureName = 'demo') {}
 
   private events: RawFixtureEnvelope[] = [];
   private index = 0;
@@ -77,7 +95,11 @@ export class FixtureConnection implements ServerConnection {
   start(): void {
     this.disposed = false; // start() re-arms after a StrictMode dispose/restart
     const embedded = embeddedRun();
-    const recorded = (embedded ?? (demoRun as unknown as RawFixtureEnvelope[])).map((e) => ({
+    const bundled =
+      this.fixture === 'mcp'
+        ? (generateMcpRun() as unknown as RawFixtureEnvelope[])
+        : (demoRun as unknown as RawFixtureEnvelope[]);
+    const recorded = (embedded ?? bundled).map((e) => ({
       ...e,
     }));
     this.events = recorded;
@@ -226,9 +248,12 @@ export class FixtureConnection implements ServerConnection {
   }
 }
 
-export function useFixtureConnection(enabled: boolean): FixtureConnection | null {
+export function useFixtureConnection(fixture: FixtureName | null): FixtureConnection | null {
   const ref = useRef<FixtureConnection | null>(null);
-  const connection = useMemo(() => (enabled ? new FixtureConnection() : null), [enabled]);
+  const connection = useMemo(
+    () => (fixture === null ? null : new FixtureConnection(fixture)),
+    [fixture],
+  );
   ref.current = connection;
 
   useEffect(() => {

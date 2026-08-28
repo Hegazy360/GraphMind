@@ -25,6 +25,10 @@ What differs is only what each framework's extension points allow — the
 [LangGraph page](/integrations/langgraph/#capability-matrix) has the honest matrix for the one
 case where a callback-only path cannot do everything.
 
+One integration has no code surface at all. [`graphmind mcp-proxy`](/integrations/mcp-proxy/)
+sits between an MCP host and an MCP server and debugs the server without touching it — any
+language, including servers you did not write.
+
 Adapters are built strictly on **public extension points** — middleware, callback handlers,
 client hooks, tool decoration. No forks, no monkey-patching of module internals, nothing that
 breaks on your framework's next minor release.
@@ -53,9 +57,24 @@ breaks on your framework's next minor release.
     description="@graphmind-ai/langgraph — a callback handler that renders the run tree, plus gated tools."
   />
   <LinkCard
+    title="MCP proxy"
+    href="/integrations/mcp-proxy/"
+    description="graphmind mcp-proxy — debug an MCP server in any language, with no code changes at all."
+  />
+  <LinkCard
+    title="MCP server (in-process)"
+    href="/integrations/mcp/"
+    description="@graphmind-ai/mcp — wrap your TypeScript MCP server; gate every tool, resource, prompt and sampling call."
+  />
+  <LinkCard
     title="Python"
     href="/integrations/python/"
     description="graphmind-ai on PyPI — openai, anthropic and langgraph, same protocol."
+  />
+  <LinkCard
+    title="Ruby"
+    href="/integrations/ruby/"
+    description="The graphmind gem — ruby-openai and RubyLLM, gated tools, and a Rails-shaped install."
   />
   <LinkCard
     title="Anything else"

@@ -3,10 +3,17 @@
  * leads with the answer: a "why this failed" block that pins the error, its
  * stack, the exact input that produced it, and what ran around it — then the
  * numbers (duration, tokens, retries, estimated spend), then the payloads.
+ *
+ * When the node it is describing is *held*, the panel also owns the decision:
+ * a pinned footer with the same Continue / Step / Retry / Inject / Abort row
+ * that the card carries. That is not duplication for its own sake — the panel
+ * is an overlay, and the natural flow (read why it failed, then inject a fix)
+ * used to end with the inject button underneath this very panel.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ErrorInfo } from '@graphmind-ai/schema';
 import { copyText, deepLink } from '../lib/commands.js';
+import { kindMeta } from '../lib/kinds.js';
 import {
   fmtClockMs,
   fmtCost,
@@ -22,11 +29,28 @@ import { useUiStore } from '../store/uiStore.js';
 import { nodeStatus, type NodeExecution, type NodeState } from '../store/types.js';
 import { IconAlert, IconClose, IconLink } from './Icons.js';
 import { JsonTree } from './JsonTree.js';
+import { KindGlyph } from './KindMark.js';
+import { PauseActions } from './nodes/PauseActions.js';
 import { StatusPill } from './nodes/nodeParts.js';
 
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 720;
 const WIDTH_KEY = 'graphmind.inspectorWidth';
+
+/**
+ * Below this the panel stops being a pane and becomes a full-width overlay
+ * (index.css owns the other half of this number — keep them in step).
+ */
+const NARROW_QUERY = '(max-width: 860px)';
+
+function mediaQuery(): MediaQueryList | undefined {
+  return typeof matchMedia === 'function' ? matchMedia(NARROW_QUERY) : undefined;
+}
+
+/** True only when the panel is actually sitting on top of the canvas. */
+function overlaysCanvas(): boolean {
+  return mediaQuery()?.matches === true;
+}
 
 function CopyButton({ getText, label = 'copy' }: { getText: () => string; label?: string }) {
   const [copied, setCopied] = useState(false);
@@ -341,11 +365,37 @@ function InspectorInner({ runId, nodeId }: { runId: string; nodeId: string }) {
     }
   });
   const dragging = useRef(false);
+  const pause = useRunStore((s) => {
+    const activeId = s.runs[runId]?.nodes[nodeId]?.activePauseId;
+    return activeId === undefined ? undefined : s.runs[runId]?.pauses[activeId];
+  });
 
   const onDragStart = useCallback((event: React.MouseEvent) => {
     event.preventDefault();
     dragging.current = true;
     document.body.style.cursor = 'col-resize';
+  }, []);
+
+  // Tell the camera how much of the canvas this panel is *covering*.
+  //
+  // Docked (the normal case) that is nothing at all: the canvas element is
+  // already narrower, so an inset would squeeze the frame twice. Only at
+  // narrow widths, where the panel goes back to being a full-width overlay,
+  // does the camera need to know. Published on open, on close, on a
+  // breakpoint change and at the end of a resize drag — never per mousemove,
+  // which would re-frame the graph sixty times a second.
+  useEffect(() => {
+    const publish = (): void => {
+      useUiStore.getState().setInspectorWidth(overlaysCanvas() ? width : 0);
+    };
+    publish();
+    const query = mediaQuery();
+    query?.addEventListener('change', publish);
+    return () => {
+      query?.removeEventListener('change', publish);
+      useUiStore.getState().setInspectorWidth(0);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- drag end republishes explicitly
   }, []);
 
   useEffect(() => {
@@ -358,6 +408,7 @@ function InspectorInner({ runId, nodeId }: { runId: string; nodeId: string }) {
       if (!dragging.current) return;
       dragging.current = false;
       document.body.style.cursor = '';
+      useUiStore.getState().setInspectorWidth(overlaysCanvas() ? width : 0);
       try {
         localStorage.setItem(WIDTH_KEY, String(width));
       } catch {
@@ -376,9 +427,14 @@ function InspectorInner({ runId, nodeId }: { runId: string; nodeId: string }) {
   const status = nodeStatus(node);
   const idx = Math.max(0, Math.min(instanceIdx ?? node.executions.length - 1, node.executions.length - 1));
   const exec = node.executions[idx];
+  const held = pause !== undefined && pause.active;
 
   return (
-    <aside className="gm-panel gm-inspector" style={{ width }} aria-label="Node inspector">
+    <aside
+      className={`gm-panel gm-inspector${held ? ' gm-inspector--held' : ''}`}
+      style={{ width }}
+      aria-label="Node inspector"
+    >
       <div
         className="gm-panel-resize"
         onMouseDown={onDragStart}
@@ -387,10 +443,14 @@ function InspectorInner({ runId, nodeId }: { runId: string; nodeId: string }) {
         aria-label="Resize inspector"
       />
       <header className="gm-inspect-head">
-        <span className={`gm-kind-badge gm-kind-badge--${node.kind}`}>{node.kind}</span>
-        <span className="gm-node-title" style={{ fontSize: 14, flex: 1 }}>
-          {node.name}
+        <span
+          className={`gm-kind-badge gm-kind--${node.kind}`}
+          title={kindMeta(node.kind).hint}
+        >
+          <KindGlyph kind={node.kind} size={11} />
+          {kindMeta(node.kind).label}
         </span>
+        <span className="gm-node-title gm-inspect-name">{node.name}</span>
         <StatusPill status={status} />
         <button
           className="gm-iconbtn"
@@ -446,6 +506,18 @@ function InspectorInner({ runId, nodeId }: { runId: string; nodeId: string }) {
           <ExecutionDetails runId={runId} node={node} exec={exec} execIndex={idx} />
         )}
       </div>
+
+      {held && pause !== undefined && (
+        <footer className="gm-inspect-held" aria-label="Held at a gate">
+          <PauseActions
+            runId={runId}
+            node={node}
+            pause={pause}
+            variant="panel"
+            hideError={exec?.error !== undefined || node.lastError !== undefined}
+          />
+        </footer>
+      )}
     </aside>
   );
 }

@@ -1297,6 +1297,9 @@
         },
         "sdk": {
           "$ref": "#/$defs/SdkInfo"
+        },
+        "resumeToken": {
+          "type": "string"
         }
       },
       "required": [
@@ -1394,6 +1397,9 @@
         },
         "mode": {
           "$ref": "#/$defs/RunMode"
+        },
+        "sessionToken": {
+          "type": "string"
         }
       },
       "required": [

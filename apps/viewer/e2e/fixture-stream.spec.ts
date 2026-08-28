@@ -108,15 +108,47 @@ test('tokens stream into the active LLM card, reasoning first then text', async 
 
   const tail = nodeCard(page, FIXTURE_NODES.llm).locator('.gm-token-tail');
 
-  // The recording opens with a reasoning stream…
-  await expect(tail).toContainText('Budget of', { timeout: 20_000 });
-  await expect(tail).toHaveClass(/gm-token-tail--reasoning/);
-  // …which is rendered as a live tail, with a caret while the step runs.
-  await expect(tail.locator('.gm-caret')).toBeVisible();
+  // Sampled continuously rather than asserted at two moments.
+  //
+  // The reasoning phase is short, and each `expect` is a fresh round trip: on
+  // a loaded machine the stream could move on to the visible answer between
+  // "the text is there" and "the class is there", so the second assertion
+  // retried toward a state that had already passed. Collecting samples and
+  // asserting on the SEQUENCE tests the same behaviour — reasoning first,
+  // then text, in one card — and cannot lose a race.
+  const samples: { text: string; reasoning: boolean; caret: boolean }[] = [];
+  await expect
+    .poll(
+      async () => {
+        samples.push(
+          await tail.evaluate((el) => ({
+            text: el.innerText,
+            reasoning: el.classList.contains('gm-token-tail--reasoning'),
+            caret: el.querySelector('.gm-caret') !== null,
+          })),
+        );
+        return samples.some((s) => s.text.includes("I'll start by finding"));
+      },
+      {
+        message: 'the visible answer should stream into the LLM card',
+        timeout: 30_000,
+        intervals: [50],
+      },
+    )
+    .toBe(true);
 
-  // …and then the visible answer takes over the same card.
-  await expect(tail).toContainText("I'll start by finding", { timeout: 20_000 });
-  await expect(tail).not.toHaveClass(/gm-token-tail--reasoning/);
+  // The recording opens with a reasoning stream…
+  const reasoning = samples.filter((s) => s.reasoning);
+  expect(reasoning.length, 'the reasoning stream should have been rendered').toBeGreaterThan(0);
+  expect(reasoning.some((s) => s.text.includes('Budget of'))).toBe(true);
+  // …rendered as a live tail, with a caret while the step runs.
+  expect(samples.some((s) => s.caret), 'a caret should show while the step runs').toBe(true);
+  // …and then the visible answer takes over the same card, no longer styled
+  // as reasoning.
+  const answer = samples.find((s) => s.text.includes("I'll start by finding"));
+  expect(answer?.reasoning).toBe(false);
+  // The order matters: reasoning came first.
+  expect(samples.indexOf(reasoning[0]!)).toBeLessThan(samples.indexOf(answer!));
 
   // Tokens keep arriving after that: the tail text changes again on its own.
   const midRun = await tail.innerText();

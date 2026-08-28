@@ -1,0 +1,23 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+gemspec
+
+group :development, :test do
+  gem "minitest", "~> 5.20"
+  gem "rake", "~> 13.0"
+
+  # Validates every emitted envelope against packages/schema/schema.json
+  # (JSON Schema draft 2020-12). The suite degrades to structural checks if it
+  # is missing rather than refusing to run.
+  gem "json_schemer", "~> 2.3"
+
+  # Integration targets. All optional: their test files skip when the gem is
+  # not installed, so the core suite runs on a bare checkout.
+  gem "ruby-openai", "~> 8.0"
+  gem "ruby_llm", ">= 1.0"
+
+  # For the Railtie test, which boots a real (tiny) Rails application.
+  gem "railties", ">= 7.0"
+end

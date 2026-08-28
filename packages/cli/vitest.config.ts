@@ -8,6 +8,12 @@ export default defineConfig({
       // CLI can be tested without building schema first. The emitted build
       // resolves the real workspace dependency instead.
       '@graphmind-ai/schema': fileURLToPath(new URL('../schema/src/index.ts', import.meta.url)),
+      '@graphmind-ai/client': fileURLToPath(new URL('../client/src/index.ts', import.meta.url)),
+      // TEST-ONLY, and deliberately not a package dependency: the proxy's
+      // inject coercion is a copy of the one in @graphmind-ai/mcp (which
+      // declares the MCP SDK as a peer dep, so the CLI must not depend on
+      // it). This alias lets one parity test prove the copies agree.
+      '@graphmind-ai/mcp/coerce': fileURLToPath(new URL('../mcp/src/coerce.ts', import.meta.url)),
     },
   },
   test: {

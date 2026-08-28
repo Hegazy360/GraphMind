@@ -118,6 +118,13 @@ export function EmptyState({
               Replay the bundled demo run
             </button>
           )}
+          <a
+            className="gm-action"
+            href="?fixture=mcp"
+            title="Replay a synthetic MCP server session — prompts/get, resources/read, tools/call and sampling, with a gate on a failed read"
+          >
+            Replay an MCP session
+          </a>
           <a className="gm-action" href="?stress=300" title="Generate a 300-node synthetic run">
             Load a 300-node stress run
           </a>

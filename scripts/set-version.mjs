@@ -8,7 +8,7 @@
  * Workspace dependencies stay `workspace:*` — pnpm rewrites them to the real
  * version at publish time.
  */
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,7 +21,16 @@ if (!version || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) {
 }
 
 // Every workspace package that is published to npm.
-const PACKAGES = ['schema', 'client', 'ai-sdk', 'anthropic', 'openai', 'langgraph', 'cli'];
+const PACKAGES = [
+  'schema',
+  'client',
+  'ai-sdk',
+  'anthropic',
+  'openai',
+  'langgraph',
+  'mcp',
+  'cli',
+];
 
 let changed = 0;
 for (const name of PACKAGES) {
@@ -56,6 +65,37 @@ if (existsSync(pyproject)) {
   }
   // graphmind/_version.py derives from installed metadata, so there is no
   // second constant to keep in step here — that is deliberate.
+}
+
+// The Ruby gem ships from the same repo and shares the version. Its constant
+// is the source of truth (the gemspec reads it), so this is the only place.
+const rubyVersion = join(root, 'ruby', 'lib', 'graphmind', 'version.rb');
+if (existsSync(rubyVersion)) {
+  const text = readFileSync(rubyVersion, 'utf8');
+  const next = text.replace(/^(\s*VERSION\s*=\s*)["'][^"']+["']/m, `$1"${version}"`);
+  if (next !== text) {
+    writeFileSync(rubyVersion, next);
+    console.log(`${'graphmind (ruby gem)'.padEnd(26)} -> ${version}`);
+    changed += 1;
+  } else {
+    console.warn('ruby/lib/graphmind/version.rb: no VERSION constant updated');
+  }
+}
+
+// A publishable package this script does not know about is the failure mode it
+// exists to prevent, so say so rather than leaving it silently behind.
+const known = new Set(PACKAGES);
+for (const entry of readdirSync(join(root, 'packages'), { withFileTypes: true })) {
+  if (!entry.isDirectory() || known.has(entry.name)) continue;
+  const path = join(root, 'packages', entry.name, 'package.json');
+  if (!existsSync(path)) continue;
+  const pkg = JSON.parse(readFileSync(path, 'utf8'));
+  if (pkg.private === true) continue;
+  console.error(
+    `\nERROR: packages/${entry.name} (${pkg.name}) is publishable but is not in PACKAGES — ` +
+      'it would ship at the wrong version. Add it to scripts/set-version.mjs.',
+  );
+  process.exit(1);
 }
 
 console.log(`\n${changed} package(s) set to ${version}.`);

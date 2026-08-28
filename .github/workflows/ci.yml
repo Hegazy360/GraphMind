@@ -261,6 +261,50 @@ jobs:
           python -m build
           ls -la dist
 
+  # The Ruby SDK. Its floor is `>= 3.1` in the gemspec, so the matrix runs
+  # the floor as well as the version it was developed on — the Python
+  # README's stale-benchmark drift is the cautionary tale for declaring a
+  # version you never executed. The suite needs no network beyond loopback
+  # and no API keys.
+  ruby:
+    name: ruby (${{ matrix.ruby }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ['3.1', '3.3']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+          working-directory: ruby
+      - name: Test
+        working-directory: ruby
+        run: bundle exec rake test
+      - name: Build the gem
+        working-directory: ruby
+        run: |
+          gem build graphmind.gemspec
+          ls -la ./*.gem
+      - name: Install it from a clean GEM_HOME and require it
+        working-directory: ruby
+        # A gem that builds but does not install is not a shipped gem. This
+        # is the same "install the real artifact" check the Python job does
+        # with a wheel, and it is what caught the Python __version__ drift.
+        run: |
+          set -euo pipefail
+          export GEM_HOME="$RUNNER_TEMP/clean-gems"
+          export GEM_PATH="$GEM_HOME"
+          gem install --no-document ./graphmind-*.gem
+          PATH="$GEM_HOME/bin:$PATH" ruby -e '
+            require "graphmind"
+            abort("version missing") if Graphmind::VERSION.to_s.empty?
+            puts "installed graphmind #{Graphmind::VERSION}"
+          '
+
   # =====================================================================
   # Phase-4 safety nets.
   #
@@ -382,9 +426,11 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  # 71 tests proving no credential reaches the database, the HTTP API, the
-  # WebSocket, the HTML/NDJSON exports or telemetry. Cheap (~8s of tests)
-  # and about as high-value as a check gets, so it runs on every push.
+  # 172 tests proving no credential reaches the database, the HTTP API, the
+  # WebSocket, the HTML/NDJSON exports or telemetry — and, since Phase 5,
+  # that no local peer can write into another peer's run, and that the two
+  # MCP boundaries hold under hostile JSON-RPC. Cheap (~40s) and about as
+  # high-value as a check gets, so it runs on every push.
   security-audit:
     name: security audit (secret-leak)
     runs-on: ubuntu-latest
@@ -433,12 +479,14 @@ jobs:
             || { echo "::error::security audit failed — pnpm --filter security-audit test"; exit 1; }
 
       - name: Guard against a silently-shrinking audit
-        # 71 = the audit's size when it was written (67 plain + 4 test.fails,
-        # which vitest counts as passing). Deleting a canary or a whole spec
-        # file would otherwise leave the job green.
+        # A floor, not a target: deleting a canary or a whole spec file would
+        # otherwise leave the job green. Raise it when the suite grows —
+        # it was 71 when written, 165 after the Phase 5 protocol-fuzz pass
+        # (172 tests, all plain: the `it.fails` markers went away when the
+        # defects they described were fixed).
         env:
           RESULT: ${{ runner.temp }}/security-audit.json
-          MIN_TESTS: '71'
+          MIN_TESTS: '165'
         run: |
           set -euo pipefail
           node -e '

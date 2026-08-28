@@ -41,6 +41,14 @@ export interface CliFlags {
    * error breakpoint. Undefined means "not given" — the default stays armed.
    */
   pauseOnError: string | undefined;
+  /** `graphmind mcp-proxy --trace`: one stderr line per relayed JSON-RPC frame. */
+  trace: boolean;
+  /** `graphmind mcp-proxy --wait-for-attach`: hold the first frame for the debugger. */
+  waitForAttach: boolean;
+  /** `graphmind mcp-proxy --inherit-stderr`: give the child the real stderr fd. */
+  inheritStderr: boolean;
+  /** `graphmind mcp-proxy --max-frame-bytes <n>`: frame-assembly ceiling. */
+  maxFrameBytes: number | undefined;
 }
 
 /**
@@ -71,6 +79,13 @@ export const OPTION_HELP: readonly string[] = [
   '  --keep <n>     (runs) keep/show the n newest runs',
   '  --days <n>     (runs) keep runs from the last n days',
   '  --rm <runId>   (runs) delete one run   --clear --yes  delete all',
+  '  --trace        (mcp-proxy) log one stderr line per relayed JSON-RPC frame',
+  '  --wait-for-attach',
+  '                 (mcp-proxy) hold the first frame until the debugger attaches',
+  '  --inherit-stderr',
+  '                 (mcp-proxy) give the server the real stderr fd (not piped)',
+  '  --max-frame-bytes <n>',
+  '                 (mcp-proxy) frame-assembly ceiling (default 64 MiB)',
   '  -v, --version  Print the version and exit',
   '  -h, --help     Show this help',
 ];
@@ -80,6 +95,13 @@ export interface ParsedCli {
   positionals: string[];
   flags: CliFlags;
   errors: string[];
+  /**
+   * Everything after a bare `--`, verbatim and unparsed. This is how
+   * `graphmind mcp-proxy -- python -m my_server` keeps the child's own flags
+   * out of our parser. Optional so existing callers that build a ParsedCli by
+   * hand keep compiling.
+   */
+  rest?: string[];
 }
 
 function splitInline(token: string): [string, string | undefined] {
@@ -108,7 +130,11 @@ export function defaultFlags(): CliFlags {
     rm: undefined,
     html: false,
     pauseOnError: undefined,
-  };;
+    trace: false,
+    waitForAttach: false,
+    inheritStderr: false,
+    maxFrameBytes: undefined,
+  };
 }
 
 export function parseCliArgs(argv: string[]): ParsedCli {
@@ -123,8 +149,17 @@ export function parseCliArgs(argv: string[]): ParsedCli {
     return value;
   };
 
+  let rest: string[] | undefined;
+
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i] as string;
+    // A bare `--` ends OUR arguments: everything after it belongs to the
+    // wrapped command (`mcp-proxy -- python -m my_server`) and is never
+    // interpreted here.
+    if (token === '--') {
+      rest = argv.slice(i + 1);
+      break;
+    }
     if (!token.startsWith('-')) {
       positionals.push(token);
       continue;
@@ -223,11 +258,31 @@ export function parseCliArgs(argv: string[]): ParsedCli {
       case '--open':
         flags.open = true;
         break;
+      case '--trace':
+        flags.trace = true;
+        break;
+      case '--wait-for-attach':
+        flags.waitForAttach = true;
+        break;
+      case '--inherit-stderr':
+        flags.inheritStderr = true;
+        break;
+      case '--max-frame-bytes': {
+        const raw = takeValue('--max-frame-bytes', inline, next);
+        if (raw === undefined) break;
+        const n = Number(raw);
+        if (!Number.isInteger(n) || n < 1024) {
+          errors.push(`--max-frame-bytes must be an integer >= 1024 (got "${raw}")`);
+        } else {
+          flags.maxFrameBytes = n;
+        }
+        break;
+      }
       default:
         errors.push(`unknown option "${name}"`);
     }
   }
 
   const command = positionals.shift() ?? 'serve';
-  return { command, positionals, flags, errors };
+  return { command, positionals, flags, errors, ...(rest === undefined ? {} : { rest }) };
 }

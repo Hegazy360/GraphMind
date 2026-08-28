@@ -6,7 +6,9 @@
     "declaration": false,
     "sourceMap": false,
     "paths": {
-      "@graphmind-ai/schema": ["../schema/src/index.ts"]
+      "@graphmind-ai/schema": ["../schema/src/index.ts"],
+      "@graphmind-ai/client": ["../client/src/index.ts"],
+      "@graphmind-ai/mcp/coerce": ["../mcp/src/coerce.ts"]
     }
   },
   "include": ["src", "test", "vitest.config.ts"]

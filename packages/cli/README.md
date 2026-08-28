@@ -6,7 +6,8 @@ graph, pause-on-error by default, breakpoints, step mode, and
 inject-and-continue that genuinely hold execution.
 
 This package is the `graphmind` CLI: the local server, SQLite storage, the
-keyless demo, the trace importer, the MCP server, and the bundled viewer UI.
+keyless demo, the trace importer, the MCP server, the MCP debugging proxy, and
+the bundled viewer UI.
 
 Local-first: the server binds `127.0.0.1` only and has no auth (never expose
 the port). Runs are stored in a local SQLite file; your prompts and payloads
@@ -23,7 +24,9 @@ adapter, `@graphmind-ai/sdk` in the [GraphMind repo](https://github.com/Hegazy36
 stream execution events to this server; the viewer connects to watch live,
 replay history, and send control commands (pause / resume / breakpoints /
 inject). Other frameworks get in via `graphmind import` (OTel / OpenInference
-trace exports).
+trace exports), and **any MCP server, in any language, needs no instrumentation
+at all** — `graphmind mcp-proxy -- <your server>` debugs it from the protocol
+boundary.
 
 ## Commands
 
@@ -116,6 +119,109 @@ claude mcp add graphmind -- npx graphmind-ai mcp
 `--db` selects the database; `--port` sets the port used in generated deep
 links (default 4747 — pass it if you run `graphmind` on a different port).
 
+### `graphmind mcp-proxy -- <command> [args...]`
+
+Debug **any** MCP server, in **any** language, with **no code changes**.
+
+```sh
+graphmind mcp-proxy -- node my-server.js
+graphmind mcp-proxy -- python -m my_server
+graphmind mcp-proxy -- ./target/debug/my-rust-server
+```
+
+The proxy spawns your server as a child process, speaks stdio JSON-RPC to the
+MCP client on one side and to the server on the other, relays every frame
+**verbatim**, and reports the conversation to GraphMind as a live run. Because
+it sits at the protocol boundary rather than inside your code, the server's
+language is irrelevant.
+
+**Point Claude Code at it.** Wrap a server you already have:
+
+```sh
+claude mcp add my-server-debug -- npx -y graphmind-ai mcp-proxy -- node my-server.js
+```
+
+Or wrap an entry that is already in `.mcp.json` / `claude_desktop_config.json`
+by moving its command inside the proxy:
+
+```jsonc
+// before
+{ "command": "node", "args": ["my-server.js"] }
+// after
+{ "command": "npx", "args": ["-y", "graphmind-ai", "mcp-proxy", "--", "node", "my-server.js"] }
+```
+
+Then run `graphmind` in another terminal and restart the client. Nothing else
+to configure — and if GraphMind is *not* running, the proxy still relays
+perfectly.
+
+**What you see.** The session becomes a `server` node; each request hangs off
+it as the right kind of node, keyed so repeated calls light up the same box:
+
+| MCP | Node | `nodeId` |
+|---|---|---|
+| `tools/call` | `tool` | `tool:<name>` |
+| `resources/read` | `resource` | `resource:<uri>` |
+| `prompts/get` | `prompt` | `prompt:<name>` |
+| `sampling/createMessage` | `llm` | `llm:sampling` |
+| `initialize`, `tools/list`, `ping`, `notifications/*`, ... | `custom` | `mcp:<method>` |
+| the session itself | `server` | `mcp:session` |
+
+The server's **stderr** — the only channel a stdio MCP server can safely log
+to — is mirrored to your terminal byte-for-byte *and* streamed onto the
+session node, so its logs sit next to the protocol they explain.
+
+A request that never gets a response stays **running** on the graph. That is
+not a rendering bug; it is your server's bug, made visible. (When the server
+process dies, still-open requests become errors, because then we know for
+certain no answer is coming.)
+
+**What you can do.** Every gate works, in both directions:
+
+| Gate | When it fires | `continue` | `inject` | `retry` | `abort` |
+|---|---|---|---|---|---|
+| `before` | a request, before the peer sees it | forward it | answer the sender with the injected `result`; the peer never sees the request | same as continue (nothing has been sent yet) | answer the sender with JSON-RPC error `-32099` |
+| `after` | a response, before the requester sees it | forward it | forward a rewritten frame carrying the injected `result` | re-send the original request and wait for a new answer | reply `-32099` instead |
+| `error` | a JSON-RPC error, or an MCP tool result with `isError: true` | forward the failure | forward the injected result instead | re-send the request | reply `-32099` |
+
+`error` is armed by default (see `--pause-on-error`), so a broken MCP server
+holds at the failure with no setup at all. A hold is indistinguishable from a
+hung server from the client's side, so the proxy says so on stderr — `HOLDING
+tools/call #5 at the error gate — resume it in http://127.0.0.1:4747` — and if
+you never resume, the MCP client times out on its own and the session carries
+on. Start the server with `--pause-on-error off` if you want to watch without
+ever stopping traffic. An injected object carrying its own
+`jsonrpc` field replaces the whole frame, which is how you hand a client a
+specific JSON-RPC error. On a notification (no id, no answer) `inject`
+replaces the forwarded notification and `abort` swallows it.
+
+Note: releasing a gate with `abort` marks the *run* aborted in the viewer,
+because that is what `abort` means to the shared gate engine. The MCP session
+itself carries on.
+
+**Flags** (everything after `--` belongs to the wrapped command and is never
+parsed by `graphmind`):
+
+| Flag | Meaning |
+|---|---|
+| `--trace` | One stderr line per relayed frame — useful even with no GraphMind running |
+| `--wait-for-attach` | Hold the first frame for up to 3s so `initialize` can be gated too |
+| `--inherit-stderr` | Give the server the real stderr fd instead of piping it (keeps `isatty(2)` true; its log then does not reach the session node) |
+| `--max-frame-bytes <n>` | Frame-assembly ceiling (default 64 MiB). Past it the proxy stops parsing and becomes a raw byte pipe — observation stops, relaying does not |
+| `--port <n>` | The GraphMind port to report to (default 4747) |
+
+`GRAPHMIND_URL` is honoured when `--port` is not given, so a proxy launched by
+a client with no TTY still finds a GraphMind on a non-standard endpoint.
+
+**Guarantees.** `stdout` carries the protocol and nothing else — every human
+word goes to stderr. Frames are relayed as the exact bytes that arrived, so
+key order, number formatting and unicode escaping all survive; the test suite
+asserts the client sees byte-identical output to an unproxied run. If the
+debugger disconnects while a gate is held, the gate releases and traffic
+resumes. When the client hangs up, the server gets the EOF; if it ignores it,
+the proxy asks it to stop rather than leaving a zombie behind. The proxy exits
+with the server's own exit code (127 if the command does not exist).
+
 ### `graphmind record <runId> [--out <file>]`
 
 Export a persisted run's event stream to NDJSON (one wire envelope per line —
@@ -131,6 +237,10 @@ one is not found.
 | `--db <path>` | SQLite database file (default `~/.graphmind/graphmind.db`) |
 | `--no-open` / `--open` | Suppress / force opening the viewer in a browser |
 | `--pause-on-error <on\|off\|kind>` | Scope the default error breakpoint (default `on` = every node; `off` = none; or one node kind) |
+| `--trace` | (`mcp-proxy`) log one stderr line per relayed JSON-RPC frame |
+| `--wait-for-attach` | (`mcp-proxy`) hold the first frame until the debugger attaches |
+| `--inherit-stderr` | (`mcp-proxy`) give the server the real stderr fd instead of piping it |
+| `--max-frame-bytes <n>` | (`mcp-proxy`) frame-assembly ceiling (default 64 MiB) |
 | `--live` | (`demo`) run the real demo agent instead of the replay |
 | `--out <file>` | (`record`) output NDJSON path |
 | `-v`, `--version` | Print the version and exit |

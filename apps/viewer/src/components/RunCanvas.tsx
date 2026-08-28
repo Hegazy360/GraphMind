@@ -17,6 +17,22 @@
  *
  * Per-token updates still bypass all of this: they flow through the token
  * buffer registry straight into the card that owns them.
+ *
+ * ── the camera ────────────────────────────────────────────────────────────
+ * Every viewport move in this file is computed here and handed to React Flow
+ * as a finished transform, on the frame *after* the nodes that provoked it.
+ * Both halves of that sentence are load-bearing. React Flow's own `fitView`
+ * and `setCenter` are dropped when they are issued in the same commit as the
+ * nodes they refer to — measured: the follow camera called `setCenter` on the
+ * held node and the viewport never moved, leaving the paused card completely
+ * off screen, which is the one frame this product exists to show. Computing
+ * the transform ourselves (lib/camera.ts) removes the measurement race
+ * entirely, and a one-frame defer removes the commit race.
+ *
+ * The camera also aims at the part of the canvas a human can *see* rather
+ * than at the element. Normally those are the same thing — the inspector is
+ * a docked pane — but at narrow widths it becomes a full-width overlay, and
+ * then the element is wider than the visible region (see `Insets`).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -41,8 +57,18 @@ import {
   type LayoutMode,
   type Placed,
 } from '../layout/incremental.js';
+import {
+  boundsOf,
+  centerViewport,
+  frameViewport,
+  isComfortablyVisible,
+  viewportDistance,
+  type Box,
+  type Insets,
+  type Viewport,
+} from '../lib/camera.js';
 import { registerCanvasActions } from '../lib/commands.js';
-import { motionMs } from '../lib/motion.js';
+import { DURATION, enterOffset, motionMs } from '../lib/motion.js';
 import { autoCollapseRoots } from '../store/collapse.js';
 import { isFilterActive, matchingNodeIds } from '../store/filters.js';
 import {
@@ -80,6 +106,19 @@ const AUTO_COLLAPSE_NODES = 70;
 
 const MIN_ZOOM = 0.06;
 const MAX_ZOOM = 1.75;
+
+/**
+ * Below this the inspector is not "a panel beside the graph", it is the
+ * screen — reserving its width would squeeze the camera into a sliver. Past
+ * that point the graph is simply behind the panel and the user closes it.
+ */
+const MIN_CANVAS_AFTER_INSPECTOR = 420;
+
+/**
+ * The zoom below which "show the whole run" stops being useful and starts
+ * being a mosaic. Above it the camera prefers to widen; below it, it follows.
+ */
+const WIDE_ENOUGH_ZOOM = 0.62;
 
 function toEdge(spec: FlowEdgeSpec, run: RunState | undefined, dimmed: boolean): Edge {
   const visual = run === undefined ? 'idle' : edgeVisual(run, spec.target);
@@ -119,70 +158,13 @@ function pickFocusNode(run: RunState): FocusTarget | undefined {
   return best === undefined ? undefined : { nodeId: best, reason: 'running' };
 }
 
-/**
- * Framing a run is fiddlier than it looks. `fitView` before React Flow has
- * measured a single card computes an infinite bounding box — which lands a
- * NaN transform on the viewport and blanks the canvas with no way back — and
- * a call issued in the same commit as the nodes themselves is simply dropped.
- * So: only fit once something is measured, then confirm the viewport actually
- * moved, and retry a few frames if it didn't.
- */
-interface Framed {
-  position: { x: number; y: number };
-  width?: number | undefined;
-  height?: number | undefined;
-}
-
-/**
- * Frame a set of nodes ourselves rather than calling `fitView`.
- *
- * React Flow only fits nodes it has *measured*, and measurement is a DOM
- * round-trip that hasn't happened on the frame a run first lays out — the
- * call is silently dropped (in v12 its promise never even settles) and the
- * user is left staring at the top-left corner of a 2,400px graph. We already
- * know every box exactly, because we just laid them out, so the viewport
- * maths is ours to do: no measurement, no race, no animation to interrupt.
- */
-function frameNodes(
-  rf: ReturnType<typeof useReactFlow<CanvasNode>>,
-  container: HTMLElement | null,
-  framed: readonly Framed[],
-  options: { padding?: number; duration?: number; maxZoom?: number } = {},
-): boolean {
-  if (container === null || framed.length === 0) return false;
-  const viewWidth = container.clientWidth;
-  const viewHeight = container.clientHeight;
-  if (viewWidth === 0 || viewHeight === 0) return false;
-
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const node of framed) {
-    minX = Math.min(minX, node.position.x);
-    minY = Math.min(minY, node.position.y);
-    maxX = Math.max(maxX, node.position.x + (node.width ?? 0));
-    maxY = Math.max(maxY, node.position.y + (node.height ?? 0));
-  }
-  const width = Math.max(1, maxX - minX);
-  const height = Math.max(1, maxY - minY);
-  const padding = options.padding ?? 0.14;
-  const zoom = Math.max(
-    MIN_ZOOM,
-    Math.min(
-      options.maxZoom ?? 1,
-      Math.min(viewWidth / (width * (1 + padding)), viewHeight / (height * (1 + padding))),
-    ),
-  );
-  rf.setViewport(
-    {
-      x: viewWidth / 2 - (minX + width / 2) * zoom,
-      y: viewHeight / 2 - (minY + height / 2) * zoom,
-      zoom,
-    },
-    { duration: motionMs(options.duration ?? 0) },
-  );
-  return true;
+function boxOf(node: { position: { x: number; y: number }; width?: number | null; height?: number | null }): Box {
+  return {
+    x: node.position.x,
+    y: node.position.y,
+    width: node.width ?? 0,
+    height: node.height ?? 0,
+  };
 }
 
 function lodFor(zoom: number, nodeCount: number): LodLevel {
@@ -223,11 +205,14 @@ export function RunCanvas({ runId }: { runId: string }) {
   const filters = useUiStore((s) => s.filters);
   const lod = useUiStore((s) => s.lod);
   const collapsed = useUiStore((s) => collapsedFor(s, runId));
+  const inspectorWidth = useUiStore((s) => s.inspectorWidth);
 
   const rf = useReactFlow<CanvasNode>();
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [arrangeNonce, setArrangeNonce] = useState(0);
+  /** Bumps when the canvas element itself changes size. */
+  const [viewNonce, setViewNonce] = useState(0);
   const [perf, setPerf] = useState<{ mode: LayoutMode; ms: number; nodes: number }>({
     mode: 'none',
     ms: 0,
@@ -243,6 +228,109 @@ export function RunCanvas({ runId }: { runId: string }) {
   const autoCollapsedRef = useRef<string | null>(null);
   const lastLayoutAtRef = useRef(0);
   const forceRef = useRef(false);
+  /** Pending camera move, so a burst of events produces one move. */
+  const cameraTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  /** Live inspector width for callbacks that outlive a render. */
+  const insetRef = useRef(0);
+  /**
+   * Where the camera is (or is on its way to).
+   *
+   * Not `rf.getViewport()`: mid-animation that returns an interpolated frame,
+   * so "is this node comfortably visible?" would be answered about a viewport
+   * that is about to stop existing — and a camera decision taken against a
+   * moving target oscillates. `onMove` keeps this honest when the *user* pans
+   * or zooms, which is the only other thing that moves it.
+   */
+  const viewportRef = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
+
+  const viewSize = useCallback(() => {
+    const el = containerRef.current;
+    if (el === null) return undefined;
+    const width = el.clientWidth;
+    const height = el.clientHeight;
+    if (width === 0 || height === 0) return undefined;
+    return { width, height };
+  }, []);
+
+  const insetsFor = useCallback((view: { width: number; height: number }): Insets => {
+    const panel = insetRef.current;
+    if (panel <= 0) return {};
+    return view.width - panel >= MIN_CANVAS_AFTER_INSPECTOR ? { right: panel } : {};
+  }, []);
+
+  insetRef.current = inspectorWidth;
+
+  /**
+   * Apply a viewport, once, after the current burst of events.
+   *
+   * A fan-out is six `node.started` envelopes in the same tick, and each one
+   * re-runs the follow effect; without coalescing the camera would start six
+   * animations, each interrupting the last a frame in, and crawl. A zero
+   * timeout (not `requestAnimationFrame`) because rAF does not run in a tab
+   * that is not compositing — a viewer left in a background tab would come
+   * back with a camera that had queued up moves and made none of them.
+   */
+  const applyViewport = useCallback(
+    (target: Viewport, duration: number) => {
+      // A move to where the camera already is, is not a move. Re-issuing one
+      // starts an animation, and an animation the eye can just about see for
+      // no reason at all is the definition of noise.
+      if (viewportDistance(viewportRef.current, target) < 6) return;
+      clearTimeout(cameraTimerRef.current);
+      viewportRef.current = target;
+      cameraTimerRef.current = setTimeout(() => {
+        rf.setViewport(target, { duration: motionMs(duration) });
+      }, 0);
+    },
+    [rf],
+  );
+
+  useEffect(() => () => clearTimeout(cameraTimerRef.current), []);
+
+  /**
+   * The canvas changing size is a camera event.
+   *
+   * Docking the inspector, dragging its edge, opening the waterfall or
+   * resizing the window all change how much of the graph fits — and a run
+   * that is *held* has no further events to re-trigger the follow decision,
+   * so without this the frame the product exists for would be left half off
+   * screen by a window resize. Debounced so a drag re-frames once, at the
+   * end, instead of animating against itself sixty times a second.
+   */
+  useEffect(() => {
+    const element = containerRef.current;
+    if (element === null || typeof ResizeObserver !== 'function') return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const observer = new ResizeObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => setViewNonce((n) => n + 1), 260);
+    });
+    observer.observe(element);
+    return () => {
+      clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, []);
+
+  /** Frame a set of boxes in the visible part of the canvas. */
+  const frameBoxes = useCallback(
+    (boxes: readonly Box[], options: { padding?: number; duration?: number } = {}): boolean => {
+      const view = viewSize();
+      const bounds = boundsOf(boxes);
+      if (view === undefined || bounds === undefined) return false;
+      applyViewport(
+        frameViewport(bounds, view, {
+          padding: options.padding ?? 0.16,
+          insets: insetsFor(view),
+          minZoom: MIN_ZOOM,
+          maxZoom: 1,
+        }),
+        options.duration ?? 0,
+      );
+      return true;
+    },
+    [applyViewport, insetsFor, viewSize],
+  );
 
   // A different run: forget every cached position.
   useEffect(() => {
@@ -303,6 +391,23 @@ export function RunCanvas({ runId }: { runId: string }) {
         height: node.height,
       });
     }
+
+    // Causality: a card that has just been placed animates in *from its
+    // caller*, so a fan-out reads as one node calling five and not as five
+    // cards materialising out of the background. The offset is written as a
+    // CSS custom property on the React Flow wrapper; index.css owns the
+    // curve, and switches the whole thing off under reduced motion and on a
+    // graph too big to afford it.
+    const parentOf = new Map<string, string>();
+    for (const edge of graph.edges) {
+      if (!parentOf.has(edge.target)) parentOf.set(edge.target, edge.source);
+    }
+    const centreOf = (id: string): { x: number; y: number } | undefined => {
+      const placed = next.get(id);
+      if (placed === undefined) return undefined;
+      return { x: placed.position.x + placed.width / 2, y: placed.position.y + placed.height / 2 };
+    };
+
     placedRef.current = next;
 
     const matching = isFilterActive(filters) ? matchingNodeIds(run, filters) : undefined;
@@ -322,6 +427,16 @@ export function RunCanvas({ runId }: { runId: string }) {
         ) {
           return old;
         }
+        const style =
+          old?.style ??
+          (() => {
+            const parentId = parentOf.get(p.id);
+            const from = enterOffset(
+              centreOf(p.id) ?? { x: p.position.x, y: p.position.y },
+              parentId === undefined ? undefined : centreOf(parentId),
+            );
+            return { '--gm-in-x': `${from.x}px`, '--gm-in-y': `${from.y}px` } as React.CSSProperties;
+          })();
         return {
           id: p.id,
           type: p.type,
@@ -329,6 +444,7 @@ export function RunCanvas({ runId }: { runId: string }) {
           data: old?.data ?? p.data,
           width: p.width,
           height: p.height,
+          style,
           ...(className !== undefined ? { className } : {}),
           draggable: true,
           connectable: false,
@@ -343,7 +459,6 @@ export function RunCanvas({ runId }: { runId: string }) {
       ),
     );
     setPerf({ mode, ms: elapsed, nodes: graph.nodes.length });
-
   }, [runId, collapsed, filters]);
 
   // Frame a run once its cards exist. Instant, not animated: a fit the user
@@ -351,10 +466,10 @@ export function RunCanvas({ runId }: { runId: string }) {
   // being taken away from them.
   useEffect(() => {
     if (nodes.length === 0 || didFitRef.current === runId) return;
-    if (frameNodes(rf, containerRef.current, nodes, { padding: 0.16 })) {
+    if (frameBoxes(nodes.map(boxOf), { padding: 0.16 })) {
       didFitRef.current = runId;
     }
-  }, [nodes, runId, rf]);
+  }, [nodes, runId, frameBoxes]);
 
   // ── structural changes → (debounced) layout ──────────────────────────────
   useEffect(() => {
@@ -396,59 +511,138 @@ export function RunCanvas({ runId }: { runId: string }) {
     });
   }, [runId, statusVersion, filters]);
 
-  // ── follow-active-node camera (legacy eye toggle) ────────────────────────
+  // ── follow the active node ───────────────────────────────────────────────
+  //
+  // Two rules keep this from turning into motion sickness:
+  //  - a node already comfortably on screen does not move the camera. Six
+  //    tools fanning out of one step used to yank the viewport six times for
+  //    a graph that already fitted;
+  //  - a gate is different. It is a full stop, so it always re-frames, sits
+  //    slightly above centre (the action row grows downwards) and gets a
+  //    guaranteed legible zoom.
   useEffect(() => {
     if (!followCamera) return;
     const run = useRunStore.getState().runs[runId];
-    if (run === undefined) return;
+    const view = viewSize();
+    if (run === undefined || view === undefined || nodes.length === 0) return;
+    const insets = insetsFor(view);
     const focus = pickFocusNode(run);
+
     if (focus === undefined) {
       // Run settled → fit the whole graph once.
       const key = `fit:${runId}:${structureVersion}`;
       if (
         run.meta.status !== 'running' &&
         run.meta.status !== 'pending' &&
-        lastFollowRef.current !== key &&
-        nodes.length > 0
+        lastFollowRef.current !== key
       ) {
         lastFollowRef.current = key;
-        frameNodes(rf, containerRef.current, nodes, { padding: 0.16, duration: 700 });
+        frameBoxes(nodes.map(boxOf), { padding: 0.16, duration: DURATION.follow });
       }
       return;
     }
+
     const node = nodes.find((n) => n.id === focus.nodeId);
-    if (node === undefined) return;
+    if (node === undefined) return; // not laid out yet — retry when it is
+    const box = boxOf(node);
+    const held = focus.reason === 'pause';
+
     // Key on the laid-out position and on *why* we are looking: a re-layout
     // that moves the focused node re-centres on it, and a gate opening pulls
     // the camera back to a node the run already ran through.
-    const key = `${runId}:${focus.nodeId}:${focus.reason}:${Math.round(node.position.x)},${Math.round(node.position.y)}`;
+    //
+    // A held gate also keys on the inspector's width. Selecting the paused
+    // node opens the inspector *after* the camera has already framed the
+    // node, and without this the panel then slides over the frame it was
+    // opened to explain.
+    const key = `${runId}:${focus.nodeId}:${focus.reason}:${Math.round(box.x)},${Math.round(
+      box.y,
+    )}:${insets.right ?? 0}:${Math.round(view.width)}x${Math.round(view.height)}`;
     if (lastFollowRef.current === key) return;
+
+    const current = viewportRef.current;
+
+    // Rule 1 — while the whole run still fits at a legible size, keep the
+    // whole run framed. "Where did that come from?" and "what else is
+    // running?" are answered by the same picture, and the camera stops
+    // lurching once per arrival. `applyViewport` no-ops when the frame has
+    // not actually changed, so this costs one move per new layer, not one
+    // per event.
+    if (!held) {
+      const whole = boundsOf(nodes.map(boxOf));
+      if (whole !== undefined) {
+        const framed = frameViewport(whole, view, {
+          padding: 0.16,
+          insets,
+          minZoom: MIN_ZOOM,
+          maxZoom: 1,
+        });
+        if (framed.zoom >= WIDE_ENOUGH_ZOOM) {
+          lastFollowRef.current = key;
+          applyViewport(framed, DURATION.follow);
+          return;
+        }
+      }
+      // Rule 2 — too big to show whole. Chase, but only what has left the
+      // screen: six parallel tools on a graph that already fits used to yank
+      // the viewport six times.
+      if (isComfortablyVisible(box, current, view, insets)) {
+        lastFollowRef.current = key;
+        return;
+      }
+    }
     lastFollowRef.current = key;
-    void rf.setCenter(
-      node.position.x + (node.width ?? 0) / 2,
-      node.position.y + (node.height ?? 0) / 2,
-      { zoom: Math.max(0.72, Math.min(rf.getZoom(), 1.1)), duration: motionMs(650) },
+
+    // Rule 3 — a gate is a full stop. It always re-frames, sits a little
+    // above centre (the action row grows downwards) and gets a zoom at which
+    // its buttons are readable.
+    const zoom = held
+      ? Math.max(0.85, Math.min(current.zoom, 1.15))
+      : Math.max(0.72, Math.min(current.zoom, 1.1));
+    applyViewport(
+      centerViewport(box, view, { zoom, insets, bias: held ? 0.16 : 0 }),
+      held ? DURATION.hold : DURATION.follow,
     );
-  }, [followCamera, statusVersion, structureVersion, nodes, runId, rf]);
+  }, [
+    followCamera,
+    statusVersion,
+    structureVersion,
+    nodes,
+    runId,
+    rf,
+    viewSize,
+    insetsFor,
+    frameBoxes,
+    applyViewport,
+    inspectorWidth,
+    viewNonce,
+  ]);
 
   // ── explicit focus requests (palette, deep links, timeline) ──────────────
   useEffect(() => {
     if (focusRequest === undefined || handledFocusRef.current === focusRequest.nonce) return;
     const node = nodes.find((n) => n.id === focusRequest.nodeId);
-    if (node === undefined) return; // not laid out yet — retry when nodes land
+    const view = viewSize();
+    if (node === undefined || view === undefined) return; // not laid out yet
     handledFocusRef.current = focusRequest.nonce;
-    void rf.setCenter(
-      node.position.x + (node.width ?? 0) / 2,
-      node.position.y + (node.height ?? 0) / 2,
-      { zoom: Math.max(0.9, rf.getZoom()), duration: motionMs(550) },
+    applyViewport(
+      centerViewport(boxOf(node), view, {
+        zoom: Math.max(0.9, viewportRef.current.zoom),
+        insets: insetsFor(view),
+      }),
+      DURATION.focus,
     );
-  }, [focusRequest, nodes, rf]);
+  }, [focusRequest, nodes, rf, viewSize, insetsFor, applyViewport]);
 
   // ── expose canvas verbs to the command palette ───────────────────────────
   useEffect(
     () =>
       registerCanvasActions({
-        fitView: () => frameNodes(rf, containerRef.current, nodesRef.current, { padding: 0.16, duration: 450 }),
+        fitView: () =>
+          void frameBoxes(nodesRef.current.map(boxOf), {
+            padding: 0.16,
+            duration: DURATION.frame,
+          }),
         arrange: () => {
           forceRef.current = true;
           setArrangeNonce((n) => n + 1);
@@ -457,7 +651,7 @@ export function RunCanvas({ runId }: { runId: string }) {
         zoomIn: () => void rf.zoomIn({ duration: motionMs(200) }),
         zoomOut: () => void rf.zoomOut({ duration: motionMs(200) }),
       }),
-    [rf],
+    [rf, frameBoxes],
   );
 
   nodesRef.current = nodes;
@@ -487,6 +681,11 @@ export function RunCanvas({ runId }: { runId: string }) {
   const onPaneClick = useCallback(() => {
     useUiStore.getState().selectNode(runId, undefined);
   }, [runId]);
+
+  /** The user panning or zooming is the other thing that moves the camera. */
+  const onMove = useCallback((_event: unknown, viewport: Viewport) => {
+    viewportRef.current = viewport;
+  }, []);
 
   const toggleFollow = useUiStore((s) => s.toggleFollow);
 
@@ -519,6 +718,7 @@ export function RunCanvas({ runId }: { runId: string }) {
         onNodesChange={onNodesChange}
         onNodeClick={onNodeClick}
         onPaneClick={onPaneClick}
+        onMove={onMove}
         minZoom={MIN_ZOOM}
         maxZoom={MAX_ZOOM}
         elementsSelectable={false}
@@ -548,7 +748,9 @@ export function RunCanvas({ runId }: { runId: string }) {
           className="gm-iconbtn"
           title="Fit view (⇧F)"
           aria-label="Fit view"
-          onClick={() => frameNodes(rf, containerRef.current, nodes, { padding: 0.16, duration: 450 })}
+          onClick={() =>
+            void frameBoxes(nodes.map(boxOf), { padding: 0.16, duration: DURATION.frame })
+          }
         >
           <IconFit />
         </button>

@@ -25,7 +25,13 @@ WILDCARD_RUN_ID = "*"
 """``runId`` for messages not bound to a run (handshake, breakpoints, mode)."""
 
 #: Capabilities announced in ``hello``. This client implements all of them.
-KNOWN_CAPABILITIES = ("pause", "step", "inject", "retry", "abort")
+#:
+#: ``run-claim``: this client stores the ``sessionToken`` from ``hello.ack``
+#: and echoes it as ``hello.resumeToken`` on reconnect, so the debugger can
+#: refuse writes to this app's runs from any other local process — including
+#: across a disconnect, which is otherwise the one window a claim cannot be
+#: proven in.
+KNOWN_CAPABILITIES = ("pause", "step", "inject", "retry", "abort", "run-claim")
 
 #: Messages the instrumented app sends.
 EVENT_TYPES = frozenset(

@@ -5,8 +5,8 @@
  * landing page.
  */
 import { useEffect, useRef, useState } from 'react';
-import type { NodeKind } from '@graphmind-ai/schema';
 import { copyText, deepLink } from '../lib/commands.js';
+import { KIND_ORDER, kindMeta } from '../lib/kinds.js';
 import { fmtCost, fmtCount, fmtDuration, fmtTokens } from '../lib/format.js';
 import { nextTheme, themeLabel } from '../lib/theme.js';
 import { filterSummary, isFilterActive, type StatusFilter } from '../store/filters.js';
@@ -15,6 +15,7 @@ import { runStats } from '../store/stats.js';
 import { runBadgeStatus, type RunBadgeStatus } from '../store/types.js';
 import { collapsedFor, useUiStore } from '../store/uiStore.js';
 import { collapsibleRoots } from '../store/collapse.js';
+import { KindGlyph } from './KindMark.js';
 import {
   IconCollapse,
   IconExpand,
@@ -29,7 +30,12 @@ import {
   IconTimeline,
 } from './Icons.js';
 
-const KINDS: NodeKind[] = ['agent', 'llm', 'tool', 'chain', 'retriever', 'custom'];
+/**
+ * Every kind the wire contract can carry, in one order (lib/kinds.ts). The
+ * MCP trio used to be missing here, which meant a run full of `server` and
+ * `resource` nodes could not be filtered at all.
+ */
+const KINDS = KIND_ORDER;
 const STATUSES: { value: StatusFilter; label: string; hint: string }[] = [
   { value: 'error', label: 'Errored', hint: 'Nodes that threw' },
   { value: 'paused', label: 'Paused', hint: 'Held at a gate right now' },
@@ -129,9 +135,11 @@ function FilterPopover({ runId }: { runId: string }) {
               return (
                 <button
                   key={kind}
-                  className={`gm-chip gm-chip--button${on ? ' gm-chip--on' : ''}`}
+                  className={`gm-chip gm-chip--button gm-chip--kind gm-kind--${kind}${on ? ' gm-chip--on' : ''}`}
+                  title={kindMeta(kind).hint}
                   onClick={() => ui.toggleKindFilter(kind)}
                 >
+                  <KindGlyph kind={kind} size={10} />
                   {kind}
                 </button>
               );
@@ -224,7 +232,7 @@ export function TopBar({ runId }: { runId: string }) {
         <FilterPopover runId={runId} />
 
         <button
-          className={`gm-toolbtn${collapsedCount > 0 ? ' gm-toolbtn--on' : ''}`}
+          className={`gm-toolbtn gm-narrow-hide${collapsedCount > 0 ? ' gm-toolbtn--on' : ''}`}
           onClick={toggleCollapseAll}
           title={collapsedCount > 0 ? 'Expand every group (⇧C)' : 'Collapse sub-agents into summary cards (⇧C)'}
         >
@@ -234,7 +242,7 @@ export function TopBar({ runId }: { runId: string }) {
           </span>
         </button>
 
-        <div className="gm-seg" role="radiogroup" aria-label="View">
+        <div className="gm-seg gm-narrow-hide" role="radiogroup" aria-label="View">
           <button
             className={view === 'graph' ? 'gm-seg--on' : ''}
             onClick={() => useUiStore.getState().setView('graph')}

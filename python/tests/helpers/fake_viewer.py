@@ -10,6 +10,10 @@ Mirrors ``packages/ai-sdk/test/helpers/fake-viewer.ts``.
 
 from __future__ import annotations
 
+#: Handed out in every ``hello.ack`` so a test can assert the client echoes it
+#: back as ``resumeToken`` on reconnect (the ``run-claim`` capability).
+SESSION_TOKEN = "fake-session-token"
+
 import asyncio
 import json
 import threading
@@ -95,6 +99,7 @@ class FakeViewer:
                                 "capabilities": ["pause", "step", "inject", "retry", "abort"],
                                 "breakpoints": self.breakpoints,
                                 "mode": self.mode,
+                                "sessionToken": SESSION_TOKEN,
                             },
                         )
                     )

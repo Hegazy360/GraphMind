@@ -46,6 +46,21 @@ always works.
 | <kbd>B</kbd> | Toggle the run list rail |
 | <kbd>D</kbd> | Cycle the theme (system → dark → light) |
 
+### While a gate is held
+
+When execution stops at a gate, focus moves to **Continue** so the keyboard is already
+where you need it, and four single-key shortcuts release the hold:
+
+| Key | Action |
+| --- | --- |
+| <kbd>C</kbd> | Continue |
+| <kbd>S</kbd> | Step |
+| <kbd>R</kbd> | Retry |
+| <kbd>I</kbd> | Inject — opens the editor; <kbd>⌘</kbd><kbd>Enter</kbd> sends it |
+
+Abort has no shortcut on purpose: it ends the run, and a single keystroke is the wrong
+amount of friction for that. Click it.
+
 ## The graph
 
 One node per **logical** node, lit up per execution — see
@@ -122,6 +137,24 @@ see the same debug state, and a change in one broadcasts to the other — which 
 "open the good run and the bad run side by side" work. See
 [comparing runs](/debugging/comparing-runs/).
 </Aside>
+
+## Built-in fixtures
+
+The viewer can render three recorded runs with no server, no agent and no API key —
+useful for seeing what a shape looks like before you instrument anything, and for
+reporting a UI bug against something everyone has:
+
+```text
+http://127.0.0.1:4747/?fixture=demo   the planted-bug trip planner
+http://127.0.0.1:4747/?fixture=mcp    an MCP session (server / tool / resource / prompt)
+http://127.0.0.1:4747/?stress=300     a generated 300-node graph, for layout and performance
+```
+
+`?stress=<n>` accepts 8–4000 nodes and takes optional `&events=<n>` and `&pace=<ms>`.
+
+The empty state offers all three as buttons, so you do not have to remember the query
+parameter. A fixture is clearly badged as recorded — it is not a live run and nothing in
+it can be resumed.
 
 ## Imported and replayed runs
 

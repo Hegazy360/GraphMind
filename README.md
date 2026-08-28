@@ -169,6 +169,9 @@ Other frameworks work the same way - wrap what you already have:
 | [OpenAI SDK](https://graphmind.ai/docs/integrations/openai/) | `@graphmind-ai/openai` | `gm.wrapClient(new OpenAI())` + `gm.wrapTools({...})` |
 | [LangGraph / LangChain](https://graphmind.ai/docs/integrations/langgraph/) | `@graphmind-ai/langgraph` | `callbacks: [gm.handler()]` + `gm.wrapTools({...})` |
 | [Python](https://graphmind.ai/docs/integrations/python/) | `pip install graphmind-ai` | `graphmind.instrument_openai(client)` + `@gm.tool` |
+| [Ruby](https://graphmind.ai/docs/integrations/ruby/) | `gem install graphmind` | `Graphmind.instrument_openai(client)` + `Graphmind.tool` |
+| [MCP server (yours)](https://graphmind.ai/docs/integrations/mcp/) | `@graphmind-ai/mcp` | `gm.wrapServer(new McpServer(...))` |
+| [MCP server (any language)](https://graphmind.ai/docs/integrations/mcp-proxy/) | nothing to install | `graphmind mcp-proxy -- <your server>` |
 
 How much you can pause depends on what the framework lets an adapter await.
 Wrapped clients and tools give the full set (pause, step, inject, retry,
@@ -187,6 +190,34 @@ Loads an OpenTelemetry (OTLP/JSON) or OpenInference span export from LangChain,
 LangGraph, CrewAI, or anything else that emits OTel GenAI / AI SDK /
 OpenInference spans, as a run you can browse in the viewer. Best-effort and
 clearly labeled: imported runs are history only, with no live features.
+
+### 4. Debug an MCP server while your client is driving it
+
+```sh
+graphmind mcp-proxy -- node my-server.js
+```
+
+Put it between your host and your server — `npx`, `python -m`, a Rust binary,
+anything — and the whole JSON-RPC conversation becomes a live graph, with **no
+changes to the server**. Every other MCP tool is a test client: you replace
+your host and invoke tools by hand. This watches the server your host is
+*really* driving, with the arguments a model actually chose, and it can stop
+there:
+
+- hold a `tools/call` **before your server sees it**, and answer it yourself;
+- hold a response **before your host sees it**, and rewrite it;
+- errors hold by default, so a broken server stops with no configuration.
+
+Point a host at it by wrapping the command already in your `.mcp.json`:
+
+```jsonc
+// before: { "command": "node", "args": ["my-server.js"] }
+{ "command": "npx", "args": ["-y", "graphmind-ai", "mcp-proxy", "--", "node", "my-server.js"] }
+```
+
+For a TypeScript server you own, `@graphmind-ai/mcp` instruments it in-process
+in two lines and additionally sees what never reaches the wire. See
+[debugging MCP servers](https://graphmind.ai/docs/debugging/mcp-servers/).
 
 ## Use it from Claude Code or Cursor
 
@@ -233,8 +264,10 @@ exact JSON record: [packages/cli/TELEMETRY.md](./packages/cli/TELEMETRY.md).
 | [`packages/anthropic`](./packages/anthropic) | Anthropic SDK adapter (client proxy + tool wrapping) |
 | [`packages/openai`](./packages/openai) | OpenAI SDK adapter (chat.completions + Responses API) |
 | [`packages/langgraph`](./packages/langgraph) | LangChain / LangGraph adapter (callback handler + tool wrapping) |
+| [`packages/mcp`](./packages/mcp) | In-process MCP server adapter (`wrapServer`) |
 | [`python`](./python) | The Python SDK (`pip install graphmind-ai`), sync and async |
-| [`packages/cli`](./packages/cli) | `graphmind-ai` (bin `graphmind`): local server, SQLite storage, demo, trace importer, MCP server, viewer host |
+| [`ruby`](./ruby) | The Ruby SDK (`gem install graphmind`), ruby-openai + ruby_llm |
+| [`packages/cli`](./packages/cli) | `graphmind-ai` (bin `graphmind`): local server, SQLite storage, demo, trace importer, MCP server, MCP debugging proxy, viewer host |
 | [`apps/viewer`](./apps/viewer) | The graph debugger UI (ships built inside the CLI package) |
 | [`apps/web`](./apps/web) | graphmind.ai |
 | [`examples/demo-agent`](./examples/demo-agent) | The planted-bug trip-planner demo agent |
@@ -246,12 +279,14 @@ exact JSON record: [packages/cli/TELEMETRY.md](./packages/cli/TELEMETRY.md).
 
 ## How it is tested
 
-Around 830 tests. Beyond the unit suites, the ones worth knowing about:
+Around 1,200 tests. Beyond the unit suites, the ones worth knowing about:
 
-- a **credential-leak audit** ([`security/`](./security)) that plants fake API
-  keys, auth headers and tokens everywhere a secret really lives, runs real
+- a **security audit** ([`security/`](./security)) that plants fake API keys,
+  auth headers and tokens everywhere a secret really lives, runs real
   instrumented agents, then greps the database, the API, the WebSocket frames,
-  both export formats and telemetry for them
+  both export formats and telemetry for them — and, since 0.4.0, fuzzes the
+  ingest and MCP boundaries with generated hostile frames and runs a real
+  attack against a real session holding a real gate
 - **browser tests** driving the built viewer through streaming, pause-on-error,
   inject-and-resume, the palette and both themes
 - a **live-provider suite** ([`examples/live-check`](./examples/live-check))
@@ -264,7 +299,7 @@ Around 830 tests. Beyond the unit suites, the ones worth knowing about:
   range, plus a weekly canary against the latest releases
 
 CI runs the lot on Linux, Windows and macOS across Node 22 and 24, plus Python
-3.10 and 3.13.
+3.10 and 3.13 and Ruby 3.1 and 3.3.
 
 ## Contributing
 

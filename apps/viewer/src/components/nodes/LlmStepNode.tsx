@@ -10,17 +10,18 @@ import type { NodeProps, Node } from '@xyflow/react';
 import type { FlowNodeData } from '../../store/runStateToFlow.js';
 import { fmtDuration, fmtTokens } from '../../lib/format.js';
 import { useTokenSnapshot } from '../../hooks/useTokenSnapshot.js';
-import { latestExecution } from '../../store/types.js';
+import { latestExecution, nodeStatus as statusOf } from '../../store/types.js';
+import { KindMark } from '../KindMark.js';
 import {
   CollapseToggle,
   FlowHandles,
   InstanceBadge,
   StatusDot,
-  nodeStatus,
   statusClass,
   useIsSelected,
   useLod,
   useNodeState,
+  useStatusFlash,
 } from './nodeParts.js';
 import { PauseBanner } from './PauseBanner.js';
 
@@ -35,7 +36,7 @@ function TokenTail({ runId, nodeId, running }: { runId: string; nodeId: string; 
   return (
     <div className={`gm-token-tail${showingReasoning ? ' gm-token-tail--reasoning' : ''}`}>
       {tail === '' ? (
-        <span style={{ opacity: 0.55 }}>{running ? 'waiting for tokens' : 'no stream'}</span>
+        <span className="gm-token-idle">{running ? 'waiting for tokens' : 'no stream'}</span>
       ) : (
         <span>
           {tail}
@@ -51,32 +52,31 @@ function LlmStepNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
   const node = useNodeState(runId, nodeId);
   const selected = useIsSelected(runId, nodeId);
   const lod = useLod();
+  const status = node === undefined ? 'ghost' : statusOf(node);
+  const flash = useStatusFlash(status);
 
   if (node === undefined) return null;
-  const status = nodeStatus(node);
   const exec = latestExecution(node);
   const usage = exec?.usage;
 
   return (
-    <div className={statusClass(status, selected)}>
+    <div className={`${statusClass(status, selected, flash)} gm-kind--${node.kind}`}>
       <FlowHandles />
       <div className="gm-node-head">
         <CollapseToggle runId={runId} nodeId={nodeId} />
         <StatusDot status={status} />
         <span className="gm-node-title">{node.name}</span>
         <InstanceBadge node={node} />
-        <span className="gm-node-kind" style={{ marginLeft: 'auto' }}>
-          llm
-        </span>
+        <KindMark kind={node.kind} className="gm-node-kind--trailing" />
       </div>
       {lod === 'full' ? (
         <TokenTail runId={runId} nodeId={nodeId} running={status === 'running'} />
       ) : (
         <div className="gm-token-tail gm-token-tail--muted" aria-hidden>
-          <span style={{ opacity: 0.5 }}>{status === 'running' ? 'streaming…' : 'stream hidden'}</span>
+          <span className="gm-token-idle">{status === 'running' ? 'streaming…' : 'stream hidden'}</span>
         </div>
       )}
-      <div className="gm-node-meta" style={{ marginTop: 7 }}>
+      <div className="gm-node-meta gm-node-meta--tail">
         {usage !== undefined ? (
           <span title={`${usage.inputTokens} in · ${usage.outputTokens} out`}>
             {fmtTokens(usage.inputTokens)} → {fmtTokens(usage.outputTokens)} tok
@@ -85,7 +85,7 @@ function LlmStepNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
           <span>{status === 'running' ? 'streaming…' : status === 'ghost' ? 'not started' : ''}</span>
         )}
         {exec?.durationMs !== undefined && (
-          <span style={{ marginLeft: 'auto' }}>{fmtDuration(exec.durationMs)}</span>
+          <span className="gm-node-ms">{fmtDuration(exec.durationMs)}</span>
         )}
       </div>
       <PauseBanner runId={runId} node={node} />

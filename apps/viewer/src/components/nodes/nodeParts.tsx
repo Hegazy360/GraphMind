@@ -1,6 +1,7 @@
 /**
  * Shared building blocks for the node cards.
  */
+import { useEffect, useRef, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { hasChildren } from '../../store/derived.js';
 import { useRunStore } from '../../store/runStore.js';
@@ -24,9 +25,57 @@ export function useLod(): LodLevel {
   return useUiStore((s) => s.lod);
 }
 
-export function statusClass(status: NodeLifeStatus, selected: boolean): string {
+/** How long a state-change flourish stays on a card. */
+const FLASH_MS = 620;
+
+/**
+ * A one-shot class marking the *moment* a card changed state.
+ *
+ * The steady-state classes (`gm-node--ok`, `--error`, `--paused`) say what a
+ * node is; on a canvas with thirty settled cards they say nothing about what
+ * just happened. Watching a run is watching transitions, so each one gets a
+ * single short cue — a green ring collapsing inward as a call succeeds, a red
+ * one snapping shut when it throws, an amber one opening when a gate holds —
+ * and then the card goes quiet. Nothing loops except the two states that
+ * genuinely are ongoing (running, held).
+ *
+ * Costs one timer per transition per card, which is bounded by the event rate
+ * and not by the graph size; a node that never changes never schedules one.
+ */
+export function useStatusFlash(status: NodeLifeStatus): string {
+  const previous = useRef<NodeLifeStatus | undefined>(undefined);
+  const [flash, setFlash] = useState('');
+
+  useEffect(() => {
+    const from = previous.current;
+    previous.current = status;
+    // First paint is an arrival, not a transition — the card's entrance
+    // animation is already carrying that.
+    if (from === undefined || from === status) return;
+    const next =
+      status === 'ok'
+        ? 'gm-node--settled'
+        : status === 'error'
+          ? 'gm-node--struck'
+          : status === 'paused'
+            ? 'gm-node--held'
+            : '';
+    if (next === '') {
+      setFlash('');
+      return;
+    }
+    setFlash(next);
+    const timer = setTimeout(() => setFlash(''), FLASH_MS);
+    return () => clearTimeout(timer);
+  }, [status]);
+
+  return flash;
+}
+
+export function statusClass(status: NodeLifeStatus, selected: boolean, flash = ''): string {
   const classes = ['gm-node', `gm-node--${status}`];
   if (selected) classes.push('gm-node--selected');
+  if (flash !== '') classes.push(flash);
   return classes.join(' ');
 }
 

@@ -120,7 +120,9 @@ socket owning that run.
 ## Primitives
 
 ```ts
-type NodeKind    = 'agent' | 'llm' | 'tool' | 'chain' | 'retriever' | 'custom';
+type NodeKind    = 'agent' | 'llm' | 'tool' | 'chain' | 'retriever'
+                 | 'server' | 'resource' | 'prompt'          // MCP
+                 | 'custom';
 type RunStatus   = 'ok' | 'error' | 'aborted';
 type PausePoint  = 'before' | 'after' | 'error';
 type ResumeAction = 'continue' | 'retry' | 'inject' | 'abort';

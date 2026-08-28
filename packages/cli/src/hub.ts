@@ -26,6 +26,7 @@ import {
   type MessagePayloadMap,
   type MessageType,
 } from '@graphmind-ai/schema';
+import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
 import { DebugState } from './debug-state.js';
 import {
@@ -51,6 +52,15 @@ export type LogFn = (message: string) => void;
  */
 export const DEFAULT_ABANDON_GRACE_MS = 15_000;
 
+/** How many run claims to remember. Oldest are evicted first. */
+const MAX_RUN_CLAIMS = 5_000;
+
+/** Longest `resumeToken` accepted from a client (ours are 32 hex chars). */
+const MAX_RESUME_TOKEN_LENGTH = 128;
+
+/** Minimum gap between two identical log lines. See `Hub.throttledLog`. */
+const LOG_THROTTLE_MS = 1_000;
+
 export interface HubOptions {
   /** Breakpoints a fresh debug session arms. Default: `{point:'error'}`. */
   breakpoints?: readonly BreakpointMatcher[];
@@ -73,6 +83,26 @@ interface IngestConn {
    */
   runSource: RunSource;
   readonly ownedRuns: Set<string>;
+  /**
+   * This connection's identity for run claims. Minted on `hello` and handed
+   * back in `hello.ack`; a reconnecting client echoes it so it re-claims its
+   * own runs. Empty until `hello`.
+   */
+  claimToken: string;
+  /**
+   * The client announced the `run-claim` capability, i.e. it echoes its token
+   * on reconnect. Claims made by such a connection are enforced even after it
+   * disconnects; claims by older clients are only enforced while connected,
+   * because an old client cannot prove continuity across a reconnect.
+   */
+  claimAware: boolean;
+}
+
+/** Who is allowed to write to a run. See `Hub.checkClaim`. */
+interface RunClaim {
+  token: string;
+  /** The claimant announced `run-claim`, so the claim outlives its socket. */
+  strict: boolean;
 }
 
 interface UiConn {
@@ -118,6 +148,11 @@ function toRunInfo(run: RunSummary, live: boolean): RunInfo {
   };
 }
 
+/** How an ingest connection is named in a log line. */
+function describeConn(conn: IngestConn): string {
+  return conn.appName === undefined ? 'an unnamed app' : `app "${conn.appName}"`;
+}
+
 function toWireEnvelope(event: StoredEvent): WireEnvelope {
   return {
     gm: PROTOCOL_VERSION,
@@ -133,6 +168,15 @@ export class Hub {
   private readonly ingestConns = new Set<IngestConn>();
   private readonly uiConns = new Set<UiConn>();
   private readonly runOwners = new Map<string, IngestConn>();
+  /**
+   * runId -> who may write to it. Outlives the connection so a reconnect can
+   * prove it is the same client. Insertion-ordered and capped: a claim is
+   * ~100 bytes and only the newest MAX_RUN_CLAIMS runs can be re-claimed,
+   * which is far beyond any real local session.
+   */
+  private readonly runClaims = new Map<string, RunClaim>();
+  /** Rate-limiting state for `throttledLog`, keyed by message kind. */
+  private readonly logThrottle = new Map<string, { last: number; suppressed: number }>();
   /** runId -> viewers tailing it. (WILDCARD subscribers are found via subs.) */
   private readonly runSubs = new Map<string, Set<UiConn>>();
   /** runId -> pending "mark abandoned" timer armed by a disconnect. */
@@ -161,12 +205,19 @@ export class Hub {
       appName: undefined,
       runSource: 'live',
       ownedRuns: new Set(),
+      claimToken: '',
+      claimAware: false,
     };
     this.ingestConns.add(conn);
     ws.on('pong', () => {
       conn.alive = true;
     });
     ws.on('message', (data, isBinary) => {
+      // Any inbound frame proves the peer is alive, not just a pong. A pong
+      // sits BEHIND that peer's own frames in the same TCP stream, so a busy
+      // app was being terminated by the reaper precisely because the server
+      // was busy reading from it — dropping everything in flight silently.
+      conn.alive = true;
       if (isBinary) return;
       const text = rawToText(data);
       if (text !== undefined) this.handleIngestFrame(conn, text);
@@ -177,10 +228,32 @@ export class Hub {
     });
   }
 
+  /**
+   * Log at most one line per key per window, with a count of what was
+   * swallowed. `graphmind serve` writes its log synchronously to the
+   * operator's TTY, so an unthrottled per-frame line lets a peer sending
+   * garbage at line rate turn the server into a blocking writer — and buries
+   * everything the operator actually needs to read.
+   */
+  private throttledLog(key: string, message: () => string): void {
+    const now = Date.now();
+    const entry = this.logThrottle.get(key);
+    if (entry !== undefined && now - entry.last < LOG_THROTTLE_MS) {
+      entry.suppressed += 1;
+      return;
+    }
+    const suppressed = entry?.suppressed ?? 0;
+    this.logThrottle.set(key, { last: now, suppressed: 0 });
+    this.log(suppressed === 0 ? message() : `${message()} (+${suppressed} more)`);
+  }
+
   private handleIngestFrame(conn: IngestConn, text: string): void {
     const result = parseEnvelopeJson(text);
     if (result.kind === 'invalid') {
-      this.log(`ingest: dropping invalid frame (${result.reason})`);
+      this.throttledLog(
+        'ingest-invalid',
+        () => `ingest: dropping invalid frame (${result.reason})`,
+      );
       return;
     }
     if (result.kind === 'version-mismatch') {
@@ -199,6 +272,18 @@ export class Hub {
       // Loose-schema extension: the bundled demo replayer marks itself so its
       // runs are registered (and badged in the viewer) as recorded sessions.
       if ((hello as Record<string, unknown>)['source'] === 'demo') conn.runSource = 'demo';
+      conn.claimAware = hello.capabilities.includes('run-claim');
+      // A client that echoes its previous token keeps the same identity, so
+      // the runs it was streaming before the socket dropped are still its
+      // own. Anything else gets a fresh identity — including a made-up token,
+      // which simply will not match any existing claim.
+      const presented = (hello as Record<string, unknown>)['resumeToken'];
+      conn.claimToken =
+        typeof presented === 'string' &&
+        presented.length > 0 &&
+        presented.length <= MAX_RESUME_TOKEN_LENGTH
+          ? presented
+          : randomUUID().replaceAll('-', '');
       this.sendToIngest(
         conn,
         createEnvelope({
@@ -210,6 +295,7 @@ export class Hub {
             capabilities: hello.capabilities,
             breakpoints: this.state.breakpoints,
             mode: this.state.mode,
+            sessionToken: conn.claimToken,
           },
         }),
       );
@@ -224,7 +310,10 @@ export class Hub {
     if (isControlType(envelope.type) || envelope.type === 'hello.ack') return;
 
     // Ownership: the most recent socket streaming a run owns it (reconnects
-    // re-claim the run when they replay their buffer).
+    // re-claim the run when they replay their buffer) — but only if this
+    // connection is entitled to the run at all.
+    if (!this.checkClaim(conn, envelope.runId)) return;
+
     const previousOwner = this.runOwners.get(envelope.runId);
     const ownerChanged = previousOwner !== conn;
     if (ownerChanged) {
@@ -295,6 +384,66 @@ export class Hub {
     }
 
     this.fanout(stored.truncated ? { ...envelope, payload: stored.payload } : envelope);
+  }
+
+  /**
+   * May this connection write to this run?
+   *
+   * `/ingest` is not a log sink. It decides which process an `exec.resume` is
+   * delivered to, and therefore which process gets to keep running — so
+   * "last writer owns the run" meant any local process could name another's
+   * run once and thereafter receive its resumes (with whatever value the
+   * operator injected), fabricate nodes inside it, wedge its gate forever, or
+   * mark it finished. It could also pre-claim low `seq` numbers and have the
+   * real app's events silently dropped by the `(runId, seq)` dedup.
+   *
+   * A run is therefore claimed by the token that first wrote to it:
+   *
+   *  - same token                  -> allowed (this is the reconnect path)
+   *  - different token, claimant still connected -> refused, always
+   *  - different token, claimant gone, claim is `strict`  -> refused
+   *  - different token, claimant gone, claim is not strict -> allowed
+   *
+   * The last case is the compatibility seam. A client older than the
+   * `run-claim` capability cannot echo a token, so after a reconnect it
+   * cannot prove it is the same client — refusing it would break reconnect
+   * for every pinned 0.3.x SDK. Such clients keep today's behaviour in that
+   * one window, and are protected the rest of the time. Current clients are
+   * protected unconditionally.
+   */
+  private checkClaim(conn: IngestConn, runId: string): boolean {
+    const claim = this.runClaims.get(runId);
+    if (claim === undefined) {
+      if (this.runClaims.size >= MAX_RUN_CLAIMS) {
+        const oldest = this.runClaims.keys().next();
+        if (!oldest.done) this.runClaims.delete(oldest.value);
+      }
+      this.runClaims.set(runId, { token: conn.claimToken, strict: conn.claimAware });
+      return true;
+    }
+    if (claim.token === conn.claimToken) return true;
+
+    const claimantConnected = this.runOwners.has(runId);
+    if (claim.strict || claimantConnected) {
+      this.throttledLog(
+        'ingest-claim',
+        () =>
+          `ingest: refusing a frame for run "${runId}" from ${describeConn(conn)} — ` +
+          'that run belongs to another connection',
+      );
+      return false;
+    }
+    // Legacy takeover. Say so: it is the one path where identity is assumed
+    // rather than proven, and an operator seeing this unexpectedly is seeing
+    // either a stale SDK or something worth looking at.
+    this.throttledLog(
+      'ingest-claim-takeover',
+      () =>
+        `ingest: run "${runId}" re-claimed by ${describeConn(conn)}, which cannot prove it is ` +
+        'the original app (SDK predates the run-claim capability); upgrade to remove this window',
+    );
+    this.runClaims.set(runId, { token: conn.claimToken, strict: conn.claimAware });
+    return true;
   }
 
   private removeIngest(conn: IngestConn): void {
@@ -383,6 +532,7 @@ export class Hub {
       conn.alive = true;
     });
     ws.on('message', (data, isBinary) => {
+      conn.alive = true; // see the ingest socket: reading bytes proves liveness
       if (isBinary) return;
       const text = rawToText(data);
       if (text !== undefined) this.handleUiFrame(conn, text);
@@ -437,6 +587,15 @@ export class Hub {
     if (runId === WILDCARD_RUN_ID) {
       conn.subs.add(runId);
       this.sendToUi(conn, { type: 'runs', runs: this.listRunInfos() });
+      return;
+    }
+    // Already tailing it: acknowledge without replaying. A viewer that
+    // re-subscribes to a run it is already on wants the tail it already has,
+    // and replaying a 2,000-event run once per repeated frame is a free
+    // amplifier for anything that can open the UI socket.
+    if (conn.subs.has(runId)) {
+      this.sendToUi(conn, { type: 'replay.start', runId, count: 0 });
+      this.sendToUi(conn, { type: 'replay.end', runId });
       return;
     }
     // Replay-then-tail. Storage reads are synchronous, so no live event can

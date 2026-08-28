@@ -13,7 +13,11 @@ import { Aside } from '@astrojs/starlight/components';
 | --- | --- |
 | `GRAPHMIND_DB` | Database path (`--db` beats it; default `~/.graphmind/graphmind.db`) |
 | `GRAPHMIND_PAUSE_ON_ERROR` | Scope the default error breakpoint: `on` (default, every node), `off`, or a node kind (`tool`, `llm`, `chain`, `retriever`, `agent`, `custom`). `--pause-on-error` beats it. |
-| `GRAPHMIND_ABANDON_GRACE_MS` | How long a run whose app disconnected mid-flight waits to reconnect before it is marked abandoned rather than left "running" forever. |
+| `GRAPHMIND_ABANDON_GRACE_MS` | How long a run whose app disconnected mid-flight waits to reconnect before it is marked abandoned rather than left "running" forever (default 15000). |
+| `GRAPHMIND_ALLOWED_ORIGINS` | Extra browser origins allowed to reach the server, comma-separated; `*` disables the check. See [who is allowed to connect](/reference/cli/#who-is-allowed-to-connect). |
+| `GRAPHMIND_RETENTION` | `off` disables the startup prune entirely |
+| `GRAPHMIND_KEEP_RUNS` | Runs to keep (default 200); `--keep` beats it |
+| `GRAPHMIND_KEEP_DAYS` | Days to keep (default 30); `--days` beats it |
 | `GRAPHMIND_TELEMETRY` | `0` or `false` disables [telemetry](/reference/telemetry/) entirely (also auto-disabled when `CI` is set) |
 | `GRAPHMIND_TELEMETRY_URL` | Override the telemetry endpoint (used by tests) |
 | `GRAPHMIND_HOME` | Directory for the telemetry install id (default `~/.graphmind`) |
@@ -38,6 +42,12 @@ Evaluated top to bottom; the first match wins:
 | `enabled` option passed | As given. |
 | `NODE_ENV=production` | **Disabled** unless `GRAPHMIND=1`. |
 | Otherwise | Enabled. |
+
+Python has no `NODE_ENV`, so it applies the same rule to the first variable that is *set* out of
+`GRAPHMIND_ENV`, `ENVIRONMENT`, `APP_ENV`, `PYTHON_ENV`, `ENV`, `DJANGO_ENV`, `FLASK_ENV`,
+`NODE_ENV`, counting `production` / `prod` (case-insensitive) as production. It is a boring
+documented list rather than a heuristic on purpose — a debugger that turns itself off for
+surprising reasons is worse than one you have to switch on.
 
 A disabled session no-ops everything: no sockets, no buffering, no warnings, and the adapter's
 `wrapClient` / `wrapModel` / `wrapTools` are identity functions. `gm.run` still executes your

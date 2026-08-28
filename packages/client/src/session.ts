@@ -226,6 +226,8 @@ class SessionImpl implements Session {
   private readonly meta: Record<string, unknown> | undefined;
 
   private seq = 0;
+  /** Identity handed out by the debugger in `hello.ack`; see `buildHello`. */
+  private sessionToken: string | undefined;
   private started = false;
   private disposed = false;
   private implicitRun: RunContext | undefined;
@@ -598,6 +600,10 @@ class SessionImpl implements Session {
       capabilities: [...KNOWN_CAPABILITIES],
       app: this.appName,
       sdk: this.sdk,
+      // Echoing the token from the last `hello.ack` is what lets the debugger
+      // recognise a reconnect as the SAME app, and so refuse writes to our
+      // runs from any other local process. Absent on the first connection.
+      ...(this.sessionToken === undefined ? {} : { resumeToken: this.sessionToken }),
     };
     return serializeEnvelope(
       createEnvelope({ type: 'hello', payload, seq: this.nextSeq(), runId: WILDCARD_RUN_ID }),
@@ -605,6 +611,11 @@ class SessionImpl implements Session {
   }
 
   private handleAttached(ack: MessagePayloadMap['hello.ack']): void {
+    // Kept across reconnects on purpose (see buildHello). Only ever replaced,
+    // never cleared on detach: the whole point is to survive the drop.
+    if (typeof ack.sessionToken === 'string' && ack.sessionToken.length > 0) {
+      this.sessionToken = ack.sessionToken;
+    }
     this.guard('attach', () => {
       this.engine.arm(ack.breakpoints, ack.mode);
       // Holes first: what they describe is older than anything still buffered.

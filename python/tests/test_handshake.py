@@ -7,6 +7,7 @@ from typing import Any
 from graphmind.protocol import PROTOCOL_VERSION
 
 from .conftest import wait_until
+from .helpers.fake_viewer import SESSION_TOKEN
 
 
 def test_hello_carries_protocol_capabilities_and_sdk(attached: Any) -> None:
@@ -18,7 +19,16 @@ def test_hello_carries_protocol_capabilities_and_sdk(attached: Any) -> None:
     payload = hello["payload"]
     assert payload["versions"]["protocol"] == PROTOCOL_VERSION
     assert payload["versions"]["client"]
-    assert set(payload["capabilities"]) == {"pause", "step", "inject", "retry", "abort"}
+    assert set(payload["capabilities"]) == {
+        "pause",
+        "step",
+        "inject",
+        "retry",
+        "abort",
+        "run-claim",
+    }
+    # First connection: nothing to prove continuity with yet.
+    assert "resumeToken" not in payload
     assert payload["sdk"]["name"] == "python"
 
 
@@ -104,3 +114,10 @@ def test_reconnect_after_viewer_restart(viewer: Any, make_gm: Any) -> None:
     replacement = viewer()
     instance.session._transport._url = replacement.url
     assert instance.ready(timeout=5.0) is True
+
+    # The run-claim capability: the debugger mints a token in `hello.ack`, and
+    # a reconnecting client echoes it so its runs are recognised as still its
+    # own. Without it a reconnect looks like a different process, and the
+    # debugger refuses to let it keep streaming the run it was already on.
+    hello = replacement.wait_for_type("hello")
+    assert hello["payload"]["resumeToken"] == SESSION_TOKEN

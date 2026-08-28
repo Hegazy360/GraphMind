@@ -1,6 +1,6 @@
 ---
 title: Exporting a run
-description: graphmind record writes a run's event stream to NDJSON — the same format the ingest endpoint accepts, so an exported run can be replayed, diffed or attached to a bug report.
+description: graphmind record writes a run to NDJSON — the same format the ingest endpoint accepts — or to one self-contained HTML page that opens with no server, so a run can be replayed, diffed, or attached to a bug report.
 sidebar:
   order: 8
 ---
@@ -8,15 +8,43 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 ```sh
-graphmind record <runId>
+graphmind record <runId>                        # NDJSON, for machines
 graphmind record <runId> --out bug-4471.ndjson
+graphmind record <runId> --html                 # one page, for people
 ```
 
-Writes the run's persisted event stream to NDJSON — **one wire envelope per line**. Default
-output is `graphmind-run-<runId>.ndjson`. Pass a run id you do not have and the command lists
+Two formats, same run. NDJSON is **one wire envelope per line** — the shape `WS /ingest` accepts,
+so it round-trips. `--html` is the viewer itself, inlined. Default output is
+`graphmind-run-<runId>.ndjson` / `.html`. Pass a run id you do not have and the command lists
 recent run ids instead of failing blankly.
 
-## The format
+## `--html`: the run as one page
+
+```sh
+graphmind record run_01H8… --html
+# exported run run_01H8… (214 events) → /Users/you/graphmind-run-run_01H8….html (1204 KB)
+# Open it in any browser, or send it to someone — it needs no server.
+```
+
+The viewer's own JS and CSS are inlined and the run's envelopes are embedded in the page, so the
+file is the debugger UI reading a frozen run: **no server, no network, no account, no install**.
+Open it on a plane. Attach it to a GitHub issue. Drop it in Slack and the person who opens it
+sees the graph, every node's input and output, the errors and the timings — exactly what you
+were looking at.
+
+What is different from a live run: controls that would steer execution are hidden, because there
+is nothing to steer. Everything else — the canvas, the inspector, the timeline, filtering — works.
+
+It needs the built viewer. The published package ships it; from a monorepo checkout run
+`pnpm build:viewer` first, or the command tells you where it looked.
+
+<Aside type="caution" title="An HTML export is a complete record">
+Because it carries the whole run, it carries the whole run's prompts and payloads — in a file
+that renders them beautifully to anyone who opens it. The command prints a warning for that
+reason. Treat it like the NDJSON: read it before you share it.
+</Aside>
+
+## NDJSON: the format
 
 Each line is a complete envelope, exactly as it went over the socket:
 

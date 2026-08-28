@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: Every graphmind command and flag — serve, demo, init, import, mcp, runs, record — plus the HTTP and WebSocket endpoints the server exposes.
+description: Every graphmind command and flag — serve, demo, init, import, mcp-proxy, mcp, runs, record — plus the HTTP and WebSocket endpoints the server exposes.
 sidebar:
   order: 1
 ---
@@ -8,7 +8,7 @@ sidebar:
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
 The `graphmind-ai` package installs the `graphmind` binary: the local server, SQLite storage,
-the keyless demo, the trace importer, the MCP server, and the bundled viewer UI.
+the keyless demo, the trace importer, the MCP proxy, the MCP server, and the bundled viewer UI.
 
 <Tabs syncKey="pkg">
 <TabItem label="npx">
@@ -41,10 +41,34 @@ expose the port.
 Start the local server and open the viewer. Running `graphmind` with no command does this.
 
 ```sh
-graphmind                # port 4747, open the browser
-graphmind --port 4848    # different port (always binds 127.0.0.1)
-graphmind --db ./x.db    # database file (default ~/.graphmind/graphmind.db)
-graphmind --no-open      # do not open a browser
+graphmind                          # port 4747, open the browser
+graphmind --port 4848              # different port (always binds 127.0.0.1)
+graphmind --db ./x.db              # database file (default ~/.graphmind/graphmind.db)
+graphmind --no-open                # do not open a browser
+graphmind --pause-on-error tool    # arm the default error breakpoint on tools only
+graphmind --pause-on-error off     # start with no breakpoints at all
+```
+
+### Who is allowed to connect
+
+Binding loopback is not on its own enough, because two browser mechanisms reach a loopback
+server from a page you merely visited: a **WebSocket handshake is exempt from the same-origin
+policy**, and **DNS rebinding** makes an attacker's domain same-origin for a plain `fetch`.
+Since 0.3.0 every HTTP request and every upgrade is checked:
+
+| Client | Result |
+| --- | --- |
+| No `Origin` header — the SDK, `curl`, the CLI itself, tests | **Allowed.** A web page cannot omit it. |
+| A loopback origin on this server's own port — the viewer it serves | **Allowed** |
+| Any other origin | **403** |
+| A `Host` header that is not a loopback name | **403** (closes DNS rebinding; SSH tunnels still work) |
+
+`GRAPHMIND_ALLOWED_ORIGINS` opens it explicitly — a comma-separated list, or `*` to disable the
+check entirely. You need it for exactly one ordinary case, a viewer running on its own dev
+server:
+
+```sh
+GRAPHMIND_ALLOWED_ORIGINS=http://localhost:5199,http://127.0.0.1:5199 graphmind
 ```
 
 ## `graphmind demo`
@@ -98,9 +122,40 @@ span lists** (OpenInference / Arize Phoenix-style JSON or JSONL). Recognised spa
 Vercel AI SDK OTel spans, OTel GenAI semantic conventions, and OpenInference. Unrecognised spans
 are imported as generic nodes or skipped with a note.
 
+## `graphmind mcp-proxy -- <command>`
+
+Debug **your** MCP server. Spawns `<command>` as a child, speaks stdio JSON-RPC to your MCP host
+on one side and to the server on the other, relays every frame verbatim, and reports the
+conversation to GraphMind as a live run you can hold and steer. Any language, no code changes.
+
+```sh
+graphmind mcp-proxy -- node my-server.js
+graphmind mcp-proxy -- python -m my_server
+graphmind mcp-proxy --trace -- ./target/debug/my-server
+```
+
+Point a host at it by moving the existing command inside the proxy:
+
+```sh
+claude mcp add my-server-debug -- npx -y graphmind-ai mcp-proxy -- node my-server.js
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--trace` | One line per frame on stderr — works with no GraphMind running |
+| `--wait-for-attach` | Hold the first frame until the debugger attaches (≤3s), so `initialize` can be gated |
+| `--inherit-stderr` | Give the server the real stderr fd; its log then does not appear on the session node |
+| `--max-frame-bytes <n>` | Frame-assembly ceiling (default 64 MiB); above it the relay becomes a raw byte pipe |
+| `--port <n>` | GraphMind port to report to |
+
+Run it with no command and it prints a working recipe. Nothing is ever written to stdout except
+the protocol. Full detail: [MCP proxy](/integrations/mcp-proxy/) and
+[debugging MCP servers](/debugging/mcp-servers/).
+
 ## `graphmind mcp`
 
-Serve recorded runs to MCP clients (Claude Code, Cursor, …) over stdio. Read-only tools:
+The other direction: serve **your recorded runs** to MCP clients (Claude Code, Cursor, …) over
+stdio. Read-only tools:
 `list_runs`, `get_run`, `get_node`, `find_errors` — each result carries a deep link into the
 viewer. Reads the SQLite database directly, so it works while the server and viewer are closed.
 
@@ -129,15 +184,29 @@ Default retention is **200 runs / 30 days**. `--clear` refuses to act without `-
 
 ## `graphmind record <runId>`
 
-Export a persisted run's event stream to NDJSON — one wire envelope per line, the same shape
-`graphmind demo` replays and `WS /ingest` accepts.
+Export a persisted run — as NDJSON (one wire envelope per line, the same shape `graphmind demo`
+replays and `WS /ingest` accepts), or as one self-contained HTML page.
 
 ```sh
+graphmind record run_01H8…                        # → graphmind-run-<runId>.ndjson
 graphmind record run_01H8… --out bug-4471.ndjson
+graphmind record run_01H8… --html                 # → graphmind-run-<runId>.html
+graphmind record run_01H8… --html --out bug-4471.html
 ```
 
-Default output: `graphmind-run-<runId>.ndjson`. Lists recent run ids when the given one is not
-found. See [exporting a run](/debugging/recording-runs/).
+`--html` inlines the viewer's own JS and CSS and embeds the run's envelopes in the page, so the
+file opens in any browser with **no server and no network** — the same UI you were just looking
+at, reading a frozen run. It needs the built viewer, which the published package ships (from a
+monorepo checkout, run `pnpm build:viewer` first). Live-looking debugger controls are hidden in
+an export, because there is nothing to control.
+
+Lists recent run ids when the given one is not found. See
+[exporting a run](/debugging/recording-runs/).
+
+<Aside type="caution" title="An export carries your payloads">
+Both formats contain the run's prompts, tool inputs, outputs and errors verbatim. The command
+says so before you share it; read the file before attaching it to a public issue.
+</Aside>
 
 ## Global flags
 
@@ -150,7 +219,12 @@ found. See [exporting a run](/debugging/recording-runs/).
 | `--live` | (`demo`) run the real demo agent instead of the replay |
 | `--install` | (`init`) run the package-manager install |
 | `--write` | (`init`) write a `graphmind.example.ts` snippet file |
-| `--out <file>` | (`record`) output NDJSON path |
+| `--out <file>` | (`record`) output path |
+| `--html` | (`record`) export a self-contained HTML page instead of NDJSON |
+| `--trace` | (`mcp-proxy`) one line per frame on stderr |
+| `--wait-for-attach` | (`mcp-proxy`) hold the first frame until the debugger attaches |
+| `--inherit-stderr` | (`mcp-proxy`) do not pipe the server's stderr |
+| `--max-frame-bytes <n>` | (`mcp-proxy`) frame-assembly ceiling (default 64 MiB) |
 | `--prune` | (`runs`) apply the retention policy now |
 | `--keep <n>` | (`runs`) keep / show the n newest runs |
 | `--days <n>` | (`runs`) keep runs from the last n days |

@@ -66,7 +66,7 @@ import { withBase } from '../../lib/with-base.js';
   />
   <LinkCard
     title="Integrations"
-    description="Vercel AI SDK, Anthropic, OpenAI, LangGraph, Python — copy-pasteable end to end."
+    description="Vercel AI SDK, Anthropic, OpenAI, LangGraph, MCP, Python, Ruby — copy-pasteable end to end."
     href="/integrations/"
   />
 </CardGrid>
@@ -86,6 +86,11 @@ import { withBase } from '../../lib/with-base.js';
     Replace a tool's result — or a failure — with a value you type, and let the agent keep
     running on it. Test the recovery path without touching your code.
   </Card>
+  <Card title="Debug an MCP server" icon="puzzle">
+    You cannot printf-debug a server whose stdout *is* the protocol. Put `graphmind mcp-proxy`
+    between the host and the server: see every request, hold one, inject a response. Any
+    language, no code changes.
+  </Card>
   <Card title="Fails open, always" icon="approve-check">
     No debugger attached? Instrumentation is a no-op. Debugger disconnects mid-hold? Every gate
     auto-continues. Your production path never waits on a viewer.
@@ -99,6 +104,8 @@ import { withBase } from '../../lib/with-base.js';
   <LinkCard title="Anthropic SDK" href="/integrations/anthropic/" description="@graphmind-ai/anthropic — wrapClient + wrapTools" />
   <LinkCard title="OpenAI SDK" href="/integrations/openai/" description="@graphmind-ai/openai — wrapClient + wrapTools" />
   <LinkCard title="LangGraph / LangChain" href="/integrations/langgraph/" description="@graphmind-ai/langgraph — callback handler" />
+  <LinkCard title="MCP servers" href="/debugging/mcp-servers/" description="graphmind mcp-proxy — any language, no code changes" />
   <LinkCard title="Python" href="/integrations/python/" description="openai · anthropic · langgraph" />
+  <LinkCard title="Ruby" href="/integrations/ruby/" description="gated callables · ruby-openai · RubyLLM" />
   <LinkCard title="Anything else" href="/integrations/other-frameworks/" description="Import a trace, or write a 200-line adapter" />
 </CardGrid>

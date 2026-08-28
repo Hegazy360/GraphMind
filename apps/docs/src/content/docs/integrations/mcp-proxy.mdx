@@ -1,0 +1,192 @@
+---
+title: MCP proxy
+description: graphmind mcp-proxy debugs any MCP server, in any language, with no code changes — it sits between the host and the server, relays every frame verbatim, and reports the conversation as a live run.
+sidebar:
+  order: 6
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+`graphmind mcp-proxy` is the one integration that needs nothing from you but a change to how the
+server is spawned. It speaks stdio JSON-RPC to your MCP host on one side and to your server on
+the other, relays every frame **byte for byte**, and reports the conversation to GraphMind as a
+live run you can watch, hold and steer.
+
+Because it sits at the protocol boundary rather than inside a process, it works on a server
+written in **any language** — TypeScript, Python, Go, Rust, a binary somebody handed you — and
+on servers you did not write and cannot modify.
+
+It ships in `graphmind-ai`, so there is nothing to install beyond the CLI. It is new, so make
+sure you are on a release that has it — `npx graphmind-ai@latest`, or check that
+`graphmind mcp-proxy --help` prints something.
+
+```sh
+graphmind mcp-proxy -- node build/server.js
+graphmind mcp-proxy -- python -m my_server
+graphmind mcp-proxy -- ./target/debug/my-server --flag
+graphmind mcp-proxy --trace -- npx -y @modelcontextprotocol/server-everything
+```
+
+Everything after `--` is your server's command line, run unchanged as a child process.
+
+<Aside type="note" title="Not to be confused with `graphmind mcp`">
+`graphmind mcp-proxy` **debugs your MCP server**. `graphmind mcp` points the other way: it turns
+GraphMind into an MCP server so Claude Code can read your recorded runs. See
+[MCP tools](/reference/mcp/).
+</Aside>
+
+## Wiring it into a host
+
+Move your existing command inside the proxy. The host still spawns one process; that process
+just happens to be the proxy now.
+
+<Tabs syncKey="host">
+<TabItem label="Claude Code">
+
+```sh
+claude mcp add my-server-debug -- npx -y graphmind-ai mcp-proxy -- node my-server.js
+```
+
+Adding it under a second name lets you keep the direct one and switch by enabling whichever you
+want.
+
+</TabItem>
+<TabItem label="Config file">
+
+```json
+// before
+{ "command": "node", "args": ["my-server.js"] }
+
+// after
+{ "command": "npx", "args": ["-y", "graphmind-ai", "mcp-proxy", "--", "node", "my-server.js"] }
+```
+
+Use absolute paths — the host does not spawn the child in your project directory.
+
+</TabItem>
+</Tabs>
+
+Then run `graphmind` in another terminal and restart the host so it re-spawns the server.
+
+## Options
+
+| Flag | Meaning |
+| --- | --- |
+| `--trace` | One line per frame on stderr. Works with **no GraphMind running at all** — a `tee` for the protocol. |
+| `--wait-for-attach` | Hold the first frame until the debugger attaches (up to 3s), so even `initialize` can be gated. |
+| `--inherit-stderr` | Give the server the real stderr fd instead of piping it. Keeps `isatty(2)` true for servers that care; the server's log then does **not** appear on the session node. |
+| `--max-frame-bytes <n>` | Frame-assembly ceiling, default 64 MiB. Above it the proxy stops parsing and becomes a raw byte pipe. |
+| `--port <n>` | GraphMind port to report to (default 4747). |
+
+Run `graphmind mcp-proxy` with no command and it prints a working recipe rather than a synopsis.
+
+## What it reports
+
+One session node, and a node per request under it:
+
+| Method | `nodeId` | Kind |
+| --- | --- | --- |
+| `tools/call` | `tool:<name>` | `tool` |
+| `resources/read` | `resource:<uri>` | `resource` |
+| `prompts/get` | `prompt:<name>` | `prompt` |
+| `sampling/createMessage` | `llm:sampling` | `llm` |
+| the session | `mcp:session` | `server` |
+| everything else (`initialize`, `tools/list`, `ping`, `logging/*`, notifications) | `mcp:<method>` | `custom` |
+
+`nodeId` is stable per *logical* node, so ten calls to one tool are ten instances of one node on
+the canvas rather than ten boxes — the same rule every GraphMind adapter follows. `instanceId` is
+a per-session counter (`mcp_1`, `mcp_2`, …) rather than the JSON-RPC request id, because
+notifications have no id at all and two connections would otherwise collide.
+
+Two behaviours are worth knowing:
+
+- **An unanswered request keeps its node open.** That is a real server bug and the graph should
+  show it as one. It only becomes an error when the child process exits, which is the first
+  moment it is honest to say no answer is coming.
+- **The server's stderr is captured and streamed onto the session node**, so the logging you are
+  allowed to write finally sits in the timeline next to the request it was about. Turn it off
+  with `--inherit-stderr`.
+
+## Gate points and what the actions mean
+
+The proxy holds *frames*, so the four actions map onto protocol actions:
+
+| | Held request (`before`) | Held response (`after`, or `error`) |
+| --- | --- | --- |
+| `continue` | Forward unchanged | Forward unchanged |
+| `inject` | Do not forward; answer the sender with your value as the JSON-RPC `result` | Forward a rewritten frame carrying your value |
+| `retry` | Same as `continue` — nothing has run yet | Drop it and re-send the original request bytes; the node stays open until the new answer |
+| `abort` | Do not forward; answer the sender with a JSON-RPC error (`-32099`) | Drop it and answer the requester with `-32099` |
+
+A **notification** has no id and no answer, so it only has a `before` gate: `continue` forwards,
+`inject` forwards your object in its place, `abort` swallows it.
+
+The `error` gate fires on a JSON-RPC error **and** on an MCP tool result carrying
+`isError: true` — the second is the common one, because that is how a failing tool reports
+itself. Both are armed by default by `graphmind serve`, so a failing tool call pauses without
+any configuration.
+
+If your injected object has its own `jsonrpc` field it is sent as the whole frame; otherwise it
+becomes the `result`. That is the escape hatch for hand-crafting an error response.
+
+### Inject the result shape, not the payload
+
+<Aside type="caution" title="The proxy does not reshape what you inject">
+Your value becomes the JSON-RPC `result` **verbatim**. MCP results are typed, so at a
+`tools/call` gate you must inject a `CallToolResult`, not the data your tool would have returned:
+
+```json
+{ "content": [{ "type": "text", "text": "{\"status\":\"blocked\"}" }] }
+```
+
+Inject the bare `{"status":"blocked"}` and the client receives a tool result with **no content** —
+it will not error, it will just be empty, which is a confusing five minutes. The same applies to
+`resources/read` (`{ "contents": [...] }`) and `prompts/get` (`{ "messages": [...] }`).
+
+[`@graphmind-ai/mcp`](/integrations/mcp/#injecting-into-a-typed-result) lifts a bare value into
+the right shape for you. The proxy deliberately does not, because reshaping bytes is the one
+thing a byte-exact relay must not do.
+</Aside>
+
+## Fail-open
+
+The proxy is in the path of your editor's tool traffic, so this matters more here than anywhere
+else in GraphMind:
+
+- **No GraphMind running: it is a plain pipe.** Frames are relayed, nothing is held, the session
+  behaves exactly as it did before you added the proxy.
+- **A debugger that disconnects mid-hold releases every held frame** with `continue`.
+- **If the reporter throws, the frame is forwarded unchanged.** Observation is best-effort;
+  delivery is not.
+- **A frame larger than `--max-frame-bytes` degrades the relay to a raw byte pipe** for the rest
+  of that stream. You lose the debugger, never the session.
+- **Nothing is ever written to stdout except the protocol**, including the proxy's own
+  diagnostics. `--trace` goes to stderr.
+- **Order is preserved.** Frames go through a single FIFO queue, and while one is held the
+  source is paused — so a held request means execution really is stopped, and the server cannot
+  see frame N+1 before frame N.
+
+## Bytes, exactly
+
+A forwarded frame is written back as it arrived. Nothing is re-serialised, so key order, number
+formatting, unicode escaping and stray `\r`s all survive the round trip. This is deliberate: a
+debugger that silently normalises the protocol is a debugger that hides protocol bugs.
+
+## Limits
+
+<Aside type="caution">
+- **stdio only.** The proxy pipes a child process's stdin/stdout. A server you reach over
+  Streamable HTTP or SSE is not proxied — use [`@graphmind-ai/mcp`](/integrations/mcp/) in-process
+  instead.
+- **One session per proxy process.** The host spawns one child, and that child is one session.
+- **The wire is the boundary.** The proxy cannot see inside a handler: not which branch it took,
+  not a slow query, not work that never produces a frame. `abort` answers the caller; it cannot
+  cancel what your handler is already doing.
+- **`retry` re-sends to the process the host already spawned.** A source change needs a restart
+  before a retry can pick it up.
+</Aside>
+
+## See also
+
+- [Debugging MCP servers](/debugging/mcp-servers/) — the workflow, end to end.
+- [`@graphmind-ai/mcp`](/integrations/mcp/) — instrument a TypeScript server from the inside.

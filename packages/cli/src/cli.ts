@@ -9,9 +9,12 @@ import { runDemo } from './commands/demo.js';
 import { runImport } from './commands/import.js';
 import { runInit } from './commands/init.js';
 import { runMcp } from './commands/mcp.js';
+import { printMcpProxyHelp, runMcpProxy } from './commands/mcp-proxy.js';
 import { runRecord } from './commands/record.js';
 import { runRuns } from './commands/runs.js';
+import { MCP_PROXY_SUMMARY } from './mcp-proxy/help.js';
 import { openBrowser } from './open-browser.js';
+import { DEFAULT_PORT } from './paths.js';
 import { startServer } from './server.js';
 import { recordTelemetry } from './telemetry.js';
 import { VERSION } from './version.js';
@@ -19,6 +22,11 @@ import { VERSION } from './version.js';
 interface CommandDef {
   summary: string;
   run(parsed: ParsedCli): Promise<number>;
+  /**
+   * Optional per-command `--help`. Commands with their own setup story
+   * (mcp-proxy) print it instead of the global option list.
+   */
+  help?(parsed: ParsedCli): void;
 }
 
 const commands: Record<string, CommandDef> = {
@@ -42,6 +50,17 @@ const commands: Record<string, CommandDef> = {
     summary: 'Serve runs to MCP clients (Claude Code, Cursor) over stdio',
     run: runMcp,
   },
+  'mcp-proxy': {
+    summary: MCP_PROXY_SUMMARY,
+    run: runMcpProxy,
+    // stderr, never stdout: `graphmind mcp-proxy --help` may well be run by a
+    // client that is already treating our stdout as the protocol channel.
+    help: (parsed) =>
+      printMcpProxyHelp(
+        (line) => void process.stderr.write(`${line}\n`),
+        parsed.flags.port ?? DEFAULT_PORT,
+      ),
+  },
   runs: {
     summary: 'List stored runs, prune old ones, or delete them',
     run: runRuns,
@@ -59,7 +78,7 @@ function printHelp(): void {
     'Usage: graphmind [command] [options]',
     '',
     'Commands:',
-    ...Object.entries(commands).map(([name, def]) => `  ${name.padEnd(10)}${def.summary}`),
+    ...Object.entries(commands).map(([name, def]) => `  ${name.padEnd(11)}${def.summary}`),
     '',
     'Options:',
     ...OPTION_HELP,
@@ -127,6 +146,11 @@ async function main(): Promise<number> {
     return 0;
   }
   if (parsed.flags.help) {
+    const withHelp = commands[parsed.command];
+    if (withHelp?.help !== undefined) {
+      withHelp.help(parsed);
+      return 0;
+    }
     printHelp();
     return 0;
   }
