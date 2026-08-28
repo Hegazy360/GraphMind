@@ -27,6 +27,9 @@ export interface Integration {
   triggers: string[];
   snippet: string;
   docs: string;
+  /** An extra paragraph printed under the snippet, when one route is not the
+   *  whole story (an MCP server can also be debugged without any code). */
+  alsoTry?: string;
 }
 
 const NODE_SNIPPET_AI_SDK = `import { graphmind } from '@graphmind-ai/sdk';
@@ -62,6 +65,17 @@ const tools = gm.wrapTools({ searchFlights, checkBudget });
 await gm.run('handle-request', async () => {
   // your usual chat.completions / responses loop, using \`client\` and \`tools\`
 });`;
+
+const NODE_SNIPPET_MCP = `import { graphmind } from '@graphmind-ai/mcp';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+
+const gm = graphmind({ app: 'my-mcp-server' });
+
+// Wrap BEFORE you register anything: the adapter gates a tool by decorating
+// its callback as it is registered.
+const server = gm.wrapServer(new McpServer({ name: 'my-server', version: '1.0.0' }));
+
+server.registerTool('search', schema, async (args) => { /* ... */ });`;
 
 const NODE_SNIPPET_LANGGRAPH = `import { graphmind } from '@graphmind-ai/langgraph';
 
@@ -136,6 +150,22 @@ export const INTEGRATIONS: Integration[] = [
     triggers: ['openai'],
     snippet: NODE_SNIPPET_OPENAI,
     docs: 'https://graphmind.ai/docs/integrations/openai/',
+  },
+  {
+    id: 'mcp',
+    framework: 'MCP server',
+    ecosystem: 'node',
+    pkg: '@graphmind-ai/mcp',
+    triggers: ['@modelcontextprotocol/sdk'],
+    snippet: NODE_SNIPPET_MCP,
+    docs: 'https://graphmind.ai/docs/integrations/mcp/',
+    // The proxy needs nothing installed and works on a server in any
+    // language, so it is the better first suggestion for most people — but it
+    // cannot be expressed as a code snippet, hence the extra line.
+    alsoTry:
+      'Or debug it with no code changes at all, in any language:\n' +
+      '  graphmind mcp-proxy -- <the command your MCP client already runs>\n' +
+      '  https://graphmind.ai/docs/debugging/mcp-servers/',
   },
   {
     id: 'langgraph',
@@ -310,6 +340,10 @@ export async function runInit(parsed: ParsedCli, io: InitIo = console): Promise<
       io.log(`  ${i.framework.padEnd(22)} ${i.triggers[0]}`);
     }
     io.log(`  ${'Python'.padEnd(22)} openai / anthropic / langgraph / crewai`);
+    io.log(`  ${'Ruby'.padEnd(22)} ruby-openai / ruby_llm`);
+    io.log('');
+    io.log('An MCP server needs no adapter at all — in any language:');
+    io.log('  graphmind mcp-proxy -- <the command your MCP client already runs>');
     io.log('');
     io.log('Any other framework can still stream traces in:');
     io.log('  graphmind import trace.json     # OpenTelemetry / OpenInference export');
@@ -342,6 +376,10 @@ export async function runInit(parsed: ParsedCli, io: InitIo = console): Promise<
     if (found.length > 1) io.log(`   --- ${integration.framework} ---`);
     for (const line of integration.snippet.split('\n')) io.log(`   ${line}`);
     io.log('');
+    if (integration.alsoTry !== undefined) {
+      for (const line of integration.alsoTry.split('\n')) io.log(`   ${line}`);
+      io.log('');
+    }
   }
 
   io.log('3. Start the debugger and run your app:\n');

@@ -6,6 +6,22 @@ this repo (`graphmind-ai`, `@graphmind-ai/sdk`, `@graphmind-ai/client`,
 `@graphmind-ai/langgraph`, `@graphmind-ai/mcp`, the Python `graphmind-ai`
 distribution, and the Ruby `graphmind` gem).
 
+## 0.4.3
+
+- **`graphmind init` told an MCP-server developer "No supported agent
+  framework found".** A project with `@modelcontextprotocol/sdk` in its
+  dependencies is the exact audience 0.4.0 was built for, and the first
+  command they would run said GraphMind had nothing for them. It now detects
+  the MCP SDK, prints the `@graphmind-ai/mcp` snippet, and — because the
+  proxy needs nothing installed and works in any language — offers
+  `graphmind mcp-proxy` alongside it. The not-found listing gained MCP and
+  Ruby too.
+- The CLI README's gate-action table described `inject` as answering with the
+  value verbatim, which was true before injected values were lifted into the
+  result shape the method has to return. Corrected, with both escape hatches
+  (a value already shaped like a result, and a whole JSON-RPC frame) written
+  down.
+
 ## 0.4.2
 
 - **A `runId` containing a NUL byte was silently mangled on Node 22.**

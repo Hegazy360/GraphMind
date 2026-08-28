@@ -80,6 +80,26 @@ describe('detection', () => {
   it('finds nothing in an empty project', () => {
     expect(detect(dir)).toEqual([]);
   });
+
+  /**
+   * The flagship audience of the MCP work: someone whose project IS an MCP
+   * server. They used to be told "no supported agent framework found", which
+   * is the worst possible answer for the one user the release was built for.
+   */
+  it('detects an MCP server, and offers the no-code route as well', () => {
+    writePkg({ '@modelcontextprotocol/sdk': '^1.30' });
+    const hits = detect(dir);
+    expect(hits.map((d) => d.integration.id)).toEqual(['mcp']);
+    expect(hits[0]?.integration.pkg).toBe('@graphmind-ai/mcp');
+    // The proxy needs nothing installed and works on any language, so it has
+    // to be offered next to the adapter rather than buried in the docs.
+    expect(hits[0]?.integration.alsoTry).toContain('mcp-proxy');
+  });
+
+  it('detects an MCP server that also uses a provider SDK', () => {
+    writePkg({ '@modelcontextprotocol/sdk': '^1.30', '@anthropic-ai/sdk': '^0.3' });
+    expect(detect(dir).map((d) => d.integration.id).sort()).toEqual(['anthropic', 'mcp']);
+  });
 });
 
 describe('package manager', () => {
