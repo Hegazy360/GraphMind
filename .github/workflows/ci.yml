@@ -466,6 +466,11 @@ jobs:
         run: pnpm build:viewer
 
       - name: Audit
+        # `continue-on-error` so the guard below always runs. Without it a
+        # failing audit skipped the one step that can say WHICH test failed,
+        # and all the operator got was "exit code 1" — the same blind spot the
+        # soak job hit. The guard re-fails the job, so nothing is swallowed.
+        continue-on-error: true
         # Extra reporters are appended to the package's own `test` script.
         # Note the absence of `--`: `pnpm --filter x test -- --reporter=json`
         # forwards a literal `--` to vitest, which then ignores every flag
@@ -478,7 +483,8 @@ jobs:
             --outputFile.json="$RUNNER_TEMP/security-audit.json" \
             || { echo "::error::security audit failed — pnpm --filter security-audit test"; exit 1; }
 
-      - name: Guard against a silently-shrinking audit
+      - name: Report the failures, then guard against a silently-shrinking audit
+        if: always()
         # A floor, not a target: deleting a canary or a whole spec file would
         # otherwise leave the job green. Raise it when the suite grows —
         # it was 71 when written, 165 after the Phase 5 protocol-fuzz pass
@@ -499,6 +505,18 @@ jobs:
             const min = Number(process.env.MIN_TESTS);
             console.log("security audit: " + r.numPassedTests + " passed, " + r.numFailedTests + " failed, " + r.numTotalTests + " total");
             if (r.numFailedTests > 0) {
+              // Name them. A security audit that fails anonymously is a
+              // security audit nobody can act on.
+              for (const file of r.testResults ?? []) {
+                for (const t of file.assertionResults ?? []) {
+                  if (t.status !== "failed") continue;
+                  const where = (file.name || "").split("/").slice(-2).join("/");
+                  console.log("::error file=" + where + "::FAILED: " + t.fullName);
+                  for (const m of t.failureMessages ?? []) {
+                    console.log(String(m).split("\n").slice(0, 12).join("\n"));
+                  }
+                }
+              }
               console.log("::error::security audit: " + r.numFailedTests + " failing test(s) - a credential reached an artifact, or a guarantee changed");
               process.exit(1);
             }
