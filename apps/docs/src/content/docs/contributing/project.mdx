@@ -64,6 +64,22 @@ pnpm build:viewer      # build the viewer into the CLI's bundle
 node packages/cli/dist/cli.js demo
 ```
 
+### Test the floor, not just your machine
+
+`engines.node` is `>=22.13`, and the floor is part of the contract, so it has
+to be executed rather than declared:
+
+```sh
+pnpm test:floor        # runs the security suite on the oldest supported Node
+```
+
+This exists because of a real bug: `node:sqlite` round-trips a string
+containing a NUL byte on Node 24 and mangles it on Node 22, so a run id with a
+NUL in it was stored under a different id than the app streamed under — on
+some runtimes and not others. Every suite was green on the dev machine and red
+in CI. If Node 22 is not installed the script says so and exits 0, because a
+missing optional toolchain is not a failing test.
+
 ## Conventions
 
 | | |
