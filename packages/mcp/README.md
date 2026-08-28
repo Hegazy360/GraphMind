@@ -29,8 +29,8 @@ ours written onto it.
 npm i -D @graphmind-ai/mcp graphmind-ai
 ```
 
-`@modelcontextprotocol/sdk` is a peer dependency (`>=1.20.0 <2`; the suite runs
-against both 1.20.0 and 1.30.0). Run the debugger with `npx graphmind-ai` and
+`@modelcontextprotocol/sdk` is a peer dependency (`>=1.26.0 <2`; the suite runs
+against both 1.26.0 and 1.30.0). Run the debugger with `npx graphmind-ai` and
 open the viewer at http://127.0.0.1:4747.
 
 ## Usage
@@ -189,10 +189,15 @@ behind the proxy; you just get two views of the same traffic.
 * **The `server` node's label** comes from the `{ name, version }` you gave the
   SDK's server, read defensively off the SDK object; if that ever stops working
   it falls back to your `app` name (or pass `server: { name }`).
-* **Verified peers**: 1.20.0 and 1.30.0. The range in between is declared, not
+* **Verified peers**: 1.26.0 and 1.30.0. The range in between is declared, not
   tested; the adapter never imports the SDK and only duck-types the six
   registration methods, `connect`, `.server`, `setRequestHandler` and
   `createMessage`.
+* **The floor is a security floor.** The adapter works on older SDKs, but every
+  release below 1.26.0 carries at least one high advisory — cross-client data
+  leak through shared transport reuse (≤1.25.3), DNS-rebinding protection off
+  by default (<1.24.0), ReDoS (<1.25.2) — so supporting them would mean telling
+  you a vulnerable SDK is a supported configuration.
 
 ## Testing
 
@@ -206,7 +211,7 @@ templated resources, prompts, zero-argument tools, sampling, throwing handlers,
 concurrent requests with independent gates, disconnect auto-continue, detached
 overhead, stdout purity, a hand-rolled low-level `Server`, a Streamable HTTP
 server over a real `node:http` listener, and the same gate-and-inject story
-again on SDK 1.20.0.
+again on SDK 1.26.0, the declared floor.
 
 There is also an end-to-end smoke that wires up the real pieces — the
 `graphmind` server, a real stdio MCP server (`example/stdio-server.mjs`) and a

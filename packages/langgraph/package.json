@@ -1,6 +1,6 @@
 {
   "name": "@graphmind-ai/langgraph",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "LangChain / LangGraph adapter for the GraphMind live agent debugger: a callback handler that streams the run tree as a live graph, plus tool wrappers that honour pause / step / inject / retry / abort gates.",
   "license": "MIT",
   "type": "module",

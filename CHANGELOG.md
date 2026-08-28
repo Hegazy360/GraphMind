@@ -6,6 +6,18 @@ this repo (`graphmind-ai`, `@graphmind-ai/sdk`, `@graphmind-ai/client`,
 `@graphmind-ai/langgraph`, `@graphmind-ai/mcp`, the Python `graphmind-ai`
 distribution, and the Ruby `graphmind` gem).
 
+## 0.4.1
+
+- `@graphmind-ai/mcp` raises its `@modelcontextprotocol/sdk` peer floor from
+  `>=1.20.0` to `>=1.26.0`. The adapter runs fine on older SDKs — this is a
+  security floor, not a compatibility one. Every release below 1.26.0 carries
+  at least one high advisory (cross-client data leak through shared transport
+  reuse ≤1.25.3, DNS-rebinding protection off by default <1.24.0, ReDoS
+  <1.25.2), and declaring support for them told users a vulnerable SDK was a
+  supported configuration. The peer-compat suite now runs the whole gate story
+  against 1.26.0 as the new floor, so the declared floor stays a *verified*
+  floor.
+
 ## 0.4.0
 
 MCP server debugging, a Ruby SDK, and the fixes a deliberate attack on the

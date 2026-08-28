@@ -1,20 +1,25 @@
 /**
- * The declared peer range is `>=1.20.0 <2`, so the suite runs the whole gate
- * story against BOTH ends of it: 1.30.0 (every other file) and 1.20.0 here,
+ * The declared peer range is `>=1.26.0 <2`, so the suite runs the whole gate
+ * story against BOTH ends of it: 1.30.0 (every other file) and 1.26.0 here,
  * installed side by side under an npm alias.
  *
  * The adapter never imports the SDK — it duck-types the six registration
  * methods, `connect`, `.server`, `setRequestHandler` and `createMessage` — so
- * this is the test that keeps that claim honest. (1.20.0 also predates the
- * SDK's zod-v4 support, so its schemas come from an aliased zod v3; that is
- * the SDK's constraint, not the adapter's — GraphMind never touches zod.)
+ * this is the test that keeps that claim honest.
+ *
+ * The floor is 1.26.0 rather than the 1.20.0 this adapter was first written
+ * against, and that is a SECURITY floor, not a compatibility one: every
+ * release below it carries at least one high advisory (cross-client data leak
+ * through shared transport reuse up to 1.25.3, no DNS-rebinding protection by
+ * default below 1.24.0, ReDoS below 1.25.2). The adapter would work fine on
+ * 1.20; declaring support for it would tell users a vulnerable SDK is a
+ * supported configuration, which is not something a debugger should say.
  */
-import { Client } from 'mcp-sdk-1-20/client/index.js';
-import { InMemoryTransport } from 'mcp-sdk-1-20/inMemory.js';
-import { McpServer } from 'mcp-sdk-1-20/server/mcp.js';
+import { Client } from 'mcp-sdk-floor/client/index.js';
+import { InMemoryTransport } from 'mcp-sdk-floor/inMemory.js';
+import { McpServer } from 'mcp-sdk-floor/server/mcp.js';
 import { afterEach, describe, expect, it } from 'vitest';
-// 1.20.0 predates the SDK's zod-v4 support, so its schemas must be zod v3.
-import { z } from 'zod-3';
+import { z } from 'zod';
 import { toolText } from './helpers/mcp.js';
 import { attach, makeCleanups, setup } from './helpers/setup.js';
 
@@ -32,7 +37,7 @@ async function connectPair(server: McpServer, raw: McpServer): Promise<Client> {
   return client;
 }
 
-describe('@modelcontextprotocol/sdk 1.20.0', () => {
+describe('@modelcontextprotocol/sdk 1.26.0 (the declared floor)', () => {
   it('reports the older SDK, gates a tool, and injects a result', async () => {
     const { viewer, gm } = await setup(cleanups.push, {
       breakpoints: [{ kind: 'tool', name: 'echo' }],

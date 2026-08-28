@@ -40,7 +40,9 @@ yarn add -D @graphmind-ai/mcp graphmind-ai
 </TabItem>
 </Tabs>
 
-`@modelcontextprotocol/sdk` is a peer dependency (`>=1.20.0 <2`).
+`@modelcontextprotocol/sdk` is a peer dependency (`>=1.26.0 <2`). That floor is
+a security floor rather than a compatibility one: the adapter runs on older
+SDKs, but every release below 1.26.0 carries at least one high advisory.
 
 <Aside type="note" title="Wrap first, register second">
 The adapter gates a tool by decorating its callback **as it is registered**. Anything registered

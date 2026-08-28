@@ -198,25 +198,35 @@ describe('tidyTreeLayout', () => {
    * fails this for the right reason or not at all.
    */
   it('stays linear as the tree gets deeper', () => {
-    const time = (depth: number): number => {
-      const { nodes, edges } = chain(depth);
-      layoutGraph(nodes, edges); // warm, so both sizes are measured JITted
-      let best = Infinity;
-      for (let i = 0; i < 5; i++) {
-        const started = performance.now();
-        layoutGraph(nodes, edges);
-        best = Math.min(best, performance.now() - started);
-      }
-      return best;
+    const shallow = chain(1000);
+    const deep = chain(4000);
+    const once = (g: { nodes: FlowNodeSpec[]; edges: FlowEdgeSpec[] }): number => {
+      const started = performance.now();
+      layoutGraph(g.nodes, g.edges);
+      return performance.now() - started;
     };
-    // Both samples are milliseconds, not microseconds, so timer noise cannot
-    // manufacture the ratio.
-    const shallow = time(1000);
-    const deep = time(4000);
+    once(shallow); // warm, so both sizes are measured JITted
+    once(deep);
+
+    // Measured INTERLEAVED, and scored on the best RATIO rather than on the
+    // best of each size independently.
+    //
+    // The deep sample does 4x the work, so it is exposed 4x longer to a
+    // preemption — measuring the two sizes in separate batches let a loaded
+    // machine inflate `deep` alone and manufacture a failure. Interleaving
+    // means both sizes meet the same conditions within a round, and a
+    // genuinely quadratic implementation is ~15x in EVERY round, so one clean
+    // round out of seven is enough to tell the two apart.
+    let bestRatio = Infinity;
+    for (let i = 0; i < 7; i++) {
+      const s = once(shallow);
+      const d = once(deep);
+      bestRatio = Math.min(bestRatio, d / Math.max(s, 0.05));
+    }
     // 4x the depth. Linear is ~4x (measured ~3.5x); the old ancestor-walk
     // cycle check was ~15x, when it did not blow the stack first. 8x is
     // comfortably between the two.
-    expect(deep / Math.max(shallow, 0.05)).toBeLessThan(8);
+    expect(bestRatio).toBeLessThan(8);
   });
 
   it('lays out 300 nodes well inside one animation frame', () => {
@@ -234,12 +244,22 @@ describe('tidyTreeLayout', () => {
       }
     }
     expect(nodes).toHaveLength(301);
-    const started = performance.now();
-    const laid = layoutGraph(nodes, edges);
-    const elapsed = performance.now() - started;
+    layoutGraph(nodes, edges); // warm
+    // Best of five: this is a budget, not a benchmark, and the question it
+    // answers is "can this run inside one animation frame", which a single
+    // preempted sample on a loaded CI runner cannot answer. The layout it
+    // replaced took 9 SECONDS on this shape, so the signal is nowhere near
+    // the noise.
+    let best = Infinity;
+    let laid = layoutGraph(nodes, edges);
+    for (let i = 0; i < 5; i++) {
+      const started = performance.now();
+      laid = layoutGraph(nodes, edges);
+      best = Math.min(best, performance.now() - started);
+    }
     expect(laid).toHaveLength(301);
     expect(overlapping(laid)).toEqual([]);
-    expect(elapsed).toBeLessThan(16);
+    expect(best).toBeLessThan(16);
   });
 });
 

@@ -121,8 +121,8 @@ test('tokens stream into the active LLM card, reasoning first then text', async 
     .poll(
       async () => {
         samples.push(
-          await tail.evaluate((el) => ({
-            text: el.innerText,
+          await tail.evaluate((el: Element) => ({
+            text: (el as HTMLElement).innerText,
             reasoning: el.classList.contains('gm-token-tail--reasoning'),
             caret: el.querySelector('.gm-caret') !== null,
           })),
