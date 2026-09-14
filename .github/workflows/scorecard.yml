@@ -12,8 +12,11 @@ on:
   branch_protection_rule:
   schedule:
     - cron: '23 6 * * 1' # weekly, Monday 06:23 UTC
+  # Default branch only: `publish_results` is refused from any other ref, so
+  # running this on `main` (kept in sync with `master` but not the default)
+  # produced a failing run beside every passing one.
   push:
-    branches: [main, master]
+    branches: [master]
   workflow_dispatch:
 
 permissions: read-all
