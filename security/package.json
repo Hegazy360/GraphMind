@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
-    "@ai-sdk/provider": "4.0.8",
+    "@ai-sdk/provider": "4.0.13",
     "@anthropic-ai/sdk": "^0.121.0",
     "@graphmind-ai/anthropic": "workspace:*",
     "@graphmind-ai/client": "workspace:*",
@@ -26,7 +26,7 @@
     "graphmind-ai": "workspace:*",
     "openai": "^6.9.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11",
+    "vitest": "^5.0.0",
     "ws": "^8.21.3",
     "zod": "^4.4.3"
   }

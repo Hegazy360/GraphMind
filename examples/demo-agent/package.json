@@ -25,7 +25,7 @@
     "@types/node": "^26.3.0",
     "@types/ws": "^8.18.1",
     "graphmind-ai": "workspace:*",
-    "tsx": "^4.19.0",
+    "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "ws": "^8.21.3"
   }
