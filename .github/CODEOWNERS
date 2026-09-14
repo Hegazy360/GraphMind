@@ -1,0 +1,11 @@
+# Every change is reviewed by the maintainer. Narrower owners can be added per
+# path as the project grows; a security reviewer at an adopting company reads
+# this file to learn who is accountable for what.
+*                       @Hegazy360
+
+# The wire contract and the security audit deserve an explicit line: a change
+# here is a change to what every SDK and every stored run relies on.
+/packages/schema/       @Hegazy360
+/security/              @Hegazy360
+/SECURITY.md            @Hegazy360
+/.github/workflows/     @Hegazy360

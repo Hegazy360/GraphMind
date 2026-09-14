@@ -189,7 +189,7 @@ jobs:
           # versions, exactly as `pnpm publish` would.
           for dir in packages/schema packages/client packages/ai-sdk \
                      packages/anthropic packages/openai packages/langgraph \
-                     packages/cli; do
+                     packages/mcp packages/cli; do
             [ -f "$dir/package.json" ] || continue
             pnpm --filter "./$dir" pack --pack-destination "$PKG_DIR"
           done
@@ -203,6 +203,22 @@ jobs:
           npm install --no-audit --no-fund "$PKG_DIR"/*.tgz
 
           npx --no-install graphmind --version
+
+          # CommonJS consumers. Node >= 22.12 can require() an ES module, but
+          # only if the package's `exports` map offers a condition require()
+          # can match — ours offered only `import`, so every package failed
+          # with ERR_PACKAGE_PATH_NOT_EXPORTED for the (large) share of
+          # enterprise codebases still on CommonJS. This is the check that
+          # keeps that door open.
+          for pkg in @graphmind-ai/schema @graphmind-ai/client @graphmind-ai/sdk \
+                     @graphmind-ai/anthropic @graphmind-ai/openai \
+                     @graphmind-ai/langgraph @graphmind-ai/mcp graphmind-ai; do
+            node -e "
+              const m = require('$pkg');
+              if (!m || Object.keys(m).length === 0) { console.error('empty module: $pkg'); process.exit(1); }
+              console.log('require(' + '$pkg' + ') ok:', Object.keys(m).length, 'exports');
+            " || { echo "::error::require('$pkg') failed - the exports map lost its default condition"; exit 1; }
+          done
 
           # Bounded demo smoke: the bundled replay must produce a run with
           # source 'demo' through the real ingest pipeline, on a cold install.

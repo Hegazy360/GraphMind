@@ -1,0 +1,56 @@
+# OpenSSF Scorecard: an automated, public read of this repository's supply-chain
+# hygiene (branch protection, pinned dependencies, token permissions, signed
+# releases, dangerous workflow patterns, ...). Security teams at adopting
+# companies check the score before they check the code, so it is better to
+# publish it and fix what it flags than to be scored blind.
+#
+# Results go to the Security tab (SARIF) and to the public Scorecard API, which
+# the README badge reads.
+name: OpenSSF Scorecard
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: '23 6 * * 1' # weekly, Monday 06:23 UTC
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: scorecard analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Needed to upload the results to code-scanning.
+      security-events: write
+      # Needed to publish results and get a badge (see publish_results below).
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@v2.4.1
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Publishes to the Scorecard API for a public repo. No token needed;
+          # the workflow's own OIDC identity is the credential.
+          publish_results: true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard-results
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif

@@ -1,7 +1,7 @@
 {
   "name": "graphmind-ai",
   "version": "0.4.4",
-  "description": "GraphMind — local server + CLI for the GraphMind live agent debugger. Instrumented apps stream execution events in; the viewer watches live, replays history, and sends control commands.",
+  "description": "GraphMind \u2014 local server + CLI for the GraphMind live agent debugger. Instrumented apps stream execution events in; the viewer watches live, replays history, and sends control commands.",
   "license": "MIT",
   "author": "Mohamed Hegazy",
   "homepage": "https://graphmind.ai",
@@ -41,7 +41,8 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     }
   },
   "files": [

@@ -1,0 +1,50 @@
+# Keeps every ecosystem this repo publishes from current, on a cadence a solo
+# maintainer can actually review. Grouped so a routine week is one PR per
+# ecosystem, not thirty; security updates are never grouped and never delayed.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      dev-dependencies:
+        dependency-type: development
+      production-dependencies:
+        dependency-type: production
+    # The SDK peer ranges are verified at their floor and ceiling in
+    # sdk-compat.yml; a bump here must not silently move a floor.
+    ignore:
+      - dependency-name: '@modelcontextprotocol/sdk'
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: pip
+    directory: /python
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      python:
+        patterns: ['*']
+
+  - package-ecosystem: bundler
+    directory: /ruby
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      ruby:
+        patterns: ['*']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ['*']
