@@ -93,7 +93,9 @@ jobs:
         # Retries for timing-sensitive suites are configured per package in
         # vitest.config.ts, keyed off CI — a flag here would reach pnpm, not
         # vitest.
-        run: pnpm test
+        # test:all = the workspace suites plus apps/web, whose tests guard the
+        # production waitlist and telemetry functions and had never run in CI.
+        run: pnpm test:all
 
       - name: Test web
         # apps/web runs on Vercel's Node 24 runtime, and its tests import .ts

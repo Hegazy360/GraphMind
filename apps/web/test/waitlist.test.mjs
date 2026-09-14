@@ -10,7 +10,7 @@ const putCalls = [];
 let putShouldThrow = false;
 
 mock.module('@vercel/blob', {
-  exports: {
+  namedExports: {
     put: async (pathname, body, options) => {
       if (putShouldThrow) throw new Error('blob unavailable');
       putCalls.push({ pathname, body, options });

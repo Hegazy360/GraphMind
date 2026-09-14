@@ -38,3 +38,11 @@ minimumReleaseAgeExclude:
   - '@langchain/protocol@0.0.19'
   - astro@7.2.8
   - sharp@0.35.4
+
+# Security floors for transitive dependencies (see CHANGELOG). Each is pinned
+# to the first patched release of the line we already resolve; nothing else
+# in the graph uses an older major, so a blanket override is safe here.
+overrides:
+  hono: '>=4.13.5'        # GHSA: toSSG(), parseBody() nesting, query parser (moderate x3)
+  qs: '>=6.16.0'          # via @modelcontextprotocol/sdk > express > body-parser (moderate x2)
+  js-yaml: '>=4.3.2 <5'   # via astro markdown-remark in apps/docs (high, build-time only); 5.x drops the default export Astro imports
