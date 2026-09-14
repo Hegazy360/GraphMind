@@ -9,8 +9,14 @@ import { createHash } from 'node:crypto';
 const putCalls = [];
 let putShouldThrow = false;
 
+// Node 22 knows this option as `namedExports`; Node 24 renamed it to `exports`
+// and deprecates the old name. engines says >= 22.13 and CI runs both lines,
+// so pick the key the running Node wants rather than living with a warning
+// on one and a hard failure on the other.
+const NODE_MAJOR = Number(process.versions.node.split('.')[0]);
+const MOCK_EXPORTS_KEY = NODE_MAJOR >= 24 ? 'exports' : 'namedExports';
 mock.module('@vercel/blob', {
-  namedExports: {
+  [MOCK_EXPORTS_KEY]: {
     put: async (pathname, body, options) => {
       if (putShouldThrow) throw new Error('blob unavailable');
       putCalls.push({ pathname, body, options });

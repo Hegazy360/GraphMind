@@ -94,15 +94,11 @@ jobs:
         # vitest.config.ts, keyed off CI — a flag here would reach pnpm, not
         # vitest.
         # test:all = the workspace suites plus apps/web, whose tests guard the
-        # production waitlist and telemetry functions and had never run in CI.
+        # production waitlist and telemetry functions. They used to run only on
+        # the Node 24 cells; type stripping has been unflagged since 22.18, so
+        # every cell runs them now — which is how a Node-22-only failure in the
+        # module mock was caught.
         run: pnpm test:all
-
-      - name: Test web
-        # apps/web runs on Vercel's Node 24 runtime, and its tests import .ts
-        # files via type stripping (default-on only in Node >= 23.6) — so this
-        # suite is meaningful and runnable only on the Node 24 matrix cells.
-        if: matrix.node == '24.x'
-        run: pnpm --filter web test
 
       - name: Build viewer (and bundle into CLI)
         run: pnpm build:viewer
