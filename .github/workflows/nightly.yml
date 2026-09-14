@@ -55,14 +55,14 @@ jobs:
     env:
       SCENARIO: ${{ github.event.inputs.scenario || 'everything' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up pnpm (corepack, pinned by packageManager)
         run: |
           corepack enable
           corepack prepare --activate
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.x'
           cache: pnpm
@@ -124,7 +124,7 @@ jobs:
 
       - name: Upload the soak numbers
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: soak-nightly-results
           path: ${{ runner.temp }}/soak-nightly.json

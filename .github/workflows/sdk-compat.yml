@@ -187,14 +187,14 @@ jobs:
       LABEL: ${{ matrix.label }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up pnpm (corepack, pinned by packageManager)
         run: |
           corepack enable
           corepack prepare --activate
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.x'
           cache: pnpm
@@ -364,14 +364,14 @@ jobs:
       MIN_TESTS: ${{ matrix.min_tests }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up pnpm (corepack, pinned by packageManager)
         run: |
           corepack enable
           corepack prepare --activate
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.x'
           cache: pnpm
