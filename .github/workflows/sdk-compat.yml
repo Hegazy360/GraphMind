@@ -76,6 +76,10 @@ on:
     # Weekly canary (Mondays 06:17 UTC) — see the `canary` job.
     - cron: '17 6 * * 1'
 
+# Least privilege: the default token is read-only for every job unless a job
+# raises it itself (publish-python raises id-token for Trusted Publishing).
+permissions:
+  contents: read
 concurrency:
   group: sdk-compat-${{ github.ref }}
   cancel-in-progress: true
@@ -187,14 +191,14 @@ jobs:
       LABEL: ${{ matrix.label }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up pnpm (corepack, pinned by packageManager)
         run: |
           corepack enable
           corepack prepare --activate
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.x'
           cache: pnpm
@@ -364,14 +368,14 @@ jobs:
       MIN_TESTS: ${{ matrix.min_tests }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up pnpm (corepack, pinned by packageManager)
         run: |
           corepack enable
           corepack prepare --activate
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.x'
           cache: pnpm

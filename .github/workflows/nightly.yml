@@ -32,6 +32,10 @@ on:
         required: false
         default: everything
 
+# Least privilege: the default token is read-only for every job unless a job
+# raises it itself (publish-python raises id-token for Trusted Publishing).
+permissions:
+  contents: read
 concurrency:
   group: nightly-${{ github.ref }}
   cancel-in-progress: true
@@ -55,14 +59,14 @@ jobs:
     env:
       SCENARIO: ${{ github.event.inputs.scenario || 'everything' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up pnpm (corepack, pinned by packageManager)
         run: |
           corepack enable
           corepack prepare --activate
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.x'
           cache: pnpm
@@ -124,7 +128,7 @@ jobs:
 
       - name: Upload the soak numbers
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: soak-nightly-results
           path: ${{ runner.temp }}/soak-nightly.json

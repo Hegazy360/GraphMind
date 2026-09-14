@@ -1,0 +1,58 @@
+# CodeQL static analysis over every language this repo ships: the TypeScript
+# packages and apps, the Python SDK, and the Ruby gem. Security teams at
+# adopting companies look for a SAST tool before they look at the code; this
+# is the one GitHub surfaces in the Security tab and the one OpenSSF Scorecard
+# credits.
+#
+# Runs on the default branch, on pull requests into it, and weekly so new
+# queries land without a code change.
+name: CodeQL
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    - cron: '41 5 * * 2' # weekly, Tuesday 05:41 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: codeql (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      security-events: write # upload results to code-scanning
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+          - language: ruby
+            build-mode: none
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@faaca9a8f6edddba5725ffe5adefdab6669a2eca # v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-extended adds the lower-precision security queries; the
+          # cost is a few more findings to triage, which is the point.
+          queries: security-extended
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@faaca9a8f6edddba5725ffe5adefdab6669a2eca # v3
+        with:
+          category: '/language:${{ matrix.language }}'
