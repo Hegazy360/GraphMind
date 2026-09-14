@@ -130,14 +130,34 @@ test('tokens stream into the active LLM card while it runs', async ({ page }) =>
    * card styles on.
    */
 
-  // Tokens keep arriving after that: the tail text changes again on its own.
+  /*
+   * Tokens keep arriving after that. Two ways to observe it, and a slow CI
+   * runner decides which one we get: either the tail text changes between two
+   * samples (the stream is still in flight), or the step has already finished
+   * by the time we sample twice — in which case the caret is gone and the
+   * final text is longer than the phrase we first matched. Sampling twice and
+   * demanding a change was the previous assertion; on a 2-worker CI runner
+   * the whole 40-delta stream can land between "phrase visible" and "sample
+   * again", and the test then reported a stream that had merely outrun it.
+   */
   const midRun = await tail.innerText();
+  const caret = tail.locator('.gm-caret');
   await expect
-    .poll(async () => (await tail.innerText()) !== midRun, {
-      message: 'the token tail should keep updating as the run streams',
-      timeout: 25_000,
-    })
-    .toBe(true);
+    .poll(
+      async () => {
+        const now = await tail.innerText();
+        if (now !== midRun) return 'changed';
+        if (!(await caret.isVisible())) return 'finished';
+        return 'waiting';
+      },
+      {
+        message: 'the token tail should keep updating as the run streams',
+        timeout: 25_000,
+      },
+    )
+    .not.toBe('waiting');
+  // Whichever way it went, more text arrived after the phrase we matched on.
+  expect((await tail.innerText()).length).toBeGreaterThan("I'll start by finding".length);
 });
 
 test('edges into a running node animate, and settle when it finishes', async ({ page }) => {

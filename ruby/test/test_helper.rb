@@ -113,6 +113,16 @@ module GraphmindTestHelpers
 
   def warnings = (@warnings ||= [])
 
+  # A worker thread that never finishes must FAIL the test, not hang the
+  # suite: a hung job is cancelled by CI with no output, which is how a json
+  # gem upgrade cost an evening. Every Thread#value in the suite goes through
+  # here. Like Thread#value, a thread that raised re-raises in the caller.
+  def value_of(worker, timeout: 10.0, label: "worker thread")
+    return worker.value if worker.join(timeout)
+
+    flunk("#{label} did not finish within #{timeout}s")
+  end
+
   def wait_until(timeout: 5.0, label: "condition")
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
     until yield

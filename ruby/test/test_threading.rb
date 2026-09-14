@@ -125,11 +125,11 @@ class TestThreading < Minitest::Test
 
     # The other thread must sail straight through while the first is held.
     free = Thread.new { fast.call }
-    assert_equal "fast done", free.value
+    assert_equal "fast done", value_of(free)
     assert_equal 1, session.stats.held_gates
 
     paused = viewer.frames_of("exec.paused").first
     viewer.resume(paused["payload"]["pauseId"], "continue")
-    assert_equal "slow done", held.value
+    assert_equal "slow done", value_of(held)
   end
 end

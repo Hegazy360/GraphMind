@@ -63,7 +63,7 @@ class TestRubyOpenAI < Minitest::Test
     paused = viewer.wait_for_frame("exec.paused").first
     viewer.resume(paused["payload"]["pauseId"], "inject", fake)
 
-    assert_equal "injected answer", worker.value.dig("choices", 0, "message", "content")
+    assert_equal "injected answer", value_of(worker).dig("choices", 0, "message", "content")
     assert_equal 0, @calls, "no HTTP request may leave the process when a response is injected"
   end
 
@@ -81,7 +81,7 @@ class TestRubyOpenAI < Minitest::Test
     assert_equal "error", paused["payload"]["point"]
     viewer.resume(paused["payload"]["pauseId"], "retry")
 
-    assert_equal "Hello there", worker.value.dig("choices", 0, "message", "content")
+    assert_equal "Hello there", value_of(worker).dig("choices", 0, "message", "content")
     assert_equal 2, @calls
   end
 

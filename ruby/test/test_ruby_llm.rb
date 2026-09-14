@@ -55,7 +55,7 @@ class TestRubyLLM < Minitest::Test
     # integration coerces it into a RubyLLM::Message.
     viewer.resume(paused["payload"]["pauseId"], "inject", "injected")
 
-    reply = worker.value
+    reply = value_of(worker)
     assert_instance_of ::RubyLLM::Message, reply
     assert_equal "injected", reply.content
     assert_equal :assistant, reply.role
@@ -73,7 +73,7 @@ class TestRubyLLM < Minitest::Test
     viewer.resume(paused["payload"]["pauseId"], "inject",
                   { "role" => "assistant", "content" => "from a hash" })
 
-    assert_equal "from a hash", worker.value.content
+    assert_equal "from a hash", value_of(worker).content
   end
 
   def test_retry_at_the_error_gate_calls_the_provider_again
@@ -87,7 +87,7 @@ class TestRubyLLM < Minitest::Test
     assert_equal "error", paused["payload"]["point"]
     viewer.resume(paused["payload"]["pauseId"], "retry")
 
-    assert_equal "four", worker.value.content
+    assert_equal "four", value_of(worker).content
     assert_equal 2, @completions
   end
 
@@ -118,7 +118,7 @@ class TestRubyLLM < Minitest::Test
     paused = viewer.wait_for_frame("exec.paused").first
     viewer.resume(paused["payload"]["pauseId"], "inject", "a blizzard, actually")
 
-    assert_equal "a blizzard, actually", worker.value
+    assert_equal "a blizzard, actually", value_of(worker)
   end
 
   def test_tools_added_after_instrumentation_are_gated_too
