@@ -28,10 +28,10 @@
     "build": "tsc -p tsconfig.build.json && node ./scripts/write-schema.mjs"
   },
   "dependencies": {
-    "zod": "^4.4.3"
+    "zod": "^4.6.2"
   },
   "devDependencies": {
-    "@types/node": "^26.3.0",
+    "@types/node": "^26.5.1",
     "fast-check": "^4.9.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
