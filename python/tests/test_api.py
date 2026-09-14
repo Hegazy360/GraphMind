@@ -264,8 +264,16 @@ def test_events_outside_a_run_land_in_one_implicit_run(attached: Any) -> None:
 
     started = viewer.wait_for_type("run.started")
     assert started["payload"]["meta"]["implicit"] is True
-    run_ids = {f["runId"] for f in viewer.frames() if f["type"] == "node.started"}
-    assert len(run_ids) == 1
+    # run.started is sent before the two node.started frames, so reading the
+    # frame list the moment it lands races the sender: on a slow Windows CI
+    # runner it saw zero node.started frames and reported "0 == 1". Wait for
+    # both tool calls to be on record first.
+    viewer.wait_for(
+        lambda _frame: sum(f["type"] == "node.started" for f in viewer.frames()) >= 2
+    )
+    node_frames = [f for f in viewer.frames() if f["type"] == "node.started"]
+    assert len(node_frames) == 2
+    assert {f["runId"] for f in node_frames} == {started["runId"]}
 
 
 def test_configure_replaces_the_default_instance(viewer: Any) -> None:
