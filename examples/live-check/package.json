@@ -12,24 +12,24 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^4.0.47",
-    "@anthropic-ai/sdk": "^0.121.0",
+    "@ai-sdk/openai": "^4.0.65",
+    "@anthropic-ai/sdk": "^0.125.0",
     "@graphmind-ai/anthropic": "workspace:*",
     "@graphmind-ai/langgraph": "workspace:*",
     "@graphmind-ai/openai": "workspace:*",
     "@graphmind-ai/schema": "workspace:*",
     "@graphmind-ai/sdk": "workspace:*",
-    "@langchain/core": "^1.2.9",
-    "@langchain/langgraph": "^1.4.13",
-    "@langchain/openai": "^1.5.10",
-    "ai": "^7.0.79",
+    "@langchain/core": "^1.2.10",
+    "@langchain/langgraph": "^1.4.14",
+    "@langchain/openai": "^1.5.12",
+    "ai": "^7.0.97",
     "graphmind-ai": "workspace:*",
-    "openai": "^6.9.0",
+    "openai": "^7.15.0",
     "ws": "^8.21.3",
-    "zod": "^4.4.3"
+    "zod": "^4.6.2"
   },
   "devDependencies": {
-    "@types/node": "^26.3.0",
+    "@types/node": "^26.5.1",
     "@types/ws": "^8.18.1",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"

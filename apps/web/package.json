@@ -10,6 +10,6 @@
   },
   "dependencies": {
     "@vercel/blob": "^2.8.0",
-    "@types/node": "^24.13.3"
+    "@types/node": "^26.5.1"
   }
 }
