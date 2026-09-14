@@ -205,9 +205,12 @@ jobs:
 
       - name: Pin SDK versions via pnpm overrides
         # pnpm 11 reads `overrides` from pnpm-workspace.yaml (it is no longer
-        # honoured under package.json's "pnpm" key), so append a block there.
-        # Refuses rather than duplicates if the repo ever grows its own
-        # `overrides:` — a duplicate YAML key would silently drop one of them.
+        # honoured under package.json's "pnpm" key). The repo now declares its
+        # own `overrides:` block there (security floors for transitive deps),
+        # so this MERGES the cell's pins into it: a pin for a package the repo
+        # already floors replaces that line, because the whole point of the
+        # cell is to test that exact version. Text-based on purpose — PyYAML
+        # is not guaranteed on the runner image.
         #
         # It also sets `minimumReleaseAge: 0`. pnpm 11 defaults that to one
         # day and re-resolves the WHOLE tree here (--no-frozen-lockfile), so
@@ -220,24 +223,36 @@ jobs:
           python3 - $PINS <<'PY'
           import sys
           path = 'pnpm-workspace.yaml'
-          src = open(path).read()
-          lines = src.splitlines()
-          if any(l.startswith('overrides:') for l in lines):
-              sys.exit('pnpm-workspace.yaml already declares overrides: - merge, do not append')
-          out = src.rstrip('\n') + '\n\n'
-          if not any(l.startswith('minimumReleaseAge:') for l in lines):
-              out += 'minimumReleaseAge: 0\n'
-          out += 'overrides:\n'
+          lines = open(path).read().rstrip('\n').split('\n')
+          pins = []
           for pin in sys.argv[1:]:
               name, sep, version = pin.rpartition('=')
               if not name or not sep or not version:
                   sys.exit('bad pin %r; expected name=version' % pin)
-              out += '  "%s": "%s"\n' % (name, version)
-          open(path, 'w').write(out)
+              pins.append((name, version))
+          def key_of(line):
+              body = line.strip().split('#', 1)[0]
+              return body.split(':', 1)[0].strip().strip('"').strip("'") if ':' in body else None
+          # Locate (or create) the top-level overrides mapping.
+          idx = next((i for i, l in enumerate(lines) if l.startswith('overrides:')), None)
+          if idx is None:
+              lines.append('overrides:')
+              idx = len(lines) - 1
+          end = idx + 1
+          while end < len(lines) and (lines[end].startswith(' ') or lines[end].strip() == ''):
+              end += 1
+          block = lines[idx + 1:end]
+          pinned = {name for name, _ in pins}
+          kept = [l for l in block if key_of(l) not in pinned]
+          added = ['  "%s": "%s"' % (name, version) for name, version in pins]
+          lines[idx + 1:end] = added + kept
+          if not any(l.startswith('minimumReleaseAge:') for l in lines):
+              lines.insert(idx, 'minimumReleaseAge: 0')
+          open(path, 'w').write('\n'.join(lines) + '\n')
           print('pinned:', ' '.join(sys.argv[1:]))
           PY
           echo '--- pnpm-workspace.yaml (tail) ---'
-          tail -n 12 pnpm-workspace.yaml
+          tail -n 14 pnpm-workspace.yaml
 
       - name: Install
         # --no-frozen-lockfile: the overrides above deliberately move
