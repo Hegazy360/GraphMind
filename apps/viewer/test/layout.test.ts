@@ -338,6 +338,44 @@ describe('appendLayout', () => {
     expect(overlapping(laid.map((n) => ({ position: n.position, width: n.width, height: n.height })))).toEqual([]);
   });
 
+  it('anchors an arrival on the band its layer uses, not on a shorter parent\'s own bottom', () => {
+    // A 104px agent and a 164px llm step share a layer (same top). A child
+    // arriving under the agent belongs on the band the layer's children use
+    // — LAYER_GAP below the TALLEST card of the layer, 60px lower than
+    // `agent.bottom + LAYER_GAP` — where the router's bus line
+    // (band - LAYER_GAP/2) clears the taller step instead of running through it.
+    const prev = new Map<string, Placed>([
+      ['agent', { id: 'agent', position: { x: 0, y: 0 }, width: 264, height: 104 }],
+      ['step', { id: 'step', position: { x: 400, y: 0 }, width: 300, height: 164 }],
+    ]);
+    const next: FlowGraph = {
+      nodes: [node('agent', 264, 104), node('step', 300, 164), node('child')],
+      edges: [edge('agent', 'child')],
+    };
+    const laid = appendLayout(prev, next);
+    expect(laid.find((n) => n.id === 'child')?.position.y).toBe(164 + LAYER_GAP);
+  });
+
+  it('puts a later arrival on the band its siblings already occupy', () => {
+    const prev = new Map<string, Placed>([
+      ['agent', { id: 'agent', position: { x: 0, y: 0 }, width: 264, height: 104 }],
+      ['first', { id: 'first', position: { x: 0, y: 500 }, width: 240, height: 100 }],
+    ]);
+    const next: FlowGraph = {
+      nodes: [node('agent', 264, 104), node('first'), node('second')],
+      edges: [edge('agent', 'first'), edge('agent', 'second')],
+    };
+    const laid = appendLayout(prev, next);
+    expect(laid.find((n) => n.id === 'second')?.position.y).toBe(500);
+    // …but a sibling dragged above its parent does not drag the band up with it.
+    const dragged = new Map<string, Placed>([
+      ['agent', { id: 'agent', position: { x: 0, y: 300 }, width: 264, height: 104 }],
+      ['first', { id: 'first', position: { x: 600, y: 0 }, width: 240, height: 100 }],
+    ]);
+    const laid2 = appendLayout(dragged, next);
+    expect(laid2.find((n) => n.id === 'second')?.position.y).toBe(300 + 104 + LAYER_GAP);
+  });
+
   it('never overlaps an existing card, at any burst size', () => {
     const { prev, nodes, edges } = canvasOf(600);
     // A step calling forty tools: every arrival anchors on the same parent.
@@ -384,6 +422,87 @@ describe('appendLayout', () => {
     const one = measure(1);
     const forty = measure(40);
     expect(forty / Math.max(one, 0.02)).toBeLessThan(4);
+  });
+});
+
+describe('leaf cells (placement metadata for the edge router)', () => {
+  it('tags every packed leaf with its grid cell, and nothing else', () => {
+    const graph = star(11); // 5 × 3
+    const laid = tidyTreeLayout(graph.nodes, graph.edges);
+    expect(laid.find((n) => n.id === 'root')?.leafCell).toBeUndefined();
+    const leaves = laid.filter((n) => n.id !== 'root');
+    expect(leaves.every((n) => n.leafCell !== undefined)).toBe(true);
+    expect(leaves.map((n) => [n.leafCell?.column, n.leafCell?.row])).toEqual([
+      [0, 0], [1, 0], [2, 0], [3, 0], [4, 0],
+      [0, 1], [1, 1], [2, 1], [3, 1], [4, 1],
+      [0, 2],
+    ]);
+    // The cell describes where the card actually is.
+    for (const leaf of leaves) {
+      const cell = leaf.leafCell;
+      if (cell === undefined) throw new Error('no cell');
+      expect(cell.columnWidth).toBe(240);
+      expect(leaf.position.x).toBe(cell.blockLeft + cell.column * (cell.columnWidth + SIBLING_GAP));
+    }
+  });
+
+  it('left-aligns a short last row so column gutters line up across rows', () => {
+    const graph = star(5); // 3 + 2
+    const laid = tidyTreeLayout(graph.nodes, graph.edges);
+    const at = (id: string) => laid.find((n) => n.id === id)?.position.x;
+    expect(at('leaf3')).toBe(at('leaf0'));
+    expect(at('leaf4')).toBe(at('leaf1'));
+  });
+
+  it('centres a narrower leaf inside its cell and reports the cell width', () => {
+    const nodes = [node('root'), node('wide', 300, 164), node('narrow', 248, 96)];
+    const edges = [edge('root', 'wide'), edge('root', 'narrow')];
+    const laid = tidyTreeLayout(nodes, edges);
+    const narrow = laid.find((n) => n.id === 'narrow');
+    expect(narrow?.leafCell?.columnWidth).toBe(300);
+    const cell = narrow?.leafCell;
+    if (narrow === undefined || cell === undefined) throw new Error('missing');
+    const cellLeft = cell.blockLeft + cell.column * (cell.columnWidth + SIBLING_GAP);
+    expect(narrow.position.x).toBe(cellLeft + (300 - 248) / 2);
+  });
+
+  it('centres a children row under a parent that is wider than it', () => {
+    const nodes = [node('root', 300, 164), node('only', 248, 96)];
+    const laid = tidyTreeLayout(nodes, [edge('root', 'only')]);
+    const root = laid.find((n) => n.id === 'root');
+    const only = laid.find((n) => n.id === 'only');
+    if (root === undefined || only === undefined) throw new Error('missing');
+    expect(root.position.x + root.width / 2).toBe(only.position.x + only.width / 2);
+  });
+
+  it('is carried through resize and append, and translated by anchoring', () => {
+    const graph = star(6);
+    const laid = tidyTreeLayout(graph.nodes, graph.edges);
+    const prev = new Map<string, Placed>(
+      laid.map((n) => [
+        n.id,
+        { id: n.id, position: n.position, width: n.width, height: n.height, ...(n.leafCell ? { leafCell: n.leafCell } : {}) },
+      ]),
+    );
+    const cellOf = (list: { id: string; leafCell?: unknown }[], id: string) => list.find((n) => n.id === id)?.leafCell;
+
+    const resized = resizeOnly(prev, { nodes: graph.nodes.map((n) => (n.id === 'leaf5' ? node(n.id, 240, 192) : n)), edges: graph.edges });
+    expect(cellOf(resized, 'leaf5')).toEqual(cellOf(laid, 'leaf5'));
+
+    const appended = appendLayout(prev, { nodes: [...graph.nodes, node('fresh')], edges: [...graph.edges, edge('root', 'fresh')] });
+    expect(cellOf(appended, 'leaf5')).toEqual(cellOf(laid, 'leaf5'));
+    expect(cellOf(appended, 'fresh')).toBeUndefined();
+
+    const shifted = new Map<string, Placed>([
+      ['root', { id: 'root', position: { x: 1000, y: 500 }, width: 240, height: 100 }],
+    ]);
+    const anchored = anchorPositions(shifted, laid);
+    const root = laid.find((n) => n.id === 'root');
+    const dx = 1000 - (root?.position.x ?? 0);
+    const before = cellOf(laid, 'leaf5') as { blockLeft: number };
+    const after = cellOf(anchored, 'leaf5') as { blockLeft: number };
+    expect(after.blockLeft).toBe(before.blockLeft + dx);
+    expect(anchored.find((n) => n.id === 'root')?.position).toEqual({ x: 1000, y: 500 });
   });
 });
 

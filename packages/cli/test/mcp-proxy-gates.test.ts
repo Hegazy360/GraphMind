@@ -58,8 +58,19 @@ describe('mcp-proxy: the graph', () => {
     expect(byId('tool:echo')?.payload).toMatchObject({ kind: 'tool', name: 'echo' });
     expect(byId('resource:test://greeting')?.payload['kind']).toBe('resource');
     expect(byId('prompt:summarize')?.payload).toMatchObject({ kind: 'prompt', name: 'summarize' });
-    // Every request node hangs off the session node.
+    // Real work hangs off the session node; protocol traffic is folded under
+    // mcp:protocol (see mcp-proxy-shape.test.ts for the full rule).
     expect(byId('tool:echo')?.payload['parentId']).toBe('mcp:session');
+    expect(byId('resource:test://greeting')?.payload['parentId']).toBe('mcp:session');
+    expect(byId('prompt:summarize')?.payload['parentId']).toBe('mcp:session');
+    expect(byId('mcp:protocol')?.payload).toMatchObject({
+      kind: 'custom',
+      name: 'protocol',
+      parentId: 'mcp:session',
+      collapsed: true,
+    });
+    expect(byId('mcp:initialize')?.payload['parentId']).toBe('mcp:protocol');
+    expect(byId('mcp:notifications/initialized')?.payload['parentId']).toBe('mcp:protocol');
   });
 
   it('sets instanceId on node.started AND node.finished, per execution', async () => {

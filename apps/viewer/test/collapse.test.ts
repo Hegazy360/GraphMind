@@ -10,7 +10,9 @@ import {
   collapsibleRoots,
   descendantsOf,
   hiddenByCollapse,
+  hintedCollapseRoots,
   isCollapsible,
+  isHintedCollapsed,
   summarizeGroup,
 } from '../src/store/collapse.js';
 import { runStateToFlow } from '../src/store/runStateToFlow.js';
@@ -149,5 +151,144 @@ describe('collapse — defaults for large runs', () => {
     const run = nestedRun();
     // agent:a contains llm:s — only the outer one is returned.
     expect(collapsibleRoots(run)).toEqual(['agent:a']);
+  });
+});
+
+describe('collapse — the sender\'s `collapsed: true` hint (MCP protocol group)', () => {
+  /**
+   * The wire shape `graphmind mcp-proxy` emits: work under the session,
+   * protocol traffic under `mcp:protocol`. The reducer stores the hint on
+   * `NodeState.collapsed`; until that hunk lands (see W2a open_issues) this
+   * test sets the field the way the reducer will.
+   */
+  function proxySession(options: { initializeFails?: boolean; noise?: boolean } = {}): RunState {
+    const run = buildRun([
+      started('mcp:session', 'custom', { name: 'node server.js' }),
+      started('mcp:protocol', 'custom', { name: 'protocol', parentId: 'mcp:session' }),
+      started('mcp:initialize', 'custom', { name: 'initialize', parentId: 'mcp:protocol' }),
+      ...(options.initializeFails
+        ? [
+            ev('node.error', {
+              nodeId: 'mcp:initialize',
+              error: { name: 'JsonRpcError(-32600)', message: 'unsupported protocol version' },
+            }),
+            ev('node.finished', { nodeId: 'mcp:initialize', output: null, durationMs: 12, status: 'error' }),
+          ]
+        : [ev('node.finished', { nodeId: 'mcp:initialize', output: {}, durationMs: 318, status: 'ok' })]),
+      started('mcp:notifications/initialized', 'custom', { parentId: 'mcp:protocol' }),
+      ev('node.finished', { nodeId: 'mcp:notifications/initialized', output: null, durationMs: 1, status: 'ok' }),
+      started('mcp:tools/list', 'custom', { parentId: 'mcp:protocol' }),
+      ev('node.finished', { nodeId: 'mcp:tools/list', output: {}, durationMs: 142, status: 'ok' }),
+      started('mcp:resources/list', 'custom', { parentId: 'mcp:protocol' }),
+      ev('node.finished', { nodeId: 'mcp:resources/list', output: {}, durationMs: 96, status: 'ok' }),
+      started('mcp:resources/templates/list', 'custom', { parentId: 'mcp:protocol' }),
+      ev('node.finished', { nodeId: 'mcp:resources/templates/list', output: {}, durationMs: 61, status: 'ok' }),
+      started('mcp:prompts/list', 'custom', { parentId: 'mcp:protocol' }),
+      ev('node.finished', { nodeId: 'mcp:prompts/list', output: {}, durationMs: 84, status: 'ok' }),
+      ...(options.noise
+        ? [
+            started('mcp:stdout-noise', 'custom', { name: 'stdout noise', parentId: 'mcp:protocol' }),
+            ev('node.error', {
+              nodeId: 'mcp:stdout-noise',
+              error: { name: 'StdoutNoise', message: 'the MCP server wrote non-JSON to stdout' },
+            }),
+            ev('node.finished', { nodeId: 'mcp:stdout-noise', output: null, durationMs: 0, status: 'error' }),
+          ]
+        : []),
+      started('tool:search', 'tool', { parentId: 'mcp:session' }),
+      ev('node.finished', { nodeId: 'tool:search', output: {}, durationMs: 264, status: 'ok' }),
+    ]);
+    // What applyEvent will store from `node.started … collapsed: true`.
+    (run.nodes['mcp:protocol'] as { collapsed?: boolean }).collapsed = true;
+    return run;
+  }
+
+  it('reads the hint from NodeState.collapsed and nothing else', () => {
+    expect(isHintedCollapsed({ collapsed: true } as unknown as never)).toBe(true);
+    expect(isHintedCollapsed({ collapsed: 'true' } as unknown as never)).toBe(false);
+    expect(isHintedCollapsed({} as never)).toBe(false);
+  });
+
+  it('folds exactly the hinted node, once it has children', () => {
+    const run = proxySession();
+    expect(hintedCollapseRoots(run)).toEqual(['mcp:protocol']);
+    // A hinted node with nothing under it yet is not folded (empty card).
+    const bare = buildRun([
+      started('mcp:session', 'custom'),
+      started('mcp:protocol', 'custom', { parentId: 'mcp:session' }),
+    ]);
+    (bare.nodes['mcp:protocol'] as { collapsed?: boolean }).collapsed = true;
+    expect(hintedCollapseRoots(bare)).toEqual([]);
+    // Without the hint, a custom node with children is left alone.
+    const plain = proxySession();
+    delete (plain.nodes['mcp:protocol'] as { collapsed?: boolean }).collapsed;
+    expect(hintedCollapseRoots(plain)).toEqual([]);
+  });
+
+  it('shows the folded card as "6 calls · 702ms" and hides the six children', () => {
+    const run = proxySession();
+    const summary = summarizeGroup(run, 'mcp:protocol');
+    expect(summary.nodes).toBe(6);
+    expect(summary.tools).toBe(6); // custom nodes render on the tool card → "calls"
+    expect(summary.executions).toBe(6);
+    expect(summary.durationMs).toBe(702);
+    expect(summary.errors).toBe(0);
+    expect(summary.status).toBe('ok');
+
+    const { nodes, edges } = runStateToFlow(run, { collapsed: hintedCollapseRoots(run) });
+    expect(nodes.map((n) => n.id)).toEqual(['mcp:session', 'mcp:protocol', 'tool:search']);
+    expect(nodes.find((n) => n.id === 'mcp:protocol')?.type).toBe('group');
+    // The work is untouched and still wired to the session.
+    expect(edges.map((e) => `${e.source}->${e.target}`)).toEqual([
+      'mcp:session->mcp:protocol',
+      'mcp:session->tool:search',
+    ]);
+  });
+
+  it('a protocol call that fails (initialize) badges the folded card as an error', () => {
+    const run = proxySession({ initializeFails: true });
+    const summary = summarizeGroup(run, 'mcp:protocol');
+    expect(summary.errors).toBe(1);
+    expect(summary.status).toBe('error');
+    // …and the held gate on it outranks the error while it is paused.
+    const held = buildRun([
+      started('mcp:session', 'custom'),
+      started('mcp:protocol', 'custom', { parentId: 'mcp:session' }),
+      started('mcp:initialize', 'custom', { parentId: 'mcp:protocol' }),
+      ev('node.error', { nodeId: 'mcp:initialize', error: { name: 'E', message: 'x' } }),
+      ev('exec.paused', { pauseId: 'p1', nodeId: 'mcp:initialize', point: 'error' }),
+    ]);
+    expect(summarizeGroup(held, 'mcp:protocol').status).toBe('paused');
+  });
+
+  it('the stdout-noise child badges the group too', () => {
+    const run = proxySession({ noise: true });
+    const summary = summarizeGroup(run, 'mcp:protocol');
+    expect(summary.nodes).toBe(7);
+    expect(summary.errors).toBe(1);
+    expect(summary.status).toBe('error');
+  });
+
+  it('"Collapse all" includes the hinted group even though `custom` is not a container kind', () => {
+    const run = proxySession();
+    expect(collapsibleRoots(run)).toEqual(['mcp:protocol']);
+    const plain = proxySession();
+    delete (plain.nodes['mcp:protocol'] as { collapsed?: boolean }).collapsed;
+    expect(collapsibleRoots(plain)).toEqual([]);
+  });
+
+  it('a large run\'s auto-fold keeps the hinted group folded as well', () => {
+    const events = [started('mcp:session', 'custom'), started('mcp:protocol', 'custom', { parentId: 'mcp:session' })];
+    for (let i = 0; i < 3; i++) events.push(started(`mcp:p${i}`, 'custom', { parentId: 'mcp:protocol' }));
+    for (let w = 0; w < 20; w++) {
+      events.push(started(`agent:w${w}`, 'agent', { parentId: 'mcp:session' }));
+      for (let t = 0; t < 4; t++) events.push(started(`tool:w${w}-${t}`, 'tool', { parentId: `agent:w${w}` }));
+    }
+    const run = buildRun(events);
+    (run.nodes['mcp:protocol'] as { collapsed?: boolean }).collapsed = true;
+    const roots = autoCollapseRoots(run, 60);
+    expect(roots).toContain('mcp:protocol');
+    expect(roots.filter((id) => id === 'mcp:protocol')).toHaveLength(1);
+    expect(runStateToFlow(run, { collapsed: roots }).nodes.length).toBeLessThanOrEqual(60);
   });
 });

@@ -96,6 +96,20 @@ describe('detection', () => {
     expect(hits[0]?.integration.alsoTry).toContain('mcp-proxy');
   });
 
+  it('detects an MCP server built on the SDK v2 package family, with the v2 snippet', () => {
+    writePkg({ '@modelcontextprotocol/server': '^2.0.0' });
+    const hits = detect(dir);
+    expect(hits.map((d) => d.integration.id)).toEqual(['mcp']);
+    const { integration, matched } = hits[0]!;
+    expect(matched).toEqual(['@modelcontextprotocol/server']);
+    const snippet = integration.snippetFor?.(matched) ?? integration.snippet;
+    expect(snippet).toContain("from '@modelcontextprotocol/server'");
+    expect(snippet).toContain('serveStdio');
+    expect(snippet).not.toContain('@modelcontextprotocol/sdk');
+    // A 1.x project still gets the 1.x snippet.
+    expect(integration.snippetFor?.(['@modelcontextprotocol/sdk'])).toContain('@modelcontextprotocol/sdk/server/mcp.js');
+  });
+
   it('detects an MCP server that also uses a provider SDK', () => {
     writePkg({ '@modelcontextprotocol/sdk': '^1.30', '@anthropic-ai/sdk': '^0.3' });
     expect(detect(dir).map((d) => d.integration.id).sort()).toEqual(['anthropic', 'mcp']);

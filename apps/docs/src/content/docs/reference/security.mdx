@@ -1,0 +1,253 @@
+---
+title: Security & compliance
+description: For the security reviewer — threat model, local-only architecture, what is stored where and with which permissions, every kill switch, supply-chain posture, measured dependency counts, versioning policy, the exact support matrix CI runs, license, and the questions your security team will ask.
+sidebar:
+  order: 9
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+This page is written for the person who has to approve GraphMind for use on developer machines.
+Every claim on it names the file in the repository that makes it true, so it can be checked rather
+than believed. The short policy version is
+[`SECURITY.md`](https://github.com/Hegazy360/GraphMind/blob/master/SECURITY.md); vulnerability
+reports go there.
+
+## One paragraph
+
+GraphMind is a **local-only** developer tool. `npx graphmind-ai` starts a server bound to
+`127.0.0.1:4747` that serves a viewer and accepts execution events from an instrumented agent over a
+local WebSocket. It records those events in a SQLite database under `~/.graphmind` and can hold the
+agent at a gate (before an LLM step, before/after a tool call, on error) until the developer resumes
+it. There is no cloud component, no account, and no data path off the machine other than a
+four-field CLI telemetry record that is off with one environment variable. The whole product is MIT
+licensed and built in the open.
+
+## Threat model
+
+Full text with the CVE-2025-49596 mapping: [SECURITY.md → Localhost threat
+model](https://github.com/Hegazy360/GraphMind/blob/master/SECURITY.md#localhost-threat-model).
+Summary:
+
+| Boundary | Position | Evidence |
+| --- | --- | --- |
+| Network | The server binds `127.0.0.1` only, no other interface, ever. | `packages/cli/src/server.ts` — `const host = '127.0.0.1'` |
+| Browser | A web page in your browser cannot talk to it: WebSocket upgrades and HTTP requests need a loopback `Host` (defeats DNS rebinding) and either no `Origin` or the served viewer's own. Everything else is `403`. | `packages/cli/src/origin-guard.ts`; `packages/cli/test/origin-guard.test.ts`; `packages/cli/test/origin-guard-control.test.ts` (a held gate cannot be resumed by a browser-originated request) |
+| Command execution | Nothing spawns a process in response to network input. The MCP proxy has no listening socket. | `packages/cli/src/hub.ts`, `server.ts` (no `spawn`); `packages/cli/src/mcp-proxy/proxy.ts` (no `listen`) |
+| Local peers | Any process running as your OS user can connect — the trust boundary is the OS account, as for a local database. A peer cannot take over another's run. | `security/tests/run-isolation.test.ts`; `internal/decisions.md` "runs are claimed, not squatted" |
+| Host application | Instrumentation is fail-open: detached = synchronous no-op; a debugger that disconnects releases every gate; adapters never throw into the host. | `packages/client/src`; `examples/soak` (fail-open checks in CI) |
+| Untrusted input | Envelopes are zod-validated at ingest; oversized payloads are truncated type-preservingly; the JSON-RPC boundary of the MCP proxy is fuzzed. | `security/tests/ingest-fuzz.test.ts`, `protocol-fuzz.test.ts`, `mcp-proxy-fuzz.test.ts`, `mcp-boundary-fuzz.test.ts` |
+
+<Aside type="caution" title="Out of scope, and said plainly">
+Exposing the port through a tunnel, a reverse proxy or a `0.0.0.0` bind puts an unauthenticated
+service on a network. GraphMind will not do that for you and reports that depend on it are not
+vulnerabilities. Stored runs are **not encrypted at rest**; disk encryption is your control.
+</Aside>
+
+## Architecture, in words
+
+1. **Your agent process** links an adapter (`@graphmind-ai/sdk`, `@graphmind-ai/anthropic`,
+   `@graphmind-ai/openai`, `@graphmind-ai/langgraph`, `@graphmind-ai/mcp`; `graphmind-ai` on PyPI;
+   the `graphmind` gem). Every adapter is a thin layer over one runtime, `@graphmind-ai/client`,
+   which opens **one outbound WebSocket to `ws://127.0.0.1:4747/ingest`** (override:
+   `GRAPHMIND_URL`). If nothing answers within 300 ms the session is detached and every call is a
+   no-op.
+2. **The server** (`graphmind-ai`, the CLI) receives versioned JSON envelopes
+   (`{gm, seq, ts, runId, type, payload}`), validates them against
+   `@graphmind-ai/schema`, stores them, and fans them out to viewers on `ws://127.0.0.1:4747/ws/ui`.
+   Gate holds are decided in the *client*: the server only relays `exec.resume` from a viewer back to
+   the connection that owns the run.
+3. **The viewer** is a static bundle served by the same process (`packages/cli/viewer-dist`). It
+   makes no requests to anything but its own origin.
+4. **`graphmind mcp-proxy -- <command>`** is a stdio man-in-the-middle for MCP servers. It spawns the
+   command *you* name, relays JSON-RPC both ways, and reports to the local hub as an ordinary ingest
+   client. It opens no port.
+
+Outbound connections made by GraphMind code, exhaustively: the loopback WebSocket above; the CLI
+telemetry `POST` (below); `graphmind demo --live` and `graphmind init` fetch nothing. The docs and
+website are separate static deployments.
+
+## What is stored where
+
+| What | Where | Permissions | Contents | Control |
+| --- | --- | --- | --- | --- |
+| Run database | `~/.graphmind/graphmind.db` (+ `-wal`, `-shm`); `GRAPHMIND_DB` / `--db` override | Directory `0700`, files `0600`, re-applied to the WAL pair; only a directory GraphMind created is chmod'ed (`--db /tmp/x.db` never tightens `/tmp`). Windows: NTFS ACL of the profile directory. | Every event you streamed: prompts, tool arguments and results, errors, timings. Payloads over 512 KB are truncated to a typed preview. | Retention prunes to 200 runs / 30 days on startup (`GRAPHMIND_KEEP_RUNS`, `GRAPHMIND_KEEP_DAYS`, `GRAPHMIND_RETENTION=off`). Delete the file to delete everything. |
+| Telemetry install id | `~/.graphmind/telemetry-id`; `GRAPHMIND_HOME` override | `0600` | One random UUID. Not created when telemetry is off. | `rm` it for a new id. |
+| Exports | Wherever you point `graphmind record` (NDJSON, or `--html`) | Your umask | A whole run. From 0.5.0, values under secret-looking keys are redacted by default (`--no-redact-secrets` to opt out); see [the key rule](/reference/cli/#secret-looking-keys-are-redacted-by-default). | Yours. |
+
+Evidence: `packages/cli/src/sqlite-storage.ts` (`DIR_MODE`, `FILE_MODE`, `hardenDatabaseFiles`),
+`packages/cli/src/telemetry.ts` (`mode: 0o600`), `packages/cli/test/db-permissions.test.ts`,
+`packages/cli/src/storage.ts` (`MAX_PAYLOAD_BYTES`, `MAX_FRAME_BYTES`).
+
+Storage uses Node's built-in `node:sqlite`: no native addon is downloaded and no `postinstall`
+script runs. Per the Node.js docs (checked 2026-09-14) the module is *Stability 1.1 – Active
+development* on the Node 22 line (unflagged since 22.13.0, GraphMind's engines floor) and *Stability
+1.2 – Release candidate* on the Node 24 line (since 24.15.0). CI runs every suite on both lines
+because they have differed before.
+
+## Every kill switch
+
+Read by the **instrumented application** (TypeScript, Python and Ruby SDKs all implement the same
+table — `packages/client/src/env.ts`, `python/graphmind/env.py`, `ruby/lib/graphmind/env.rb`):
+
+| Switch | Effect |
+| --- | --- |
+| `GRAPHMIND_DISABLED=1` | Instrumentation off. Beats everything, including an explicit `enabled: true` in code. No socket, no buffering, wrappers are identity functions, `gm.run` still runs your function. |
+| `NODE_ENV=production` | Off by default in production; `GRAPHMIND=1` re-enables. Python/Ruby read the documented list of environment-name variables the same way. |
+| `pauseTimeoutMs` (session option) | Cap on how long any gate may hold; default is "hold until resumed", which is only possible while a debugger is attached. |
+| `GRAPHMIND_HIDE_INPUTS` / `GRAPHMIND_HIDE_OUTPUTS` / `GRAPHMIND_HIDE_TOOL_ARGS` / `GRAPHMIND_HIDE_TOOL_RESULTS` = `1` or `true` **(0.5.0)** | Whole-field redaction at the emit point, by node kind: the named field is replaced with the string `"__REDACTED__"` before it leaves the process, affected events carry `redaction: {count, keys}`, the viewer shows a "hidden by …" chip, and `inject` refuses to send the placeholder back. Coarse by design — a reviewer can reason about it. |
+| `GRAPHMIND_ON_LOOP=off` / `GRAPHMIND_LOOP_THRESHOLD=0` / `GRAPHMIND_LOOP_ALLOW=<tools>` **(0.5.0)** | Disable the identical-tool-call loop hold, or exempt named tools from it (it only ever holds while a debugger is attached). |
+
+Read by the **CLI / server**:
+
+| Switch | Effect |
+| --- | --- |
+| `DO_NOT_TRACK=1` (or `true`) | Telemetry off. Wins over every GraphMind-specific setting. |
+| `GRAPHMIND_TELEMETRY=0` (or `false`) | Telemetry off. |
+| `GRAPHMIND_TELEMETRY=log` | Telemetry payload printed to stderr with a `[graphmind telemetry]` prefix, **nothing sent** — the audit mode. Also prints under `CI`. |
+| `CI` set | Telemetry off. |
+| `--pause-on-error off` / `GRAPHMIND_PAUSE_ON_ERROR=off` | Start with no breakpoint at all (the default arms pause-on-error; it can also be narrowed to one node kind). |
+| `GRAPHMIND_ALLOWED_ORIGINS` | The *opposite* of a kill switch: it widens which browser origins may connect. Unset by default; `*` disables the check and is for setups you fully control. |
+| `GRAPHMIND_RETENTION=off` | Never prune stored runs. |
+| `graphmind record --no-redact-secrets` **(0.5.0)** | Opt out of the default secret-key redaction in exports (`authorization`, `cookie`, `api_key`, `password`, `token`, … matched as a whole key or as parts split on `_`, `-` or camelCase, so `max_tokens` is never touched). |
+
+Precedence tables with tests: [Environment variables](/reference/environment/) and
+[Telemetry](/reference/telemetry/); telemetry is pinned by `packages/cli/test/telemetry.test.ts`.
+
+## Telemetry, exactly
+
+One `POST https://graphmind.ai/api/telemetry` per CLI command with
+`{event, installId, version, ts}` — command name, random UUID, package version, time. Never
+arguments, prompts, run data, hostnames or user names. Fire-and-forget, 3 s timeout, socket
+`unref()`ed so it can never hold the process open. Adapters send nothing. Disclosure:
+`packages/cli/TELEMETRY.md`. The security suite scans captured telemetry bodies for canary secrets
+and asserts the key set is exactly those four (`security/tests/adapter-leaks.test.ts`).
+
+## Supply-chain posture
+
+| Control | Status | Where |
+| --- | --- | --- |
+| Provenance on npm | Every release from the first tag after 0.4.4 is published by GitHub Actions with `--provenance` (Sigstore-signed SLSA build provenance bound to this repo and workflow), via npm Trusted Publishing (OIDC, no long-lived token). Verify: `npm view graphmind-ai@<v> dist.attestations`, `npm audit signatures`. 0.4.4 and earlier were published by hand and are unattested. | `.github/workflows/publish-npm.yml`, `scripts/release/` |
+| Provenance on PyPI | Trusted Publishing with PEP 740 attestations; present for 0.4.4 already (`https://pypi.org/integrity/graphmind-ai/0.4.4/<file>/provenance`). Build front-end and back-end (`hatchling`) hash-pinned. | `.github/workflows/publish-python.yml`, `scripts/release/requirements-build.txt` |
+| SBOM | One CycloneDX 1.6 JSON per release, generated from a clean `npm install` of the eight published tarballs (so it lists what a consumer installs, not the dev tree), attached to the GitHub Release with `SHA256SUMS`. | `scripts/release/sbom.mjs` |
+| Release gate | A tag publishes only after the full battery (typecheck, unit + viewer + web tests, secret-leak/run-isolation/fuzz audit) passes in the release workflow itself; tag must equal all ten declared versions (npm ×8, PyPI, gem). | `publish-npm.yml` job `npm: verify`, `scripts/release/check-versions.mjs` |
+| Pinned actions | Every GitHub Action referenced by full commit SHA with a version comment; Dependabot keeps them current. | `.github/workflows/*.yml`, `.github/dependabot.yml` |
+| Least privilege | `permissions: contents: read` at the top of every workflow; `id-token: write` only on the publish jobs; `contents: write` only on the release job. `persist-credentials: false` on release checkouts. | same |
+| Static analysis | CodeQL (`security-extended`) over JavaScript/TypeScript, Python and Ruby on every push, PR and weekly. | `.github/workflows/codeql.yml` |
+| OpenSSF Scorecard | Published weekly; **7.7 / 10** on the default branch at the time of writing. Remaining deductions are repository settings (branch protection, code review — a solo maintainer cannot review their own PRs), not code. | `.github/workflows/scorecard.yml` |
+| Dependency updates | Dependabot weekly, grouped per ecosystem (npm, pip, bundler, actions); security updates ungrouped and immediate. Transitive floors for advisories live in `pnpm-workspace.yaml` `overrides`. | `.github/dependabot.yml`, `pnpm-workspace.yaml` |
+| Audits | `pnpm audit` reports no known vulnerabilities at the time of writing (2026-09-14); the transitive floors that keep it that way live in `pnpm-workspace.yaml` `overrides`. `pnpm audit`, `pip-audit` and `bundler-audit` are run by the maintainer before a release — they are **not yet a CI job**, so do not look for them in `ci.yml`. What CI does run on every push is the in-repo adversarial suite (`security/`, 170+ tests: secret-leak, run isolation, protocol and MCP fuzzing) with a floor on its test count so it cannot silently shrink. | `pnpm-workspace.yaml`; `ci.yml` job `security audit` (the suite and its floor) |
+| Install-time code | No `postinstall` or other lifecycle scripts in any published package; no native addons (SQLite is `node:sqlite`). | `packages/*/package.json` |
+| Ownership | `CODEOWNERS`, `CODE_OF_CONDUCT.md`, `SECURITY.md`. | repository root, `.github/` |
+
+## Dependency counts (measured)
+
+Counted from npm's own lockfile after a clean `npm install` of the eight packed tarballs
+(`node scripts/release/dep-count.mjs --tarballs <dir>`), 2026-09-14, version 0.4.4. "Transitive"
+is the full third-party closure including direct dependencies; workspace siblings are not counted.
+
+| Package | Direct third-party | Transitive third-party |
+| --- | --- | --- |
+| `@graphmind-ai/schema` | 1 (`zod`) | 1 |
+| `@graphmind-ai/client` | 0 | 1 (`zod`, via schema) |
+| `@graphmind-ai/sdk` | 0 | 1 |
+| `@graphmind-ai/anthropic` | 0 | 1 |
+| `@graphmind-ai/openai` | 0 | 1 |
+| `@graphmind-ai/langgraph` | 0 | 1 |
+| `@graphmind-ai/mcp` | 0 | 1 |
+| `graphmind-ai` (CLI + server) | 4 (`hono`, `@hono/node-server`, `ws`, `@modelcontextprotocol/sdk`) | 92 |
+
+The libraries you link into your application carry **one** third-party dependency (`zod`). The CLI's
+count is dominated by `@modelcontextprotocol/sdk` (which brings `express`); it runs on the developer
+machine, not in your application. Peer dependencies are your own provider SDKs and are not
+installed by GraphMind. Python: `websockets>=12` only. Ruby: zero runtime dependencies.
+
+## Versioning and deprecation
+
+Full policy: [Stability & versioning](/reference/stability/).
+
+- **Semantic versioning**, one version number across every package and language. While the major
+  is `0`, a **minor** is the only release that may change behaviour incompatibly and says so in
+  the CHANGELOG; a **patch** never does.
+- **Wire protocol** compatibility is governed separately by the envelope's `gm` field (the
+  protocol major, currently `1`) and negotiated in the `hello` / `hello.ack` handshake
+  (`versions.protocol`). Payloads are *loose* objects: unknown fields are preserved, unknown event
+  types are stored and shown rather than dropped, so a newer SDK against an older server (or the
+  reverse) degrades rather than breaks. A `gm` bump is a major event and will not happen in a
+  patch.
+- **Deprecations** are announced in a minor, in the CHANGELOG and with a **runtime warning**
+  printed once, and the deprecated thing is removed in the next major, not before. Nothing is
+  deprecated today.
+- **Support window**: the latest minor receives security fixes as patches; the previous minor
+  for 90 days after the next minor ships (`SECURITY.md`).
+
+## Support matrix — exactly what CI runs
+
+Nothing below is claimed that a CI job does not execute on every push (`.github/workflows/ci.yml`,
+`sdk-compat.yml`). No other runtime is claimed: **not Bun, not Deno, not edge runtimes.**
+
+| Component | Runs | Where |
+| --- | --- | --- |
+| npm packages (unit tests, typecheck, full-stack smoke) | Node **22.x** and **24.x** on **ubuntu-latest, windows-latest, macos-latest** (6 cells). `engines.node: >=22.13`. | `ci.yml` job `test` |
+| Cold install from packed tarballs, `require()` (CommonJS) of all eight, `graphmind demo` end-to-end | Node 22.x on ubuntu and windows | `ci.yml` job `cold-package-smoke` |
+| Viewer | Built bundle driven by Playwright in headless Chromium | `ci.yml` job `viewer-e2e` |
+| Python SDK | Python **3.10** and **3.13** on ubuntu and windows; `requires-python >=3.10`. (3.11/3.12/3.14 are declared classifiers, not CI cells.) | `ci.yml` job `python` |
+| Ruby gem | Ruby **3.1** and **3.3** on ubuntu; gem built and installed into a clean `GEM_HOME` | `ci.yml` job `ruby` |
+| `@graphmind-ai/sdk` | `ai` 6.0.270 (floor, partial suite — see the file), 7.0.0, 7.0.83; peer range `>=6 <8` | `sdk-compat.yml` |
+| `@graphmind-ai/anthropic` | `@anthropic-ai/sdk` 0.60.0 and 0.121.0; peer `>=0.60.0 <1` | `sdk-compat.yml` |
+| `@graphmind-ai/openai` | `openai` 5.0.0 (floor, two upstream-gap tests skipped), 6.45.0, 7.7.0; peer `>=5 <8` | `sdk-compat.yml` |
+| `@graphmind-ai/langgraph` | `@langchain/core` 0.3.40 + `@langchain/langgraph` 0.3.0 (floor); core 1.2.9 + langgraph 1.4.13 (ceiling) | `sdk-compat.yml` |
+| `@graphmind-ai/mcp` / `mcp-proxy` | Optional peers `@modelcontextprotocol/sdk >=1.26.0 <2` or `@modelcontextprotocol/server >=2 <3`. 1.x: 1.30.0 from the lockfile, and the 1.26.0 floor via an aliased install (`packages/mcp/test/peer-compat.test.ts`). 2.x: 2.0.0, the only 2.x release, pinned for both the adapter and the proxy. The proxy is tested against real SDK servers of both generations. | `ci.yml` job `test`; `sdk-compat.yml` (the 2.0.0 cells) |
+| Weekly canary | Each adapter against today's `latest` of its SDK — advisory, does not gate | `sdk-compat.yml` job `canary` |
+
+## License
+
+MIT, for every package in the repository (`LICENSE`; `"license": "MIT"` in each `package.json`,
+`pyproject.toml`, and the gemspec). Copyright 2026 GraphMind (Mohamed Hegazy). No CLA; contributions
+are accepted under the same license (`CONTRIBUTING.md`).
+
+## Questions your security team will ask
+
+**Does any of our data leave the machine?** No. Run data travels only over loopback and is stored
+under `~/.graphmind`. The one outbound request is the four-field telemetry record described above,
+off with `DO_NOT_TRACK=1`.
+
+**Can a website reach the local server?** No. `Origin`/`Host` enforcement on every request and
+upgrade; tested including DNS rebinding, `Origin: null`, other local ports, and a browser-originated
+attempt to resume a held gate.
+
+**Does it execute anything?** The server never spawns a process from network input. The MCP proxy
+spawns exactly the command you pass it, and nothing else.
+
+**Can it break our production application?** It is off by default under `NODE_ENV=production` and
+unconditionally off with `GRAPHMIND_DISABLED=1`. When on but detached it is a synchronous no-op.
+When attached, a debugger disconnect releases every gate. Adapters never throw into the host.
+
+**What is the blast radius of the stored data?** One SQLite file, owner-only permissions, on the
+developer's disk, unencrypted. Treat it like a local log of prompts. Retention prunes it; deleting
+it deletes everything.
+
+**Can we redact prompts / tool arguments?** From 0.5.0: `GRAPHMIND_HIDE_INPUTS`,
+`GRAPHMIND_HIDE_OUTPUTS`, `GRAPHMIND_HIDE_TOOL_ARGS`, `GRAPHMIND_HIDE_TOOL_RESULTS` replace whole
+fields with `"__REDACTED__"` before they leave the process. Exports redact values under a documented
+list of secret-looking keys by default. Two limits to know before you rely on them: the **tool-only** switches hide the
+tool node's own input and output, but in an agent loop the same values also pass through the model —
+its `tool_use` blocks and the next request's `tool_result` messages — so to keep tool data out of the
+recording entirely, set `GRAPHMIND_HIDE_INPUTS` and `GRAPHMIND_HIDE_OUTPUTS`. And error messages are
+never redacted (they can echo data). Exports match *keys*, not values: a secret typed into a prompt is
+exported as recorded. In `graphmind mcp-proxy`, `HIDE_TOOL_RESULTS` also stops a failed result being
+quoted into its error, and `HIDE_INPUTS` also removes the server's command-line arguments from the run
+label and metadata. The TypeScript, Python and Ruby SDKs implement the same switches with identical wire
+output, held to shared conformance fixtures and a differential test generated from the TypeScript client.
+
+**How do we verify what we install is what you built?** `npm view <pkg>@<v> dist.attestations` and
+`npm audit signatures` for npm; PEP 740 attestations on PyPI; SBOM and `SHA256SUMS` on the GitHub
+Release; every action in the build pinned by SHA; CodeQL and Scorecard public.
+
+**Who is accountable?** A single maintainer (`CODEOWNERS`). Report privately via GitHub Private
+Vulnerability Reporting or `hello@graphmind.ai`; acknowledgement within 3 business days, fix
+targets by severity in `SECURITY.md`.
+
+**What are the known gaps?** No encryption at rest; any local process under the same OS user can
+connect (by design — it is a local debugger); releases up to 0.4.4 are not provenance-attested; the
+Ruby gem is not yet on RubyGems; Scorecard items that need repository settings are open.

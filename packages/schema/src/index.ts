@@ -41,6 +41,9 @@ export {
   isEventType,
   type EventType,
   type EventPayloadMap,
+  LoopInfoSchema,
+  PauseReasonSchema,
+  RedactionSummarySchema,
 } from './events.js';
 
 export {
@@ -81,3 +84,15 @@ export {
 } from './parse.js';
 
 export { exportJsonSchema, exportJsonSchemaString } from './json-schema.js';
+
+// The payload budget (512 KB) and its type-preserving shrink, shared by the
+// server's storage and the client's emit so both agree on what is kept.
+// Pass the event type to `serializePayload` so a valid event stays valid.
+export {
+  MAX_PAYLOAD_BYTES,
+  MAX_SHRINK_KEYS,
+  MAX_TRIM_FIELDS,
+  isTruncatedPayload,
+  serializePayload,
+  type TruncatedPayload,
+} from './shrink.js';

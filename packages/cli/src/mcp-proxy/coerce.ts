@@ -140,3 +140,17 @@ export function coerceInjectedFor(method: string, params: unknown, value: unknow
   const uri = isRecord(params) && typeof params['uri'] === 'string' ? params['uri'] : undefined;
   return coerceInjected(shape, value, uri);
 }
+
+/**
+ * Protocol revision 2026-07-28 requires `resultType` on every result and
+ * `ttlMs`/`cacheScope` on cacheable ones (`resources/read` here); the 2026
+ * client rejects a result without them (`INVALID_RESULT`). The 2025 codec
+ * ignores both, so the reporter applies this only when the session negotiated
+ * a modern era. A whole-frame inject (`jsonrpc` present) is never touched.
+ */
+export function stampModernEra(method: string, result: unknown): unknown {
+  if (!isRecord(result) || typeof result['jsonrpc'] === 'string') return result;
+  const typed = 'resultType' in result ? result : { ...result, resultType: 'complete' };
+  if (method !== 'resources/read') return typed;
+  return { ttlMs: 0, cacheScope: 'private', ...typed };
+}

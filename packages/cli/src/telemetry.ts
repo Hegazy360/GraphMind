@@ -2,8 +2,15 @@
  * Anonymous usage telemetry: event name + random install id + version, nothing
  * else — no payloads, no PII, no run data. Full disclosure in ../TELEMETRY.md.
  *
- * Opt-out: GRAPHMIND_TELEMETRY=0 (or "false"); CI environments are always
- * excluded. When disabled, nothing is written to disk and nothing is sent.
+ * Switches, in precedence order (see telemetryMode):
+ *   DO_NOT_TRACK=1|true      -> off, always (the cross-tool convention wins
+ *                               over every GraphMind-specific setting)
+ *   GRAPHMIND_TELEMETRY=0    -> off ("false" too)
+ *   GRAPHMIND_TELEMETRY=log  -> print the exact payload to stderr, send nothing
+ *                               (also in CI — it is how you audit what would go)
+ *   CI set                   -> off (never collect from build machines)
+ *   otherwise                -> send
+ * When off, nothing is written to disk and nothing is sent.
  *
  * Delivery is fire-and-forget over node:http(s) with the socket unref()ed so
  * an in-flight request can never hold the process open (an undici fetch would
@@ -34,11 +41,31 @@ const VERSION = (createRequire(import.meta.url)('../package.json') as { version:
 
 type EnvLike = Record<string, string | undefined>;
 
-function disabled(env: EnvLike): boolean {
+export type TelemetryMode = 'send' | 'log' | 'off';
+
+/** Prefix of every line `GRAPHMIND_TELEMETRY=log` writes to stderr. */
+export const LOG_PREFIX = '[graphmind telemetry] ';
+
+/** `1` / `true`, case-insensitive, surrounding whitespace ignored. */
+function isOn(value: string | undefined): boolean {
+  const v = (value ?? '').trim().toLowerCase();
+  return v === '1' || v === 'true';
+}
+
+/**
+ * Pure precedence, exported for tests. `DO_NOT_TRACK` (consoledonottrack.com)
+ * is checked first and wins over everything, including `GRAPHMIND_TELEMETRY=1`
+ * and `=log`: a user who set the cross-tool switch must never have to learn
+ * ours. `log` beats the CI rule on purpose — it sends nothing, and printing
+ * the payload on a build machine is exactly how someone audits it.
+ */
+export function telemetryMode(env: EnvLike): TelemetryMode {
+  if (isOn(env['DO_NOT_TRACK'])) return 'off';
   const flag = (env['GRAPHMIND_TELEMETRY'] ?? '').trim().toLowerCase();
-  if (flag === '0' || flag === 'false') return true;
-  if (env['CI'] !== undefined) return true; // never collect from CI machines
-  return false;
+  if (flag === '0' || flag === 'false') return 'off';
+  if (flag === 'log') return 'log';
+  if (env['CI'] !== undefined) return 'off'; // never collect from CI machines
+  return 'send';
 }
 
 /** `$GRAPHMIND_HOME/telemetry-id`, defaulting to `~/.graphmind/telemetry-id`. */
@@ -87,12 +114,9 @@ function loadInstallId(env: EnvLike): string {
 export function recordTelemetry(event: string): void {
   try {
     const env: EnvLike = process.env;
-    if (disabled(env)) return;
+    const mode = telemetryMode(env);
+    if (mode === 'off') return;
     if (!EVENT_RE.test(event)) return; // command names only, never data
-
-    const endpoint = env['GRAPHMIND_TELEMETRY_URL'];
-    const url = new URL(endpoint !== undefined && endpoint !== '' ? endpoint : DEFAULT_ENDPOINT);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
 
     const body = JSON.stringify({
       event,
@@ -100,6 +124,17 @@ export function recordTelemetry(event: string): void {
       version: VERSION,
       ts: new Date().toISOString(),
     });
+
+    if (mode === 'log') {
+      // The exact bytes a send would carry, and nothing is sent. stderr, not
+      // stdout: `graphmind runs --json` and friends own stdout.
+      process.stderr.write(`${LOG_PREFIX}${body}\n`);
+      return;
+    }
+
+    const endpoint = env['GRAPHMIND_TELEMETRY_URL'];
+    const url = new URL(endpoint !== undefined && endpoint !== '' ? endpoint : DEFAULT_ENDPOINT);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
 
     const request = url.protocol === 'https:' ? httpsRequest : httpRequest;
     const req = request(url, {

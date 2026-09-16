@@ -23,7 +23,9 @@ recent run ids instead of failing blankly.
 ```sh
 graphmind record run_01H8… --html
 # exported run run_01H8… (214 events) → /Users/you/graphmind-run-run_01H8….html (1204 KB)
+# redacted 3 values under 2 distinct keys (--no-redact-secrets keeps them)
 # Open it in any browser, or send it to someone — it needs no server.
+# It contains this run's prompts, tool inputs and outputs: check before sharing.
 ```
 
 The viewer's own JS and CSS are inlined and the run's envelopes are embedded in the page, so the
@@ -51,15 +53,25 @@ Each line is a complete envelope, exactly as it went over the socket:
 ```json
 {"gm":1,"seq":0,"ts":1756254187512,"runId":"run_01H8…","type":"run.started","payload":{"app":"support-agent","sdk":{"name":"ai","version":"7.0.79"},"meta":{"name":"handle-ticket"}}}
 {"gm":1,"seq":1,"ts":1756254187533,"runId":"run_01H8…","type":"node.started","payload":{"nodeId":"tool:searchOrders","kind":"tool","name":"searchOrders","instanceId":"call_a1","input":{"email":"alex@example.com"}}}
-{"gm":1,"seq":2,"ts":1756254187904,"runId":"run_01H8…","type":"node.finished","payload":{"nodeId":"tool:searchOrders","instanceId":"call_a1","output":[…],"durationMs":371,"status":"ok"}}
+{"gm":1,"seq":2,"ts":1756254187904,"runId":"run_01H8…","type":"node.finished","payload":{"nodeId":"tool:searchOrders","instanceId":"call_a1","output":[…],"durationMs":371.42,"heldMs":0,"status":"ok"}}
 ```
 
 This is the same shape `graphmind demo` replays and `WS /ingest` accepts, which makes an export
 a **portable run**: it can be re-ingested, diffed, scripted over, or attached to an issue.
 
-<Aside type="caution" title="Exports contain your payloads">
-Inputs, outputs, prompts and errors are all in there verbatim. Read the file before you attach
-it to a public bug report — it is your data, and nothing has been redacted for you.
+## Secrets are redacted by key, by default
+
+Both formats replace the value under any secret-looking key (`authorization`, `api_key`,
+`password`, `token`, `accessToken`, … but not `max_tokens`) with `"__REDACTED__"`, and the
+command says how many it replaced. The loop-hold fingerprint is replaced too.
+`--no-redact-secrets` exports every value as recorded. The exact key rule is in the
+[CLI reference](/reference/cli/#secret-looking-keys-are-redacted-by-default).
+
+<Aside type="caution" title="Exports still contain your payloads">
+Redaction looks at keys, never at values. A prompt, a tool result, a secret pasted into a
+message, a token in a URL and an error message are all exported as recorded. Read the file
+before you attach it to a public bug report. To keep prompts or results out of the recording
+entirely, run the app with the [`GRAPHMIND_HIDE_*` switches](/reference/environment/#recording-less).
 </Aside>
 
 ## What it is good for

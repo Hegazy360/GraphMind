@@ -36,7 +36,7 @@ told. Leave run mode on with only the error breakpoint armed and let the agent s
 
 ## Attaching to something already running
 
-The client keeps a bounded ring buffer of events (2000 by default, drop-oldest). Attach a viewer
+The client keeps a bounded ring buffer of events (drop-oldest; by default 5,000 events or 8 MiB in the TypeScript client, 2,000 events in Python and Ruby). Attach a viewer
 mid-run and the whole buffer replays oldest-first with the original sequence numbers — you get
 the history you missed, and the viewer deduplicates on `(runId, seq)`.
 
@@ -50,8 +50,8 @@ The buffer only governs what a *late* viewer can replay — once a viewer is att
 persisted to SQLite as they arrive and are never lost.
 
 <Aside type="tip" title="Debug the second hour, not the first">
-For a run that takes hours, start it detached. Instrumentation is effectively free while nothing
-is attached. Attach the viewer when you suspect trouble; you get the recent history and full
+For a run that takes hours, start it detached. While nothing is attached, gates take a fast path
+and events only go to a bounded buffer (see [limits](/reference/limits/#buffers)). Attach the viewer when you suspect trouble; you get the recent history and full
 live control from that point on.
 </Aside>
 
@@ -65,6 +65,9 @@ no connection is open and no partial request is waiting. Two practical guards:
   SDK's outer loop —
   [see the details](/integrations/vercel-ai-sdk/#timeouts-while-debugging) — so prefer removing
   `timeout` configs while debugging.
+- **Held time is not run time.** A node you held for five minutes is not shown as a slow node:
+  cards, the timeline, stats and the slow filter use the time the code ran. See
+  [durations](/reference/viewer/#durations).
 - **`pauseTimeoutMs`** auto-continues a gate nobody resumed. Unset by default (hold forever).
   Set it when you leave an agent running under a debugger unattended:
 

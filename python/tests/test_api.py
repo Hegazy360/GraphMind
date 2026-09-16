@@ -264,8 +264,16 @@ def test_events_outside_a_run_land_in_one_implicit_run(attached: Any) -> None:
 
     started = viewer.wait_for_type("run.started")
     assert started["payload"]["meta"]["implicit"] is True
-    run_ids = {f["runId"] for f in viewer.frames() if f["type"] == "node.started"}
-    assert len(run_ids) == 1
+    # run.started is sent before the two node.started frames, so reading the
+    # frame list the moment it lands races the sender: on a slow Windows CI
+    # runner it saw zero node.started frames and reported "0 == 1". Wait for
+    # both tool calls to be on record first.
+    viewer.wait_for(
+        lambda _frame: sum(f["type"] == "node.started" for f in viewer.frames()) >= 2
+    )
+    node_frames = [f for f in viewer.frames() if f["type"] == "node.started"]
+    assert len(node_frames) == 2
+    assert {f["runId"] for f in node_frames} == {started["runId"]}
 
 
 def test_configure_replaces_the_default_instance(viewer: Any) -> None:
@@ -337,7 +345,13 @@ def test_large_values_are_bounded_before_they_hit_the_wire(attached: Any) -> Non
 def test_thread_safety_under_concurrent_emitters(attached: Any) -> None:
     import threading
 
-    instance, viewer = attached()
+    # The loop hold is disarmed here, for the reason the security fuzz relay
+    # tests disarm it: 8 threads calling work(0), work(1)... share the implicit
+    # run, so whenever the scheduler interleaves them three identical
+    # (tool:work, {n: i}) starts are consecutive — a documented loop streak —
+    # and a call is held with nobody to resume it. This test is about seq
+    # uniqueness and order under concurrent emitters, not about the hold.
+    instance, viewer = attached(gm_options={"loop_guard": False})
 
     @instance.tool
     def work(n: int) -> int:

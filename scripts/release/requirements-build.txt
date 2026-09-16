@@ -1,0 +1,32 @@
+# Hash-pinned build toolchain for publish-python.yml: the PEP 517 front-end
+# (build) AND the backend python/pyproject.toml names (hatchling) with its
+# closure. Installed with
+#   pip install --require-hashes --only-binary :all: -r scripts/release/requirements-build.txt
+# and used by `python -m build --no-isolation`, so the code that turns the
+# source tree into the wheel is exactly this and nothing else. (With build's
+# default isolation the backend is resolved fresh from PyPI at release time —
+# `hatchling>=1.24`, unpinned — which is precisely what this file exists to
+# prevent; verified 2026-09-14: an isolated build fetched hatchling==1.32.0.)
+# Regenerate after a bump with:
+#   pip download build hatchling --dest /tmp/w --only-binary :all: --python-version 3.13 --platform any --implementation py --abi none
+#   for f in /tmp/w/*.whl; do echo "$f"; pip hash --algorithm sha256 "$f"; done
+# (universal py3-none-any wheels: one hash per package is the whole set on
+# Python >= 3.11 — tomli is only pulled in below 3.11; the workflow runs 3.13.)
+# Keep hatchling inside the floor pyproject.toml declares (>=1.24).
+build==1.6.1 \
+    --hash=sha256:ecd351a4be9d35a9eaaba244a7687143c9c7d4aea6ac964e7e7ddab20cbcf4e7
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+pyproject_hooks==1.2.0 \
+    --hash=sha256:9e5c6bfa8dcc30091c74b0cf803c81fdd29d94f01992a7707bc97babb1141913
+# --- build backend (python/pyproject.toml [build-system].requires) ---
+hatchling==1.32.0 \
+    --hash=sha256:0e17c9c3b9aa7c625acc8d0f5b622f107d5049af9ecf5ada4de1aada5be7cdbc
+pathspec==1.1.1 \
+    --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189
+pluggy==1.6.0 \
+    --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
+tomlkit==0.15.1 \
+    --hash=sha256:177a05aece5a8ca5266fd3c448abb47b8d352f09d477d3ca8332db4d89b24304
+trove-classifiers==2026.6.1.19 \
+    --hash=sha256:ab4c4ec93cc4a4e7815fa759906e05e6bb3f2fbd92ea0f897288c6a43efd15b3

@@ -892,6 +892,16 @@ button {
 }
 .gm-node-ms {
   margin-left: auto;
+  /* The duration is the one number a card must never lose to its own label. */
+  flex-shrink: 0;
+}
+/* The variable-length middle of a meta row gives way first, with an ellipsis
+   and the full text on hover. Cards cannot wrap: the canvas lays out and
+   routes edges from each card's declared height. */
+.gm-node-meta-fill {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .gm-text-err {
   color: var(--err);
@@ -1605,6 +1615,22 @@ button {
     border-left-color: color-mix(in srgb, #000000 30%, transparent);
   }
 }
+/* The part of a timeline bar during which the debugger held the node: hatched,
+   so "ran" and "held" read as different things at a glance. Geometry is inline
+   (left/width follow the bar); the look lives here so both themes get it. */
+.gm-bar-held {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  background-color: color-mix(in srgb, var(--text-faint) 18%, transparent);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--text-faint) 55%, transparent) 0 3px,
+    transparent 3px 7px
+  );
+}
+
 .gm-bar-label {
   position: absolute;
   right: 5px;
@@ -1980,6 +2006,41 @@ button {
 }
 
 /* why-it-failed */
+/* Loop hold (0.5.0): the banner label is the tool's own sentence rather than a
+   caps label, and the inspector's evidence block is amber like the hold it
+   explains. A refused inject keeps the editor open and says why. */
+.gm-pause-label--loop {
+  text-transform: none;
+  letter-spacing: 0;
+}
+.gm-loop {
+  background: linear-gradient(180deg, var(--amber-tint) 0%, transparent 70%);
+}
+.gm-loop .gm-why-head {
+  color: var(--amber-text);
+}
+.gm-loop-note {
+  margin-top: 8px;
+}
+.gm-loop-calls {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.gm-loop-call {
+  margin-top: 6px;
+}
+.gm-loop-kv {
+  margin-bottom: 4px;
+}
+.gm-loop-pill {
+  margin-left: 6px;
+}
+.gm-inject-refusal {
+  color: var(--amber-text);
+  margin-top: 6px;
+}
+
 .gm-why {
   padding: var(--sp-4);
   border-bottom: 1px solid var(--border);

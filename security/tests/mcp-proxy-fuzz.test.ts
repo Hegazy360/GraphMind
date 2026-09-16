@@ -86,6 +86,16 @@ function hostileFrames(): string[] {
   return [...jsonRpc, ...general];
 }
 
+/**
+ * 0.5.0's loop hold is a built-in breakpoint: the client holds the third
+ * consecutive call of the same tool with the same arguments while a GraphMind
+ * server is attached. The hostile corpus below contains exactly that shape
+ * (four `tools/call` frames with no params), so the byte-faithfulness tests
+ * disarm it for the same reason they disarm pause-on-error — they measure the
+ * relay, not the gates. The hold itself is pinned in its own block at the end.
+ */
+const NO_LOOP_HOLD = { GRAPHMIND_ON_LOOP: 'off' };
+
 describe('the proxy is byte-faithful under hostile input', () => {
   it('relays every hostile frame back byte-for-byte, with GraphMind attached', async () => {
     // Pause-on-error off. With the shipped default armed, a correlated error
@@ -94,7 +104,7 @@ describe('the proxy is byte-faithful under hostile input', () => {
     // Here the question is byte-faithfulness, so nothing is armed.
     const server = await WireServer.boot({ pauseOnError: 'off' });
     cleanups.push(() => server.close());
-    const peer = await ProxyPeer.start({ port: server.port });
+    const peer = await ProxyPeer.start({ port: server.port, env: NO_LOOP_HOLD });
     cleanups.push(() => peer.close());
 
     const frames = hostileFrames();
@@ -181,7 +191,7 @@ describe('the proxy never breaks the session', () => {
 
   it('keeps relaying after the GraphMind server disappears mid-conversation', async () => {
     const server = await WireServer.boot({ pauseOnError: 'off' });
-    const peer = await ProxyPeer.start({ port: server.port });
+    const peer = await ProxyPeer.start({ port: server.port, env: NO_LOOP_HOLD });
     cleanups.push(() => peer.close());
 
     const first = Buffer.from('{"jsonrpc":"2.0","id":1,"method":"before"}\n', 'utf8');
@@ -203,7 +213,7 @@ describe('the proxy never breaks the session', () => {
     // diagnostic line on stdout corrupts the client's JSON-RPC stream.
     const server = await WireServer.boot({ pauseOnError: 'off' });
     cleanups.push(() => server.close());
-    const peer = await ProxyPeer.start({ port: server.port });
+    const peer = await ProxyPeer.start({ port: server.port, env: NO_LOOP_HOLD });
     cleanups.push(() => peer.close());
 
     const frames = ['not json at all', '{', '"a string"', '{"jsonrpc":"2.0","id":1,"method":"m"}'];
@@ -222,7 +232,7 @@ describe('what the proxy reports to GraphMind', () => {
   it('is always a valid envelope, however hostile the conversation', async () => {
     const server = await WireServer.boot({ pauseOnError: 'off' });
     cleanups.push(() => server.close());
-    const peer = await ProxyPeer.start({ port: server.port });
+    const peer = await ProxyPeer.start({ port: server.port, env: NO_LOOP_HOLD });
     cleanups.push(() => peer.close());
 
     const frames = hostileFrames();
@@ -314,6 +324,74 @@ describe('the error gate stops the conversation, on purpose', () => {
 
     // ...and the held bytes arrive, unmodified.
     expect(peer.stdout().equals(Buffer.concat([request, failure]))).toBe(true);
+    expect(peer.alive).toBe(true);
+  }, 120_000);
+});
+
+describe('the loop hold stops the conversation, on purpose', () => {
+  /**
+   * The third consecutive call of one tool with identical arguments holds the
+   * before-gate while a GraphMind server is attached (0.5.0, decisions.md
+   * "Loop hold"). Through the proxy that has the same consequence as the error
+   * gate above: this direction of the conversation stops until a viewer
+   * resumes it. Pinned here as a pause with a stated reason, not a deadlock:
+   * the hub receives `exec.paused` with `reason: 'loop'` and `repeats: 3`, a
+   * viewer's `exec.resume` releases it, and the exact bytes arrive.
+   */
+  it('holds the third identical tools/call with reason "loop", and releases on resume', async () => {
+    const server = await WireServer.boot({ pauseOnError: 'off' });
+    cleanups.push(() => server.close());
+    const viewer = await RawViewer.connect(server);
+    cleanups.push(async () => viewer.close());
+    viewer.subscribe('*');
+    const peer = await ProxyPeer.start({ port: server.port }); // loop hold ARMED (the default)
+    cleanups.push(() => peer.close());
+
+    const call = (id: number): Buffer =>
+      Buffer.from(
+        `{"jsonrpc":"2.0","id":${id},"method":"tools/call","params":{"name":"search","arguments":{"q":"same"}}}\n`,
+        'utf8',
+      );
+    const first = Buffer.concat([call(1), call(2)]);
+    peer.write(first);
+    await peer.waitForBytes(first.length, 30_000); // both echoed back
+
+    peer.write(call(3));
+    await sleep(1_500);
+    // Held: the third call never reached the server, so nothing came back.
+    expect(peer.stdout().length).toBe(first.length);
+
+    // The hub was told why, in the wire's own words.
+    let loopPause: { pauseId: string; reason?: string; loop?: { repeats?: number } } | undefined;
+    for (const run of await server.runs()) {
+      for (const event of await server.events(run.id)) {
+        if (event.type !== 'exec.paused') continue;
+        const payload = event.payload as { pauseId: string; reason?: string; loop?: { repeats?: number } };
+        if (payload.reason === 'loop') loopPause = payload;
+      }
+    }
+    expect(loopPause, 'an exec.paused with reason "loop"').toBeDefined();
+    expect(loopPause?.loop?.repeats).toBe(3);
+
+    // Release every hold until the bytes arrive (the echo gates per direction too).
+    const wanted = first.length + call(3).length;
+    const resumed = new Set<string>();
+    const deadline = Date.now() + 30_000;
+    while (peer.stdout().length < wanted && Date.now() < deadline) {
+      for (const run of await server.runs()) {
+        for (const event of await server.events(run.id)) {
+          if (event.type !== 'exec.paused') continue;
+          const pauseId = String((event.payload as { pauseId?: string }).pauseId);
+          if (resumed.has(pauseId)) continue;
+          resumed.add(pauseId);
+          viewer.control(run.id, 'exec.resume', { pauseId, action: 'continue' });
+        }
+      }
+      await sleep(100);
+    }
+    expect(resumed.size).toBeGreaterThan(0);
+    expect(viewer.errors()).toEqual([]);
+    expect(peer.stdout().equals(Buffer.concat([first, call(3)]))).toBe(true);
     expect(peer.alive).toBe(true);
   }, 120_000);
 });

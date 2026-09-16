@@ -93,6 +93,9 @@ describe('the client and the CLI read only documented environment variables', ()
     'GRAPHMIND_KEEP_RUNS',
     'GRAPHMIND_KEEP_DAYS',
     'GRAPHMIND_TELEMETRY',
+    // Cross-tool telemetry opt-out (consoledonottrack.com). Read only by
+    // telemetry.ts, only to switch off; documented in packages/cli/TELEMETRY.md.
+    'DO_NOT_TRACK',
     'GRAPHMIND_TELEMETRY_URL',
     'GRAPHMIND_DEMO_AGENT_DIR',
     // Added in 0.3.2. Neither carries user data: one scopes the default
@@ -101,6 +104,16 @@ describe('the client and the CLI read only documented environment variables', ()
     // packages/cli/README.md and the CLI reference page.
     'GRAPHMIND_PAUSE_ON_ERROR',
     'GRAPHMIND_ABANDON_GRACE_MS',
+    // 0.5.0 — loop hold (client). Documented in reference/environment.
+    'GRAPHMIND_LOOP_THRESHOLD',
+    'GRAPHMIND_ON_LOOP',
+    'GRAPHMIND_LOOP_ALLOW',
+    // 0.5.0 — coarse redaction kill switches (client). Each is a boolean
+    // (1/true) that REMOVES data from the recording; none carries user data.
+    'GRAPHMIND_HIDE_INPUTS',
+    'GRAPHMIND_HIDE_OUTPUTS',
+    'GRAPHMIND_HIDE_TOOL_ARGS',
+    'GRAPHMIND_HIDE_TOOL_RESULTS',
     'CI',
   ];
 

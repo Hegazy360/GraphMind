@@ -104,6 +104,10 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Guides',
+          items: [{ slug: 'guides/remote-development' }],
+        },
+        {
           label: 'Integrations',
           items: [
             { slug: 'integrations' },
@@ -138,9 +142,12 @@ export default defineConfig({
             { slug: 'reference/viewer' },
             { slug: 'reference/cli' },
             { slug: 'reference/environment' },
+            { slug: 'reference/limits' },
             { slug: 'reference/wire-protocol' },
             { slug: 'reference/mcp' },
             { slug: 'reference/telemetry' },
+            { slug: 'reference/security' },
+            { slug: 'reference/stability' },
             { slug: 'reference/faq' },
             { slug: 'reference/troubleshooting' },
           ],

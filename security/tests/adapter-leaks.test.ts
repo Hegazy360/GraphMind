@@ -17,6 +17,8 @@
  *      dropped them would be broken — and because that is precisely what
  *      `graphmind record --html` warns about before you share the file.
  */
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runAiSdkAgent } from '../src/agents/ai-sdk-agent.js';
 import { runAnthropicAgent } from '../src/agents/anthropic-agent.js';
@@ -227,5 +229,43 @@ describe.each(ADAPTERS)('$name adapter', (adapter) => {
         `by-design canary "${canary.id}" (${canary.where}) is missing from the HTML export`,
       ).toBe(true);
     }
+  });
+});
+
+// -- the cross-tool opt-out, through the shipped dist -------------------------
+
+describe('DO_NOT_TRACK', () => {
+  let canaries: CanarySet;
+  let provider: MockProvider;
+  let result: AuditArtifacts;
+
+  beforeAll(async () => {
+    canaries = makeCanaries('DNT');
+    provider = await MockProvider.start({ toolArg: canaries.value('toolArg') });
+    // captureTelemetry force-enables GRAPHMIND_TELEMETRY=1 on the CLI child;
+    // cliEnv layers the cross-tool switch on top. The switch must win.
+    result = await runAudit({
+      env: canaries.envVars(),
+      captureTelemetry: true,
+      cliEnv: { DO_NOT_TRACK: '1' },
+      agent: async (ctx) => {
+        await runOpenAiAgent({ ingestUrl: ctx.ingestUrl, canaries, provider });
+      },
+    });
+  }, 90_000);
+
+  afterAll(async () => {
+    await provider?.close();
+    if (result !== undefined) cleanupAudit(result);
+  });
+
+  it('DO_NOT_TRACK=1 sends nothing even when GRAPHMIND_TELEMETRY=1 force-enables', () => {
+    expect(result.runIds.length).toBeGreaterThan(0); // the CLI did run `record`
+    expect(result.ndjsonPath).toBeDefined();
+    expect(result.telemetryBodies).toEqual([]);
+  });
+
+  it('and does not even mint an install id', () => {
+    expect(existsSync(join(result.dir, 'gm-home', 'telemetry-id'))).toBe(false);
   });
 });

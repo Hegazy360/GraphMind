@@ -282,7 +282,7 @@ describe('everything the server stores is still a valid envelope', () => {
 
 describe('the 512 KB guard preserves the fields the schema requires', () => {
   /**
-   * `serializePayload` in packages/cli/src/storage.ts trims an oversized
+   * `serializePayload` (packages/schema/src/shrink.ts, re-exported by packages/cli/src/storage.ts) trims an oversized
    * payload field by field rather than discarding the payload whole, because
    * a payload replaced wholesale no longer satisfies its own schema — the
    * viewer's parser rejects the replayed envelope and the node is stuck

@@ -10,13 +10,13 @@ import { createServer as createTcpServer, type Server as TcpServer, type Socket 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, expect, test } from 'vitest';
-import { recordTelemetry } from '../src/telemetry.js';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { LOG_PREFIX, recordTelemetry, telemetryMode } from '../src/telemetry.js';
 import { VERSION } from '../src/version.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const TELEMETRY_TS = fileURLToPath(new URL('../src/telemetry.ts', import.meta.url));
-const ENV_KEYS = ['GRAPHMIND_TELEMETRY', 'GRAPHMIND_TELEMETRY_URL', 'GRAPHMIND_HOME', 'CI'] as const;
+const ENV_KEYS = ['GRAPHMIND_TELEMETRY', 'GRAPHMIND_TELEMETRY_URL', 'GRAPHMIND_HOME', 'CI', 'DO_NOT_TRACK'] as const;
 
 interface CapturedRequest {
   method: string | undefined;
@@ -176,6 +176,136 @@ test.each([
     expect(existsSync(join(home, 'telemetry-id'))).toBe(false);
   } finally {
     await capture.close();
+  }
+});
+
+// -- precedence: DO_NOT_TRACK > GRAPHMIND_TELEMETRY=0 > =log > CI > send ------
+
+test('telemetryMode: the full precedence table', () => {
+  // DO_NOT_TRACK wins over everything, in every spelling the convention allows.
+  for (const dnt of ['1', 'true', 'TRUE', ' True ', '1 ']) {
+    expect(telemetryMode({ DO_NOT_TRACK: dnt }), dnt).toBe('off');
+    expect(telemetryMode({ DO_NOT_TRACK: dnt, GRAPHMIND_TELEMETRY: '1' }), `${dnt} vs =1`).toBe('off');
+    expect(telemetryMode({ DO_NOT_TRACK: dnt, GRAPHMIND_TELEMETRY: 'log' }), `${dnt} vs =log`).toBe('off');
+  }
+  // Only 1/true count: a DO_NOT_TRACK that is set but "off" changes nothing.
+  for (const dnt of ['0', 'false', '', 'no', 'yes', '2']) {
+    expect(telemetryMode({ DO_NOT_TRACK: dnt }), dnt).toBe('send');
+  }
+  // GRAPHMIND_TELEMETRY.
+  expect(telemetryMode({ GRAPHMIND_TELEMETRY: '0' })).toBe('off');
+  expect(telemetryMode({ GRAPHMIND_TELEMETRY: 'false' })).toBe('off');
+  expect(telemetryMode({ GRAPHMIND_TELEMETRY: 'FALSE ' })).toBe('off');
+  expect(telemetryMode({ GRAPHMIND_TELEMETRY: 'log' })).toBe('log');
+  expect(telemetryMode({ GRAPHMIND_TELEMETRY: ' LOG ' })).toBe('log');
+  expect(telemetryMode({ GRAPHMIND_TELEMETRY: '1' })).toBe('send');
+  expect(telemetryMode({ GRAPHMIND_TELEMETRY: 'banana' })).toBe('send');
+  expect(telemetryMode({})).toBe('send');
+  // CI: off, unless log was asked for (log sends nothing, so it is safe there).
+  expect(telemetryMode({ CI: 'true' })).toBe('off');
+  expect(telemetryMode({ CI: '' })).toBe('off');
+  expect(telemetryMode({ CI: 'true', GRAPHMIND_TELEMETRY: '1' })).toBe('off');
+  expect(telemetryMode({ CI: 'true', GRAPHMIND_TELEMETRY: 'log' })).toBe('log');
+  expect(telemetryMode({ CI: 'true', GRAPHMIND_TELEMETRY: 'log', DO_NOT_TRACK: '1' })).toBe('off');
+});
+
+test.each([
+  ['1', '1'],
+  ['true', '1'],
+  ['TRUE', 'log'],
+  [' true ', 'log'],
+])('DO_NOT_TRACK=%j beats GRAPHMIND_TELEMETRY=%j: no request, no id file, no stderr', async (dnt, flag) => {
+  const capture = await startCaptureServer();
+  const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  try {
+    process.env['GRAPHMIND_TELEMETRY_URL'] = capture.url;
+    process.env['GRAPHMIND_TELEMETRY'] = flag;
+    process.env['DO_NOT_TRACK'] = dnt;
+    recordTelemetry('serve');
+    await sleep(150);
+    expect(capture.requests).toHaveLength(0);
+    expect(existsSync(join(home, 'telemetry-id'))).toBe(false);
+    expect(stderr).not.toHaveBeenCalled();
+  } finally {
+    stderr.mockRestore();
+    await capture.close();
+  }
+});
+
+test('DO_NOT_TRACK set to anything but 1/true does not disable telemetry', async () => {
+  const capture = await startCaptureServer();
+  try {
+    process.env['GRAPHMIND_TELEMETRY_URL'] = capture.url;
+    process.env['DO_NOT_TRACK'] = '0';
+    recordTelemetry('serve');
+    await capture.waitFor(1);
+    expect(capture.requests).toHaveLength(1);
+  } finally {
+    await capture.close();
+  }
+});
+
+test('GRAPHMIND_TELEMETRY=log prints the exact payload to stderr with the prefix and sends nothing', async () => {
+  const capture = await startCaptureServer();
+  const lines: string[] = [];
+  const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => {
+    lines.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write);
+  try {
+    process.env['GRAPHMIND_TELEMETRY_URL'] = capture.url;
+    process.env['GRAPHMIND_TELEMETRY'] = 'log';
+    recordTelemetry('demo');
+    await sleep(150);
+    expect(capture.requests).toHaveLength(0);
+    expect(lines).toHaveLength(1);
+    const line = lines[0] ?? '';
+    expect(line.startsWith(LOG_PREFIX)).toBe(true);
+    expect(LOG_PREFIX).toBe('[graphmind telemetry] ');
+    expect(line.endsWith('\n')).toBe(true);
+    // Exactly the JSON a send would carry: same four keys, same install id.
+    const payload = JSON.parse(line.slice(LOG_PREFIX.length)) as Record<string, unknown>;
+    expect(Object.keys(payload).sort()).toEqual(['event', 'installId', 'ts', 'version']);
+    expect(payload['event']).toBe('demo');
+    expect(payload['version']).toBe(VERSION);
+    expect(payload['installId']).toMatch(UUID_RE);
+    expect(readFileSync(join(home, 'telemetry-id'), 'utf8').trim()).toBe(payload['installId']);
+  } finally {
+    stderr.mockRestore();
+    await capture.close();
+  }
+});
+
+test('log mode still prints under CI (it sends nothing, so CI does not silence it)', async () => {
+  const capture = await startCaptureServer();
+  const lines: string[] = [];
+  const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => {
+    lines.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write);
+  try {
+    process.env['GRAPHMIND_TELEMETRY_URL'] = capture.url;
+    process.env['GRAPHMIND_TELEMETRY'] = 'LOG';
+    process.env['CI'] = 'true';
+    recordTelemetry('serve');
+    await sleep(150);
+    expect(capture.requests).toHaveLength(0);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.startsWith(LOG_PREFIX)).toBe(true);
+  } finally {
+    stderr.mockRestore();
+    await capture.close();
+  }
+});
+
+test('log mode never writes invalid event names either', async () => {
+  const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  try {
+    process.env['GRAPHMIND_TELEMETRY'] = 'log';
+    recordTelemetry('Not A Command');
+    expect(stderr).not.toHaveBeenCalled();
+  } finally {
+    stderr.mockRestore();
   }
 });
 

@@ -7,9 +7,12 @@
  *  - `maxBytes`  — an approximate memory ceiling, measured with `sizeOf`.
  *    Without it a buffer of N slots costs N x the largest payload the host
  *    ever emits, which is unbounded (the 512 KB guard lives in the server,
- *    not here). A single item larger than the whole budget is still kept —
- *    the buffer never evicts down to empty just to satisfy the byte bound,
- *    because a lone huge event is still worth replaying.
+ *    not here). By default a single item larger than the whole budget is
+ *    still kept — the buffer never evicts down to empty just to satisfy the
+ *    byte bound. With `rejectOversize` such an item is refused instead
+ *    (`push` returns false) and NOTHING is evicted for it: one oversized
+ *    event must never cost the replay buffer every older event (see
+ *    `rejectOversize`).
  *
  * Every eviction is announced through `onEvict` so the owner can decide what
  * it means: an item that was already delivered is merely forgotten, while an
@@ -25,6 +28,16 @@ export interface RingBufferOptions<T> {
   sizeOf?: ((item: T) => number) | undefined;
   /** Called with each evicted item, oldest first. Must not throw. */
   onEvict?: ((item: T) => void) | undefined;
+  /**
+   * Refuse an item whose own size exceeds `maxBytes`: `push` returns false,
+   * the buffer is left exactly as it was (nothing evicted, `onEvict` not
+   * called, `dropped` unchanged, `rejected` incremented), and the caller owns
+   * the item's fate. Without it such an item is kept alone and every other
+   * item is evicted to make room — which, while the debugger is unreachable,
+   * turned one 17 MB event into the loss of every event before it. Default
+   * false (the original behaviour). No effect without `maxBytes`.
+   */
+  rejectOversize?: boolean | undefined;
 }
 
 export class RingBuffer<T> {
@@ -34,11 +47,13 @@ export class RingBuffer<T> {
   private readonly maxBytes: number;
   private readonly sizeOf: (item: T) => number;
   private readonly onEvict: ((item: T) => void) | undefined;
+  private readonly rejectOversize: boolean;
 
   private start = 0;
   private count = 0;
   private bytes = 0;
   private droppedTotal = 0;
+  private rejectedTotal = 0;
 
   constructor(options: RingBufferOptions<T>) {
     const { capacity } = options;
@@ -53,11 +68,20 @@ export class RingBuffer<T> {
     this.maxBytes = options.maxBytes ?? Number.POSITIVE_INFINITY;
     this.sizeOf = options.sizeOf ?? (() => 0);
     this.onEvict = options.onEvict;
+    this.rejectOversize = options.rejectOversize === true;
   }
 
-  /** Append; drops the oldest item(s) when either bound is exceeded. */
-  push(item: T): void {
+  /**
+   * Append; drops the oldest item(s) when either bound is exceeded. Returns
+   * false only when `rejectOversize` refused the item (see the option);
+   * the buffer is then untouched.
+   */
+  push(item: T): boolean {
     const size = this.maxBytes === Number.POSITIVE_INFINITY ? 0 : this.sizeOf(item);
+    if (this.rejectOversize && size > this.maxBytes) {
+      this.rejectedTotal += 1;
+      return false;
+    }
     if (this.count === this.capacity) {
       const evicted = this.items[this.start] as T;
       this.bytes -= this.maxBytes === Number.POSITIVE_INFINITY ? 0 : this.sizeOf(evicted);
@@ -82,6 +106,7 @@ export class RingBuffer<T> {
       this.droppedTotal += 1;
       this.announce(evicted);
     }
+    return true;
   }
 
   /** Oldest-to-newest snapshot. Does not consume. */
@@ -112,6 +137,16 @@ export class RingBuffer<T> {
   /** Total number of items evicted since construction (diagnostics). */
   get dropped(): number {
     return this.droppedTotal;
+  }
+
+  /** The configured byte ceiling (`Infinity` when unbounded). */
+  get byteLimit(): number {
+    return this.maxBytes;
+  }
+
+  /** Total number of items refused by `rejectOversize` since construction. */
+  get rejected(): number {
+    return this.rejectedTotal;
   }
 
   /** The eviction callback is a diagnostics path: it must never throw here. */

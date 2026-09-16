@@ -54,6 +54,12 @@
 #     core@1.0.1  + lg@1.0.0   68/68  (with langgraph-checkpoint 1.0.4/1.1.0)
 #     core@1.2.9  + lg@1.4.13  68/68
 #
+#   @graphmind-ai/mcp        peers                                WIDENED (2026-09-14)
+#     @modelcontextprotocol/sdk    >=1.26.0 <2  (unchanged; floor exercised in-repo by test/peer-compat.test.ts)
+#     @modelcontextprotocol/server >=2 <3       NEW — 2.0.0 (the only 2.x today, so floor = ceiling):
+#       in-process 36/36 (legacy era + 2026-07-28 via serveStdio, incl. the verifier's file); mcp-proxy 23/23 (+2 built-CLI)
+#       with both client generations. Both peers optional (peerDependenciesMeta).
+#
 # PARTIAL CELL (ai@6): the ai-sdk suite cannot run in full on ai v6 because
 # `test/helpers/scenario.ts` and `test/observe.test.ts` import
 # `MockLanguageModelV4` from `ai/test` by name, and ai v6 exports that class
@@ -181,6 +187,24 @@ jobs:
             pins: '@langchain/core=1.2.9 @langchain/langgraph=1.4.13'
             args: ''
             min_tests: 68
+          # --- @graphmind-ai/mcp (peers: @modelcontextprotocol/sdk >=1.26.0 <2 | @modelcontextprotocol/server >=2 <3) ---
+          # v2 is a new package family (server + core, client for the suite). Only 2.0.0
+          # exists today, so floor == ceiling; the weekly canary picks up 2.x.y.
+          - label: 'mcp / @modelcontextprotocol/server@2.0.0 (+client, core) — v2 floor = ceiling'
+            pkg: '@graphmind-ai/mcp'
+            dir: packages/mcp
+            pins: '@modelcontextprotocol/server=2.0.0 @modelcontextprotocol/client=2.0.0 @modelcontextprotocol/core=2.0.0'
+            args: 'test/v2'
+            min_tests: 36
+          # --- graphmind-ai (mcp-proxy) against the v2 family: wire-level, so this is the
+          # cell that notices a v2 release changing what is on the wire. The built-CLI
+          # file skips itself without dist/cli.js (2 tests); 23 is the floor without it.
+          - label: 'mcp-proxy / @modelcontextprotocol/server@2.0.0 + client@2.0.0'
+            pkg: 'graphmind-ai'
+            dir: packages/cli
+            pins: '@modelcontextprotocol/server=2.0.0 @modelcontextprotocol/client=2.0.0 @modelcontextprotocol/core=2.0.0'
+            args: 'mcp-proxy-v2'
+            min_tests: 23
 
     env:
       PINS: ${{ matrix.pins }}
@@ -376,6 +400,10 @@ jobs:
             dir: packages/langgraph
             sdks: '@langchain/core @langchain/langgraph'
             min_tests: 68
+          - pkg: '@graphmind-ai/mcp'
+            dir: packages/mcp
+            sdks: '@modelcontextprotocol/server @modelcontextprotocol/client @modelcontextprotocol/core'
+            min_tests: 77
 
     env:
       PKG: ${{ matrix.pkg }}

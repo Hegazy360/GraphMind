@@ -8,6 +8,14 @@
  * registry) — no React, no DOM, fully unit-testable.
  */
 import type { ErrorInfo, NodeKind, RunStatus } from '@graphmind-ai/schema';
+import {
+  buildHeldIndex,
+  heldIntervalsFor,
+  heldMsOf,
+  ranMs,
+  unionMs,
+  type HeldInterval,
+} from '../lib/duration.js';
 import type { RunState } from './types.js';
 
 export interface TimelineBar {
@@ -28,6 +36,15 @@ export interface TimelineBar {
   /** The portion of the bar during which tokens were streaming back. */
   streamStartTs?: number;
   streamEndTs?: number;
+  /**
+   * What the node itself took (`durationMs - heldMs`), the number every label
+   * shows. For an open bar: wall so far minus the holds so far.
+   */
+  ranMs: number;
+  /** Time the debugger held this execution (union of its pauses). */
+  heldMs: number;
+  /** Held stretches inside the bar, in epoch ms, for the hatched overlay. */
+  held: HeldInterval[];
   /** Sub-lane inside the row, for concurrent instances of one logical node. */
   lane: number;
 }
@@ -41,7 +58,10 @@ export interface TimelineRow {
   bars: TimelineBar[];
   /** Number of sub-lanes this row needs (1 unless instances overlap). */
   lanes: number;
+  /** Sum of `ranMs` across the row's bars — held time excluded. */
   totalMs: number;
+  /** Sum of `heldMs` across the row's bars. */
+  heldMs: number;
   errors: number;
 }
 
@@ -110,6 +130,8 @@ export function buildTimeline(
   let min = Number.POSITIVE_INFINITY;
   let max = Number.NEGATIVE_INFINITY;
   let live = false;
+  // One pass over the pauses; every bar then looks its holds up in O(1).
+  const heldIndex = buildHeldIndex(run, now);
 
   for (const nodeId of run.order) {
     const node = run.nodes[nodeId];
@@ -117,6 +139,7 @@ export function buildTimeline(
 
     const bars: TimelineBar[] = [];
     let totalMs = 0;
+    let heldTotalMs = 0;
     let errors = 0;
     node.executions.forEach((exec, execIndex) => {
       const running = exec.status === 'running';
@@ -126,6 +149,13 @@ export function buildTimeline(
         exec.finishedTs ??
         (exec.durationMs !== undefined ? exec.startedTs + exec.durationMs : running ? now : exec.startedTs);
       const stream = streamTiming?.(nodeId, execIndex, node.executions.length);
+      const barEnd = Math.max(endTs, exec.startedTs);
+      // Held stretches, clipped to the bar so the hatch never paints outside it.
+      const held = heldIntervalsFor(run, nodeId, exec, now, heldIndex)
+        .map((h) => ({ start: Math.max(h.start, exec.startedTs), end: Math.min(h.end, barEnd) }))
+        .filter((h) => h.end > h.start);
+      const ran = ranMs(exec);
+      const heldMs = ran === undefined ? unionMs(held) : heldMsOf(exec);
       const bar: TimelineBar = {
         key: `${nodeId}#${execIndex}`,
         nodeId,
@@ -142,10 +172,14 @@ export function buildTimeline(
         ...(stream !== undefined
           ? { streamStartTs: stream.firstTs, streamEndTs: Math.max(stream.lastTs, stream.firstTs) }
           : {}),
+        ranMs: ran ?? Math.max(0, barEnd - exec.startedTs - heldMs),
+        heldMs,
+        held,
         lane: 0,
       };
       bars.push(bar);
-      totalMs += bar.endTs - bar.startTs;
+      totalMs += bar.ranMs;
+      heldTotalMs += bar.heldMs;
       if (exec.status === 'error' || exec.error !== undefined) errors += 1;
       if (running) live = true;
       min = Math.min(min, bar.startTs);
@@ -162,6 +196,7 @@ export function buildTimeline(
       bars,
       lanes,
       totalMs,
+      heldMs: heldTotalMs,
       errors,
     });
   }

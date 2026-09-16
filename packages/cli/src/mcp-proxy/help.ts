@@ -53,6 +53,14 @@ export function mcpProxyHelp(port: number = DEFAULT_PORT): string[] {
     '                       it the proxy stops parsing and becomes a raw pipe',
     `  --port <n>           GraphMind port to report to (default ${port})`,
     '',
+    'Environment (the proxy takes no config file; these are the knobs):',
+    '  GRAPHMIND_LOOP_ALLOW=<tools>   never hold these as loops (comma-separated)',
+    '  GRAPHMIND_ON_LOOP=pause|warn|off  what a back-to-back repeated call does',
+    '  GRAPHMIND_HIDE_TOOL_ARGS=1, GRAPHMIND_HIDE_TOOL_RESULTS=1,',
+    '  GRAPHMIND_HIDE_INPUTS=1, GRAPHMIND_HIDE_OUTPUTS=1   record less',
+    '  GRAPHMIND_DISABLED=1           relay only, record nothing',
+    '  https://graphmind.ai/docs/reference/environment/',
+    '',
     'Nothing is ever written to stdout except the protocol itself.',
   ];
 }

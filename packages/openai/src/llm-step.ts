@@ -24,6 +24,7 @@
  * is already live by the time it is returned, so there is nothing meaningful
  * to hold there — the stream tee reports it as it flows instead.
  */
+import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
 import type { GateNode, RunContext, RunStatus } from '@graphmind-ai/client';
 import { GatedApiPromise, type ApiTracker } from './api-promise.js';
 import type { AdapterCore } from './core.js';
@@ -124,7 +125,7 @@ function makeReporter(core: AdapterCore, ctx: StepCtx): StepReporter {
         instanceId: ctx.instanceId,
         output,
         ...(usage !== undefined ? { usage } : {}),
-        durationMs: Date.now() - ctx.startedAt,
+        durationMs: elapsedMs(ctx.startedAt),
         status,
         extra: { api: ctx.api, ...extra },
       });
@@ -290,7 +291,7 @@ function beginStep(
     return makeReporter(core, {
       instanceId,
       scopeId,
-      startedAt: Date.now(),
+      startedAt: monotonicNow(),
       api: flavor.api,
       run: ctx,
     });

@@ -61,7 +61,13 @@ Since 0.3.0 every HTTP request and every upgrade is checked:
 | No `Origin` header — the SDK, `curl`, the CLI itself, tests | **Allowed.** A web page cannot omit it. |
 | A loopback origin on this server's own port — the viewer it serves | **Allowed** |
 | Any other origin | **403** |
-| A `Host` header that is not a loopback name | **403** (closes DNS rebinding; SSH tunnels still work) |
+| A `Host` header that is not a loopback name | **403** (closes DNS rebinding) |
+
+A forwarded port (SSH `-L`, VS Code, a devcontainer) passes the `Host` check whatever port it
+uses. The `Origin` check is stricter: the browser's origin must use the **same port number** as
+the server, or be listed in `GRAPHMIND_ALLOWED_ORIGINS`. With a mismatched port the viewer
+loads a blank page, because its own scripts are refused. See
+[remote development](/guides/remote-development/).
 
 `GRAPHMIND_ALLOWED_ORIGINS` opens it explicitly — a comma-separated list, or `*` to disable the
 check entirely. You need it for exactly one ordinary case, a viewer running on its own dev
@@ -103,8 +109,14 @@ graphmind init --write      # write a graphmind.example.ts snippet file
 ```
 
 Detection is deliberately dumb and transparent: it reads the manifest, matches dependency names,
-and reports what it found. There are no prompts (so it is safe in CI and from coding agents) and
-nothing is written unless you pass `--write`.
+and reports what it found. In `package.json` it recognises `ai` (or `@ai-sdk/anthropic`, `@ai-sdk/openai`, `@ai-sdk/react`),
+`@anthropic-ai/sdk`, `openai`, `@modelcontextprotocol/sdk` (1.x) and
+`@modelcontextprotocol/server` (2.x, with a `serveStdio` snippet), and `@langchain/langgraph`,
+`@langchain/core` or `langchain`. In `pyproject.toml`, `requirements.txt`, `Pipfile` or
+`setup.cfg` it recognises `openai`, `anthropic`, `langgraph`, `langchain`, `langchain-core` and
+`crewai`. It does not read a `Gemfile`: for Ruby, follow [Ruby](/integrations/ruby/). For an MCP
+server it also offers `graphmind mcp-proxy`, which needs no adapter. There are no prompts (so it
+is safe in CI and from coding agents) and nothing is written unless you pass `--write`.
 
 ## `graphmind import <trace-file>`
 
@@ -149,7 +161,17 @@ claude mcp add my-server-debug -- npx -y graphmind-ai mcp-proxy -- node my-serve
 | `--port <n>` | GraphMind port to report to |
 
 Run it with no command and it prints a working recipe. Nothing is ever written to stdout except
-the protocol. Full detail: [MCP proxy](/integrations/mcp-proxy/) and
+the protocol. The proxy speaks up on stderr in three situations:
+
+| What happened | stderr | Exit | On the graph |
+| --- | --- | --- | --- |
+| The command cannot be started (`ENOENT`; on Windows a `.cmd`/`.bat` target, `EINVAL`) | `cannot run "<cmd>": <reason> — <hint>` | `127` | `SpawnError` on the session node; the run ends `error` |
+| The server exits before its first JSON-RPC frame | The exit reason and the last 40 lines of its stderr | the server's | `McpServerExitedEarly` with the last 200 lines / 32 KB of stderr; the run ends `error` |
+| The server writes a non-JSON-RPC line to stdout | One line quoting up to 200 bytes, plus a count at the end of the session | — | A red **stdout noise** node under **protocol** (the first 25 lines) |
+
+The environment variables `GRAPHMIND_HIDE_*`, `GRAPHMIND_LOOP_THRESHOLD`, `GRAPHMIND_ON_LOOP` and
+`GRAPHMIND_LOOP_ALLOW` apply to the proxy too; see [environment](/reference/environment/).
+Full detail: [MCP proxy](/integrations/mcp-proxy/) and
 [debugging MCP servers](/debugging/mcp-servers/).
 
 ## `graphmind mcp`
@@ -203,9 +225,43 @@ an export, because there is nothing to control.
 Lists recent run ids when the given one is not found. See
 [exporting a run](/debugging/recording-runs/).
 
-<Aside type="caution" title="An export carries your payloads">
-Both formats contain the run's prompts, tool inputs, outputs and errors verbatim. The command
-says so before you share it; read the file before attaching it to a public issue.
+### Secret-looking keys are redacted by default
+
+Both formats replace the value under any secret-looking key with `"__REDACTED__"`, and say how
+many they replaced:
+
+```text
+$ graphmind record run_db4bd5541228 --out a.ndjson
+recorded 4 events of run run_db4bd5541228 → …/a.ndjson
+redacted 4 values under 4 distinct keys (--no-redact-secrets keeps them)
+
+"input":{"user":"alice","password":"__REDACTED__","api_key":"__REDACTED__","max_tokens":42,"accessToken":"__REDACTED__"}
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--redact-secrets` | The default. |
+| `--no-redact-secrets` | Keep every value as recorded; prints `secrets NOT redacted (--no-redact-secrets): the file holds every value as recorded`. If both flags are given, the last one wins. |
+
+The keys: `authorization`, `cookie`, `set-cookie`, `api_key`, `apikey`, `password`, `passwd`,
+`secret`, `client_secret`, `private_key`, `access_token`, `refresh_token`, `token`, `bearer`.
+A key matches in any case, either whole or as a run of its parts split on `_`, `-` or a
+camelCase boundary:
+
+| Matches | Does not match |
+| --- | --- |
+| `Authorization`, `x-api-key`, `http_authorization`, `accessToken`, `X-Refresh-Token`, `PassWord` | `max_tokens`, `maxTokens`, `tokenizer`, `apiKeys`, `secrets` |
+
+Over-matching is deliberate: `token_count` and `client_secret_expires_at` are redacted because
+one of their parts is a listed key. Keys are matched at any depth, arrays included. The
+loop-hold fingerprint (`exec.paused.loop.fingerprint`) is also replaced, because it is a digest
+of the whole input.
+
+<Aside type="caution" title="An export still carries your payloads">
+Redaction looks at **keys, never values**. A secret typed into a prompt, a `Bearer …` string
+inside a message, a token in a URL, or a secret repeated in an error message is exported as
+recorded. Read the file before attaching it to a public issue. To keep values out of the
+recording in the first place, use the [`GRAPHMIND_HIDE_*` switches](/reference/environment/#recording-less).
 </Aside>
 
 ## Global flags
@@ -221,6 +277,7 @@ says so before you share it; read the file before attaching it to a public issue
 | `--write` | (`init`) write a `graphmind.example.ts` snippet file |
 | `--out <file>` | (`record`) output path |
 | `--html` | (`record`) export a self-contained HTML page instead of NDJSON |
+| `--no-redact-secrets` / `--redact-secrets` | (`record`) keep / replace values under secret-looking keys (default: replace) |
 | `--trace` | (`mcp-proxy`) one line per frame on stderr |
 | `--wait-for-attach` | (`mcp-proxy`) hold the first frame until the debugger attaches |
 | `--inherit-stderr` | (`mcp-proxy`) do not pipe the server's stderr |
@@ -292,7 +349,9 @@ JSON text frames, each an object with a `type` discriminant. Wire envelopes are 
 
 Replayed envelopes keep their original `seq`; dedupe on `(runId, seq)`. Control envelopes can be
 built with `createEnvelope` from `@graphmind-ai/schema` with any `seq` — the server re-mints
-sequence numbers when relaying to apps.
+sequence numbers when relaying to apps. The server refuses an `exec.resume` with action
+`inject` whose output still contains `"__REDACTED__"`. It answers `{ type: 'error', runId,
+message: 'inject refused: …' }` and does not relay it.
 
 ## Storage
 
@@ -300,4 +359,4 @@ sequence numbers when relaying to apps.
 `~/.graphmind/graphmind.db` (override: `GRAPHMIND_DB` or `--db`). Events are keyed
 `(run_id, seq)` with `INSERT OR IGNORE`, so replay dedup falls out of the protocol. A single
 payload larger than 512 KB is stored as a marker so one enormous event cannot bloat the database
-or wedge the viewer.
+or wedge the viewer. Every size ceiling and timeout is on [limits](/reference/limits/).

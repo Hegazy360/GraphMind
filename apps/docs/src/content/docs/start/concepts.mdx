@@ -73,7 +73,7 @@ node's lifecycle:
 
 | Point | Where | Fires when |
 | --- | --- | --- |
-| `before` | Before the node's work starts | A breakpoint matches, or step mode is on |
+| `before` | Before the node's work starts | A breakpoint matches, step mode is on, or (for a tool) it is the third identical call in a row: the [loop hold](/reference/environment/#loop-hold) |
 | `after` | After work completes, before the value returns | Step mode |
 | `error` | The node threw, before the framework sees it | **Always, by default** |
 
@@ -145,17 +145,17 @@ GraphMind is instrumentation that ships in your codebase, so it is built to be h
 - **Disabled** (`GRAPHMIND_DISABLED=1`, or `NODE_ENV=production` without `GRAPHMIND=1`): the
   wrappers are identity functions. No sockets, no buffering, no warnings — but `gm.run` still
   runs your function and still hands it a working context, so your code never has to branch.
-- **Enabled but detached**: gates take a fast path to a shared resolved promise (average under
-  1 ms in the test suite), and events go only to an in-memory ring buffer.
-- **Attached, then disconnected**: every held gate is released with `continue` immediately —
-  measured under 100 ms — and breakpoints are forgotten until a new handshake re-arms them.
+- **Enabled but detached**: gates take a fast path to a shared resolved promise (`packages/client/test/overhead.test.ts` asserts an
+  average and a p99 under 1 ms), and events go only to an in-memory ring buffer.
+- **Attached, then disconnected**: every held gate is released with `continue` within 100 ms
+  (asserted in `packages/client/test/session.test.ts`) — and breakpoints are forgotten until a new handshake re-arms them.
 - **Internally broken**: the session catches its own errors, degrades to a no-op, and logs one
   rate-limited warning. It never throws into your app. Errors thrown by *your* function inside
   `gm.run` are yours and propagate untouched.
 
 ## Replay on attach
 
-Events are kept in a bounded ring buffer (2000 by default, drop-oldest). When a viewer attaches
+Events are kept in a bounded ring buffer (drop-oldest; by default 5,000 events or 8 MiB in the TypeScript client, 2,000 events in Python and Ruby). When a viewer attaches
 mid-run, the whole buffer is replayed oldest-first **with the original sequence numbers**, so
 you see the history you missed and the viewer deduplicates on `(runId, seq)` across reconnects.
 

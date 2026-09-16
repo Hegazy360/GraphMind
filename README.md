@@ -8,11 +8,11 @@
 
 # GraphMind
 
-**The live debugger for AI agents. Attaches while it's happening.**
+**The live debugger for AI agents. Holds the call while it's happening.**
 
 [graphmind.ai](https://graphmind.ai) · [Try in browser](https://graphmind.ai/try/?fixture=1) · [Docs](https://graphmind.ai/docs) · [Quick start](#quick-start) · [How it compares](#how-it-compares) · [MCP](#use-it-from-claude-code-or-cursor) · [Telemetry](#telemetry)
 
-[![npm version](https://img.shields.io/npm/v/graphmind-ai?label=npm&color=4ade80)](https://www.npmjs.com/package/graphmind-ai) [![CI](https://github.com/Hegazy360/GraphMind/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Hegazy360/GraphMind/actions/workflows/ci.yml) [![license](https://img.shields.io/npm/l/graphmind-ai)](./LICENSE) [![node](https://img.shields.io/node/v/graphmind-ai)](https://nodejs.org) [![PRs welcome](https://img.shields.io/badge/PRs-welcome-4ade80)](#contributing)
+[![npm version](https://img.shields.io/npm/v/graphmind-ai?label=npm&color=4ade80)](https://www.npmjs.com/package/graphmind-ai) [![CI](https://github.com/Hegazy360/GraphMind/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Hegazy360/GraphMind/actions/workflows/ci.yml) [![license](https://img.shields.io/npm/l/graphmind-ai)](./LICENSE) [![node](https://img.shields.io/node/v/graphmind-ai)](https://nodejs.org) [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Hegazy360/GraphMind/badge)](https://scorecard.dev/viewer/?uri=github.com/Hegazy360/GraphMind) [![CodeQL](https://github.com/Hegazy360/GraphMind/actions/workflows/codeql.yml/badge.svg?branch=master)](https://github.com/Hegazy360/GraphMind/actions/workflows/codeql.yml) [![PRs welcome](https://img.shields.io/badge/PRs-welcome-4ade80)](#contributing)
 <!-- Re-enable once npm's downloads API has data for the fresh package (shows a red error until then):
 [![npm downloads](https://img.shields.io/npm/dm/graphmind-ai)](https://www.npmjs.com/package/graphmind-ai)
 -->
@@ -207,6 +207,8 @@ there:
 - hold a `tools/call` **before your server sees it**, and answer it yourself;
 - hold a response **before your host sees it**, and rewrite it;
 - errors hold by default, so a broken server stops with no configuration.
+- a server that logs to stdout, or never starts, is named on stderr and on the graph instead of silently breaking the session;
+- protocol traffic (handshake, listings, ping) folds into one **protocol** card, so the session shows the work.
 
 Point a host at it by wrapping the command already in your `.mcp.json`:
 
@@ -218,7 +220,10 @@ Point a host at it by wrapping the command already in your `.mcp.json`:
 For a TypeScript server you own, `@graphmind-ai/mcp` instruments it in-process
 in two lines and additionally sees what never reaches the wire. See
 [debugging MCP servers](https://graphmind.ai/docs/debugging/mcp-servers/).
+It supports the MCP SDK 1.x (`@modelcontextprotocol/sdk`) and 2.x (`@modelcontextprotocol/server`).
 
+
+Agent in a devcontainer, Codespace, WSL 2 or over SSH? Run `npx graphmind-ai` where the agent runs and forward port 4747 with the same port number — see [remote development](https://graphmind.ai/docs/guides/remote-development/). Every size ceiling and timeout is on [limits](https://graphmind.ai/docs/reference/limits/); the upgrade contract is on [stability](https://graphmind.ai/docs/reference/stability/).
 ## Use it from Claude Code or Cursor
 
 ```sh
@@ -279,7 +284,7 @@ exact JSON record: [packages/cli/TELEMETRY.md](./packages/cli/TELEMETRY.md).
 
 ## How it is tested
 
-Around 1,200 tests. Beyond the unit suites, the ones worth knowing about:
+More than 2,700 tests — 2,754 on the 0.5.0 build, counted by [`apps/docs/scripts/count-tests.mjs`](./apps/docs/scripts/count-tests.mjs) (re-run it with `--run` rather than trusting this line). Beyond the unit suites, the ones worth knowing about:
 
 - a **security audit** ([`security/`](./security)) that plants fake API keys,
   auth headers and tokens everywhere a secret really lives, runs real

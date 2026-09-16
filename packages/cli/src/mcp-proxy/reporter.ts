@@ -8,6 +8,33 @@
  * file only decides which node a frame is and what a decision means over the
  * wire.
  *
+ * The shape of a session (what the viewer draws):
+ *
+ *   mcp:session                (kind server)   the proxied command; one run
+ *   ├─ mcp:protocol            (kind custom, name "protocol", opened FOLDED:
+ *   │  │                        `node.started … collapsed: true`)
+ *   │  ├─ mcp:initialize
+ *   │  ├─ mcp:notifications/initialized
+ *   │  ├─ mcp:tools/list, mcp:resources/list, mcp:prompts/list, mcp:ping, …
+ *   │  └─ mcp:stdout-noise     (kind custom, name "stdout noise", ERROR-badged:
+ *   │                           one execution per line the server wrote to
+ *   │                           stdout that is not JSON-RPC — plain text or a
+ *   │                           structured logger's JSON — see `noteStdoutNoise`)
+ *   ├─ tool:<name>             (kind tool)      tools/call
+ *   ├─ resource:<uri>          (kind resource)  resources/read
+ *   ├─ prompt:<name>           (kind prompt)    prompts/get
+ *   ├─ llm:sampling            (kind llm)       sampling/createMessage
+ *   └─ mcp:elicitation/*, mcp:completion/complete (kind custom, work)
+ *
+ * The split is the wire-level truth, not a heuristic: `isWorkMethod` in
+ * mapping.ts is the one rule, and an unknown method lands under
+ * `mcp:protocol`. Nothing about gating changes with the parent — a
+ * breakpoint on `initialize` holds it under the folded group exactly as it
+ * did when it was a flat sibling, and an `initialize` that fails trips the
+ * error gate and badges the folded card red. `mcp:protocol` is created
+ * lazily on the first protocol frame (so a session with none has no empty
+ * group) and closed when the session closes, with counts on its output.
+ *
  * Gate semantics (the debugger part), per direction:
  *
  *   REQUEST, before it reaches the peer            -> gate('before')
@@ -37,6 +64,25 @@
  * server bug and the graph has to show it. Only when the child process dies
  * do the still-open requests become errors, because then we know for a fact
  * no answer is coming.
+ *
+ * Two silent failures are made loud here (they are the two an MCP developer
+ * actually hits, per real user reports):
+ *
+ *   1. The server logs to stdout. stdout IS the wire, so a `console.log` in a
+ *      handler corrupts the stream; before, the proxy relayed the line and
+ *      said nothing. Now the FIRST such line prints one default-on stderr
+ *      line (quoting <= 200 bytes, with the fix), every line is counted for
+ *      `summary()`, and each one (up to a cap) is an error-badged execution
+ *      of `mcp:stdout-noise` so someone watching only the viewer sees it.
+ *      The bytes are still relayed verbatim — the proxy never edits the wire
+ *      on its own initiative.
+ *   2. The server never got going. When it exits before its first response
+ *      (or could not be spawned at all), the tail of its stderr (a bounded
+ *      ring, see stderr-ring.ts) is printed with the failure and attached to
+ *      the session node's error, so the exit code arrives with the reason.
+ *
+ * Timing: durations are `performance.now()` deltas rounded to 0.01 ms (see
+ * clock.ts); envelope timestamps stay integer epoch ms (the client's job).
  */
 import {
   type GateDecision,
@@ -46,6 +92,8 @@ import {
   type Session,
   type TokenDelta,
 } from '@graphmind-ai/client';
+import { durationBetween, monotonicNow, type Clock } from './clock.js';
+import { describeExit } from './exit-status.js';
 import {
   GRAPHMIND_ABORTED_CODE,
   classify,
@@ -60,7 +108,11 @@ import {
   type JsonRpcId,
 } from './jsonrpc.js';
 import {
+  PROTOCOL_NODE_ID,
+  PROTOCOL_NODE_NAME,
   SESSION_NODE_ID,
+  STDOUT_NOISE_NODE_ID,
+  STDOUT_NOISE_NODE_NAME,
   commandLabel,
   directionLabel,
   mapMethod,
@@ -68,8 +120,9 @@ import {
   type Direction,
   type MappedNode,
 } from './mapping.js';
-import { coerceInjectedFor } from './coerce.js';
+import { coerceInjectedFor, stampModernEra } from './coerce.js';
 import { FORWARD, type FrameAction } from './relay.js';
+import { StderrRing } from './stderr-ring.js';
 
 /** How the reporter reaches the two ends of the pipe. */
 export interface FrameSink {
@@ -77,6 +130,16 @@ export interface FrameSink {
 }
 
 export interface ReporterOptions {
+  /**
+   * GRAPHMIND_HIDE_OUTPUTS / GRAPHMIND_HIDE_TOOL_RESULTS as the session resolved
+   * them. `node.error` is never redacted by the session, so the reporter must
+   * not copy a failed (`isError`) result's content into it when results are
+   * hidden — that content IS the result, not an exception message.
+   */
+  hideOutputs?: boolean;
+  hideToolResults?: boolean;
+  /** GRAPHMIND_HIDE_INPUTS: the session label drops the command's arguments. */
+  hideInputs?: boolean;
   session: Session;
   command: string;
   args: readonly string[];
@@ -90,7 +153,13 @@ export interface ReporterOptions {
   stderrFlushMs?: number;
   /** Viewer address, quoted when a gate holds. */
   viewerUrl?: string;
-  now?: () => number;
+  /** Monotonic clock for durations (tests). Default `performance.now`. */
+  now?: Clock;
+  /**
+   * Whether the server's stderr flows through us. When it does not
+   * (`--inherit-stderr`) the failure line says so instead of quoting a tail.
+   */
+  stderrCaptured?: boolean;
 }
 
 interface PendingRequest {
@@ -122,29 +191,54 @@ const MAX_PENDING = 10_000;
 const HOLD_NOTICE_MS = 250;
 /** Cap on a single stderr batch so a chatty server cannot balloon one event. */
 const MAX_STDERR_BATCH = 64 * 1024;
+/** How much of a stdout line that is not JSON-RPC is quoted (stderr line and node input). */
+export const STDOUT_NOISE_QUOTE_BYTES = 200;
+/**
+ * How many such stdout lines become executions on the graph. A server
+ * that logs on every request would otherwise turn the folded group into a
+ * thousand red cards; past the cap the lines are only counted.
+ */
+export const STDOUT_NOISE_MAX_RECORDED = 25;
+/** How many stderr lines the failure line quotes on the terminal. */
+const STDERR_TAIL_ON_TERMINAL = 40;
 
 export class ProxyReporter {
   private readonly session: Session;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly label: string;
-  private readonly now: () => number;
+  private readonly now: Clock;
   private readonly stderrFlushMs: number;
+  private readonly stderrRing = new StderrRing();
 
   private instanceCounter = 0;
   private sessionStartedAt = 0;
   private sessionOpen = false;
   private unmatchedResponses = 0;
-  private unparseableFrames = 0;
+  private unparseableClientFrames = 0;
   private unansweredAtExit = 0;
   private negotiated: string | undefined;
+  /** 'legacy' after an `initialize` result, 'modern' after a successful `server/discover`. */
+  private era: 'legacy' | 'modern' | undefined;
+  private firstResponseSeen = false;
+  private spawnFailure: string | undefined;
+  private spawnFailureReported = false;
+  private earlyDeathReported = false;
+  private earlyDeathReason: string | undefined;
+
+  private protocolStartedAt: number | undefined;
+  private protocolCalls = 0;
+  private protocolErrors = 0;
+
+  private stdoutNoiseCount = 0;
+  private stdoutNoiseRecorded = 0;
 
   private stderrBuffer = '';
   private stderrTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly options: ReporterOptions) {
     this.session = options.session;
-    this.label = commandLabel(options.command, options.args);
-    this.now = options.now ?? Date.now;
+    this.label = commandLabel(options.command, options.args, undefined, options.hideInputs === true);
+    this.now = options.now ?? monotonicNow;
     this.stderrFlushMs = options.stderrFlushMs ?? 40;
   }
 
@@ -154,8 +248,44 @@ export class ProxyReporter {
   }
 
   /** The protocol version the two peers agreed on, once `initialize` returns. */
+  get protocolEra(): 'legacy' | 'modern' | undefined {
+    return this.era;
+  }
+
   get negotiatedProtocolVersion(): string | undefined {
     return this.negotiated;
+  }
+
+  /** Lines the server wrote to stdout that were not JSON-RPC, so far. */
+  get stdoutNoiseLines(): number {
+    return this.stdoutNoiseCount;
+  }
+
+  /** Whether the server has answered anything yet. */
+  get hasResponded(): boolean {
+    return this.firstResponseSeen;
+  }
+
+  /** The command could not be started at all (spawn threw or emitted 'error'). */
+  get spawnFailed(): boolean {
+    return this.spawnFailure !== undefined;
+  }
+
+  /** The server exited before its first JSON-RPC frame (see `reportEarlyDeath`). */
+  get diedEarly(): boolean {
+    return this.earlyDeathReported;
+  }
+
+  /**
+   * Why the session never got going — the run-level error message. Undefined
+   * for a session that answered at least once, whatever happened afterwards.
+   */
+  get failureReason(): string | undefined {
+    if (this.spawnFailure !== undefined) return this.spawnFailure;
+    if (this.earlyDeathReported) {
+      return `${this.earlyDeathReason ?? 'the server exited'} before answering anything`;
+    }
+    return undefined;
   }
 
   // -- lifecycle ------------------------------------------------------------
@@ -174,6 +304,35 @@ export class ProxyReporter {
       input: { command: this.options.command, args: [...this.options.args] },
       transport: 'stdio',
     });
+    // A spawn that already failed (ENOENT fires before the run opens under
+    // --wait-for-attach; a synchronous throw always does) is reported now,
+    // in order, after the node exists.
+    this.reportSpawnFailure();
+  }
+
+  /**
+   * The command could not be started at all — `spawn` threw synchronously
+   * (Windows `EINVAL` for a `.cmd`) or emitted `error` (ENOENT). Recorded on
+   * the session node as its error so the viewer shows the reason, not just
+   * an exit code of 127.
+   *
+   * Deliberately NOT emitted from here. This is called from the child's
+   * 'error' listener, which runs outside the run's async context; an emit
+   * from there opens an anonymous implicit run beside the real one, and the
+   * SpawnError ends up in a run with nothing else in it. It is emitted
+   * in-context instead: by `sessionStarted()` when it is already known when
+   * the run opens (`--wait-for-attach`, or a synchronous throw), otherwise
+   * by `sessionFinished()`, which follows within the same tick.
+   */
+  noteSpawnFailure(message: string): void {
+    if (this.spawnFailure !== undefined) return;
+    this.spawnFailure = message;
+  }
+
+  private reportSpawnFailure(): void {
+    if (this.spawnFailure === undefined || this.spawnFailureReported) return;
+    this.spawnFailureReported = true;
+    this.emitSessionError('SpawnError', this.spawnFailure);
   }
 
   /**
@@ -183,10 +342,7 @@ export class ProxyReporter {
   sessionFinished(exit: { code: number | null; signal: string | null }): void {
     this.flushStderr();
     if (this.stderrTimer !== undefined) clearTimeout(this.stderrTimer);
-    const reason =
-      exit.signal !== null
-        ? `the MCP server was killed by ${exit.signal}`
-        : `the MCP server exited with code ${exit.code ?? 0}`;
+    const reason = describeExit(exit);
     this.unansweredAtExit = this.pending.size;
     for (const [key, entry] of this.pending) {
       this.pending.delete(key);
@@ -199,23 +355,52 @@ export class ProxyReporter {
     }
     if (!this.sessionOpen) return;
     this.sessionOpen = false;
+
+    // ENOENT that arrived after the run opened (the common case without
+    // --wait-for-attach): put the SpawnError on the session node now, from
+    // inside the run, before the node closes.
+    this.reportSpawnFailure();
+
     const ok = exit.signal === null && (exit.code ?? 0) === 0;
+    // Died before it ever answered: the exit code alone explains nothing, so
+    // the stderr tail travels with it — on the terminal and on the node.
+    const earlyDeath =
+      !this.firstResponseSeen &&
+      this.spawnFailure === undefined &&
+      (!ok || this.unansweredAtExit > 0);
+    if (earlyDeath) this.reportEarlyDeath(reason);
+
+    if (this.protocolStartedAt !== undefined) {
+      this.session.emit('node.finished', {
+        nodeId: PROTOCOL_NODE_ID,
+        instanceId: PROTOCOL_NODE_ID,
+        output: {
+          calls: this.protocolCalls,
+          errors: this.protocolErrors,
+          stdoutNoise: this.stdoutNoiseCount,
+        },
+        durationMs: durationBetween(this.protocolStartedAt, this.now()),
+        status: 'ok',
+      });
+    }
     this.session.emit('node.finished', {
       nodeId: SESSION_NODE_ID,
       instanceId: SESSION_NODE_ID,
       output: { exitCode: exit.code, signal: exit.signal },
-      durationMs: Math.max(0, this.now() - this.sessionStartedAt),
-      status: ok ? 'ok' : 'error',
+      durationMs: durationBetween(this.sessionStartedAt, this.now()),
+      status: ok && this.spawnFailure === undefined ? 'ok' : 'error',
     });
   }
 
   /**
    * The MCP server's stderr — the one channel a stdio server can legitimately
    * log to. Streamed onto the session node as text deltas so the logs sit
-   * next to the protocol they explain. The bytes the client sees are written
+   * next to the protocol they explain, and remembered (bounded) so a server
+   * that dies early can be quoted. The bytes the client sees are written
    * separately and are not touched by this.
    */
   noteStderr(chunk: Buffer): void {
+    this.stderrRing.push(chunk);
     this.stderrBuffer += chunk.toString('utf8');
     if (this.stderrBuffer.length >= MAX_STDERR_BATCH) {
       this.flushStderr();
@@ -243,14 +428,22 @@ export class ProxyReporter {
     if (this.unansweredAtExit > 0) {
       lines.push(
         `${this.unansweredAtExit} request(s) were still unanswered when the server exited ` +
-          '(they are marked as errors on the graph)',
+          (this.session.enabled ? '(they are marked as errors on the graph)' : '(nothing was recorded: GraphMind is disabled)'),
       );
     }
     if (this.unmatchedResponses > 0) {
       lines.push(`${this.unmatchedResponses} response(s) arrived with no matching request id`);
     }
-    if (this.unparseableFrames > 0) {
-      lines.push(`${this.unparseableFrames} frame(s) were not JSON-RPC (relayed verbatim)`);
+    if (this.stdoutNoiseCount > 0) {
+      lines.push(
+        `${this.stdoutNoiseCount} line(s) the server wrote to stdout were not JSON-RPC and were relayed ` +
+          `verbatim — stdout is the MCP wire; log to stderr${this.session.enabled ? ' (see "stdout noise" on the graph)' : ''}`,
+      );
+    }
+    if (this.unparseableClientFrames > 0) {
+      lines.push(
+        `${this.unparseableClientFrames} frame(s) from the client were not JSON-RPC (relayed verbatim)`,
+      );
     }
     return lines;
   }
@@ -263,13 +456,27 @@ export class ProxyReporter {
    * that cannot classify or does not need to change a frame does.
    */
   async handleFrame(direction: Direction, raw: Buffer): Promise<FrameAction> {
-    const value = parseFrame(raw);
-    if (value === undefined) {
-      this.unparseableFrames += 1;
-      this.trace(direction, `non-JSON frame (${raw.length} bytes), relayed verbatim`);
+    if (!this.sessionOpen) {
+      // The session is over: the server is gone and the run is closed. A
+      // frame the client had already written (an MCP host pipes `initialize`
+      // the instant it spawns us, so this is the norm after a spawn failure
+      // or a boot crash) cannot be answered or gated, and a node started
+      // after run.finished would be a ghost in a finished run. Relay only.
+      this.trace(direction, `frame after the session ended (${raw.length} bytes), relayed verbatim`);
       return FORWARD;
     }
-    const frame = classify(value);
+    const value = parseFrame(raw);
+    const frame = value === undefined ? undefined : classify(value);
+    if (frame === undefined || frame.kind === 'other') {
+      // Not JSON at all, or JSON that is not a JSON-RPC message. The second
+      // kind is what a structured logger (pino, bunyan, winston-json) puts on
+      // stdout by default — one JSON object per line — and the MCP client
+      // rejects it exactly as it rejects plain text, so it must not pass for
+      // "the server answered" just because JSON.parse succeeded.
+      this.onUnparseable(direction, raw);
+      return FORWARD;
+    }
+    if (direction === 'server-to-client') this.firstResponseSeen = true;
     switch (frame.kind) {
       case 'request':
         return await this.onRequest(direction, raw, frame);
@@ -289,6 +496,76 @@ export class ProxyReporter {
         this.trace(direction, 'unrecognised JSON-RPC frame, relayed verbatim');
         return FORWARD;
     }
+  }
+
+  /**
+   * A frame that is not JSON-RPC (plain text, or JSON of some other shape).
+   * From the client that is just counted (a client bug, rare). From the
+   * SERVER it is the classic stdio mistake — a log line on the wire — and it
+   * gets the full treatment described in the header. Blank lines are
+   * neither: they carry nothing worth quoting.
+   */
+  private onUnparseable(direction: Direction, raw: Buffer): void {
+    const blank = raw.toString('utf8').trim() === '';
+    if (direction === 'client-to-server' || blank) {
+      if (!blank) this.unparseableClientFrames += 1;
+      this.trace(direction, `frame that is not JSON-RPC (${raw.length} bytes), relayed verbatim`);
+      return;
+    }
+    this.noteStdoutNoise(raw);
+  }
+
+  private noteStdoutNoise(raw: Buffer): void {
+    this.stdoutNoiseCount += 1;
+    const quoted = raw.subarray(0, STDOUT_NOISE_QUOTE_BYTES).toString('utf8');
+    const truncated = raw.length > STDOUT_NOISE_QUOTE_BYTES;
+    this.trace('server-to-client', `stdout line that is not JSON-RPC (${raw.length} bytes), relayed verbatim`);
+
+    if (this.stdoutNoiseCount === 1) {
+      // Once per session, default-on. JSON.stringify keeps control characters
+      // and ANSI escapes from doing anything to the terminal.
+      this.options.log(
+        `graphmind mcp-proxy: the MCP server wrote a line to stdout that is not JSON-RPC: ` +
+          `${JSON.stringify(quoted)}${truncated ? ` (first ${STDOUT_NOISE_QUOTE_BYTES} bytes)` : ''} ` +
+          '— stdout is the MCP wire; log to stderr instead (console.error, or your logger ' +
+          'pointed at stderr). Relayed verbatim; the client may reject it. Further lines are ' +
+          'counted, not printed.',
+      );
+    }
+    if (!this.sessionOpen || this.stdoutNoiseRecorded >= STDOUT_NOISE_MAX_RECORDED) return;
+    this.stdoutNoiseRecorded += 1;
+    this.ensureProtocolNode();
+    const instanceId = this.nextInstanceId();
+    const message =
+      `the MCP server wrote a line to stdout that is not JSON-RPC (line ${this.stdoutNoiseCount}, ${raw.length} bytes): ` +
+      `${JSON.stringify(quoted)}${truncated ? '…' : ''} — stdout is the MCP wire; log to stderr`;
+    this.session.emit('node.started', {
+      nodeId: STDOUT_NOISE_NODE_ID,
+      parentId: PROTOCOL_NODE_ID,
+      kind: 'custom',
+      name: STDOUT_NOISE_NODE_NAME,
+      instanceId,
+      input: {
+        text: quoted,
+        bytes: raw.length,
+        truncated,
+        count: this.stdoutNoiseCount,
+        hint: 'stdout is the MCP wire; log to stderr',
+      },
+      direction: directionLabel('server-to-client'),
+    });
+    this.session.emit('node.error', {
+      nodeId: STDOUT_NOISE_NODE_ID,
+      instanceId,
+      error: { name: 'StdoutNoise', message },
+    });
+    this.session.emit('node.finished', {
+      nodeId: STDOUT_NOISE_NODE_ID,
+      instanceId,
+      output: undefined,
+      durationMs: 0,
+      status: 'error',
+    });
   }
 
   /**
@@ -324,7 +601,7 @@ export class ProxyReporter {
     raw: Buffer,
     frame: Extract<ClassifiedFrame, { kind: 'request' }>,
   ): Promise<FrameAction> {
-    const node = mapMethod(frame.method, frame.params);
+    const node = mapMethod(frame.method, frame.params, direction);
     const instanceId = this.nextInstanceId();
     const entry: PendingRequest = {
       node,
@@ -345,7 +622,10 @@ export class ProxyReporter {
       // Coerced into the result shape this method must answer with; see
       // coerce.ts. Without it, injecting `{"price":42}` at a `tools/call`
       // gate hands the host a tool result with no content and no error.
-      const output = coerceInjectedFor(frame.method, frame.params, decision.output);
+      const output = this.forWire(
+        frame.method,
+        coerceInjectedFor(frame.method, frame.params, decision.output),
+      );
       await this.replyTo(direction, injectedResponse(frame.id, output));
       this.finish(entry, output, 'ok', { injected: true, gatedAt: 'before' });
       return { kind: 'drop' };
@@ -371,12 +651,13 @@ export class ProxyReporter {
     _raw: Buffer,
     frame: Extract<ClassifiedFrame, { kind: 'notification' }>,
   ): Promise<FrameAction> {
-    const node = mapMethod(frame.method, frame.params);
+    const node = mapMethod(frame.method, frame.params, direction);
     const instanceId = this.nextInstanceId();
     const startedAt = this.now();
+    this.parentReady(node);
     this.session.emit('node.started', {
       nodeId: node.nodeId,
-      parentId: SESSION_NODE_ID,
+      parentId: node.parentId,
       kind: node.kind,
       name: node.name,
       instanceId,
@@ -393,7 +674,7 @@ export class ProxyReporter {
         nodeId: node.nodeId,
         instanceId,
         output: undefined,
-        durationMs: Math.max(0, this.now() - startedAt),
+        durationMs: durationBetween(startedAt, this.now()),
         status,
         notification: true,
         ...extra,
@@ -438,17 +719,11 @@ export class ProxyReporter {
       return FORWARD;
     }
     this.pending.delete(key);
-    this.rememberNegotiated(entry.method, frame.result);
+    this.rememberNegotiated(entry.method, entry.params, frame.result, frame.error);
 
     const failed = frame.error !== undefined || isErrorResult(frame.result);
     const output = frame.error !== undefined ? { error: frame.error } : frame.result;
-    if (failed) {
-      this.session.emit('node.error', {
-        nodeId: entry.node.nodeId,
-        instanceId: entry.instanceId,
-        error: describeFailure(entry.method, frame.error, frame.result),
-      });
-    }
+    if (failed) this.recordError(entry, describeFailure(entry.method, frame.error, frame.result, this.hidesResultOf(entry.method)));
     this.trace(direction, `<- ${entry.method} #${String(frame.id)} ${failed ? 'ERROR' : 'ok'}`);
 
     const point: PausePoint = failed ? 'error' : 'after';
@@ -464,7 +739,10 @@ export class ProxyReporter {
       return { kind: 'drop' };
     }
     if (decision.action === 'inject') {
-      const output = coerceInjectedFor(entry.method, entry.params, decision.output);
+      const output = this.forWire(
+        entry.method,
+        coerceInjectedFor(entry.method, entry.params, decision.output),
+      );
       this.finish(entry, output, 'ok', { injected: true, gatedAt: point });
       return { kind: 'replace', raw: injectedResponse(frame.id, output) };
     }
@@ -484,7 +762,7 @@ export class ProxyReporter {
   private observeBatch(direction: Direction, frame: Extract<ClassifiedFrame, { kind: 'batch' }>): void {
     for (const item of frame.items) {
       if (item.kind === 'request') {
-        const node = mapMethod(item.method, item.params);
+        const node = mapMethod(item.method, item.params, direction);
         const entry: PendingRequest = {
           node,
           instanceId: this.nextInstanceId(),
@@ -505,11 +783,12 @@ export class ProxyReporter {
         this.start(entry, item.params, { batched: true });
         this.remember(entry);
       } else if (item.kind === 'notification') {
-        const node = mapMethod(item.method, item.params);
+        const node = mapMethod(item.method, item.params, direction);
         const instanceId = this.nextInstanceId();
+        this.parentReady(node);
         this.session.emit('node.started', {
           nodeId: node.nodeId,
-          parentId: SESSION_NODE_ID,
+          parentId: node.parentId,
           kind: node.kind,
           name: node.name,
           instanceId,
@@ -534,13 +813,7 @@ export class ProxyReporter {
         }
         this.pending.delete(pendingKey(otherSide(direction), item.id));
         const failed = item.error !== undefined || isErrorResult(item.result);
-        if (failed) {
-          this.session.emit('node.error', {
-            nodeId: entry.node.nodeId,
-            instanceId: entry.instanceId,
-            error: describeFailure(entry.method, item.error, item.result),
-          });
-        }
+        if (failed) this.recordError(entry, describeFailure(entry.method, item.error, item.result, this.hidesResultOf(entry.method)));
         this.finish(
           entry,
           item.error !== undefined ? { error: item.error } : item.result,
@@ -553,10 +826,40 @@ export class ProxyReporter {
 
   // -- helpers --------------------------------------------------------------
 
+  /**
+   * Make sure a node's parent exists on the graph before the node does. Work
+   * hangs off the session node (always there); protocol traffic hangs off
+   * `mcp:protocol`, created on first use.
+   */
+  private parentReady(node: MappedNode): void {
+    if (node.parentId !== PROTOCOL_NODE_ID) return;
+    this.protocolCalls += 1;
+    this.ensureProtocolNode();
+  }
+
+  private ensureProtocolNode(): void {
+    if (this.protocolStartedAt !== undefined) return;
+    this.protocolStartedAt = this.now();
+    this.session.emit('node.started', {
+      nodeId: PROTOCOL_NODE_ID,
+      parentId: SESSION_NODE_ID,
+      kind: 'custom',
+      name: PROTOCOL_NODE_NAME,
+      instanceId: PROTOCOL_NODE_ID,
+      input: {
+        about:
+          'MCP protocol traffic (handshake, discovery, keepalive, notifications); ' +
+          'tools/call, resources/read, prompts/get and sampling sit on the session node',
+      },
+      collapsed: true,
+    });
+  }
+
   private start(entry: PendingRequest, params: unknown, extra?: Record<string, unknown>): void {
+    this.parentReady(entry.node);
     this.session.emit('node.started', {
       nodeId: entry.node.nodeId,
-      parentId: SESSION_NODE_ID,
+      parentId: entry.node.parentId,
       kind: entry.node.kind,
       name: entry.node.name,
       instanceId: entry.instanceId,
@@ -565,6 +868,15 @@ export class ProxyReporter {
       direction: directionLabel(entry.origin),
       jsonrpcId: entry.id,
       ...extra,
+    });
+  }
+
+  private recordError(entry: PendingRequest, error: { name: string; message: string }): void {
+    if (entry.node.parentId === PROTOCOL_NODE_ID) this.protocolErrors += 1;
+    this.session.emit('node.error', {
+      nodeId: entry.node.nodeId,
+      instanceId: entry.instanceId,
+      error,
     });
   }
 
@@ -578,12 +890,47 @@ export class ProxyReporter {
       nodeId: entry.node.nodeId,
       instanceId: entry.instanceId,
       output,
-      durationMs: Math.max(0, this.now() - entry.startedAt),
+      durationMs: durationBetween(entry.startedAt, this.now()),
       status,
       method: entry.method,
       ...(entry.retries > 0 ? { retries: entry.retries } : {}),
       ...extra,
     });
+  }
+
+  private emitSessionError(name: string, message: string): void {
+    this.session.emit('node.error', {
+      nodeId: SESSION_NODE_ID,
+      instanceId: SESSION_NODE_ID,
+      error: { name, message },
+    });
+  }
+
+  /**
+   * The server exited before its first response. Print the reason with the
+   * stderr tail, and put both on the session node.
+   */
+  private reportEarlyDeath(reason: string): void {
+    this.earlyDeathReported = true;
+    this.earlyDeathReason = reason;
+    const captured = this.options.stderrCaptured !== false;
+    const tail = this.stderrRing.tail();
+    const head = `${reason} before answering anything`;
+    let detail: string;
+    if (!captured) {
+      detail = 'its stderr was inherited (--inherit-stderr), so look above for the reason';
+    } else if (tail.length === 0) {
+      detail = 'it wrote nothing to stderr';
+    } else {
+      const shown = tail.slice(Math.max(0, tail.length - STDERR_TAIL_ON_TERMINAL));
+      const omitted = this.stderrRing.seen - shown.length;
+      detail =
+        `its last stderr output was${omitted > 0 ? ` (${omitted} earlier line(s) omitted here; the last ${tail.length} are on the session node)` : ''}:\n` +
+        shown.map((line) => `    ${line}`).join('\n');
+    }
+    this.options.log(`graphmind mcp-proxy: ${head} — ${detail}`);
+    const onNode = captured && tail.length > 0 ? `\n\nlast stderr output:\n${tail.join('\n')}` : '';
+    this.emitSessionError('McpServerExitedEarly', `${head}${onNode}`);
   }
 
   private remember(entry: PendingRequest): void {
@@ -606,11 +953,51 @@ export class ProxyReporter {
   }
 
   /** Record the negotiated protocol version from the `initialize` result. */
-  private rememberNegotiated(method: string, result: unknown): void {
-    if (method !== 'initialize' || this.negotiated !== undefined) return;
-    if (typeof result !== 'object' || result === null) return;
-    const version = (result as Record<string, unknown>)['protocolVersion'];
-    if (typeof version === 'string') this.negotiated = version;
+  /** Whether the session hides this method's result (and so must its error text). */
+  private hidesResultOf(method: string): boolean {
+    return this.options.hideOutputs === true || (this.options.hideToolResults === true && method === 'tools/call');
+  }
+
+  /** Injected values must be shaped for the era the peers actually negotiated. */
+  private forWire(method: string, value: unknown): unknown {
+    return this.era === 'modern' ? stampModernEra(method, value) : value;
+  }
+
+  /**
+   * Record the version the peers agreed on. Legacy: the `initialize` result.
+   * Modern (2026-07-28): there is no initialize; a SUCCESSFUL `server/discover`
+   * settles the era, and the version is the one the client claimed in its
+   * request envelope (`params._meta['io.modelcontextprotocol/protocolVersion']`)
+   * when the server lists it, else the server's first offer. A failed discover
+   * (-32601 from a legacy-only server) records nothing, so the fallback
+   * `initialize` still wins — the first answer settles it.
+   */
+  private rememberNegotiated(
+    method: string,
+    params: unknown,
+    result: unknown,
+    error: JsonRpcErrorBody | undefined,
+  ): void {
+    if (this.negotiated !== undefined || error !== undefined || !isFrameObject(result)) return;
+    if (method === 'initialize') {
+      const version = result['protocolVersion'];
+      if (typeof version === 'string') {
+        this.negotiated = version;
+        this.era = 'legacy';
+      }
+      return;
+    }
+    if (method === 'server/discover' && Array.isArray(result['supportedVersions'])) {
+      const offered = result['supportedVersions'].filter((v): v is string => typeof v === 'string');
+      const meta =
+        isFrameObject(params) && isFrameObject(params['_meta']) ? params['_meta'] : undefined;
+      const claimed = meta?.['io.modelcontextprotocol/protocolVersion'];
+      const version = typeof claimed === 'string' && offered.includes(claimed) ? claimed : offered[0];
+      if (version !== undefined) {
+        this.negotiated = version;
+        this.era = 'modern';
+      }
+    }
   }
 
   private trace(direction: Direction, message: string): void {
@@ -636,13 +1023,23 @@ function pendingKey(origin: Direction, id: JsonRpcId): string {
  * Both ways an MCP call can fail, described the same way: a JSON-RPC error
  * object, or a tool result carrying `isError: true`.
  */
+/** Why a failed result's content is missing from its error message. */
+const REDACTED_NOTE = 'GRAPHMIND_HIDE_TOOL_RESULTS or GRAPHMIND_HIDE_OUTPUTS';
+
 function describeFailure(
   method: string,
   error: JsonRpcErrorBody | undefined,
   result: unknown,
+  hideContent = false,
 ): { name: string; message: string } {
   if (error !== undefined) {
     return { name: `JsonRpcError(${error.code})`, message: error.message };
+  }
+  if (hideContent) {
+    return {
+      name: 'McpToolError',
+      message: `${method} returned isError: true — content hidden (${REDACTED_NOTE})`,
+    };
   }
   const content = (result as { content?: unknown } | null | undefined)?.content;
   let detail = '';

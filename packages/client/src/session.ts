@@ -14,19 +14,25 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   KNOWN_CAPABILITIES,
+  MAX_PAYLOAD_BYTES,
   PROTOCOL_VERSION,
   WILDCARD_RUN_ID,
   createEnvelope,
+  parseEnvelope,
   serializeEnvelope,
+  serializePayload,
+  type Envelope,
   type EventPayloadMap,
   type EventType,
   type KnownEnvelope,
   type MessagePayloadMap,
+  type NodeKind,
   type PausePoint,
   type ResumeAction,
   type RunStatus,
   type SdkInfo,
 } from '@graphmind-ai/schema';
+import { type Clock, monotonicNow, normalizeDurationMs } from './clock.js';
 import { resolveEnabled, resolveUrl, type EnvLike } from './env.js';
 import { GraphMindAbortError, isAbortError, toErrorInfo } from './errors.js';
 import {
@@ -35,7 +41,16 @@ import {
   type GateDecision,
   type GateNode,
 } from './gate-engine.js';
+import { HeldLedger } from './held-ledger.js';
+import {
+  LoopGuard,
+  UNREADABLE_INPUT,
+  resolveLoopGuard,
+  type LoopGuardOptions,
+  type LoopInfo,
+} from './loop-guard.js';
 import { makeCounterIds, newId } from './ids.js';
+import { REDACTED, Redactor, resolveRedaction } from './redaction.js';
 import { RingBuffer } from './ring-buffer.js';
 import { RateLimitedWarner, type WarnSink } from './safe.js';
 import { Transport, type WebSocketConstructor } from './transport.js';
@@ -98,6 +113,30 @@ export interface SessionOptions {
   /** Warning sink override (default console.warn) and rate-limit interval. */
   logger?: WarnSink;
   warnIntervalMs?: number;
+  /**
+   * Monotonic millisecond clock used for held-time accounting (`heldMs`).
+   * Default `performance.now()`. For tests.
+   */
+  clock?: Clock;
+  /**
+   * Loop hold: hold the before-gate of the Nth identical call of one tool made
+   * back-to-back — no other watched call of the same kind in between — while
+   * a debugger is attached (see loop-guard.ts, rule v3).
+   * Default `{threshold: 3, mode: 'pause', kinds: ['tool']}`, overridable per
+   * field here or via `GRAPHMIND_LOOP_THRESHOLD` / `GRAPHMIND_ON_LOOP`.
+   * `false` switches it off.
+   */
+  loopGuard?: LoopGuardOptions | false;
+  // -- Coarse redaction (W7; see redaction.ts). Each defaults to its env switch;
+  // either source turning one on turns it on (env is a floor code cannot lower).
+  /** Replace `node.started.input` with "__REDACTED__" on every node. Env: GRAPHMIND_HIDE_INPUTS. */
+  hideInputs?: boolean;
+  /** Replace `node.finished.output` and every token delta's text. Env: GRAPHMIND_HIDE_OUTPUTS. */
+  hideOutputs?: boolean;
+  /** Replace the input of tool nodes only (and streamed tool-args). Env: GRAPHMIND_HIDE_TOOL_ARGS. */
+  hideToolArgs?: boolean;
+  /** Replace the output of tool nodes only. Env: GRAPHMIND_HIDE_TOOL_RESULTS. */
+  hideToolResults?: boolean;
 }
 
 export interface ReadyOptions {
@@ -218,6 +257,19 @@ class SessionImpl implements Session {
   private readonly transport: Transport;
   private readonly engine: GateEngine;
   private readonly buffer: RingBuffer<BufferedEnvelope>;
+  /** Pins gate holds to node instances so `node.finished` can carry `heldMs`. */
+  private readonly ledger: HeldLedger;
+  /** Coarse redaction (W7): the kill switches, applied in emitInternal before the buffer. */
+  private readonly redactor: Redactor;
+  /** Loop hold: back-to-back identical tool calls (rule v3), consulted at gate('before'). */
+  private readonly loopGuard: LoopGuard;
+  /**
+   * Loop details for the hold `gate()` is about to open. `GateEngine.hold`
+   * calls `onPaused` synchronously inside its Promise executor, so this is
+   * set immediately before `hold()` and consumed inside `onPaused` — never
+   * across a tick, never shared between two gates.
+   */
+  private pendingLoop: LoopInfo | undefined;
   private readonly als = new AsyncLocalStorage<RunContext>();
   private readonly newPauseId = makeCounterIds('pause');
 
@@ -252,19 +304,53 @@ class SessionImpl implements Session {
       maxBytes: options.maxBufferBytes ?? DEFAULTS.maxBufferBytes,
       sizeOf: (item) => item.json.length,
       onEvict: (item) => this.recordEviction(item),
+      // One event bigger than the whole buffer must never evict every older
+      // event; emitInternal decides its fate instead (see handleUnbuffered).
+      rejectOversize: true,
     });
 
+    this.ledger = new HeldLedger(options.clock ?? monotonicNow);
+    this.redactor = new Redactor(
+      resolveRedaction(
+        {
+          hideInputs: options.hideInputs,
+          hideOutputs: options.hideOutputs,
+          hideToolArgs: options.hideToolArgs,
+          hideToolResults: options.hideToolResults,
+        },
+        env,
+      ),
+      undefined,
+      // Fail-closed reports (a failed form sent, or an event dropped), one line
+      // per key per interval — never the payload, never the error text.
+      (key, message) => this.warner.warn(key, message),
+    );
+    this.loopGuard = new LoopGuard(resolveLoopGuard(options.loopGuard, env));
     this.engine = new GateEngine(
       {
         newPauseId: this.newPauseId,
         onPaused: (pauseId, node, point, runId) => {
-          this.emitInternal('exec.paused', { pauseId, nodeId: node.nodeId, point }, runId);
+          // Loop hold (W5): the built-in breakpoint says why it fired. Taken
+          // FIRST so a throw anywhere below can never leave it behind for the
+          // next, unrelated hold.
+          const loop = this.pendingLoop;
+          this.pendingLoop = undefined;
+          this.ledger.holdOpened(pauseId, runId, node.nodeId, point);
+          this.emitInternal(
+            'exec.paused',
+            loop === undefined
+              ? { pauseId, nodeId: node.nodeId, point }
+              : { pauseId, nodeId: node.nodeId, point, reason: 'loop', loop: this.loopOnWire(loop, node) },
+            runId,
+          );
         },
         onResumed: (pauseId, _node, action, runId) => {
+          this.ledger.holdClosed(pauseId);
           this.emitInternal('exec.resumed', { pauseId, action }, runId);
         },
       },
       options.pauseTimeoutMs,
+      options.clock ?? monotonicNow,
     );
 
     this.transport = new Transport(
@@ -366,7 +452,24 @@ class SessionImpl implements Session {
     if (!this.active()) return;
     this.guard('emit', () => {
       this.ensureStarted();
-      this.emitInternal(type, payload, this.resolveRunId());
+      const runId = this.resolveRunId();
+      if (type !== 'node.started') {
+        this.emitInternal(type, payload, runId);
+        return;
+      }
+      // Loop hold (W5): fingerprint the call on the adapter's own payload (the
+      // redactor works on a copy and never mutates it), recorded once the
+      // frame exists (Ruby parity, decision "A dropped event takes no seq and
+      // clears its kind's loop streak"). A start the redactor dropped, or one
+      // that could not be serialised, never reached the wire: it is not "the
+      // call right before" the next one, so it clears its kind's streak
+      // (rule 3), and a hold's firstSeq/lastSeq always name an emitted event.
+      let seq: number | undefined;
+      try {
+        seq = this.emitInternal(type, payload, runId);
+      } finally {
+        this.noteNodeStarted(payload as EventPayloadMap['node.started'], runId, seq);
+      }
     });
   }
 
@@ -374,12 +477,22 @@ class SessionImpl implements Session {
     if (!this.active()) return CONTINUE_PROMISE;
     try {
       this.ensureStarted();
-      // Fast path: detached, or attached with nothing matching.
-      if (!this.transport.attached || !this.engine.shouldPause(point, node)) {
+      // Fast path: detached, or attached with nothing matching. The loop hold
+      // (W5) is a built-in breakpoint consulted only when attached, only at
+      // 'before', only in mode 'pause' — detached, the fast path is untouched.
+      const loop =
+        point === 'before' && this.transport.attached && this.loopGuard.mode === 'pause'
+          ? this.loopGuard.consult(this.resolveRunId(), node.kind, node.nodeId, node.name)
+          : undefined;
+      if (
+        loop === undefined &&
+        (!this.transport.attached || !this.engine.shouldPause(point, node))
+      ) {
         return CONTINUE_PROMISE;
       }
       const ctx = this.currentRun();
       const runId = this.resolveRunId();
+      this.pendingLoop = loop;
       return this.engine.hold(point, node, runId).then(
         (decision) => {
           if (decision.action === 'abort') {
@@ -451,6 +564,90 @@ class SessionImpl implements Session {
     this.transport.start();
   }
 
+  /**
+   * Loop hold, the recording half (rule v3, see loop-guard.ts). Fingerprints a
+   * watched node's input and extends or replaces its kind's back-to-back
+   * streak; the before-gate consults it. When the count reaches the threshold
+   * and nothing will hold — no debugger attached, or mode `warn` — say so once
+   * per streak, so a looping agent is never silent even when nobody is
+   * watching. Each field is read once, here: an input whose read throws clears
+   * the kind's streak (rule 3); a start whose kind cannot be read touches no
+   * streak. `seq` is the seq the start's envelope received, or `undefined`
+   * when it was never emitted (dropped by the redactor, or not serialisable):
+   * such a start is recorded as unreadable, which clears its kind's streak.
+   * Pure bookkeeping: never throws.
+   */
+  private noteNodeStarted(
+    payload: EventPayloadMap['node.started'],
+    runId: string,
+    seq: number | undefined,
+  ): void {
+    try {
+      const guard = this.loopGuard;
+      if (!guard.enabled) return;
+      let kind: NodeKind;
+      try {
+        kind = payload.kind;
+      } catch {
+        return; // no kind, no streak to extend or clear
+      }
+      let nodeId: string;
+      let name: string;
+      try {
+        nodeId = payload.nodeId;
+        name = payload.name;
+      } catch {
+        // Unidentifiable call of a (possibly) watched kind: clears (rule 3).
+        nodeId = undefined as unknown as string;
+        name = '';
+      }
+      let input: unknown = UNREADABLE_INPUT;
+      if (seq !== undefined) {
+        try {
+          input = payload.input;
+        } catch {
+          input = UNREADABLE_INPUT;
+        }
+      }
+      // Never emitted: UNREADABLE_INPUT clears the streak before `seq` is used.
+      const record = guard.record(runId, kind, nodeId, name, input, seq ?? -1);
+      if (record === undefined || !record.atThreshold) return;
+      const willHold = guard.mode === 'pause' && this.transport.attached;
+      if (willHold) return;
+      if (!guard.claimWarning(runId, nodeId, kind)) return;
+      const times = `${record.repeats}×`;
+      const because =
+        guard.mode === 'warn'
+          ? 'GRAPHMIND_ON_LOOP=warn, so it is not being held'
+          : 'no debugger is attached to hold it (start `npx graphmind-ai` to pause it there)';
+      this.warner.warn(
+        `loop:${nodeId}`,
+        `possible loop: ${name} (${nodeId}) was called ${times} in a row with ` +
+          `identical arguments; ${because}. Polling on purpose? add it to ` +
+          `loopGuard.allowNodes; GRAPHMIND_ON_LOOP=off silences this`,
+      );
+    } catch {
+      // never throw into the host
+    }
+  }
+
+  /**
+   * Loop hold (W5): `exec.paused.loop` as it may leave the process. The
+   * fingerprint is an unsalted digest of this node's input; when a redaction
+   * switch hides that input (`hideInputs`, or `hideToolArgs` on a tool), a
+   * low-entropy argument — an email, a zip code, an id — would be a
+   * dictionary attack away from the digest, so the digest is hidden with it.
+   * The hold, `repeats`, `firstSeq` and `lastSeq` are unaffected.
+   */
+  private loopOnWire(
+    loop: LoopInfo,
+    node: GateNode,
+  ): NonNullable<EventPayloadMap['exec.paused']['loop']> {
+    const s = this.redactor.switches;
+    const hidden = s.hideInputs || (s.hideToolArgs && node.kind === 'tool');
+    return hidden ? { ...loop, fingerprint: REDACTED } : { ...loop };
+  }
+
   private makeRunContext(name: string): RunContext {
     const abortController = new AbortController();
     return {
@@ -480,21 +677,224 @@ class SessionImpl implements Session {
     return this.implicitRun.runId;
   }
 
-  /** Envelope + buffer + (if attached) send. No enable/guard checks here. */
+  /**
+   * Envelope + buffer + (if attached) send. No enable/guard checks here.
+   * Returns the seq the event was emitted with, or `undefined` when the
+   * redactor dropped it (a serialisation failure throws, as before).
+   */
   private emitInternal<T extends EventType>(
     type: T,
     payload: EventPayloadMap[T],
     runId: string,
-  ): void {
+  ): number | undefined {
+    // Coarse redaction (W7) runs FIRST, before the ring buffer and before any
+    // other bookkeeping reads the payload: the kill switches must hold for
+    // replay-on-attach, storage and every export, so nothing may see the raw
+    // input/output past this line. `apply` is a no-op when every switch is off.
+    // It fails closed: `undefined` means the payload could not be redacted
+    // safely nor replaced by a valid failed form — the event is not emitted
+    // (the redactor already warned) and takes NO seq, so the seqs of emitted
+    // events stay consecutive (decision "A dropped event takes no seq").
+    const redacted = this.redactor.apply(type, payload, runId);
+    if (redacted === undefined) return undefined;
     const seq = this.nextSeq();
-    const json = serializeEnvelope(
+    let json: string;
+    try {
       // Instantiated at the EventType union: TS cannot relate the generic
       // indexed accesses EventPayloadMap[T] / MessagePayloadMap[T] directly.
-      createEnvelope<EventType>({ type, payload, seq, runId }),
-    );
+      const envelope = createEnvelope<EventType>({
+        type,
+        payload: this.withHeldTime(type, redacted, runId),
+        seq,
+        runId,
+      });
+      // Payload budget, AFTER redaction and held time, BEFORE the ring buffer:
+      // what is buffered and sent is exactly what the server stores.
+      json = this.serializeWithinBudget(type, envelope);
+    } catch (error) {
+      // Not serialisable at all: never emitted, so give the seq back — unless
+      // something re-entered emit meanwhile (a logger, a toJSON) and took the
+      // next one, where handing it back would duplicate a seq.
+      if (this.seq === seq + 1) this.seq = seq;
+      throw error;
+    }
     const item: BufferedEnvelope = { json, seq, runId, sent: false };
-    this.buffer.push(item);
+    if (!this.buffer.push(item)) {
+      this.handleUnbuffered(item);
+      return seq;
+    }
     if (this.transport.attached && this.transport.send(json)) item.sent = true;
+    return seq;
+  }
+
+  /**
+   * Serialize an event envelope with its payload held to the protocol's
+   * payload budget (MAX_PAYLOAD_BYTES, 512 KB of UTF-8 JSON).
+   *
+   * The server has always shrunk a larger payload to a type-preserving
+   * preview before storing it (`serializePayload`, now in @graphmind-ai/schema).
+   * Doing it only there meant a 17 MB payload was framed whole: it evicted
+   * the replay buffer and was refused by the server's 16 MiB frame cap, so the
+   * event vanished — no seq stored, the node "running" forever, nothing
+   * counted or printed. Applying the SAME function here makes the event
+   * degrade exactly as the server would have stored it; the server's own pass
+   * is then a no-op (the function is idempotent).
+   *
+   * Under the budget the envelope is serialized once, exactly as before: the
+   * pre-check is exact (a string's UTF-8 size is at most 3x its UTF-16 length,
+   * and the payload's JSON is a substring of the envelope's), so only an
+   * envelope longer than MAX_PAYLOAD_BYTES / 3 characters pays for a parse of
+   * the frame and a second stringify of its payload.
+   *
+   * The shrink runs on the payload parsed back out of the frame — what the
+   * server will parse — never on the live object. JSON rewrites a Buffer
+   * (toJSON -> {type, data: [...]}), a typed array, a Date, a URL, anything
+   * with toJSON, and drops keys whose value is undefined; shrinking the live
+   * value diverged from the server for all of them, and for a Buffer it walked
+   * every byte as an object key (a 1 MB tool result: ~170 ms inside the host's
+   * emit), could not fit the result, and fell back to the whole-payload marker
+   * — not a valid node.finished, so ingest dropped the event outright.
+   *
+   * A payload JSON cannot serialize at all (a cycle, a BigInt) used to throw
+   * here and drop the event; it now degrades the same way, field by field.
+   * If reading the payload itself throws, that still propagates to the
+   * caller's guard (the event is dropped with a warning, never thrown).
+   * Warnings are one per event type per interval and never quote content.
+   */
+  private serializeWithinBudget(type: EventType, envelope: Envelope<EventType>): string {
+    let payload: unknown = envelope.payload;
+    let json: string;
+    try {
+      json = serializeEnvelope(envelope);
+    } catch (error) {
+      // A cycle, a BigInt, or JSON longer than the engine's maximum string
+      // length. Here the payload only has to become serializable — and, with
+      // its type, stay a valid event; the budget is applied below, to the
+      // wire form, exactly as for every other event (hence no byte limit).
+      const degraded = serializePayload(payload, Number.POSITIVE_INFINITY, type);
+      if (!degraded.truncated) throw error;
+      payload = degraded.payload;
+      const degradedEnvelope = { ...envelope, payload: payload as never };
+      json = serializeEnvelope(degradedEnvelope);
+      if (parseEnvelope(degradedEnvelope).kind === 'invalid') {
+        this.warner.warn(
+          `payload-invalid:${type}`,
+          `a ${type} event had a value that could not be serialized to JSON, and it could not ` +
+            `be degraded to a valid event; the debugger will drop it`,
+        );
+      } else {
+        this.warner.warn(
+          `payload-unserializable:${type}`,
+          `a ${type} event had a value that could not be serialized to JSON; it was sent with ` +
+            `that value replaced by a marker`,
+        );
+      }
+      // Fall through: the fields that DID serialize may still be over budget
+      // (a cycle next to a 17 MB string), exactly as the server would see it.
+    }
+    if (json.length * 3 <= MAX_PAYLOAD_BYTES) return json;
+    // The wire form of the payload (see above): exactly what the server parses.
+    const wirePayload = (JSON.parse(json) as { payload?: unknown }).payload;
+    const shrunk = serializePayload(wirePayload, MAX_PAYLOAD_BYTES, type);
+    if (!shrunk.truncated) return json;
+    const bytes = (shrunk.payload as { bytes?: unknown }).bytes;
+    const size = typeof bytes === 'number' ? bytes : 'unknown';
+    const shrunkEnvelope = { ...envelope, payload: shrunk.payload as never };
+    // With its type the shrink keeps a valid event of every known type (the
+    // skeleton tier); only an event that was not valid to begin with ends up
+    // as the whole-payload marker, which the server drops at ingest. Say so
+    // rather than promise a preview. (Only this over-budget path pays for the
+    // check.)
+    if (parseEnvelope(shrunkEnvelope).kind === 'invalid') {
+      this.warner.warn(
+        `payload-invalid:${type}`,
+        `a ${type} event of ${size} bytes could not be shrunk to a valid event (the debugger ` +
+          `stores at most ${MAX_PAYLOAD_BYTES / 1024} KB per payload, and this payload is not a ` +
+          `valid ${type} event); the debugger will drop it`,
+      );
+    } else {
+      this.warner.warn(
+        `payload-budget:${type}`,
+        `an event of ${size} bytes was shrunk to a preview ` +
+          `(the debugger stores at most ${MAX_PAYLOAD_BYTES / 1024} KB per payload)`,
+      );
+    }
+    return serializeEnvelope(shrunkEnvelope);
+  }
+
+  /**
+   * The ring buffer refused an envelope bigger than its whole byte budget
+   * (`maxBufferBytes`) rather than evict every older event for it. With the
+   * payload budget above this takes a `maxBufferBytes` configured below
+   * ~512 KB to reach. Attached: send it live (it is not replayable, but it is
+   * not lost). Detached: it is lost — counted in `stats().lost` and marked by
+   * the next gap marker like any other loss — with one warning of its own.
+   */
+  private handleUnbuffered(item: BufferedEnvelope): void {
+    const size = `${item.json.length} characters`;
+    const limit = `maxBufferBytes is ${this.buffer.byteLimit}`;
+    if (this.transport.attached && this.transport.send(item.json)) {
+      item.sent = true;
+      this.warner.warn(
+        'buffer-oversize-sent',
+        `an event of ${size} is larger than the whole replay buffer (${limit}); it was sent ` +
+          `but not kept for replay`,
+      );
+      return;
+    }
+    this.recordEviction(item, false);
+    this.warner.warn(
+      'buffer-oversize-lost',
+      `dropped an event of ${size}: it is larger than the whole replay buffer (${limit}) and ` +
+        `the debugger is not attached; the recorded run is incomplete. Raise \`maxBufferBytes\``,
+    );
+  }
+
+  /**
+   * Held time is not run time. Track node instances as they start, pin gate
+   * holds to them (see HeldLedger), and stamp the total onto `node.finished`
+   * / `node.error` as the loose field `heldMs`. `durationMs` is left exactly
+   * as the adapter measured it (wall clock, held time included); "ran" is
+   * `durationMs - heldMs`. An adapter that already set `heldMs` wins. Pure
+   * bookkeeping: any failure leaves the payload untouched.
+   */
+  private withHeldTime<T extends EventType>(
+    type: T,
+    payload: EventPayloadMap[T],
+    runId: string,
+  ): EventPayloadMap[T] {
+    try {
+      switch (type) {
+        case 'node.started': {
+          const p = payload as EventPayloadMap['node.started'];
+          this.ledger.started(runId, p.nodeId, p.instanceId, p.parentId);
+          return payload;
+        }
+        case 'node.error': {
+          const p = payload as EventPayloadMap['node.error'];
+          this.ledger.errored(runId, p.nodeId, p.instanceId);
+          if (typeof p['heldMs'] === 'number') return payload;
+          const heldMs = this.ledger.peek(runId, p.nodeId, p.instanceId);
+          return heldMs === undefined ? payload : ({ ...p, heldMs } as EventPayloadMap[T]);
+        }
+        case 'node.finished': {
+          const p = payload as EventPayloadMap['node.finished'];
+          const heldMs = this.ledger.finished(runId, p.nodeId, p.instanceId);
+          // Wire contract for every duration: finite, >= 0, 0.01 ms resolution
+          // (adapters already comply; a raw `emit` is held to the same rule).
+          const durationMs = normalizeDurationMs(p.durationMs);
+          const out = durationMs === p.durationMs ? p : { ...p, durationMs };
+          if (typeof p['heldMs'] === 'number' || heldMs === undefined) {
+            return out as EventPayloadMap[T];
+          }
+          return { ...out, heldMs } as EventPayloadMap[T];
+        }
+        default:
+          return payload;
+      }
+    } catch {
+      return payload;
+    }
   }
 
   /**
@@ -503,7 +903,7 @@ class SessionImpl implements Session {
    *  - it never left the process -> a hole in the recorded run. Remember the
    *    seq range so the next attach can mark it, and tell the developer.
    */
-  private recordEviction(item: BufferedEnvelope): void {
+  private recordEviction(item: BufferedEnvelope, warn = true): void {
     if (item.sent) return;
     this.lostTotal += 1;
     const existing = this.pendingGaps.get(item.runId);
@@ -520,7 +920,8 @@ class SessionImpl implements Session {
     } else {
       this.unattributedLost += 1;
     }
-    this.warnLoss();
+    // `warn = false`: the caller reports this loss with a warning of its own.
+    if (warn) this.warnLoss();
   }
 
   /**

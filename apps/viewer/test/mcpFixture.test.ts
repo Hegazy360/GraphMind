@@ -6,8 +6,15 @@
  */
 import { describe, expect, it } from 'vitest';
 import { parseEnvelope, type EventEnvelope } from '@graphmind-ai/schema';
-import { MCP_NODES, MCP_RUN_ID, generateMcpRun } from '../src/store/mcpFixture.js';
+import {
+  MCP_NODES,
+  MCP_PROTOCOL_NODES,
+  MCP_PROTOCOL_TOTAL_MS,
+  MCP_RUN_ID,
+  generateMcpRun,
+} from '../src/store/mcpFixture.js';
 import { applyEvent, type RunsMap } from '../src/store/applyEvent.js';
+import { hintedCollapseRoots, summarizeGroup } from '../src/store/collapse.js';
 import { runStateToFlow } from '../src/store/runStateToFlow.js';
 import { nodeStatus, runHasActivePause, type RunState } from '../src/store/types.js';
 
@@ -64,10 +71,63 @@ describe('the MCP fixture builds the graph the canvas is designed for', () => {
     }
   });
 
-  it('exercises all three MCP kinds plus a tool call and sampling', () => {
+  it('parents the six protocol calls under mcp:protocol, which opens folded', () => {
+    const run = build();
+    const protocol = run.nodes[MCP_NODES.protocol];
+    expect(protocol).toMatchObject({ kind: 'custom', name: 'protocol', parentId: MCP_NODES.session });
+    for (const nodeId of Object.values(MCP_PROTOCOL_NODES)) {
+      expect(run.nodes[nodeId]?.parentId, `${nodeId} should be protocol traffic`).toBe(MCP_NODES.protocol);
+      expect(run.nodes[nodeId]?.kind).toBe('custom');
+    }
+    // The hint is on the wire exactly as the proxy sends it…
+    const started = RUN.find(
+      (e) => e.type === 'node.started' && e.payload['nodeId'] === MCP_NODES.protocol,
+    );
+    expect(started?.payload['collapsed']).toBe(true);
+    expect(started?.payload['instanceId']).toBe(MCP_NODES.protocol);
+    // …the group is announced before its first child…
+    const firstChild = RUN.find(
+      (e) => e.type === 'node.started' && e.payload['parentId'] === MCP_NODES.protocol,
+    );
+    expect(started?.seq).toBeLessThan(firstChild?.seq ?? -1);
+    // …and it closes with counts, before the session does.
+    const protocolEnd = RUN.find(
+      (e) => e.type === 'node.finished' && e.payload['nodeId'] === MCP_NODES.protocol,
+    );
+    const sessionEnd = RUN.find(
+      (e) => e.type === 'node.finished' && e.payload['nodeId'] === MCP_NODES.session,
+    );
+    expect(protocolEnd?.payload['output']).toEqual({ calls: 6, errors: 0, stdoutNoise: 0 });
+    expect(protocolEnd?.seq).toBeLessThan(sessionEnd?.seq ?? -1);
+  });
+
+  it('the folded protocol card reads "6 calls · 702ms"', () => {
+    const run = build();
+    const summary = summarizeGroup(run, MCP_NODES.protocol);
+    expect(summary.nodes).toBe(6);
+    expect(summary.executions).toBe(6);
+    expect(summary.tools).toBe(6);
+    expect(summary.durationMs).toBe(MCP_PROTOCOL_TOTAL_MS);
+    expect(summary.errors).toBe(0);
+    // Folded, the canvas shows the session, the group and the six work nodes.
+    const folded = runStateToFlow(run, { collapsed: [MCP_NODES.protocol] });
+    expect(folded.nodes).toHaveLength(8);
+    expect(folded.nodes.find((n) => n.id === MCP_NODES.protocol)?.type).toBe('group');
+    for (const nodeId of Object.values(MCP_PROTOCOL_NODES)) {
+      expect(folded.nodes.some((n) => n.id === nodeId), `${nodeId} should be hidden`).toBe(false);
+    }
+  });
+
+  it('the protocol group opens folded: the reducer keeps `collapsed` and the projection folds it', () => {
+    const run = build();
+    expect(run.nodes[MCP_NODES.protocol]?.collapsed).toBe(true);
+    expect(hintedCollapseRoots(run)).toEqual([MCP_NODES.protocol]);
+  });
+
+  it('exercises all three MCP kinds plus a tool call, sampling and the protocol group', () => {
     const run = build();
     const kinds = Object.values(MCP_NODES).map((id) => run.nodes[id]?.kind);
-    expect(new Set(kinds)).toEqual(new Set(['server', 'resource', 'prompt', 'tool', 'llm']));
+    expect(new Set(kinds)).toEqual(new Set(['server', 'resource', 'prompt', 'tool', 'llm', 'custom']));
   });
 
   it('advertises its catalogue before anything runs — hinted nodes are ghosts', () => {
@@ -99,7 +159,8 @@ describe('the MCP fixture builds the graph the canvas is designed for', () => {
 
   it('projects onto the canvas as a connected tree', () => {
     const { nodes, edges } = runStateToFlow(build());
-    expect(nodes).toHaveLength(7);
+    // 1 session + 1 protocol group + 6 protocol calls + 6 work nodes.
+    expect(nodes).toHaveLength(14);
     expect(nodes.find((n) => n.id === MCP_NODES.session)?.type).toBe('invocation');
     expect(nodes.find((n) => n.id === MCP_NODES.changelog)?.type).toBe('tool');
     expect(nodes.find((n) => n.id === MCP_NODES.sampling)?.type).toBe('llmStep');

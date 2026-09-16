@@ -23,7 +23,7 @@ class TestProtocol < Minitest::Test
 
     paused = viewer.wait_for_frame("exec.paused").first
     viewer.resume(paused["payload"]["pauseId"], "continue")
-    worker.join
+    assert worker.join(10), "the worker did not finish within 10s"
     viewer.wait_for_frame("run.finished")
 
     seen = viewer.received.map { |f| f["type"] }.uniq.sort

@@ -7,6 +7,11 @@
  *   2. opts.enabled (if provided)  -> as given.
  *   3. NODE_ENV === 'production'   -> disabled unless GRAPHMIND=1.
  *   4. otherwise                   -> enabled.
+ *
+ * Loop hold (parsed in loop-guard.ts, option > env > default per field):
+ *   GRAPHMIND_LOOP_THRESHOLD  non-negative integer, default 3; 0 disables.
+ *   GRAPHMIND_ON_LOOP         pause (default) | warn | off.
+ *   GRAPHMIND_LOOP_ALLOW      comma-separated node ids/names never held (tools that poll).
  */
 
 export type EnvLike = Record<string, string | undefined>;

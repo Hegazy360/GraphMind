@@ -23,6 +23,7 @@
  * observed the LLM step that requested it (see core.recordToolUse); otherwise
  * a synthetic id is used.
  */
+import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
 import { isAbortError, type GateNode, type RunStatus } from '@graphmind-ai/client';
 import type { AdapterCore } from './core.js';
 import { LLM_NODE_ID, nextId, toolNodeId } from './ids.js';
@@ -68,7 +69,7 @@ export function wrapToolFn<F extends AnyToolFn>(
     const ctx = core.session.currentRun();
     const scopeId = core.scopeId(ctx);
     const instanceId = core.takeToolUse(scopeId, toolName) ?? nextId('call');
-    const startedAt = Date.now();
+    const startedAt = monotonicNow();
     core.startNode({
       nodeId: node.nodeId,
       kind: 'tool',
@@ -83,7 +84,7 @@ export function wrapToolFn<F extends AnyToolFn>(
         nodeId: node.nodeId,
         instanceId,
         output,
-        durationMs: Date.now() - startedAt,
+        durationMs: elapsedMs(startedAt),
         status,
         ...(extra !== undefined ? { extra } : {}),
       });

@@ -44,11 +44,13 @@ import {
   useReactFlow,
   useStore,
   type Edge,
+  type EdgeTypes,
   type Node,
   type NodeChange,
   type NodeTypes,
 } from '@xyflow/react';
-import { layoutGraph } from '../layout/tidyTree.js';
+import { LAYOUT_GAPS, layoutGraph } from '../layout/tidyTree.js';
+import { routeEdges, type RoutedEdge } from '../layout/routeEdges.js';
 import {
   anchorPositions,
   appendLayout,
@@ -69,7 +71,7 @@ import {
 } from '../lib/camera.js';
 import { registerCanvasActions } from '../lib/commands.js';
 import { DURATION, enterOffset, motionMs } from '../lib/motion.js';
-import { autoCollapseRoots } from '../store/collapse.js';
+import { autoCollapseRoots, hintedCollapseRoots } from '../store/collapse.js';
 import { isFilterActive, matchingNodeIds } from '../store/filters.js';
 import {
   edgeVisual,
@@ -81,6 +83,7 @@ import {
 import { useRunStore } from '../store/runStore.js';
 import { collapsedFor, useUiStore, type LodLevel } from '../store/uiStore.js';
 import { nodeStatus, type RunState } from '../store/types.js';
+import { GmEdge } from './edges/GmEdge.js';
 import { GroupNode } from './nodes/GroupNode.js';
 import { InvocationNode } from './nodes/InvocationNode.js';
 import { LlmStepNode } from './nodes/LlmStepNode.js';
@@ -94,6 +97,14 @@ const nodeTypes: NodeTypes = {
   llmStep: LlmStepNode,
   tool: ToolNode,
   group: GroupNode,
+};
+
+/**
+ * One edge type: the gutter-routed orthogonal edge (layout/routeEdges.ts).
+ * Module-level so React Flow sees a stable object and never re-mounts edges.
+ */
+const edgeTypes: EdgeTypes = {
+  gm: GmEdge,
 };
 
 /** Coalesce a burst of node.started events into one layout. */
@@ -121,15 +132,40 @@ const MIN_CANVAS_AFTER_INSPECTOR = 420;
  */
 const WIDE_ENOUGH_ZOOM = 0.62;
 
-function toEdge(spec: FlowEdgeSpec, run: RunState | undefined, dimmed: boolean): Edge {
+/**
+ * A canvas edge. The route is computed from the positioned nodes in
+ * `applyLayout` and travels on `data.points`; `GmEdge` draws it. An edge
+ * without a route (the target never got a position) draws the straight
+ * handle-to-handle line, which is what `anchorRoute` does with no points.
+ */
+function toEdge(
+  spec: FlowEdgeSpec,
+  run: RunState | undefined,
+  dimmed: boolean,
+  route: RoutedEdge | undefined,
+): Edge {
   const visual = run === undefined ? 'idle' : edgeVisual(run, spec.target);
   return {
     id: spec.id,
     source: spec.source,
     target: spec.target,
-    type: 'default',
+    type: 'gm',
     className: `gm-edge-${visual}${dimmed ? ' gm-dim' : ''}`,
+    data: { points: route?.points ?? [] },
   };
+}
+
+function samePoints(
+  a: readonly { x: number; y: number }[] | undefined,
+  b: readonly { x: number; y: number }[],
+): boolean {
+  if (a === undefined || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i] as { x: number; y: number };
+    const q = b[i] as { x: number; y: number };
+    if (p.x !== q.x || p.y !== q.y) return false;
+  }
+  return true;
 }
 
 interface FocusTarget {
@@ -227,6 +263,8 @@ export function RunCanvas({ runId }: { runId: string }) {
   const nodesRef = useRef<CanvasNode[]>([]);
   const placedRef = useRef(new Map<string, Placed>());
   const autoCollapsedRef = useRef<string | null>(null);
+  /** Hinted roots already folded once for this run, so a user's unfold is never undone. */
+  const hintedRef = useRef<{ runId: string; done: Set<string> }>({ runId: '', done: new Set() });
   const lastLayoutAtRef = useRef(0);
   const forceRef = useRef(false);
   /** Pending camera move, so a burst of events produces one move. */
@@ -356,6 +394,23 @@ export function RunCanvas({ runId }: { runId: string }) {
     didFitRef.current = null;
   }, [runId, structureVersion]);
 
+  // A node whose sender said `collapsed: true` (the MCP proxy's mcp:protocol
+  // group) opens folded on FIRST sight, regardless of run size. Applied once
+  // per node, so the user's unfold is never undone by the next event.
+  useEffect(() => {
+    const run = useRunStore.getState().runs[runId];
+    if (run === undefined) return;
+    if (hintedRef.current.runId !== runId) hintedRef.current = { runId, done: new Set() };
+    const fresh = hintedCollapseRoots(run).filter((id) => !hintedRef.current.done.has(id));
+    if (fresh.length === 0) return;
+    for (const id of fresh) hintedRef.current.done.add(id);
+    const ui = useUiStore.getState();
+    const current = collapsedFor(ui, runId);
+    ui.setCollapsed(runId, [...current, ...fresh.filter((id) => !current.includes(id))]);
+    // The folded graph is a different shape — frame it again.
+    didFitRef.current = null;
+  }, [runId, structureVersion]);
+
   const applyLayout = useCallback(() => {
     const run = useRunStore.getState().runs[runId];
     if (run === undefined) {
@@ -390,8 +445,14 @@ export function RunCanvas({ runId }: { runId: string }) {
         position: node.position,
         width: node.width,
         height: node.height,
+        ...(node.leafCell !== undefined ? { leafCell: node.leafCell } : {}),
       });
     }
+
+    // Edges are routed from the same positions the cards get, every time the
+    // positions change (any mode — a resize moves a card's bottom edge, and
+    // the bus below it has to follow).
+    const routed = routeEdges(positioned, graph.edges, LAYOUT_GAPS);
 
     // Causality: a card that has just been placed animates in *from its
     // caller*, so a fan-out reads as one node calling five and not as five
@@ -458,7 +519,7 @@ export function RunCanvas({ runId }: { runId: string }) {
     });
     setEdges(
       graph.edges.map((edge) =>
-        toEdge(edge, run, matching !== undefined && !matching.has(edge.target)),
+        toEdge(edge, run, matching !== undefined && !matching.has(edge.target), routed.get(edge.id)),
       ),
     );
     setPerf({ mode, ms: elapsed, nodes: graph.nodes.length });
@@ -660,18 +721,38 @@ export function RunCanvas({ runId }: { runId: string }) {
   nodesRef.current = nodes;
 
   const onNodesChange = useCallback((changes: NodeChange<CanvasNode>[]) => {
-    setNodes((nds) => {
-      const next = applyNodeChanges(changes, nds);
-      // Keep the incremental layout's memory in sync with manual drags.
-      for (const change of changes) {
-        if (change.type !== 'position' || change.dragging === true) continue;
-        const moved = next.find((n) => n.id === change.id);
-        if (moved === undefined) continue;
-        const entry = placedRef.current.get(moved.id);
-        if (entry !== undefined) placedRef.current.set(moved.id, { ...entry, position: moved.position });
-      }
-      return next;
-    });
+    setNodes((nds) => applyNodeChanges(changes, nds));
+    // Keep the incremental layout's memory in sync with manual drags — every
+    // frame of one, not only the drop. Done here, synchronously, not inside
+    // the state updater: React may run an updater lazily, and the re-route
+    // below reads the memory right away.
+    let moved = false;
+    for (const change of changes) {
+      if (change.type !== 'position' || change.position === undefined) continue;
+      const entry = placedRef.current.get(change.id);
+      if (entry === undefined) continue;
+      placedRef.current.set(change.id, { ...entry, position: change.position });
+      moved = true;
+    }
+    // A card being dragged takes its edges with it: routing is O(edges) and
+    // well under a millisecond at this size, so it runs per drag frame from
+    // where the cards actually are. Edges whose route did not change keep
+    // their identity so React Flow does not repaint the whole graph.
+    if (moved) {
+      const placed = [...placedRef.current.values()];
+      setEdges((prev) => {
+        const routed = routeEdges(placed, prev, LAYOUT_GAPS);
+        let changed = false;
+        const next = prev.map((edge) => {
+          const route = routed.get(edge.id);
+          const before = (edge.data as { points?: readonly { x: number; y: number }[] } | undefined)?.points;
+          if (route === undefined || samePoints(before, route.points)) return edge;
+          changed = true;
+          return { ...edge, data: { points: route.points } };
+        });
+        return changed ? next : prev;
+      });
+    }
   }, []);
 
   const onNodeClick = useCallback(
@@ -718,6 +799,7 @@ export function RunCanvas({ runId }: { runId: string }) {
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onNodeClick={onNodeClick}
         onPaneClick={onPaneClick}

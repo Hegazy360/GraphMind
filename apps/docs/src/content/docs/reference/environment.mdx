@@ -1,6 +1,6 @@
 ---
 title: Environment variables
-description: Every variable GraphMind reads — the CLI's and the instrumented app's — plus the exact kill-switch precedence.
+description: Every variable GraphMind reads — the CLI's and the instrumented app's — plus kill-switch precedence, the GRAPHMIND_HIDE_* switches, and the loop hold.
 sidebar:
   order: 2
 ---
@@ -18,7 +18,9 @@ import { Aside } from '@astrojs/starlight/components';
 | `GRAPHMIND_RETENTION` | `off` disables the startup prune entirely |
 | `GRAPHMIND_KEEP_RUNS` | Runs to keep (default 200); `--keep` beats it |
 | `GRAPHMIND_KEEP_DAYS` | Days to keep (default 30); `--days` beats it |
-| `GRAPHMIND_TELEMETRY` | `0` or `false` disables [telemetry](/reference/telemetry/) entirely (also auto-disabled when `CI` is set) |
+| `GRAPHMIND_TELEMETRY` | `0` or `false` disables [telemetry](/reference/telemetry/). `log` prints the exact record to stderr, prefixed `[graphmind telemetry] `, and sends nothing, even when `CI` is set. Any other value leaves telemetry on unless `CI` is set. |
+| `DO_NOT_TRACK` | `1` or `true` (any case, surrounding spaces ignored) disables telemetry. It beats every `GRAPHMIND_TELEMETRY` value, including `1` and `log`. Other values such as `yes` are ignored. |
+| `CI` | Set to anything, telemetry is off (unless `GRAPHMIND_TELEMETRY=log`) |
 | `GRAPHMIND_TELEMETRY_URL` | Override the telemetry endpoint (used by tests) |
 | `GRAPHMIND_HOME` | Directory for the telemetry install id (default `~/.graphmind`) |
 | `GRAPHMIND_DEMO_AGENT_DIR` | Where `demo --live` finds the demo agent outside a monorepo checkout |
@@ -31,6 +33,18 @@ import { Aside } from '@astrojs/starlight/components';
 | `GRAPHMIND_URL` | Ingest endpoint for adapters (default `ws://127.0.0.1:4747/ingest`) |
 | `GRAPHMIND_DISABLED` | `1` disables instrumentation — beats everything, including an explicit `enabled: true` |
 | `GRAPHMIND` | `1` re-enables instrumentation under `NODE_ENV=production` (disabled there by default) |
+| `GRAPHMIND_HIDE_INPUTS` | `1` or `true`: every node's `input` is recorded as `"__REDACTED__"`. See [recording less](#recording-less). |
+| `GRAPHMIND_HIDE_OUTPUTS` | `1` or `true`: every node's `output`, and the text of every streamed token, is recorded as hidden |
+| `GRAPHMIND_HIDE_TOOL_ARGS` | `1` or `true`: tool nodes' `input` only |
+| `GRAPHMIND_HIDE_TOOL_RESULTS` | `1` or `true`: tool nodes' `output` only |
+| `GRAPHMIND_LOOP_THRESHOLD` | How many identical calls in a row count as a loop. Default `3`; `0` turns the loop hold off; anything that is not a whole number ≥ 0 falls back to `3`. See [loop hold](#loop-hold). |
+| `GRAPHMIND_ON_LOOP` | `pause` (default: hold when a debugger is attached, warn when not), `warn` (never hold, warn once per streak), or `off`. `0`, `false` and `none` also mean `off`; any other value falls back to `pause`. |
+| `GRAPHMIND_LOOP_ALLOW` | Comma-separated node ids or tool names that are never held as a loop, e.g. `pollJob,tool:heartbeat` |
+
+The `GRAPHMIND_HIDE_*` and loop variables are read by the TypeScript client (so by every TS
+adapter and by `graphmind mcp-proxy`), by the Python SDK and by the Ruby gem, with the same
+names and meanings. Set them in the environment of the **instrumented app**, or of
+`graphmind mcp-proxy`. Setting them on `graphmind serve` does nothing.
 
 ## Kill-switch precedence
 
@@ -60,6 +74,130 @@ want certainty regardless of how `NODE_ENV` is set, put `GRAPHMIND_DISABLED=1` i
 environment. Nothing overrides it.
 </Aside>
 
+## Recording less
+
+Four switches keep values out of the recording altogether. The instrumented app replaces the
+value with the string `"__REDACTED__"` before the event is buffered or sent. Nothing downstream
+ever sees the original: not a debugger that attaches later and gets the buffered events, not
+the database, not `graphmind record`, not the read-only MCP tools.
+
+| Switch | Session option | Replaces |
+| --- | --- | --- |
+| `GRAPHMIND_HIDE_INPUTS` | `hideInputs` | `input` on every node (prompts, messages, tool arguments, MCP params), and streamed tool-argument text |
+| `GRAPHMIND_HIDE_OUTPUTS` | `hideOutputs` | `output` on every node, and the text of every streamed token |
+| `GRAPHMIND_HIDE_TOOL_ARGS` | `hideToolArgs` | `input` on tool nodes, and streamed tool-argument text |
+| `GRAPHMIND_HIDE_TOOL_RESULTS` | `hideToolResults` | `output` on tool nodes, and a tool node's streamed text |
+
+Checked by running each one against a real server, 2026-09-14:
+
+```text
+GRAPHMIND_HIDE_OUTPUTS=true
+  node.token    llm:step     deltas=[{"t":"text","v":"","chars":5}]   redaction={"count":1,"keys":["deltas"]}
+  node.finished llm:step     output="__REDACTED__"                    redaction={"count":1,"keys":["output"]}
+GRAPHMIND_HIDE_TOOL_RESULTS=true
+  node.finished llm:step     output="hello"
+  node.finished tool:search  output="__REDACTED__"                    redaction={"count":1,"keys":["output"]}
+```
+
+- **Values:** `1` or `true`, in any case, with surrounding spaces ignored. Anything else is off.
+- **Env and option:** either one turning a switch on turns it on. An app cannot pass
+  `hideInputs: false` to undo `GRAPHMIND_HIDE_INPUTS=1`. An option set to `1`, `"1"` or
+  `"true"` counts as on, so a config file that spells it as a string does not quietly record.
+- **What survives:** node names, kinds, ids, timings, token counts, the number of streamed
+  deltas and each delta's length (`chars`). The graph still reads; the contents do not.
+- **A payload that cannot be read safely is not sent raw.** If a switch is on and reading the
+  payload fails (a throwing getter or Proxy, a malformed `deltas`), the event is sent with
+  `input`/`output` hidden, `deltas: []` and `redaction.failed: true`. If even its identity
+  fields cannot be read, it is dropped with one warning.
+- **`node.error` is never redacted.** An error message or stack can repeat the data it failed
+  on, so these switches do not guarantee that no value is recorded.
+- **The tool-only switches hide only the tool node's own input and output.** In an agent loop
+  the same arguments appear in the model's output (`tool_use`), and the same results appear in
+  the next model request (`tool_result`). To keep them out of the recording, use
+  `GRAPHMIND_HIDE_INPUTS` and `GRAPHMIND_HIDE_OUTPUTS`.
+- **Under `graphmind mcp-proxy`:** with `GRAPHMIND_HIDE_TOOL_RESULTS` (or `_OUTPUTS`), a failed
+  `isError: true` result is not quoted into the error message. The message says the call failed
+  and that the content is hidden. With `GRAPHMIND_HIDE_INPUTS`, the server's command-line
+  arguments are left out of the run metadata. Its label keeps only the command's name and the
+  file names of path arguments; flags, their values, URLs and `key=value` pairs are dropped.
+  JSON-RPC error messages are still recorded.
+- The viewer shows a "hidden by …" chip where the value would be, and refuses to inject a value
+  that still contains the placeholder. See [the viewer](/reference/viewer/#hidden-values).
+- **The loop fingerprint follows `hideInputs`.** When inputs are hidden, `exec.paused.loop.fingerprint` is
+  also `"__REDACTED__"` (under `GRAPHMIND_HIDE_TOOL_ARGS`, for tool nodes). A digest of a
+  low-entropy input can be reversed by guessing.
+
+For exports, a separate mechanism removes values under secret-looking keys by default:
+[`graphmind record`](/reference/cli/#graphmind-record-runid).
+
+## Loop hold
+
+While a debugger is attached, GraphMind holds an agent that calls the same tool with the same
+arguments again and again. The third call in a row is stopped at its `before` gate, reason
+`loop`, and the card reads `Loop: 3× searchFlights with identical arguments`. Continue, Retry,
+Inject and Abort work as they do at any gate. Loop holds obey `pauseTimeoutMs` and are released
+if the debugger disconnects.
+
+- **Identical** means: same node, same arguments after canonicalisation. Key order, whitespace
+  and number spelling (`1.0` and `1`) do not matter. MCP's per-request `_meta` object is
+  ignored, because clients put a fresh `progressToken` in it on every call. Pagination keys
+  (`page`, `cursor`, `offset`) are **not** ignored, so page 3 of a listing is a different call.
+- **In a row** means back-to-back within one run. Any other watched call in between, whether
+  a different tool or the same tool with different arguments, starts the count again. LLM
+  steps are not watched, so `model → search → model → search → model → search` is still three in
+  a row. An agent alternating between two tools (`search, read, search, read`) is not held.
+- **Watched kinds:** tool calls only. LLM steps are not watched unless you set `kinds`.
+- **Not attached** (or `GRAPHMIND_ON_LOOP=warn`): nothing is held. One warning per streak is
+  logged; it names the tool, never its arguments. The count keeps running, so a debugger that
+  attaches later holds the next identical call.
+- **Attached** means connected to a running `graphmind` server, whether or not a viewer tab is
+  open. As with the default pause-on-error, a loop can hold with nobody watching. Set
+  `pauseTimeoutMs` if that matters to you.
+
+Checked against a real server (`GRAPHMIND_ON_LOOP=warn`) and with no server at all:
+
+```text
+[graphmind] possible loop: search (tool:search) was called 3× in a row with identical arguments; GRAPHMIND_ON_LOOP=warn, so it is not being held. Polling on purpose? add it to loopGuard.allowNodes; GRAPHMIND_ON_LOOP=off silences this
+[graphmind] possible loop: search (tool:search) was called 3× in a row with identical arguments; no debugger is attached to hold it (start `npx graphmind-ai` to pause it there). Polling on purpose? add it to loopGuard.allowNodes; GRAPHMIND_ON_LOOP=off silences this
+```
+
+Configuration. For each field the option wins over the environment variable, which wins over the default:
+
+| Option (`loopGuard: {…}`) | Env | Default | Meaning |
+| --- | --- | --- | --- |
+| `threshold` | `GRAPHMIND_LOOP_THRESHOLD` | `3` | Identical calls in a row that count as a loop; `0` turns it off |
+| `mode` | `GRAPHMIND_ON_LOOP` | `pause` | `pause`, `warn` or `off` |
+| `allowNodes` | `GRAPHMIND_LOOP_ALLOW` | none | Node ids (`tool:pollJob`) or tool names (`pollJob`) never held. Use it for tools that poll on purpose. |
+| `ignoreKeys` | — | `['_meta']` | Keys removed at every depth before comparing. Your list **replaces** the default. |
+| `kinds` | — | `['tool']` | Node kinds watched. Your list replaces the default. |
+
+`loopGuard: false` turns it off in code. Python spells the option
+`loop_guard={"threshold": 5, "allow_nodes": [...]}` and Ruby `loop_guard: { allow_nodes: [...] }`.
+Under `graphmind mcp-proxy`, which takes no session options, the environment variables are the
+only way to configure it.
+
+Costs and limits:
+
+- **Fingerprinting cost:** each watched tool's start pays to fingerprint its arguments, even
+  when detached, and the cost grows with the size of the arguments. The tests bound it for a
+  1 KB input: under 0.05 ms on average in TypeScript (`packages/client/test/loop-guard.test.ts`),
+  under 0.5 ms in Python and Ruby (`test_fingerprinting_a_1kb_input_is_cheap` in each), where
+  the canonicaliser is interpreted code. For a tool that takes megabytes of arguments, use
+  `allowNodes` or `GRAPHMIND_ON_LOOP=off`.
+- **Identical calls in parallel also count.** Their starts are back-to-back, so once the
+  threshold is reached each further identical call can be held.
+- **One run can span requests.** Under `graphmind mcp-proxy` a whole host session is one run.
+  In an app that does not wrap each request in `gm.run`, every request shares one implicit run.
+  Either way, the same call three times in a row, with no other tool call between, is held even
+  when the calls came from separate requests.
+- **A poll with byte-identical arguments** looks exactly like a loop. Use `allowNodes`.
+- **Only where a `before` gate exists.** Provider-executed and other ungated tools can warn but
+  cannot be held.
+
+`exec.paused` carries `reason: 'loop'` and `loop: { repeats, firstSeq, lastSeq, fingerprint }`;
+see the [wire protocol](/reference/wire-protocol/#events-app--viewer). To try it:
+`pnpm --filter demo-agent start -- --loop` from a checkout, with `npx graphmind-ai` running.
+
 ## Non-standard ports
 
 Two sides have to agree. If you move the server, tell the app:
@@ -86,18 +224,25 @@ claude mcp add graphmind -- npx graphmind-ai mcp --port 4848
 
 ## Docker & remote containers
 
-The adapter dials `127.0.0.1` inside its own network namespace. From a container, point it at
-the host:
+The adapter dials `127.0.0.1` inside its own network namespace. The simplest setup is to run
+`npx graphmind-ai` in the same container as the agent and forward port 4747 to your browser.
+See [remote development](/guides/remote-development/), which also covers devcontainers,
+Codespaces, WSL 2 and SSH.
+
+To keep the server on the host instead, point the adapter at it **and** allow that hostname on
+the server. Without the second line the connection is refused with `403`, because
+`host.docker.internal` is not a loopback name:
 
 ```sh
-# Docker Desktop (macOS / Windows)
+# in the container
 GRAPHMIND_URL=ws://host.docker.internal:4747/ingest
-
-# Linux, with --add-host=host.docker.internal:host-gateway
-GRAPHMIND_URL=ws://host.docker.internal:4747/ingest
+# on the host
+GRAPHMIND_ALLOWED_ORIGINS=http://host.docker.internal:4747 npx graphmind-ai
 ```
 
-The server still binds loopback on the host, so nothing is exposed to your network.
+This works where `host.docker.internal` reaches the host's loopback (Docker Desktop). On Linux,
+`--add-host=host.docker.internal:host-gateway` points at the bridge address, where a server
+bound to `127.0.0.1` is not listening. There, run the server in the container.
 
 <Aside type="caution">
 There is no auth on the ingest socket. If you make the port reachable beyond loopback (a
@@ -116,5 +261,7 @@ Options passed to `graphmind({ … })` take precedence over the variables:
 | `connectTimeoutMs` | `300` | — |
 | `handshakeTimeoutMs` | `1000` | — |
 | `retryIntervalMs` | `10000` | — |
-| `bufferSize` | `2000` | — |
+| `bufferSize` | `5000` (and at most `maxBufferBytes`, 8 MiB) | — |
 | `pauseTimeoutMs` | hold forever | — |
+| `hideInputs` / `hideOutputs` / `hideToolArgs` / `hideToolResults` | `false` | `GRAPHMIND_HIDE_*`. Not shadowed: either one turning a switch on wins. |
+| `loopGuard` | `{ threshold: 3, mode: 'pause', … }` | `GRAPHMIND_LOOP_THRESHOLD`, `GRAPHMIND_ON_LOOP`, `GRAPHMIND_LOOP_ALLOW`, field by field |

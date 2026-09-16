@@ -9,9 +9,13 @@
 import { runTripPlanner } from './agent.js';
 
 const live = process.argv.includes('--live');
+// `--loop`: a scripted model that asks for the same flights again and again,
+// so the loop hold has something to stop (mock mode only).
+const loop = process.argv.includes('--loop');
 
 runTripPlanner({
-  mode: live ? 'live' : 'mock',
+  mode: live && !loop ? 'live' : 'mock',
+  scenario: loop ? 'loop' : 'planner',
   log: (message) => console.log(`[demo-agent] ${message}`),
 }).then(
   (result) => {

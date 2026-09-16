@@ -37,6 +37,12 @@ export interface CliFlags {
   /** `graphmind record --html`: export a self-contained viewer page. */
   html: boolean;
   /**
+   * `graphmind record`: replace values under secret-shaped keys (api_key,
+   * authorization, token, …) with "__REDACTED__" in the export. Default ON;
+   * `--no-redact-secrets` keeps them. See redact-secrets.ts for the rule.
+   */
+  redactSecrets: boolean;
+  /**
    * `graphmind --pause-on-error <on|off|kind>`: scope (or remove) the default
    * error breakpoint. Undefined means "not given" — the default stays armed.
    */
@@ -75,6 +81,10 @@ export const OPTION_HELP: readonly string[] = [
   '  --write        (init) write a graphmind.example.ts snippet file',
   '  --out <file>   (record) output path',
   '  --html         (record) export a shareable self-contained HTML page',
+  '  --no-redact-secrets',
+  '                 (record) keep values under secret-shaped keys (api_key,',
+  '                 authorization, token, password, …). By default they are',
+  '                 replaced with "__REDACTED__" in both export formats',
   '  --prune        (runs) apply the retention policy now',
   '  --keep <n>     (runs) keep/show the n newest runs',
   '  --days <n>     (runs) keep runs from the last n days',
@@ -129,6 +139,7 @@ export function defaultFlags(): CliFlags {
     days: undefined,
     rm: undefined,
     html: false,
+    redactSecrets: true,
     pauseOnError: undefined,
     trace: false,
     waitForAttach: false,
@@ -210,6 +221,12 @@ export function parseCliArgs(argv: string[]): ParsedCli {
         break;
       case '--html':
         flags.html = true;
+        break;
+      case '--redact-secrets':
+        flags.redactSecrets = true;
+        break;
+      case '--no-redact-secrets':
+        flags.redactSecrets = false;
         break;
       case '--prune':
         flags.prune = true;

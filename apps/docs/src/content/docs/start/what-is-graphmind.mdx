@@ -76,11 +76,13 @@ These are enforced in the client runtime and asserted in its test suite, not asp
 
 - **Never throws into your app.** Internal failures degrade to a no-op plus one rate-limited
   `console.warn`. Errors thrown by *your* code stay yours and propagate untouched.
-- **Free when detached.** With no debugger attached, an awaited gate short-circuits to a shared
-  resolved promise — the suite asserts an average under 1 ms; the design spike measured 0.03 ms
-  worst case. With GraphMind disabled outright, the wrappers are identity functions.
+- **Cheap when detached.** With no debugger attached, an awaited gate short-circuits to a shared
+  resolved promise. `packages/client/test/overhead.test.ts` asserts an average and a p99 under
+  1 ms per gate over 2,000 gates. With GraphMind disabled outright, the wrappers are identity
+  functions.
 - **Fails open.** If the viewer disconnects while gates are held, every held gate resolves
-  `continue` immediately, and the agent runs on as if nothing had attached.
+  `continue` within 100 ms (asserted in the TypeScript and Python suites), and the agent runs on
+  as if nothing had attached.
 - **Local-first.** The server binds `127.0.0.1` only. Runs live in `~/.graphmind/graphmind.db`.
   Your prompts and tool payloads never leave the machine.
 - **Off in production.** Under `NODE_ENV=production` instrumentation is disabled unless you set

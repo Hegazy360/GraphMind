@@ -21,10 +21,10 @@ from __future__ import annotations
 
 import functools
 import inspect
-import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
+from ..clock import elapsed_ms, monotonic_ms
 from ..gate import GateNode
 from ..ids import LLM_NODE_ID, LLM_NODE_NAME, agent_node_id, next_id
 from ..session import Session
@@ -153,7 +153,7 @@ class _Call:
         self.hinter = hinter
         self.node = GateNode(LLM_NODE_ID, "llm", LLM_NODE_NAME)
         self.instance_id = next_id("step")
-        self.started = time.monotonic()
+        self.started = monotonic_ms()
 
     def begin(self, kwargs: dict[str, Any]) -> None:
         ctx = self.session.current_run()
@@ -167,7 +167,7 @@ class _Call:
             input=_describe(kwargs),
             extra={"sdk": SDK_NAME},
         )
-        self.started = time.monotonic()
+        self.started = monotonic_ms()
 
     def finish(
         self,
@@ -179,7 +179,7 @@ class _Call:
         self.session.finish_node(
             node_id=LLM_NODE_ID,
             instance_id=self.instance_id,
-            duration_ms=(time.monotonic() - self.started) * 1000.0,
+            duration_ms=elapsed_ms(self.started),
             status=status,
             output=output,
             usage=usage,

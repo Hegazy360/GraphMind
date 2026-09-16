@@ -1,0 +1,163 @@
+---
+title: Remote development
+description: Use GraphMind when your agent runs in a devcontainer, a Codespace, WSL 2 or on a machine you reach over SSH — run the server where the agent runs, forward port 4747 to your browser, and keep the port number the same.
+sidebar:
+  label: Remote development
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+`graphmind serve` binds `127.0.0.1` and has no `--host` option. Nothing can reach it from
+another machine or another network namespace, which is the point. When your agent runs
+somewhere other than your browser, the flow that works is:
+
+<Steps>
+
+1. **Run `npx graphmind-ai` where the agent runs**: inside the container, the Codespace, the WSL
+   distribution, or on the SSH host. The agent then reaches it on its own loopback, with no
+   configuration.
+
+2. **Forward port 4747 to the machine your browser is on**, keeping the **same port number**.
+
+3. **Open `http://localhost:4747`** in your local browser.
+
+</Steps>
+
+The same port number matters. The server accepts a browser only when the page's origin is on
+the server's own port. If the forward lands on a different local port, say `localhost:8888`,
+every script the viewer loads is refused with `403` and **the page stays blank**. If you cannot
+keep the port, tell the server which origin to expect:
+
+```sh
+# on the remote side, if your browser will use http://localhost:8888
+GRAPHMIND_ALLOWED_ORIGINS=http://localhost:8888 npx graphmind-ai
+```
+
+## By environment
+
+<Tabs>
+<TabItem label="VS Code devcontainer">
+
+Run `npx graphmind-ai --no-open` in the container's terminal. VS Code offers to forward a port
+it sees in terminal output. To make it explicit, add to `.devcontainer/devcontainer.json`:
+
+```json
+{
+  "forwardPorts": [4747]
+}
+```
+
+Check the **Ports** panel: the "Forwarded Address" should be `localhost:4747`. If VS Code
+picked another local port because 4747 was busy on your machine, either free it or set
+`GRAPHMIND_ALLOWED_ORIGINS` to that origin as above.
+
+Publishing the port with `docker run -p 4747:4747` does **not** work on its own. Docker
+forwards to the container's network interface, and the server listens only on the container's
+loopback. VS Code's forwarding connects from inside the container, which is why it works.
+
+</TabItem>
+<TabItem label="GitHub Codespaces">
+
+Opened in **VS Code desktop**, a Codespace forwards ports to `localhost` on your machine. That
+is the same flow as a devcontainer: run `npx graphmind-ai --no-open`, forward 4747, open
+`http://localhost:4747`.
+
+Opened **in the browser**, the forwarded address is a `https://<name>-4747.app.github.dev` URL.
+That hostname is not a loopback name, so the server's DNS-rebinding check refuses it with
+`403`. Allowing that exact origin should let it through:
+
+```sh
+GRAPHMIND_ALLOWED_ORIGINS=https://<name>-4747.app.github.dev npx graphmind-ai --no-open
+```
+
+That is an unauthenticated control channel for your agent, reachable by anyone who can pass
+the forwarded port's visibility setting. Keep the port **Private**.
+
+</TabItem>
+<TabItem label="WSL 2">
+
+Run the agent and `npx graphmind-ai --no-open` inside the same WSL distribution, then open
+`http://localhost:4747` in a Windows browser. WSL 2 forwards `localhost` from Windows into the
+distribution by default, so the port number stays the same.
+
+If the agent runs on Windows and the server in WSL (or the reverse), they are not on the same
+loopback. Run both on the same side.
+
+</TabItem>
+<TabItem label="SSH">
+
+Run the agent and `npx graphmind-ai --no-open` on the remote host, and forward the port with
+the same number on both ends:
+
+```sh
+ssh -L 4747:127.0.0.1:4747 you@remote-host
+```
+
+Then open `http://localhost:4747` locally. VS Code Remote-SSH does the same when you forward the
+port from its **Ports** panel.
+
+If 4747 is taken on your machine, forward another local port and allow that origin on the
+remote server:
+
+```sh
+ssh -L 8888:127.0.0.1:4747 you@remote-host
+# on the remote host:
+GRAPHMIND_ALLOWED_ORIGINS=http://localhost:8888 npx graphmind-ai --no-open
+```
+
+</TabItem>
+</Tabs>
+
+## When the server and the agent cannot share a machine
+
+`GRAPHMIND_URL` tells an SDK where the server is, for example when you run the server on your
+host and the agent in a container:
+
+```sh
+GRAPHMIND_URL=ws://host.docker.internal:4747/ingest node agent.js
+```
+
+Two things stand in the way, and both are deliberate:
+
+1. **The Host check.** The SDK's connection arrives with `Host: host.docker.internal:4747`,
+   which is not a loopback name, and the server answers `403`. Allow that hostname on the
+   server:
+
+   ```sh
+   GRAPHMIND_ALLOWED_ORIGINS=http://host.docker.internal:4747 npx graphmind-ai
+   ```
+
+2. **The loopback bind.** The server must be reachable at all from inside the container. Docker
+   Desktop's `host.docker.internal` routes to the host's loopback. On Linux,
+   `--add-host=host.docker.internal:host-gateway` points at the bridge address, where a
+   server bound to `127.0.0.1` is not listening.
+
+Running the server inside the container, as above, avoids both.
+
+<Aside type="caution" title="Loopback is the security boundary">
+There is no authentication on the ingest or viewer sockets. Anyone who can reach them can read
+your prompts and resume, inject into or abort your agent. Every flow on this page keeps the
+server on a loopback interface and moves only your browser's view of it. Do not put the port
+behind a public tunnel. See [security](/reference/security/#threat-model).
+</Aside>
+
+## What was tested
+
+Tested on macOS on 2026-09-14 against the built CLI:
+
+- A browser on the server's own loopback port: the viewer loads and connects.
+- A TCP port forward to a **different** local port, the same thing `ssh -L` and VS Code do at
+  the socket level: the page is blank, and the console shows `403 (Forbidden)` for the
+  viewer's scripts.
+- The same forward with `GRAPHMIND_ALLOWED_ORIGINS` set to the forwarded origin: the viewer
+  loads and connects.
+- An SDK connection whose `Host` is `host.docker.internal:4747`: refused with `403`. Accepted
+  once `GRAPHMIND_ALLOWED_ORIGINS=http://host.docker.internal:4793` named that hostname. The
+  port in that setting does not have to match for the `Host` check.
+- A request with `Host: <name>-4747.app.github.dev`: refused with `403`.
+
+Described from how each environment forwards ports, but **not run** here: a real VS Code
+devcontainer, a Codespace (in VS Code or in the browser), WSL 2, SSH, and Docker on Linux with
+`host-gateway`. If one of these behaves differently for you,
+[open an issue](https://github.com/Hegazy360/GraphMind/issues) with the Ports panel entry or
+the `403` body; the server's message names the header it refused.

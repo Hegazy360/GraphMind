@@ -18,6 +18,8 @@ import json
 import time
 from typing import Any
 
+from .shrink import escape_lone_surrogates
+
 PROTOCOL_VERSION = 1
 """Envelope ``gm`` field. See ``packages/schema/src/constants.ts``."""
 
@@ -120,16 +122,81 @@ def _fallback(obj: Any) -> Any:
         return f"<unserializable {type(obj).__name__}>"
 
 
-def serialize_envelope(envelope: dict[str, Any]) -> str:
-    """Serialize an envelope to a single JSON text frame. Never raises."""
+def _dumps_like_js(value: Any) -> str:
+    """``json.dumps`` held to what ``JSON.stringify`` would put on the wire.
+
+    * A non-finite float (NaN, Infinity) is written as ``null`` at any depth.
+      Python writes the bare literals, which are not JSON: the debugger's
+      parser rejected the whole frame and the event silently vanished.
+    * A lone surrogate is written as a ``\\udXXX`` escape. A ``str`` can hold
+      one (a JSON-decoded ``"\\ud800"``, ``surrogateescape``-decoded bytes);
+      written raw, the frame could not be encoded as UTF-8, the WebSocket send
+      raised, the connection dropped — and the frame, still in the replay
+      buffer, dropped the next connection too. Adjacent high+low code points
+      are paired first, as a UTF-16 string would see them.
+    """
     try:
-        return json.dumps(envelope, default=_fallback, ensure_ascii=False)
+        text = json.dumps(value, default=_fallback, ensure_ascii=False, allow_nan=False)
+    except ValueError as exc:
+        if "Circular" in str(exc):
+            raise
+        # A non-finite float somewhere (default= results included). Serialise
+        # with the literals, then re-read them as None and write again: the
+        # round trip is exact for everything else json.dumps writes.
+        text = json.dumps(value, default=_fallback, ensure_ascii=False)
+        text = json.dumps(json.loads(text, parse_constant=lambda _: None), ensure_ascii=False)
+    return escape_lone_surrogates(text)
+
+
+def _degraded_payload(payload: Any) -> dict[str, Any]:
+    """A payload that does not serialise even with ``default`` (a cyclic
+    container): keep every top-level field that does and replace only the
+    ones that do not, as ``serializePayload`` in ``packages/schema`` does, so
+    the event keeps its identity fields and stays a valid event instead of
+    being dropped by the debugger. ``_graphmindSerializationError`` marks it."""
+    if not isinstance(payload, dict):
+        return {"_graphmindSerializationError": True}
+    kept: dict[Any, Any] = {}
+    dropped: list[str] = []
+    for key, value in list(payload.items()):
+        if key is not None and not isinstance(key, (str, int, float)):
+            continue  # a key json.dumps cannot write at all (a tuple): omitted
+        try:
+            _dumps_like_js([value])
+            kept[key] = value
+        except Exception:
+            dropped.append(key if isinstance(key, str) else json.dumps(key))
+            # Type-preserving where it matters: an array stays an array.
+            kept[key] = (
+                []
+                if isinstance(value, (list, tuple))
+                else {"__graphmindTruncated": True, "bytes": 0, "preview": "[unserializable value]"}
+            )
+    kept["__graphmindTruncated"] = True
+    kept["fields"] = dropped
+    kept["_graphmindSerializationError"] = True
+    return kept
+
+
+def serialize_envelope(envelope: dict[str, Any]) -> str:
+    """Serialize an envelope to a single JSON text frame. Never raises.
+
+    The text is valid JSON, as ``JSON.stringify`` would write it: non-finite
+    floats become ``null`` and lone surrogates are escaped (see
+    :func:`_dumps_like_js`)."""
+    try:
+        return _dumps_like_js(envelope)
     except Exception:
-        # A container that breaks even with `default` (e.g. a cyclic dict):
-        # drop the payload rather than lose the event entirely.
-        safe = dict(envelope)
+        pass
+    # A container that breaks even with `default` (e.g. a cyclic dict): degrade
+    # the offending fields rather than lose the event entirely.
+    safe = dict(envelope)
+    try:
+        safe["payload"] = _degraded_payload(envelope.get("payload"))
+        return _dumps_like_js(safe)
+    except Exception:
         safe["payload"] = {"_graphmindSerializationError": True}
-        return json.dumps(safe, ensure_ascii=False)
+        return json.dumps(safe, default=repr)
 
 
 class ParseResult:

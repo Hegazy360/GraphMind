@@ -239,6 +239,17 @@ the same shape `graphmind demo` replays and `WS /ingest` accepts). Default
 output: `graphmind-run-<runId>.ndjson`. Lists recent run ids when the given
 one is not found.
 
+Exports are **sanitised by default** (0.5.0): any value under a secret-shaped
+key becomes `"__REDACTED__"` and the command prints what it redacted. Keys
+matched, case-insensitively, as the whole key or a `_`/`-`/camelCase-delimited
+part of it: `authorization`, `cookie`, `set-cookie`, `api_key`, `apikey`,
+`password`, `passwd`, `secret`, `client_secret`, `private_key`, `access_token`,
+`refresh_token`, `token`, `bearer` (so `x-api-key` and `accessToken` match;
+`max_tokens` and `tokenizer` do not). Keys, not values: a secret typed into a
+prompt is exported as recorded — use the client's `GRAPHMIND_HIDE_*` switches
+for that. `--no-redact-secrets` keeps the values; `--redact-secrets`
+re-enables. The same applies to `--html`.
+
 ### Global flags
 
 | Flag | Meaning |
@@ -261,7 +272,12 @@ one is not found.
 | Variable | Read by | Meaning |
 |---|---|---|
 | `GRAPHMIND_DB` | CLI | Database path (`--db` beats it; default `~/.graphmind/graphmind.db`) |
-| `GRAPHMIND_TELEMETRY` | CLI | `0` or `false` disables telemetry entirely (also auto-disabled when `CI` is set) |
+| `GRAPHMIND_HIDE_INPUTS` | client | `1`/`true`: every node's `input` is recorded as `"__REDACTED__"` (see the client README) |
+| `GRAPHMIND_HIDE_OUTPUTS` | client | `1`/`true`: every node's `output` and streamed token text |
+| `GRAPHMIND_HIDE_TOOL_ARGS` | client | `1`/`true`: tool nodes' `input` only |
+| `GRAPHMIND_HIDE_TOOL_RESULTS` | client | `1`/`true`: tool nodes' `output` only — see the note below the table |
+| `DO_NOT_TRACK` | CLI | `1`/`true` disables telemetry, beating every `GRAPHMIND_TELEMETRY` value |
+| `GRAPHMIND_TELEMETRY` | CLI | `0` or `false` disables telemetry; `log` prints the exact payload to stderr and sends nothing; otherwise auto-disabled when `CI` is set |
 | `GRAPHMIND_TELEMETRY_URL` | CLI | Override the telemetry endpoint (used by tests) |
 | `GRAPHMIND_HOME` | CLI | Directory for the telemetry install id (default `~/.graphmind`) |
 | `GRAPHMIND_DEMO_AGENT_DIR` | CLI | Where `demo --live` finds the demo agent outside a monorepo checkout |
@@ -271,6 +287,8 @@ one is not found.
 | `GRAPHMIND_URL` | instrumented app | Ingest endpoint for adapters (default `ws://127.0.0.1:4747/ingest`) |
 | `GRAPHMIND_DISABLED` | instrumented app | `1` disables instrumentation — beats everything, including explicit `enabled: true` |
 | `GRAPHMIND` | instrumented app | `1` re-enables instrumentation under `NODE_ENV=production` (disabled there by default) |
+
+> **Redaction switches — what they do not cover.** The tool-only switches hide the tool node's own `input` / `output`. In an agent loop the same values also travel through the model: its `tool_use` blocks (LLM output) and the `tool_result` messages of the next request (LLM input). To keep tool arguments and results out of the recording entirely, set `GRAPHMIND_HIDE_INPUTS` (and `GRAPHMIND_HIDE_OUTPUTS`). Error messages are never redacted. Under `GRAPHMIND_HIDE_TOOL_RESULTS`, `graphmind mcp-proxy` does not quote a failed (`isError`) result into the error either; under `GRAPHMIND_HIDE_INPUTS` it drops the server's command-line arguments from the run label and metadata.
 
 ## Telemetry
 

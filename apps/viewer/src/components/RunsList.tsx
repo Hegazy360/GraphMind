@@ -4,6 +4,7 @@
  * runs of the same app apart without opening them.
  */
 import { useEffect, useMemo, useState } from 'react';
+import { runHeldMs } from '../lib/duration.js';
 import { runChipLabel } from '../lib/firstRun.js';
 import { fmtCount, fmtDuration, fmtRelative } from '../lib/format.js';
 import { useRunStore } from '../store/runStore.js';
@@ -52,10 +53,14 @@ function RunItem({ run, now }: { run: RunState; now: number }) {
     }
     return count;
   }, [run]);
+  // Held time is not run time: a run the developer sat on for a minute at a
+  // breakpoint is not a minute-long run.
   const elapsed =
     run.meta.startedTs === undefined
       ? undefined
       : (run.meta.finishedTs ?? now) - run.meta.startedTs;
+  const held = elapsed === undefined ? 0 : Math.min(elapsed, runHeldMs(run, run.meta.finishedTs ?? now));
+  const ran = elapsed === undefined ? undefined : Math.max(0, elapsed - held);
 
   return (
     <button
@@ -76,7 +81,11 @@ function RunItem({ run, now }: { run: RunState; now: number }) {
         </span>
         {nodeCount > 0 && <span>· {fmtCount(nodeCount)} nodes</span>}
         {errors > 0 && <span className="gm-run-item-errors">· {errors} err</span>}
-        {elapsed !== undefined && <span>· {fmtDuration(elapsed)}</span>}
+        {ran !== undefined && (
+          <span {...(held > 0 ? { title: `${fmtDuration(elapsed ?? 0)} wall · ${fmtDuration(held)} held at gates` } : {})}>
+            · {fmtDuration(ran)}
+          </span>
+        )}
         {run.meta.startedTs !== undefined && (
           <span className="gm-run-item-when">{fmtRelative(run.meta.startedTs, now)}</span>
         )}

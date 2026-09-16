@@ -24,6 +24,7 @@
  * the handler's `node.finished`. With no handler attached the wrapper emits the
  * node events itself, so a wrapped tool is useful on its own.
  */
+import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
 import {
   CONTINUE_DECISION,
   isAbortError,
@@ -150,7 +151,7 @@ async function runGated(
   // With a handler attached the node events are already the handler's job.
   const ownsEvents = site.link === undefined;
   const instanceId = site.link?.instanceId ?? nextId('call');
-  const startedAt = Date.now();
+  const startedAt = monotonicNow();
   const runIn = <T>(fn: () => T | Promise<T>): Promise<T> => core.runIn(site.runId, fn);
   // Resolved inside the run context so it picks up that run's abort reason.
   const abortError = (): Promise<Error> =>
@@ -179,7 +180,7 @@ async function runGated(
       nodeId,
       instanceId,
       output,
-      durationMs: Date.now() - startedAt,
+      durationMs: elapsedMs(startedAt),
       status,
       extra: { attempts, ...extra },
     });

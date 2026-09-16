@@ -1,0 +1,252 @@
+{
+  "$comment": "Conformance fixture for the coarse redaction kill switches (Phase 6 W7). Every implementation (TS @graphmind-ai/client, Python graphmind, Ruby graphmind) must turn each case's `in` events into exactly its `out` events when the given switches are on. Events are `{type, payload}` in emit order within ONE run; a fresh redactor per case (kind tracking starts empty). Switch names are the option names; the env names are GRAPHMIND_HIDE_INPUTS / _OUTPUTS / _TOOL_ARGS / _TOOL_RESULTS (values 1/true, case-insensitive). Rules: node.started.input -> placeholder under hideInputs, or under hideToolArgs when kind is tool; node.finished.output -> placeholder under hideOutputs, or under hideToolResults when the instance's kind is tool (kind comes from the matching node.started; without an instanceId the node's latest kind; unknown node -> a `tool:` nodeId prefix); node.token deltas keep `t` and gain `chars` (the text length) with `v` emptied — all deltas under hideOutputs, deltas of tool nodes under hideToolResults, `tool-args` deltas under hideToolArgs and hideInputs; node.error is never redacted; a field that is absent, or already the placeholder, is left alone and not counted; `redaction.count` is the number of values replaced and `redaction.keys` the payload fields touched; an existing `redaction` on the payload is merged (counts add, keys union). Names, kinds, ids, timings, usage and every other field survive untouched. Fail closed (decisions.md \"Redaction fails closed on internal error\"): with any switch on, a node.started/node.finished/node.token event the redactor cannot inspect (the payload is not an object, a property read throws, token `deltas` that is not an array while a hiding switch could cover it, a covered delta that is neither null nor an object, a covered delta whose `v` is present and not a string) is replaced by its failed form, built WITHOUT reading input/output/deltas: node.started {nodeId, parentId?, kind, name, instanceId, input: placeholder}, node.finished {nodeId, instanceId?, durationMs, heldMs?, status, usage?, output: placeholder}, node.token {nodeId, instanceId?, deltas: []}, each with redaction {count: 0, keys: [\"input\",\"output\",\"deltas\"], failed: true}; every other field is omitted; an optional field whose read throws or whose value is not schema-valid is omitted; when a required field cannot be read or is not schema-valid (nodeId/name/instanceId strings, kind a NodeKind, durationMs a finite number >= 0, status ok|error|aborted) the event is dropped, shown in `out` as {type, dropped: true}. `chars` is the UTF-16 code unit count (JS string length: an astral character counts 2).",
+  "placeholder": "__REDACTED__",
+  "cases": [
+    {
+      "name": "hideInputs replaces node.started.input on every kind, nothing else",
+      "switches": { "hideInputs": true },
+      "in": [
+        { "type": "run.started", "payload": { "app": "a", "sdk": { "name": "t", "version": "1" } } },
+        { "type": "node.started", "payload": { "nodeId": "agent:run", "kind": "agent", "name": "run", "instanceId": "r1", "input": { "prompt": "SECRET-PROMPT" } } },
+        { "type": "node.started", "payload": { "nodeId": "llm:step", "kind": "llm", "name": "step", "instanceId": "l1", "parentId": "agent:run", "input": { "messages": ["SECRET-PROMPT"] } } },
+        { "type": "node.started", "payload": { "nodeId": "tool:search", "kind": "tool", "name": "search", "instanceId": "t1", "input": { "q": "SECRET-ARG" } } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:search", "instanceId": "t1", "output": { "hits": 3 }, "durationMs": 12, "status": "ok" } },
+        { "type": "node.finished", "payload": { "nodeId": "llm:step", "instanceId": "l1", "output": { "text": "SECRET-OUTPUT" }, "usage": { "inputTokens": 10, "outputTokens": 5 }, "durationMs": 800, "status": "ok" } },
+        { "type": "node.finished", "payload": { "nodeId": "agent:run", "instanceId": "r1", "output": "done", "durationMs": 900, "status": "ok" } },
+        { "type": "run.finished", "payload": { "status": "ok" } }
+      ],
+      "out": [
+        { "type": "run.started", "payload": { "app": "a", "sdk": { "name": "t", "version": "1" } } },
+        { "type": "node.started", "payload": { "nodeId": "agent:run", "kind": "agent", "name": "run", "instanceId": "r1", "input": "__REDACTED__", "redaction": { "count": 1, "keys": ["input"] } } },
+        { "type": "node.started", "payload": { "nodeId": "llm:step", "kind": "llm", "name": "step", "instanceId": "l1", "parentId": "agent:run", "input": "__REDACTED__", "redaction": { "count": 1, "keys": ["input"] } } },
+        { "type": "node.started", "payload": { "nodeId": "tool:search", "kind": "tool", "name": "search", "instanceId": "t1", "input": "__REDACTED__", "redaction": { "count": 1, "keys": ["input"] } } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:search", "instanceId": "t1", "output": { "hits": 3 }, "durationMs": 12, "status": "ok" } },
+        { "type": "node.finished", "payload": { "nodeId": "llm:step", "instanceId": "l1", "output": { "text": "SECRET-OUTPUT" }, "usage": { "inputTokens": 10, "outputTokens": 5 }, "durationMs": 800, "status": "ok" } },
+        { "type": "node.finished", "payload": { "nodeId": "agent:run", "instanceId": "r1", "output": "done", "durationMs": 900, "status": "ok" } },
+        { "type": "run.finished", "payload": { "status": "ok" } }
+      ]
+    },
+    {
+      "name": "hideOutputs replaces node.finished.output on every kind and empties token deltas, keeping counts",
+      "switches": { "hideOutputs": true },
+      "in": [
+        { "type": "node.started", "payload": { "nodeId": "llm:step", "kind": "llm", "name": "step", "instanceId": "l1", "input": { "messages": ["hi"] } } },
+        { "type": "node.token", "payload": { "nodeId": "llm:step", "deltas": [{ "t": "text", "v": "Hello" }, { "t": "reasoning", "v": "thinking…" }, { "t": "tool-args", "v": "{\"q\":1}" }] } },
+        { "type": "node.token", "payload": { "nodeId": "llm:step", "deltas": [{ "t": "text", "v": "" }] } },
+        { "type": "node.finished", "payload": { "nodeId": "llm:step", "instanceId": "l1", "output": { "text": "Hello" }, "usage": { "inputTokens": 3, "outputTokens": 2 }, "durationMs": 40, "status": "ok" } },
+        { "type": "node.started", "payload": { "nodeId": "tool:search", "kind": "tool", "name": "search", "instanceId": "t1", "input": { "q": 1 } } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:search", "instanceId": "t1", "output": [1, 2, 3], "durationMs": 5, "status": "ok" } }
+      ],
+      "out": [
+        { "type": "node.started", "payload": { "nodeId": "llm:step", "kind": "llm", "name": "step", "instanceId": "l1", "input": { "messages": ["hi"] } } },
+        { "type": "node.token", "payload": { "nodeId": "llm:step", "deltas": [{ "t": "text", "v": "", "chars": 5 }, { "t": "reasoning", "v": "", "chars": 9 }, { "t": "tool-args", "v": "", "chars": 7 }], "redaction": { "count": 3, "keys": ["deltas"] } } },
+        { "type": "node.token", "payload": { "nodeId": "llm:step", "deltas": [{ "t": "text", "v": "" }] } },
+        { "type": "node.finished", "payload": { "nodeId": "llm:step", "instanceId": "l1", "output": "__REDACTED__", "usage": { "inputTokens": 3, "outputTokens": 2 }, "durationMs": 40, "status": "ok", "redaction": { "count": 1, "keys": ["output"] } } },
+        { "type": "node.started", "payload": { "nodeId": "tool:search", "kind": "tool", "name": "search", "instanceId": "t1", "input": { "q": 1 } } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:search", "instanceId": "t1", "output": "__REDACTED__", "durationMs": 5, "status": "ok", "redaction": { "count": 1, "keys": ["output"] } } }
+      ]
+    },
+    {
+      "name": "hideToolArgs replaces input only on tool nodes, plus streamed tool-args deltas",
+      "switches": { "hideToolArgs": true },
+      "in": [
+        { "type": "node.started", "payload": { "nodeId": "llm:step", "kind": "llm", "name": "step", "instanceId": "l1", "input": { "messages": ["hi"] } } },
+        { "type": "node.token", "payload": { "nodeId": "llm:step", "deltas": [{ "t": "text", "v": "calling" }, { "t": "tool-args", "v": "{\"q\":\"SECRET\"}" }] } },
+        { "type": "node.started", "payload": { "nodeId": "tool:search", "kind": "tool", "name": "search", "instanceId": "t1", "input": { "q": "SECRET" } } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:search", "instanceId": "t1", "output": { "hits": 3 }, "durationMs": 12, "status": "ok" } },
+        { "type": "node.finished", "payload": { "nodeId": "llm:step", "instanceId": "l1", "output": { "text": "done" }, "durationMs": 40, "status": "ok" } }
+      ],
+      "out": [
+        { "type": "node.started", "payload": { "nodeId": "llm:step", "kind": "llm", "name": "step", "instanceId": "l1", "input": { "messages": ["hi"] } } },
+        { "type": "node.token", "payload": { "nodeId": "llm:step", "deltas": [{ "t": "text", "v": "calling" }, { "t": "tool-args", "v": "", "chars": 14 }], "redaction": { "count": 1, "keys": ["deltas"] } } },
+        { "type": "node.started", "payload": { "nodeId": "tool:search", "kind": "tool", "name": "search", "instanceId": "t1", "input": "__REDACTED__", "redaction": { "count": 1, "keys": ["input"] } } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:search", "instanceId": "t1", "output": { "hits": 3 }, "durationMs": 12, "status": "ok" } },
+        { "type": "node.finished", "payload": { "nodeId": "llm:step", "instanceId": "l1", "output": { "text": "done" }, "durationMs": 40, "status": "ok" } }
+      ]
+    },
+    {
+      "name": "hideToolResults replaces output only on tool instances (kind learned from node.started), plus a tool node's streamed chunks",
+      "switches": { "hideToolResults": true },
+      "in": [
+        { "type": "node.started", "payload": { "nodeId": "llm:step", "kind": "llm", "name": "step", "instanceId": "l1", "input": { "messages": ["hi"] } } },
+        { "type": "node.started", "payload": { "nodeId": "tool:search", "kind": "tool", "name": "search", "instanceId": "t1", "input": { "q": 1 } } },
+        { "type": "node.started", "payload": { "nodeId": "tool:search", "kind": "tool", "name": "search", "instanceId": "t2", "input": { "q": 2 } } },
+        { "type": "node.token", "payload": { "nodeId": "tool:search", "deltas": [{ "t": "text", "v": "chunk-1" }] } },
+        { "type": "node.token", "payload": { "nodeId": "llm:step", "deltas": [{ "t": "text", "v": "visible" }] } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:search", "instanceId": "t2", "output": { "hits": 2 }, "durationMs": 5, "status": "ok" } },
+        { "type": "node.error", "payload": { "nodeId": "tool:search", "instanceId": "t1", "error": { "name": "Boom", "message": "upstream said: SECRET-IN-MESSAGE" } } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:search", "instanceId": "t1", "output": null, "durationMs": 7, "status": "error" } },
+        { "type": "node.finished", "payload": { "nodeId": "llm:step", "instanceId": "l1", "output": { "text": "done" }, "durationMs": 40, "status": "ok" } }
+      ],
+      "out": [
+        { "type": "node.started", "payload": { "nodeId": "llm:step", "kind": "llm", "name": "step", "instanceId": "l1", "input": { "messages": ["hi"] } } },
+        { "type": "node.started", "payload": { "nodeId": "tool:search", "kind": "tool", "name": "search", "instanceId": "t1", "input": { "q": 1 } } },
+        { "type": "node.started", "payload": { "nodeId": "tool:search", "kind": "tool", "name": "search", "instanceId": "t2", "input": { "q": 2 } } },
+        { "type": "node.token", "payload": { "nodeId": "tool:search", "deltas": [{ "t": "text", "v": "", "chars": 7 }], "redaction": { "count": 1, "keys": ["deltas"] } } },
+        { "type": "node.token", "payload": { "nodeId": "llm:step", "deltas": [{ "t": "text", "v": "visible" }] } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:search", "instanceId": "t2", "output": "__REDACTED__", "durationMs": 5, "status": "ok", "redaction": { "count": 1, "keys": ["output"] } } },
+        { "type": "node.error", "payload": { "nodeId": "tool:search", "instanceId": "t1", "error": { "name": "Boom", "message": "upstream said: SECRET-IN-MESSAGE" } } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:search", "instanceId": "t1", "output": "__REDACTED__", "durationMs": 7, "status": "error", "redaction": { "count": 1, "keys": ["output"] } } },
+        { "type": "node.finished", "payload": { "nodeId": "llm:step", "instanceId": "l1", "output": { "text": "done" }, "durationMs": 40, "status": "ok" } }
+      ]
+    },
+    {
+      "name": "all four switches together; absent fields, an already-redacted field and node.error are left alone; an existing redaction summary is merged",
+      "switches": { "hideInputs": true, "hideOutputs": true, "hideToolArgs": true, "hideToolResults": true },
+      "in": [
+        { "type": "node.started", "payload": { "nodeId": "mcp:session", "kind": "server", "name": "srv", "instanceId": "mcp:session", "transport": "stdio" } },
+        { "type": "node.started", "payload": { "nodeId": "tool:echo", "kind": "tool", "name": "echo", "instanceId": "1", "parentId": "mcp:session", "input": { "name": "echo", "arguments": { "text": "SECRET" } }, "method": "tools/call" } },
+        { "type": "node.token", "payload": { "nodeId": "tool:echo", "deltas": [{ "t": "text", "v": "SEC" }, { "t": "text", "v": "RET" }] } },
+        { "type": "node.error", "payload": { "nodeId": "tool:echo", "instanceId": "1", "error": { "name": "E", "message": "echo failed for SECRET", "stack": "E: SECRET\n  at x" } } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:echo", "instanceId": "1", "output": { "content": [{ "type": "text", "text": "SECRET" }] }, "durationMs": 1.23, "status": "error", "method": "tools/call" } },
+        { "type": "node.started", "payload": { "nodeId": "llm:pre", "kind": "llm", "name": "pre", "instanceId": "p1", "input": "__REDACTED__", "redaction": { "count": 1, "keys": ["input"] } } },
+        { "type": "node.finished", "payload": { "nodeId": "llm:pre", "instanceId": "p1", "output": { "text": "SECRET" }, "durationMs": 2, "status": "ok", "redaction": { "count": 2, "keys": ["messages"] } } },
+        { "type": "node.finished", "payload": { "nodeId": "mcp:session", "instanceId": "mcp:session", "durationMs": 100, "status": "ok" } }
+      ],
+      "out": [
+        { "type": "node.started", "payload": { "nodeId": "mcp:session", "kind": "server", "name": "srv", "instanceId": "mcp:session", "transport": "stdio" } },
+        { "type": "node.started", "payload": { "nodeId": "tool:echo", "kind": "tool", "name": "echo", "instanceId": "1", "parentId": "mcp:session", "input": "__REDACTED__", "method": "tools/call", "redaction": { "count": 1, "keys": ["input"] } } },
+        { "type": "node.token", "payload": { "nodeId": "tool:echo", "deltas": [{ "t": "text", "v": "", "chars": 3 }, { "t": "text", "v": "", "chars": 3 }], "redaction": { "count": 2, "keys": ["deltas"] } } },
+        { "type": "node.error", "payload": { "nodeId": "tool:echo", "instanceId": "1", "error": { "name": "E", "message": "echo failed for SECRET", "stack": "E: SECRET\n  at x" } } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:echo", "instanceId": "1", "output": "__REDACTED__", "durationMs": 1.23, "status": "error", "method": "tools/call", "redaction": { "count": 1, "keys": ["output"] } } },
+        { "type": "node.started", "payload": { "nodeId": "llm:pre", "kind": "llm", "name": "pre", "instanceId": "p1", "input": "__REDACTED__", "redaction": { "count": 1, "keys": ["input"] } } },
+        { "type": "node.finished", "payload": { "nodeId": "llm:pre", "instanceId": "p1", "output": "__REDACTED__", "durationMs": 2, "status": "ok", "redaction": { "count": 3, "keys": ["messages", "output"] } } },
+        { "type": "node.finished", "payload": { "nodeId": "mcp:session", "instanceId": "mcp:session", "durationMs": 100, "status": "ok" } }
+      ]
+    },
+    {
+      "name": "kind fallbacks: node.finished without instanceId uses the node's latest kind; an instance never started falls back to the tool: prefix",
+      "switches": { "hideToolResults": true },
+      "in": [
+        { "type": "node.started", "payload": { "nodeId": "tool:a", "kind": "tool", "name": "a", "instanceId": "1", "input": {} } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:a", "output": "SECRET", "durationMs": 1, "status": "ok" } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:never-started", "instanceId": "x", "output": "SECRET", "durationMs": 1, "status": "ok" } },
+        { "type": "node.finished", "payload": { "nodeId": "llm:never-started", "instanceId": "y", "output": "visible", "durationMs": 1, "status": "ok" } }
+      ],
+      "out": [
+        { "type": "node.started", "payload": { "nodeId": "tool:a", "kind": "tool", "name": "a", "instanceId": "1", "input": {} } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:a", "output": "__REDACTED__", "durationMs": 1, "status": "ok", "redaction": { "count": 1, "keys": ["output"] } } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:never-started", "instanceId": "x", "output": "__REDACTED__", "durationMs": 1, "status": "ok", "redaction": { "count": 1, "keys": ["output"] } } },
+        { "type": "node.finished", "payload": { "nodeId": "llm:never-started", "instanceId": "y", "output": "visible", "durationMs": 1, "status": "ok" } }
+      ]
+    },
+    {
+      "name": "no switch on: every event passes through byte-identical",
+      "switches": {},
+      "in": [
+        { "type": "node.started", "payload": { "nodeId": "tool:a", "kind": "tool", "name": "a", "instanceId": "1", "input": { "secret": "x" } } },
+        { "type": "node.token", "payload": { "nodeId": "tool:a", "deltas": [{ "t": "text", "v": "y" }] } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:a", "instanceId": "1", "output": { "z": 1 }, "durationMs": 1, "status": "ok" } }
+      ],
+      "out": [
+        { "type": "node.started", "payload": { "nodeId": "tool:a", "kind": "tool", "name": "a", "instanceId": "1", "input": { "secret": "x" } } },
+        { "type": "node.token", "payload": { "nodeId": "tool:a", "deltas": [{ "t": "text", "v": "y" }] } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:a", "instanceId": "1", "output": { "z": 1 }, "durationMs": 1, "status": "ok" } }
+      ]
+    },
+    {
+      "name": "chars counts UTF-16 code units (JS string length): an astral character counts 2",
+      "switches": { "hideOutputs": true },
+      "in": [
+        { "type": "node.token", "payload": { "nodeId": "llm:step", "deltas": [{ "t": "text", "v": "a\ud83d\ude00" }] } }
+      ],
+      "out": [
+        { "type": "node.token", "payload": { "nodeId": "llm:step", "deltas": [{ "t": "text", "v": "", "chars": 3 }], "redaction": { "count": 1, "keys": ["deltas"] } } }
+      ]
+    },
+    {
+      "name": "fail closed: with any switch on, a node.started / node.finished / node.token payload that is not an object is dropped (out: dropped true), never sent",
+      "switches": { "hideToolArgs": true },
+      "in": [
+        { "type": "node.started", "payload": "SECRET-STRING" },
+        { "type": "node.finished", "payload": ["SECRET-IN-ARRAY"] },
+        { "type": "node.token", "payload": null },
+        { "type": "node.error", "payload": "not redacted: node.error is never touched" }
+      ],
+      "out": [
+        { "type": "node.started", "dropped": true },
+        { "type": "node.finished", "dropped": true },
+        { "type": "node.token", "dropped": true },
+        { "type": "node.error", "payload": "not redacted: node.error is never touched" }
+      ]
+    },
+    {
+      "name": "fail closed: token deltas a hiding switch cannot inspect (deltas not an array, a delta that is not an object, a text value that is not a string) replace the event with the failed form: identity copied, deltas [], redaction.failed",
+      "switches": { "hideOutputs": true },
+      "in": [
+        { "type": "node.token", "payload": { "nodeId": "llm:a", "deltas": "SECRET-1" } },
+        { "type": "node.token", "payload": { "nodeId": "llm:a", "instanceId": "i1", "deltas": [{ "t": "text", "v": "ok" }, "SECRET-2"], "extra": "SECRET-3" } },
+        { "type": "node.token", "payload": { "nodeId": "llm:a", "deltas": [{ "t": "text", "v": { "s": "SECRET-4" } }] } },
+        { "type": "node.token", "payload": { "nodeId": "llm:a", "deltas": [null, { "t": "text" }] } }
+      ],
+      "out": [
+        { "type": "node.token", "payload": { "nodeId": "llm:a", "deltas": [], "redaction": { "count": 0, "keys": ["input", "output", "deltas"], "failed": true } } },
+        { "type": "node.token", "payload": { "nodeId": "llm:a", "instanceId": "i1", "deltas": [], "redaction": { "count": 0, "keys": ["input", "output", "deltas"], "failed": true } } },
+        { "type": "node.token", "payload": { "nodeId": "llm:a", "deltas": [], "redaction": { "count": 0, "keys": ["input", "output", "deltas"], "failed": true } } },
+        { "type": "node.token", "payload": { "nodeId": "llm:a", "deltas": [null, { "t": "text" }] } }
+      ]
+    },
+    {
+      "name": "fail closed only where a switch applies: under hideToolArgs a text delta with a non-string value is left alone, a tool-args one fails closed",
+      "switches": { "hideToolArgs": true },
+      "in": [
+        { "type": "node.token", "payload": { "nodeId": "llm:a", "deltas": [{ "t": "text", "v": 3 }, { "t": "tool-args", "v": "{}" }] } },
+        { "type": "node.token", "payload": { "nodeId": "llm:a", "deltas": [{ "t": "tool-args", "v": { "q": "SECRET" } }] } }
+      ],
+      "out": [
+        { "type": "node.token", "payload": { "nodeId": "llm:a", "deltas": [{ "t": "text", "v": 3 }, { "t": "tool-args", "v": "", "chars": 2 }], "redaction": { "count": 1, "keys": ["deltas"] } } },
+        { "type": "node.token", "payload": { "nodeId": "llm:a", "deltas": [], "redaction": { "count": 0, "keys": ["input", "output", "deltas"], "failed": true } } }
+      ]
+    },
+    {
+      "name": "fail closed: when the failed form cannot be valid (a required field missing or of the wrong type) the event is dropped",
+      "switches": { "hideOutputs": true },
+      "in": [
+        { "type": "node.token", "payload": { "nodeId": 7, "deltas": "SECRET" } },
+        { "type": "node.token", "payload": { "deltas": ["SECRET"] } }
+      ],
+      "out": [
+        { "type": "node.token", "dropped": true },
+        { "type": "node.token", "dropped": true }
+      ]
+    },
+    {
+      "name": "fail closed: an identity field a switch decides by (nodeId, instanceId and kind on node.started; nodeId and instanceId on node.finished; nodeId on node.token; t on each delta of a batch a switch could cover) that is present, not null and not a string is not inspected — serialisation could turn it into the very string the switch looks for (a JS String object or toJSON, Python bytes or repr, a Ruby object's to_s); null is left as it is",
+      "switches": { "hideToolArgs": true, "hideToolResults": true },
+      "in": [
+        { "type": "node.started", "payload": { "nodeId": "tool:a", "kind": { "k": "tool" }, "name": "a", "instanceId": "i1", "input": "SECRET-1" } },
+        { "type": "node.started", "payload": { "nodeId": "custom:b", "kind": "tool", "name": "b", "instanceId": ["i2"], "input": "SECRET-2" } },
+        { "type": "node.finished", "payload": { "nodeId": "custom:b", "instanceId": { "id": "i2" }, "durationMs": 1, "status": "ok", "output": "SECRET-3" } },
+        { "type": "node.token", "payload": { "nodeId": ["tool:c"], "deltas": [{ "t": "text", "v": "SECRET-4" }] } },
+        { "type": "node.token", "payload": { "nodeId": "llm:d", "instanceId": "i9", "deltas": [{ "t": { "c": "tool-args" }, "v": "SECRET-5" }] } },
+        { "type": "node.finished", "payload": { "nodeId": 12, "durationMs": 1, "status": "ok", "output": "SECRET-6" } },
+        { "type": "node.token", "payload": { "nodeId": "llm:f", "deltas": [{ "t": null, "v": "visible" }] } }
+      ],
+      "out": [
+        { "type": "node.started", "dropped": true },
+        { "type": "node.started", "dropped": true },
+        { "type": "node.finished", "payload": { "nodeId": "custom:b", "durationMs": 1, "status": "ok", "output": "__REDACTED__", "redaction": { "count": 0, "keys": ["input", "output", "deltas"], "failed": true } } },
+        { "type": "node.token", "dropped": true },
+        { "type": "node.token", "payload": { "nodeId": "llm:d", "instanceId": "i9", "deltas": [], "redaction": { "count": 0, "keys": ["input", "output", "deltas"], "failed": true } } },
+        { "type": "node.finished", "dropped": true },
+        { "type": "node.token", "payload": { "nodeId": "llm:f", "deltas": [{ "t": null, "v": "visible" }] } }
+      ]
+    },
+    {
+      "name": "fail closed on non-string identity fields with ANY switch on, even where that switch would not consult them (a start's kind under hideOutputs alone; a delta's t when every delta is hidden anyway): one rule, identical in every port",
+      "switches": { "hideOutputs": true },
+      "in": [
+        { "type": "node.started", "payload": { "nodeId": "tool:a", "kind": 5, "name": "a", "instanceId": "i1", "input": "visible-by-design" } },
+        { "type": "node.token", "payload": { "nodeId": "llm:b", "deltas": [{ "t": "text", "v": "SECRET-1" }, { "t": 7, "v": "SECRET-2" }] } },
+        { "type": "node.token", "payload": { "nodeId": false, "deltas": [{ "t": "text", "v": "SECRET-3" }] } },
+        { "type": "node.started", "payload": { "nodeId": "tool:c", "kind": "tool", "name": "c", "instanceId": "i2", "parentId": 9, "input": "visible-by-design" } }
+      ],
+      "out": [
+        { "type": "node.started", "dropped": true },
+        { "type": "node.token", "payload": { "nodeId": "llm:b", "deltas": [], "redaction": { "count": 0, "keys": ["input", "output", "deltas"], "failed": true } } },
+        { "type": "node.token", "dropped": true },
+        { "type": "node.started", "payload": { "nodeId": "tool:c", "kind": "tool", "name": "c", "instanceId": "i2", "parentId": 9, "input": "visible-by-design" } }
+      ]
+    }
+  ]
+}

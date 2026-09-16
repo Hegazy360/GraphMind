@@ -24,7 +24,13 @@ import { AdapterCore } from './core.js';
 import { peerVersion } from './peer-version.js';
 import { wrapServer } from './wrap-server.js';
 
-const MCP_SDK = '@modelcontextprotocol/sdk';
+/**
+ * The two SDK generations this adapter wraps. The 1.x monolith and the 2.x
+ * family (`@modelcontextprotocol/server` + `/core`, published 2026-07-28) are
+ * different packages, so both are looked up.
+ */
+const MCP_SDK_V1 = '@modelcontextprotocol/sdk';
+const MCP_SDK_V2 = '@modelcontextprotocol/server';
 
 export interface GraphmindOptions extends Omit<SessionOptions, 'appName' | 'sdk'> {
   /** Application name shown in the viewer. Default: "mcp-server". */
@@ -80,9 +86,20 @@ export interface Graphmind {
   dispose(): Promise<void>;
 }
 
-/** The installed MCP SDK version, for the `sdk` field the viewer shows. */
-function detectSdkVersion(): string {
-  return peerVersion(MCP_SDK, import.meta.url) ?? 'unknown';
+/**
+ * The installed MCP SDK, for the `sdk` badge the viewer shows on the session.
+ * The 2.x package wins when both are installed: adding it is an active choice
+ * (a migration in progress), while 1.x may still be around transitively. The
+ * `server` node carries the generation of the OBJECT that was wrapped, read
+ * structurally, so a mixed install is still told apart per server; and the
+ * `sdk` option overrides all of this.
+ */
+function detectSdk(): SdkInfo {
+  for (const name of [MCP_SDK_V2, MCP_SDK_V1]) {
+    const version = peerVersion(name, import.meta.url);
+    if (version !== undefined) return { name, version };
+  }
+  return { name: MCP_SDK_V1, version: 'unknown' };
 }
 
 /**
@@ -95,7 +112,7 @@ export function graphmind(options: GraphmindOptions = {}): Graphmind {
   const session = createSession({
     ...sessionOptions,
     appName,
-    sdk: sdk ?? { name: MCP_SDK, version: detectSdkVersion() },
+    sdk: sdk ?? detectSdk(),
   });
   const core = new AdapterCore(session, options.logger, waitForAttach);
 

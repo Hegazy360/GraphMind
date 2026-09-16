@@ -85,6 +85,60 @@ describe('graphmind mcp-proxy: zero-config discovery', () => {
   });
 });
 
+describe('graphmind mcp-proxy: GRAPHMIND_DISABLED', () => {
+  it('says it is disabled — not "not running" — relays anyway, and never claims to report', async () => {
+    const saved = process.env['GRAPHMIND_DISABLED'];
+    process.env['GRAPHMIND_DISABLED'] = '1';
+    try {
+      const io = { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() };
+      const out: Buffer[] = [];
+      const err: Buffer[] = [];
+      io.stdout.on('data', (c: Buffer) => out.push(c));
+      io.stderr.on('data', (c: Buffer) => err.push(c));
+      const done = runMcpProxy(
+        parseCliArgs(['mcp-proxy', '--port', '1', '--', process.execPath, `${FIXTURES}raw-server.mjs`]),
+        io,
+      );
+      io.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'echo', arguments: { text: 'relayed while disabled' } } })}\n`);
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      io.stdin.end();
+      expect(await done).toBe(0);
+      expect(Buffer.concat(out).toString()).toContain('relayed while disabled');
+      const guide = Buffer.concat(err).toString();
+      expect(guide).toContain('GraphMind is disabled in this environment');
+      expect(guide).not.toContain('is not running');
+      expect(guide).not.toContain('reporting to');
+    } finally {
+      if (saved === undefined) delete process.env['GRAPHMIND_DISABLED'];
+      else process.env['GRAPHMIND_DISABLED'] = saved;
+    }
+  });
+
+  it('never points at "the graph" in its end-of-session summary when nothing was recorded', async () => {
+    const saved = process.env['GRAPHMIND_DISABLED'];
+    process.env['GRAPHMIND_DISABLED'] = '1';
+    try {
+      const io = { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() };
+      const err: Buffer[] = [];
+      io.stdout.resume();
+      io.stderr.on('data', (c: Buffer) => err.push(c));
+      const done = runMcpProxy(
+        parseCliArgs(['mcp-proxy', '--port', '1', '--', process.execPath, `${FIXTURES}chatty-server.mjs`]),
+        io,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      io.stdin.end();
+      await done;
+      const guide = Buffer.concat(err).toString();
+      expect(guide).toContain('were not JSON-RPC'); // the summary line is there…
+      expect(guide).not.toContain('on the graph'); // …without sending the user to a graph that does not exist
+    } finally {
+      if (saved === undefined) delete process.env['GRAPHMIND_DISABLED'];
+      else process.env['GRAPHMIND_DISABLED'] = saved;
+    }
+  });
+});
+
 describe('graphmind mcp-proxy: end to end through the command', () => {
   it('relays, keeps stdout protocol-only, and returns the child’s exit code', async () => {
     const io = { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() };

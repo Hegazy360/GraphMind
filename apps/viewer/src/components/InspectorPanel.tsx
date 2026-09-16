@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ErrorInfo } from '@graphmind-ai/schema';
 import { copyText, deepLink } from '../lib/commands.js';
+import { fmtRanHeld, heldMsOf, ranMs } from '../lib/duration.js';
 import { kindMeta } from '../lib/kinds.js';
 import {
   fmtClockMs,
@@ -22,16 +23,47 @@ import {
   fmtTokens,
 } from '../lib/format.js';
 import { useTokenSnapshot } from '../hooks/useTokenSnapshot.js';
+import { identicalCalls, loopBannerText } from '../store/loop.js';
 import { tokenBuffers } from '../store/tokenBuffers.js';
 import { useRunStore } from '../store/runStore.js';
 import { failureContext, nodeStats } from '../store/stats.js';
 import { useUiStore } from '../store/uiStore.js';
-import { nodeStatus, type NodeExecution, type NodeState } from '../store/types.js';
+import { nodeStatus, type NodeExecution, type NodeState, type Pause } from '../store/types.js';
 import { IconAlert, IconClose, IconLink } from './Icons.js';
 import { JsonTree } from './JsonTree.js';
 import { KindGlyph } from './KindMark.js';
 import { PauseActions } from './nodes/PauseActions.js';
 import { StatusPill } from './nodes/nodeParts.js';
+
+// ── W7: coarse redaction ─────────────────────────────────────────────────────
+// Under GRAPHMIND_HIDE_INPUTS / _OUTPUTS / _TOOL_ARGS / _TOOL_RESULTS the
+// instrumented app replaces the whole field with this placeholder before it
+// leaves the process, so the viewer has nothing to show — say so, instead of
+// rendering a JSON tree whose only leaf is the string "__REDACTED__".
+const REDACTED_PLACEHOLDER = '__REDACTED__';
+
+/** Which switch(es) can have hidden this field on a node of this kind. */
+function hiddenBySwitch(field: 'input' | 'output', kind: NodeState['kind']): string {
+  const general = field === 'input' ? 'GRAPHMIND_HIDE_INPUTS' : 'GRAPHMIND_HIDE_OUTPUTS';
+  const toolOnly = field === 'input' ? 'GRAPHMIND_HIDE_TOOL_ARGS' : 'GRAPHMIND_HIDE_TOOL_RESULTS';
+  return kind === 'tool' ? `${toolOnly} or ${general}` : general;
+}
+
+function RedactedChip({ field, kind }: { field: 'input' | 'output'; kind: NodeState['kind'] }) {
+  return (
+    <span
+      className="gm-chip gm-chip--tiny"
+      data-testid={`redacted-${field}`}
+      // `.gm-chip` is nowrap; the tool variants name two env vars and ran
+      // ~30px past the right edge of the inspector at its default width.
+      style={{ whiteSpace: 'normal', overflowWrap: 'anywhere', maxWidth: '100%' }}
+      title="The instrumented app replaced this value before it left the process. Unset the switch and re-run to record it."
+    >
+      hidden by {hiddenBySwitch(field, kind)}
+    </span>
+  );
+}
+// ── end W7 block ─────────────────────────────────────────────────────────────
 
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 720;
@@ -177,7 +209,11 @@ function WhyItFailed({
 
       <div className="gm-why-label">The input that produced it</div>
       <div className="gm-why-input nowheel">
-        <JsonTree value={exec.input} initialDepth={1} rootPath="input" searchable={false} />
+        {exec.input === REDACTED_PLACEHOLDER ? (
+          <RedactedChip field="input" kind={node.kind} />
+        ) : (
+          <JsonTree value={exec.input} initialDepth={1} rootPath="input" searchable={false} />
+        )}
       </div>
 
       {(context.parent !== undefined || context.siblings.length > 0) && (
@@ -211,8 +247,8 @@ function WhyItFailed({
                 title={`${sibling.nodeId} — ${sibling.status}`}
               >
                 {sibling.name}
-                {sibling.durationMs !== undefined && (
-                  <span className="gm-why-chip-ms">{fmtDuration(sibling.durationMs)}</span>
+                {sibling.ranMs !== undefined && (
+                  <span className="gm-why-chip-ms">{fmtDuration(sibling.ranMs)}</span>
                 )}
               </button>
             ))}
@@ -261,9 +297,15 @@ function ExecutionDetails({
       <Section label="This execution">
         <div className="gm-inspect-stats">
           <StatCell
-            label="duration"
-            value={exec.durationMs !== undefined ? fmtDuration(exec.durationMs) : exec.status === 'running' ? 'running' : '—'}
+            label={heldMsOf(exec) > 0 ? 'ran' : 'duration'}
+            value={(() => {
+              const ran = ranMs(exec);
+              return ran !== undefined ? fmtDuration(ran) : exec.status === 'running' ? 'running' : '—';
+            })()}
           />
+          {heldMsOf(exec) > 0 && (
+            <StatCell label="held" value={fmtDuration(heldMsOf(exec))} tone="dim" />
+          )}
           {exec.usage !== undefined && (
             <>
               <StatCell label="tokens in" value={fmtTokens(exec.usage.inputTokens)} />
@@ -307,9 +349,10 @@ function ExecutionDetails({
             <StatCell label="executions" value={String(stats.executions)} />
             <StatCell label="retries" value={String(stats.retries)} tone={stats.retries > 0 ? 'error' : undefined} />
             {stats.errors > 0 && <StatCell label="failed" value={String(stats.errors)} tone="error" />}
-            <StatCell label="total" value={fmtDuration(stats.totalMs)} />
+            <StatCell label="total ran" value={fmtDuration(stats.totalMs)} />
             <StatCell label="avg" value={fmtDuration(stats.avgMs)} />
             <StatCell label="slowest" value={fmtDuration(stats.maxMs)} />
+            {stats.heldMs > 0 && <StatCell label="held" value={fmtDuration(stats.heldMs)} tone="dim" />}
             {stats.tokensIn + stats.tokensOut > 0 && (
               <>
                 <StatCell label="tokens" value={`${fmtTokens(stats.tokensIn)}→${fmtTokens(stats.tokensOut)}`} />
@@ -321,12 +364,20 @@ function ExecutionDetails({
       )}
 
       <Section label="Input" copy={() => toJson(exec.input)}>
-        <JsonTree value={exec.input} rootPath="input" />
+        {exec.input === REDACTED_PLACEHOLDER ? (
+          <RedactedChip field="input" kind={node.kind} />
+        ) : (
+          <JsonTree value={exec.input} rootPath="input" />
+        )}
       </Section>
 
       {exec.output !== undefined && (
         <Section label="Output" copy={() => toJson(exec.output)}>
-          <JsonTree value={exec.output} rootPath="output" />
+          {exec.output === REDACTED_PLACEHOLDER ? (
+            <RedactedChip field="output" kind={node.kind} />
+          ) : (
+            <JsonTree value={exec.output} rootPath="output" />
+          )}
         </Section>
       )}
 
@@ -342,6 +393,96 @@ function ExecutionDetails({
         </Section>
       )}
     </>
+  );
+}
+
+/**
+ * Loop hold (W5): the "why this held" block. Rendered only while the held
+ * gate's `reason` is `loop`. Lists the identical calls of the streak with
+ * their outputs, so the developer sees the model asking the same question
+ * and getting the same answer — the evidence that nothing new is being
+ * learned — right above the decision row.
+ */
+function LoopEvidence({ node, pause }: { node: NodeState; pause: Pause }) {
+  const loop = pause.loop;
+  const calls = useMemo(() => identicalCalls(node, loop), [node, loop]);
+  if (pause.reason !== 'loop' || loop === undefined) return null;
+  const heldExec = calls.find((c) => c.current)?.exec ?? calls[calls.length - 1]?.exec;
+  const finished = calls.filter((c) => !c.current && c.exec.output !== undefined);
+  const allSame = finished.length > 1 && finished.slice(1).every((c) => c.sameOutputAsPrevious);
+  const title = loopBannerText(node, pause) ?? `Loop: ${node.name} with identical arguments`;
+
+  return (
+    <section
+      className="gm-why gm-loop"
+      aria-label="Loop detected"
+      data-testid="loop-evidence"
+    >
+      <div className="gm-why-head">
+        <IconAlert width={13} height={13} />
+        <span>{title}</span>
+      </div>
+      <div className="gm-pause-note gm-loop-note">
+        The model asked for <strong>{node.name}</strong> with the same arguments {loop.repeats} times in a
+        row{allSame ? ' and got the same answer back every time' : ''} — it is not learning anything new.
+        Continue runs this call anyway; Inject hands the model a different result; Abort stops the run.
+      </div>
+
+      {heldExec !== undefined && (
+        <>
+          <div className="gm-why-label">The arguments it keeps sending</div>
+          <div className="gm-why-input nowheel">
+            <JsonTree value={heldExec.input} initialDepth={1} rootPath="input" searchable={false} />
+          </div>
+        </>
+      )}
+
+      <div className="gm-why-label">
+        The {calls.length === 1 ? 'call' : `${calls.length} calls`} in this streak
+      </div>
+      <ol className="gm-loop-calls">
+        {calls.map((call) => (
+          <li
+            key={`${call.exec.instanceId}-${call.index}`}
+            className={`gm-loop-call${call.current ? ' gm-loop-call--current' : ''}`}
+            data-testid="loop-call"
+          >
+            <div className="gm-inspect-kv gm-loop-kv">
+              <span>#{call.index}</span>
+              <span>
+                {call.current ? (
+                  <span className="gm-pill gm-pill--paused">this call — held</span>
+                ) : (
+                  <>
+                    {call.exec.status}
+                    {call.sameOutputAsPrevious && (
+                      <span className="gm-pill gm-loop-pill">
+                        same output as the call before
+                      </span>
+                    )}
+                  </>
+                )}
+              </span>
+            </div>
+            {!call.current && call.exec.output !== undefined && (
+              <div className="gm-why-input nowheel">
+                <JsonTree
+                  value={call.exec.output}
+                  initialDepth={3}
+                  rootPath={`output#${call.index}`}
+                  searchable={false}
+                />
+              </div>
+            )}
+          </li>
+        ))}
+      </ol>
+      <div className="gm-pause-note gm-loop-note">
+        Polling on purpose? Add <code>{node.name}</code> to <code>loopGuard.allowNodes</code> or set{' '}
+        <code>GRAPHMIND_LOOP_ALLOW={node.name}</code> (the only way under <code>graphmind mcp-proxy</code>),
+        or set <code>GRAPHMIND_ON_LOOP=warn</code> to log instead of holding.
+      </div>
+    </section>
   );
 }
 
@@ -476,6 +617,9 @@ function InspectorInner({ runId, nodeId }: { runId: string; nodeId: string }) {
       </div>
 
       <div className="gm-inspect-body">
+        {held && pause !== undefined && pause.reason === 'loop' && (
+          <LoopEvidence node={node} pause={pause} />
+        )}
         {node.executions.length > 1 && (
           <div className="gm-inspect-execs">
             <span className="gm-section-label">Execution</span>
@@ -484,12 +628,12 @@ function InspectorInner({ runId, nodeId }: { runId: string; nodeId: string }) {
                 <button
                   key={`${e.instanceId}-${i}`}
                   className={`gm-exec-chip gm-exec-chip--${e.status}${i === idx ? ' gm-exec-chip--on' : ''}`}
-                  title={`${e.instanceId} — ${e.status}${e.durationMs !== undefined ? ` · ${fmtDuration(e.durationMs)}` : ''}`}
+                  title={`${e.instanceId} — ${e.status}${e.durationMs !== undefined ? ` · ${fmtRanHeld(e)}` : ''}`}
                   onClick={() => setInstanceIdx(i)}
                 >
                   #{i + 1}
-                  {e.durationMs !== undefined && (
-                    <span className="gm-exec-chip-ms">{fmtDuration(e.durationMs)}</span>
+                  {ranMs(e) !== undefined && (
+                    <span className="gm-exec-chip-ms">{fmtDuration(ranMs(e) ?? 0)}</span>
                   )}
                 </button>
               ))}

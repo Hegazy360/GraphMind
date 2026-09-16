@@ -117,6 +117,31 @@ but `session.run` still executes your function and still hands it a working
 `GRAPHMIND_URL` overrides the default endpoint
 `ws://127.0.0.1:4747/ingest` (or pass `url`).
 
+## Recording less: the redaction switches (0.5.0)
+
+Four whole-field kill switches stop values being recorded at all. Set them in
+the environment of the **instrumented app** (not the server), or pass them as
+session options on any adapter (`graphmind({ hideInputs: true, … })`); either
+source turning a switch on turns it on — the environment is a floor code
+cannot lower.
+
+| Switch | Replaces with `"__REDACTED__"` |
+|---|---|
+| `GRAPHMIND_HIDE_INPUTS` / `hideInputs` | every node's `input` (prompts, messages, tool arguments, MCP params); streamed tool-argument deltas are emptied |
+| `GRAPHMIND_HIDE_OUTPUTS` / `hideOutputs` | every node's `output`; every streamed token delta is emptied (`v: ""`, a `chars` length survives) |
+| `GRAPHMIND_HIDE_TOOL_ARGS` / `hideToolArgs` | only tool nodes' `input` |
+| `GRAPHMIND_HIDE_TOOL_RESULTS` / `hideToolResults` | only tool nodes' `output` |
+
+> **What the tool-only switches do not cover.** The tool-only switches hide the tool node's own `input` / `output`. In an agent loop the same values also travel through the model: its `tool_use` blocks (LLM output) and the `tool_result` messages of the next request (LLM input). To keep tool arguments and results out of the recording entirely, set `GRAPHMIND_HIDE_INPUTS` (and `GRAPHMIND_HIDE_OUTPUTS`). Error messages are never redacted.
+
+Values `1` or `true`, case-insensitive (as options: `true`, `1`, `"1"` or `"true"` — a privacy switch fails closed). Redaction runs inside the session
+before the ring buffer, so late-attaching debuggers, SQLite, exports,
+`graphmind mcp-proxy` recordings and the read-only MCP tools only ever see the
+placeholder; run names, node names, kinds, ids, timings and token counts are
+always recorded (`graphmind mcp-proxy` additionally drops the server's command-line arguments from the run's label and metadata under `GRAPHMIND_HIDE_INPUTS`). Affected events carry `redaction: {count, keys}`. `node.error`
+is never redacted — an error message can echo data, so `HIDE_OUTPUTS` is not a
+guarantee against error text. The Python SDK and the Ruby gem implement the same switches, env names, placeholder and wire fields (0.5), held to the same conformance fixtures.
+
 ## Gating model
 
 `session.gate(point, node)` — `point` is `before | after | error`, `node` is

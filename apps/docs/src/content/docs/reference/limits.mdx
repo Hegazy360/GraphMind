@@ -1,0 +1,96 @@
+---
+title: Limits
+description: Every size ceiling, buffer and timeout in GraphMind, read from the source — the 512 KB payload cap, the 16 MiB ingest frame ceiling, the 64 MiB proxy frame ceiling, replay buffers, hold timeouts, and the graph sizes the tests actually exercise.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Each number on this page is a constant in the source, named so you can check it. Where a number
+is a measurement rather than a constant, the page names the test or benchmark that measures
+it.
+
+## Sizes
+
+| Limit | Value | Where it lives | Above it |
+| --- | --- | --- | --- |
+| Stored payload | **512 KB** of JSON per event | `MAX_PAYLOAD_BYTES`, `packages/schema/src/shrink.ts` (re-exported by `packages/cli/src/storage.ts`) | The event is still stored and shown. Its largest fields are shrunk and keep their JSON type (a string becomes a shorter string, an array `[]`), and the payload gains `__graphmindTruncated: true`, the original size and a 2,000-character preview. The live view and a reload show the same truncated payload. The TypeScript client applies the same shrink before it sends, with a rate-limited warning. |
+| WebSocket frame, server side | **16 MiB** per frame, on both `/ingest` and `/ws/ui` | `MAX_FRAME_BYTES`, `packages/cli/src/storage.ts` (applied in `server.ts`) | The server refuses the frame while assembling it and closes the socket (code 1009) without reading the rest. The TypeScript client never sends a frame that large; the Python and Ruby SDKs can (see below). |
+| JSON-RPC frame, `graphmind mcp-proxy` | **64 MiB** per newline-delimited frame by default; `--max-frame-bytes <n>` changes it | `DEFAULT_MAX_FRAME_BYTES`, `packages/cli/src/mcp-proxy/proxy.ts` | The proxy stops parsing that direction and relays raw bytes for the rest of the session. The MCP session keeps working; the graph stops updating. It prints: `graphmind mcp-proxy: a server frame exceeded 67108864 bytes (… buffered); relaying raw from here on — the graph will stop updating but the session keeps working (raise --max-frame-bytes)`. Tested by `packages/cli/test/mcp-proxy-relay.test.ts` ("degrades to a raw pipe … when a frame passes the ceiling"). |
+| Server stderr kept by the proxy | last **200 lines / 32 KB** | `STDERR_RING_MAX_LINES`, `STDERR_RING_MAX_BYTES`, `packages/cli/src/mcp-proxy/stderr-ring.ts` | Older lines are dropped. When a server exits before answering, the terminal shows the last 40 lines; the session node carries the whole ring. |
+| stdout noise recorded by the proxy | the first **25** non-JSON-RPC lines become nodes; each is quoted up to **200 bytes** | `STDOUT_NOISE_MAX_RECORDED`, `STDOUT_NOISE_QUOTE_BYTES`, `packages/cli/src/mcp-proxy/reporter.ts` | Further lines are counted, not recorded. |
+
+The two frame ceilings are different on purpose. The server ceiling protects a long-running
+process from a single oversized frame. It is 32 times the storage budget, so a payload big
+enough to be worth a preview still gets through and is truncated. The proxy ceiling sits on
+your editor's tool traffic, where dropping a frame would break the session. So above it the
+proxy stops recording instead of dropping anything.
+
+<Aside type="tip" title="An oversized event degrades, it does not disappear">
+Every client — TypeScript, Python and Ruby — shrinks a payload over 512 KB before it buffers or
+sends it, with the same algorithm the server uses for storage
+(`serializePayload`, `packages/schema/src/shrink.ts`), so a 17 MB tool output arrives as a preview
+and its card still finishes. One warning is printed per event type:
+`an event of 17000091 bytes was shrunk to a preview (the debugger stores at most 512 KB per payload)`.
+A **valid event stays a valid event** of its type — see
+[the wire protocol](/reference/wire-protocol/#oversized-payloads) for the marker fields
+(`__graphmindTruncated`, `bytes`, `preview`, `fields`, `keysDropped`).
+
+For a large document, recording a summary is still kinder than a preview; spans take an explicit
+output for this (`span.set_output` in Python, `span.output =` in Ruby).
+</Aside>
+
+## Buffers
+
+| Buffer | Default | Where | When it fills |
+| --- | --- | --- | --- |
+| Replay ring buffer, TypeScript client | **5,000 events or 8 MiB**, whichever comes first (`bufferSize`, `maxBufferBytes`) | `packages/client/src/session.ts` | Oldest events are dropped. On the next attach the client sends a gap marker naming how many events were lost and their `seq` range, and it warns once. Test: `packages/client/test/gap.test.ts`. |
+| Replay ring buffer, Python | **2,000 events** (`buffer_size`) | `python/graphmind/session.py` | Oldest events are dropped |
+| Replay ring buffer, Ruby | **2,000 events or 8 MiB** (`buffer_size:`, `max_buffer_bytes:`) | `ruby/lib/graphmind/session.rb` | Oldest events are dropped |
+| Loop-hold state | one streak (node, fingerprint, count) per node kind per run, for up to **64 runs** (least recently used are evicted) | `MAX_LOOP_RUNS`, `packages/client/src/loop-guard.ts` | An evicted run's streak starts again |
+| Redaction kind tracking | **10,000** open executions | `DEFAULT_MAX_TRACKED_INSTANCES`, `packages/client/src/redaction.ts` | Falls back to the node's latest kind, then to the `tool:` id prefix |
+| Stored runs | **200 runs / 30 days**, pruned at server start | `DEFAULT_RETENTION`, `packages/cli/src/storage.ts` | Older runs are deleted (`GRAPHMIND_KEEP_RUNS`, `GRAPHMIND_KEEP_DAYS`, `GRAPHMIND_RETENTION=off`) |
+
+## Timeouts and holds
+
+| What | Default | Where |
+| --- | --- | --- |
+| A held gate | **Held until resumed.** `pauseTimeoutMs` (TS), `pause_timeout` (Python, Ruby) auto-continues after that long and emits `exec.resumed`. | session options |
+| A debugger that disconnects mid-hold | Every held gate continues within **100 ms** | asserted by `packages/client/test/session.test.ts` ("auto-continues held gates within 100ms of the viewer dying") and `python/tests/test_failopen.py` |
+| Connect to the server | **300 ms** (`connectTimeoutMs`); Python `0.3 s` | TS `session.ts`, Python `session.py` |
+| Handshake | **1,000 ms** (`handshakeTimeoutMs`); Python `1.0 s` | same |
+| Retry while detached | every **10 s** (`retryIntervalMs`) | same |
+| `gm.ready()` | **2,000 ms**; `waitForAttach: true` means 2,000 ms | same |
+| `graphmind mcp-proxy --wait-for-attach` | holds the first frame for up to **3 s** | `ATTACH_WAIT_MS`, `mcp-proxy/proxy.ts` |
+| A proxied server that fails to start, with no `--wait-for-attach` | the proxy waits up to **1 s** for GraphMind before exiting, so the failure reaches the graph | `SPAWN_FAILURE_ATTACH_MS`, `mcp-proxy/proxy.ts` |
+| `@graphmind-ai/mcp` long-hold warning | printed once when a hold passes **1 s**, because the MCP host has its own timeout | `HOLD_WARN_MS`, `packages/mcp/src/gate-flow.ts` |
+| A run whose app disconnected mid-flight | marked abandoned after **15 s** without a reconnect (`GRAPHMIND_ABANDON_GRACE_MS`) | `DEFAULT_ABANDON_GRACE_MS`, `packages/cli/src/hub.ts` |
+
+A held gate stops your code, not the other side. An MCP host, an HTTP client or a framework
+with its own timeout can still give up while you are looking at a paused node. The TypeScript
+adapters neutralise their SDK's per-request timeouts while a debugger is attached; the Python
+SDK does not yet. See each [integration](/integrations/) page.
+
+## Graph sizes that are tested
+
+"Handles large graphs" is only as true as the largest graph a test runs. These are the ones in
+the repository:
+
+| Size | What is checked | Where |
+| --- | --- | --- |
+| 300 nodes, ~5,000 events | Reducer, projection, layout and timeline each finish inside a frame on a warm pass (budget 16 ms, observed well under); the auto-folded view has at most 60 cards | `apps/viewer/test/stress.test.ts` |
+| 300 nodes in a browser | Ingests, folds itself, stays interactive; the palette finds one node; the minimap pans | `apps/viewer/e2e/stress.spec.ts` |
+| 301-node layout, 300-node stress run folded and unfolded | Zero edges through cards, zero overlapping cards | `apps/viewer/test/geometry.test.ts` |
+| 100 → 1,600 nodes | Layout time sweep; a canvas of ~800 nodes lays out in under 50 ms | soak `viewer` scenario, run in CI (`examples/soak`) |
+| `?stress=<n>` | Accepts 8 to 4,000 nodes for trying larger shapes yourself | `apps/viewer/src/connection/StressConnection.ts` |
+
+Above a few hundred nodes, fold. A run with more than 70 nodes opens folded on its own, and
+[large graphs](/debugging/large-graphs/) covers the rest.
+
+<Aside type="note" title="What is not bounded">
+There is no limit on the number of concurrent runs, ingest connections or nodes per run on the
+server. The security suite checks that 300 simultaneous ingest connections and a flood of
+20,000 frames are survived (`security/tests/ingest-abuse.test.ts`). It does not claim anything
+beyond what those tests run.
+</Aside>

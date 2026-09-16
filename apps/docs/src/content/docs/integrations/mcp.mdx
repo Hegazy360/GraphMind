@@ -1,14 +1,14 @@
 ---
 title: MCP server (in-process)
-description: Debug your own TypeScript MCP server from the inside — @graphmind-ai/mcp wraps the server object, gates every tool, resource, prompt and sampling call, and never touches stdout.
+description: Debug your own TypeScript MCP server from the inside — @graphmind-ai/mcp wraps an MCP SDK 1.x or 2.x server object, gates every tool, resource, prompt and sampling call, and never touches stdout.
 sidebar:
   order: 7
 ---
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
-`@graphmind-ai/mcp` instruments an MCP server written with
-`@modelcontextprotocol/sdk`. `wrapServer` returns a **Proxy** of your server — your object is
+`@graphmind-ai/mcp` instruments an MCP server written with the TypeScript MCP SDK, either
+generation: `@modelcontextprotocol/sdk` 1.x or `@modelcontextprotocol/server` 2.x. `wrapServer` returns a **Proxy** of your server — your object is
 never mutated — and decorates the callbacks you register, so every `tools/call`,
 `resources/read`, `prompts/get` and outbound `sampling/createMessage` becomes a gated node.
 
@@ -40,9 +40,17 @@ yarn add -D @graphmind-ai/mcp graphmind-ai
 </TabItem>
 </Tabs>
 
-`@modelcontextprotocol/sdk` is a peer dependency (`>=1.26.0 <2`). That floor is
-a security floor rather than a compatibility one: the adapter runs on older
-SDKs, but every release below 1.26.0 carries at least one high advisory.
+Both SDK generations are **optional** peer dependencies. Install the one your server uses:
+
+| Your server uses | Peer range | Tested with |
+| --- | --- | --- |
+| `@modelcontextprotocol/sdk` (1.x) | `>=1.26.0 <2` | 1.26.0 and 1.30.0 |
+| `@modelcontextprotocol/server` (2.x, with `@modelcontextprotocol/core`) | `>=2 <3` | 2.0.0, the only 2.x release so far, on both the 2025-11-25 and 2026-07-28 protocol eras |
+
+The 1.x floor is a security floor rather than a compatibility one: the adapter runs on older
+SDKs, but every release below 1.26.0 carries at least one high advisory. The API is the same
+for both generations. The adapter tells them apart from the object you pass to `wrapServer`,
+without importing either SDK.
 
 <Aside type="note" title="Wrap first, register second">
 The adapter gates a tool by decorating its callback **as it is registered**. Anything registered
@@ -99,6 +107,55 @@ the session. GraphMind never writes to stdout (its warnings go to stderr), and n
 your handlers. This is the constraint that makes a debugger worth having here; see
 [debugging MCP servers](/debugging/mcp-servers/).
 </Aside>
+
+## On the v2 SDK
+
+The same two lines. What changes is where you import from, and one rule for `serveStdio`:
+
+```ts title="server.ts (v2)"
+import { McpServer } from '@modelcontextprotocol/server';
+import { StdioServerTransport, serveStdio } from '@modelcontextprotocol/server/stdio';
+import { graphmind } from '@graphmind-ai/mcp';
+
+const gm = graphmind({ app: 'project-tracker', waitForAttach: true });
+
+function buildServer() {
+  const server = gm.wrapServer(new McpServer({ name: 'project-tracker', version: '1.0.0' }));
+  // registerTool / registerResource / registerPrompt on `server`, as above
+  return server;
+}
+
+// Serves the 2025-11-25 protocol only:
+await buildServer().connect(new StdioServerTransport());
+
+// Serves 2025-11-25 and 2026-07-28. Wrap INSIDE the factory, once per connection:
+// serveStdio(() => buildServer());
+```
+
+What the adapter does with v2, all covered by its suite (`test/v2.test.ts`,
+`test/v2-modern.test.ts`):
+
+- **The handler context** (`ctx.mcpReq`) that replaced 1.x's `RequestHandlerExtra` is
+  recognised. A zero-argument tool reports an empty input and a templated resource reports its
+  `variables`, never the context object. `instanceId` is `ctx.mcpReq.id`, namespaced by the
+  connection.
+- **Abort is chained** into `ctx.mcpReq.signal` while a debugger is attached, never replacing
+  it, so `abort` at a gate reaches your handler.
+- **Sampling is gated.** `ctx.mcpReq.requestSampling(...)` and
+  `ctx.mcpReq.send({ method: 'sampling/createMessage' })` become the `llm:sampling` node under
+  the request.
+- **The low-level `Server.setRequestHandler`** is instrumented in both v2 spellings,
+  `(method, handler)` and `(method, { params }, handler)`.
+- **Inject works on both eras.** On 2026-07-28 the SDK adds `resultType` and the cache fields
+  after the gate, so injecting `"a string"` or `{ price: 42 }` is accepted by a 2026 client.
+- **The `server` node's input carries `sdk`**: `'@modelcontextprotocol/server'` or
+  `'@modelcontextprotocol/sdk'`, for the object you wrapped. The session badge names the
+  installed package, and prefers 2.x when both are installed; `graphmind({ sdk })` overrides it.
+
+Not modelled on v2: `elicitInput`, `ctx.mcpReq.log` and `notify`. The 2026 `input_required`
+round trip is recorded as one execution per round, not linked as one node. Sampling on the
+2026-07-28 era fails inside the SDK by design, since that era has no server-to-client request
+channel; it shows as the `llm:sampling` node's error.
 
 ## API
 
@@ -199,16 +256,18 @@ result that carries it:
 | --- | --- | --- |
 | `app` | `mcp-server` | Shown in the viewer's run list |
 | `server` | the server's own `{ name, version }` | Override what the `server` node is called |
-| `sdk` | the installed MCP SDK version | Override the reported SDK info |
+| `sdk` | the installed MCP SDK package and version (`@modelcontextprotocol/server` preferred when both are installed) | Override the reported SDK info |
 | `waitForAttach` | `false` | `true` (2000 ms) or a number: the first `connect()` — or the first request, if already connected — awaits `ready()`, so gates are armed from the very first request |
 | `url` | `ws://127.0.0.1:4747/ingest` | Ingest endpoint (or `GRAPHMIND_URL`) |
 | `enabled` | kill-switch logic | Force on/off (`GRAPHMIND_DISABLED=1` still wins) |
 | `pauseTimeoutMs` | hold forever | Auto-continue a gate nobody resumes |
+| `hideInputs` … `hideToolResults` | off | [Recording less](/reference/environment/#recording-less) |
+| `loopGuard` | `{ threshold: 3, mode: 'pause' }` | [Loop hold](/reference/environment/#loop-hold). A tool's input here is its `arguments`, so the per-request `_meta` never gets in the way. |
 
 ## Fail-open invariants
 
 - **Disabled** (`enabled: false` or a kill switch): `wrapServer` returns its input unchanged —
-  identity, zero overhead, nothing emitted, no network.
+  identity, nothing emitted, no network.
 - **Enabled but detached**: gates resolve `continue` on a shared-resolved-promise fast path;
   events go to the replay ring buffer only.
 - If `wrapServer` itself fails on a server shape it does not recognise, it warns once and returns
@@ -230,8 +289,10 @@ result that carries it:
   common "why did nothing pause?" on an MCP server, because a host's first move is `initialize`
   followed straight away by a listing and a call.
 - **A crash before `connect()` is invisible.** Nothing has attached yet. Use the
-  [proxy](/integrations/mcp-proxy/) for startup problems: it sees the frames your server managed
-  to emit before it died.
+  [proxy](/integrations/mcp-proxy/) for startup problems: it names a server that exits before
+  answering, with the tail of its stderr.
+- **No protocol traffic.** The SDK answers `initialize`, `ping` and the listings itself, before
+  the adapter is involved, so there is no **protocol** card here. The proxy shows that traffic.
 </Aside>
 
 ## Proxy or in-process?
@@ -246,5 +307,6 @@ result that carries it:
 | `abort` cancels in-flight handler work | answers the caller | the handler's own `AbortSignal` |
 | Frames sent before the server finishes starting | yes | no |
 | Exact bytes on the wire | yes | no — the SDK's serialisation |
+| Protocol traffic (`initialize`, listings, `ping`) | yes, folded | no |
 
 They compose: run both and you get two runs of the same session, one from each side.

@@ -53,6 +53,14 @@ export interface AuditOptions {
   readonly expectRuns?: number;
   /** Also exercise the telemetry path by running the CLI with CI unset. */
   readonly captureTelemetry?: boolean;
+  /**
+   * Extra environment for the CLI child processes (`graphmind record`),
+   * applied AFTER the telemetry force-enable — so a test can set
+   * DO_NOT_TRACK=1 on purpose and prove it wins over GRAPHMIND_TELEMETRY=1.
+   */
+  readonly cliEnv?: Record<string, string>;
+  /** Extra flags for both `graphmind record` invocations (e.g. `--no-redact-secrets`). */
+  readonly recordArgs?: string[];
 }
 
 export interface AuditArtifacts {
@@ -285,10 +293,11 @@ export async function runAudit(options: AuditOptions): Promise<AuditArtifacts> {
     if (primaryRun !== undefined) {
       ndjsonPath = join(dir, 'export.ndjson');
       await runCli(
-        ['record', primaryRun, '--db', dbPath, '--out', ndjsonPath],
+        ['record', primaryRun, '--db', dbPath, '--out', ndjsonPath, ...(options.recordArgs ?? [])],
         gmHome,
         telemetry.url,
         options.captureTelemetry === true,
+        options.cliEnv,
       );
       exportArtifacts.push({
         name: 'NDJSON export (graphmind record)',
@@ -298,10 +307,11 @@ export async function runAudit(options: AuditOptions): Promise<AuditArtifacts> {
 
       htmlPath = join(dir, 'export.html');
       await runCli(
-        ['record', primaryRun, '--db', dbPath, '--html', '--out', htmlPath],
+        ['record', primaryRun, '--db', dbPath, '--html', '--out', htmlPath, ...(options.recordArgs ?? [])],
         gmHome,
         telemetry.url,
         options.captureTelemetry === true,
+        options.cliEnv,
       );
       exportArtifacts.push({
         name: 'HTML export (graphmind record --html)',
@@ -398,6 +408,7 @@ async function runCli(
   gmHome: string,
   telemetryUrl: string,
   enableTelemetry: boolean,
+  extraEnv?: Record<string, string>,
 ): Promise<string> {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -406,10 +417,14 @@ async function runCli(
   };
   if (enableTelemetry) {
     delete env['CI'];
+    // The cross-tool opt-out beats GRAPHMIND_TELEMETRY=1 since 0.5.0; a
+    // developer machine that exports it must not make the capture tests fail.
+    delete env['DO_NOT_TRACK'];
     env['GRAPHMIND_TELEMETRY'] = '1';
   } else {
     env['GRAPHMIND_TELEMETRY'] = '0';
   }
+  Object.assign(env, extraEnv ?? {});
   const { stdout } = await execFileAsync(process.execPath, [CLI_ENTRY, ...args], {
     env,
     maxBuffer: 64 * 1024 * 1024,

@@ -130,7 +130,7 @@ describe('stats', () => {
     const context = failureContext(run, 'tool:bad');
     expect(context.parent?.nodeId).toBe('llm:s');
     expect(context.siblings.map((s) => s.nodeId)).toEqual(['tool:fast', 'tool:slow']);
-    expect(context.siblings[0]?.durationMs).toBe(20);
+    expect(context.siblings[0]?.ranMs).toBe(20);
   });
 });
 

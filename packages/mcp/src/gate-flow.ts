@@ -22,6 +22,7 @@
  *                AbortError-named reason
  */
 import { isAbortError, type GateNode, type RunContext, type RunStatus } from '@graphmind-ai/client';
+import { elapsedMs, now } from './clock.js';
 import type { AdapterCore } from './core.js';
 
 /** A gate that outlasts this is a real hold; warn about client timeouts once. */
@@ -50,9 +51,9 @@ async function gateAt(
   // Fast path: detached gates resolve from a shared promise; do not even
   // spend two clock reads on them.
   if (!core.session.attached) return core.session.gate(point, node);
-  const startedAt = Date.now();
+  const startedAt = now();
   const decision = await core.session.gate(point, node);
-  if (Date.now() - startedAt > HOLD_WARN_MS) core.warnHoldTimeout();
+  if (now() - startedAt > HOLD_WARN_MS) core.warnHoldTimeout();
   return decision;
 }
 
@@ -63,7 +64,7 @@ async function gateAt(
  */
 export async function gateFlow(options: GateFlowOptions): Promise<unknown> {
   const { core, ctx, node, instanceId } = options;
-  const startedAt = Date.now();
+  const startedAt = now();
 
   core.startNode({
     nodeId: node.nodeId,
@@ -80,7 +81,7 @@ export async function gateFlow(options: GateFlowOptions): Promise<unknown> {
       nodeId: node.nodeId,
       instanceId,
       output,
-      durationMs: Date.now() - startedAt,
+      durationMs: elapsedMs(startedAt),
       status,
       ...(extra !== undefined ? { extra } : {}),
     });

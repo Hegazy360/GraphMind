@@ -1,6 +1,6 @@
 ---
 title: The viewer
-description: Everything the debugger UI does — the command palette, keyboard shortcuts, the timeline waterfall, filters, collapsing, and deep links.
+description: Everything the viewer does — the command palette, keyboard shortcuts, edge routing, the folded MCP protocol card, ran vs held durations, the loop banner, hidden values, the timeline, filters and deep links.
 sidebar:
   order: 1
 ---
@@ -38,7 +38,7 @@ always works.
 | <kbd>Esc</kbd> | Close the palette, or deselect the current node |
 | <kbd>F</kbd> | Follow the active node with the camera |
 | <kbd>⇧</kbd><kbd>F</kbd> | Fit the graph to the screen |
-| <kbd>⇧</kbd><kbd>A</kbd> | Re-arrange the layout (full ELK pass) |
+| <kbd>⇧</kbd><kbd>A</kbd> | Re-arrange the layout (a full tidy-tree pass) |
 | <kbd>⇧</kbd><kbd>T</kbd> | Toggle the timeline |
 | <kbd>⇧</kbd><kbd>E</kbd> | Show only the error path |
 | <kbd>⇧</kbd><kbd>C</kbd> | Collapse / expand all groups |
@@ -73,7 +73,151 @@ them, glow while running, and turn red on failure.
 - **Re-arrange** (<kbd>⇧</kbd><kbd>A</kbd>) runs a full layout pass. Live runs are laid out
   incrementally so nothing jumps under your cursor; after a long run this tidies the result.
 - **Collapse** (<kbd>⇧</kbd><kbd>C</kbd>) folds sub-agents and chains into summary cards — the
-  first thing to reach for on a graph you cannot take in at once.
+  first thing to reach for on a graph you cannot take in at once. A run with more than 70 nodes
+  opens folded on its own.
+
+### Edges
+
+Edges are right-angled lines routed through the gaps between cards, not curves drawn over them.
+There is nothing to configure; this is the only edge style. An edge leaves the parent at the
+middle of its bottom border, drops to a shared line halfway down the gap to the next layer, runs
+sideways, and enters the child at the middle of its top border. When one step calls many things
+at once, the children are packed into a grid; an edge to the second row or below travels down
+the gutter to the left of its column and turns in just above its card. A fan-out therefore
+reads as one trunk with drops.
+
+What the test suite holds the layout to, on every change:
+
+- **No edge passes through a card** other than the two it connects.
+- **No two cards overlap.**
+- **Every edge starts and ends on its cards' borders**, with a vertical first and last segment.
+
+`apps/viewer/test/geometry.test.ts` checks these on eleven layouts: the demo and MCP runs, both
+finished and held at a gate, fans of 5, 11 and 30 children, three nested levels, and the
+300-node stress run folded and unfolded. `apps/viewer/e2e/geometry.spec.ts` checks the edges
+the browser actually draws, sampled every 4px, against the real card boxes.
+
+Dragging a card re-routes its edges as it moves. When a card pauses it grows to show its action
+row; if that would push it into the row below, the grid is laid out again with the camera held
+in place, so cards in that block can shift.
+
+<Aside type="caution" title="What the routing does not cover">
+Edges are routed for trees. A card you drag into another card's path is not routed around, and
+an edge whose child sits above its parent is drawn as a straight line that may cross cards. The
+runs GraphMind records do not produce such edges on their own.
+</Aside>
+
+### MCP protocol traffic is one folded card
+
+A session recorded through [`graphmind mcp-proxy`](/integrations/mcp-proxy/) puts the calls you
+care about (`tools/call`, `resources/read`, `prompts/get`, sampling, elicitation, completion)
+directly under the session. Everything else goes under one node named **protocol**: the
+handshake, the listings, `ping`, notifications, and any method GraphMind does not recognise. The
+proxy asks the viewer to open that node folded, so a session first shows as a card like:
+
+```text
+protocol                                  GROUP
+6 nodes      6 protocol calls      702ms
+```
+
+The count is how many calls are folded inside. The duration adds up the time those calls ran,
+not counting time they were held. If any call failed, the card turns red and says how many.
+
+- **Unfold** with the chevron on the card, or **Expand every group** (<kbd>⇧</kbd><kbd>C</kbd>).
+  The fold is applied once, when the node first appears: after you unfold it, new events do
+  not fold it again.
+- **Gates still work inside the fold.** Every folded call is still a node. A breakpoint on
+  `initialize` or `ping` still holds, and a failing handshake call still pauses on the default
+  error breakpoint.
+- A server that writes to stdout shows a red **stdout noise** node inside the fold. See
+  [debugging MCP servers](/debugging/mcp-servers/#a-server-that-logs-to-stdout).
+
+## Durations
+
+A duration on a card, in the inspector, in the timeline or in the run list is **how long the
+code ran**. Time the debugger spent holding it at a gate is not included.
+
+| Where | What it shows |
+| --- | --- |
+| Card | Ran time. Once the node has been held, hover it for both numbers, e.g. `ran 19ms · held 161.2s`. |
+| Inspector, this execution | **duration**, or separate **ran** and **held** cells once it has been held |
+| Inspector, across executions | **total ran**, **avg** and **slowest**, plus **held** when anything was held |
+| Timeline | Bar labels show ran time. The bar is drawn over the wall-clock span, with the held part hatched; the tooltip lists ran, held and wall. |
+| Top bar | **wall** for the whole run, plus a **held** stat once any gate has held |
+| Run list | Elapsed time minus held time. Hover it for both. |
+| **Slow nodes** filter | Ranks by ran time, so a call you paused on is not flagged as slow |
+
+Held time is counted for the node that was held **and for its parents**. If a tool is held for
+40 seconds, its agent node also shows 40 seconds held.
+
+Durations are printed with this rule:
+
+| Value | Printed as |
+| --- | --- |
+| `0` | `<1ms`: under a millisecond, or measured by an older SDK whose clock only counted whole milliseconds |
+| under 0.1 ms | `<0.1ms` |
+| under 10 ms | one decimal, e.g. `2.4ms` |
+| under 1 s | whole milliseconds, e.g. `312ms` |
+| 1 s or more | seconds with one decimal, e.g. `38.1s` (minutes are also shown in seconds) |
+
+The value is rounded before its format is chosen, so 9.96 ms prints as `10ms`, not `10.0ms`.
+One exception: the timeline's hover card and the first-token cell in the inspector never switch
+to seconds, so a 38-second step reads `38,142ms` there.
+
+Where the numbers come from: SDKs from 0.5.0 time every node with a monotonic high-resolution
+clock and send `heldMs` alongside `durationMs`. `durationMs` still means wall-clock time with
+holds included, so recordings from older SDKs read the same as before. For those recordings the
+viewer works out held time from the pause and resume events in the run. See
+[`heldMs` in the wire protocol](/reference/wire-protocol/#events-app--viewer).
+
+## When a loop is held
+
+While a debugger is attached, the SDK holds the third call in a row of one tool with identical
+arguments (the [loop hold](/reference/environment/#loop-hold)). The held card reads:
+
+```text
+Loop: 3× searchFlights with identical arguments
+```
+
+The usual action row sits underneath it. The inspector adds a block that shows:
+
+- the arguments the agent keeps sending;
+- each call in the streak with its output, tagged **same output as the call before** where it
+  matches. When outputs are hidden by `GRAPHMIND_HIDE_OUTPUTS` they are never called the same;
+- how to stop it holding a tool that polls on purpose: `loopGuard.allowNodes`, or
+  `GRAPHMIND_LOOP_ALLOW=<tool>` (the only way under `graphmind mcp-proxy`), or
+  `GRAPHMIND_ON_LOOP=warn`.
+
+**Continue** runs that call, and the next identical call is held again. **Inject** hands the
+model a different result, which is usually how the loop ends. **Abort** ends the run. In an
+exported run the label reads `Was held — loop: …`. To see it without an agent, open
+`?fixture=loop`.
+
+## Hidden values
+
+When the app runs with one of the `GRAPHMIND_HIDE_*` switches, the hidden input or output reaches
+the viewer as the string `"__REDACTED__"`. The inspector shows a chip in its place instead of a
+JSON viewer:
+
+| Node | Input chip | Output chip |
+| --- | --- | --- |
+| Tool | `hidden by GRAPHMIND_HIDE_TOOL_ARGS or GRAPHMIND_HIDE_INPUTS` | `hidden by GRAPHMIND_HIDE_TOOL_RESULTS or GRAPHMIND_HIDE_OUTPUTS` |
+| Any other kind | `hidden by GRAPHMIND_HIDE_INPUTS` | `hidden by GRAPHMIND_HIDE_OUTPUTS` |
+
+A tool chip names two switches because either one produces the same event.
+
+The inject editor is pre-filled with the execution's recorded output, or its input when there
+is no output yet. If that value was hidden, the editor therefore holds the placeholder. If you
+press **Inject & resume** without replacing it, the viewer refuses, keeps the editor open and
+says:
+
+```text
+this value contains redacted content; edit it before injecting
+```
+
+The placeholder is refused anywhere in the value: as the whole value, inside a string, or as a
+key. The server applies the same check, so a script or an older viewer cannot send the
+placeholder into your app either. See [environment → recording less](/reference/environment/#recording-less).
 
 ## Filters
 
@@ -82,7 +226,7 @@ From the palette, to cut a large run down to what you care about:
 | Filter | Shows |
 | --- | --- |
 | **Errored nodes** | Only nodes that failed |
-| **Slow nodes** | p90 duration and above, *for this run* |
+| **Slow nodes** | p90 ran time and above, *for this run* (never below 200 ms; held time does not count) |
 | **Paused nodes** | Only nodes currently held at a gate |
 | **Error path** (<kbd>⇧</kbd><kbd>E</kbd>) | Dims everything that is not an ancestor of a failure |
 
@@ -99,7 +243,8 @@ cannot:
 - what **overlapped** — which tool calls actually ran in parallel;
 - where the **wall clock** went — the step that took eleven seconds is the widest bar;
 - how long a step **waited before its first token**;
-- when a **gate held**, and for how long.
+- when a **gate held**, and for how long: the held part of a bar is hatched, and its label shows
+  only the time the code ran.
 
 Rows are virtualised, so a thousand bars cost the same as thirty. Zoom with
 <kbd>⌘</kbd>-scroll, the +/−/fit buttons, or by dragging a range on the ruler. Labels stay pinned
@@ -140,20 +285,21 @@ see the same debug state, and a change in one broadcasts to the other — which 
 
 ## Built-in fixtures
 
-The viewer can render three recorded runs with no server, no agent and no API key —
-useful for seeing what a shape looks like before you instrument anything, and for
-reporting a UI bug against something everyone has:
+The viewer can render these runs with no server, no agent and no API key. They are useful for
+seeing what a shape looks like before you instrument anything, and for reporting a UI bug
+against something everyone has:
 
 ```text
 http://127.0.0.1:4747/?fixture=demo   the planted-bug trip planner
-http://127.0.0.1:4747/?fixture=mcp    an MCP session (server / tool / resource / prompt)
+http://127.0.0.1:4747/?fixture=mcp    an MCP session, with the protocol calls folded
+http://127.0.0.1:4747/?fixture=loop   an agent held on its third identical searchFlights call
 http://127.0.0.1:4747/?stress=300     a generated 300-node graph, for layout and performance
 ```
 
 `?stress=<n>` accepts 8–4000 nodes and takes optional `&events=<n>` and `&pace=<ms>`.
 
-The empty state offers all three as buttons, so you do not have to remember the query
-parameter. A fixture is clearly badged as recorded — it is not a live run and nothing in
+The empty state offers the demo, the MCP session and the stress run as buttons, so you do not
+have to remember the query parameter. A fixture is clearly badged as recorded — it is not a live run and nothing in
 it can be resumed.
 
 ## Imported and replayed runs

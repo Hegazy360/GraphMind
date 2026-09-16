@@ -125,7 +125,7 @@ class GateEngine:
 
     def __init__(
         self,
-        on_paused: Callable[[str, GateNode, str, str], None],
+        on_paused: Callable[[str, GateNode, str, str, Any], None],
         on_resumed: Callable[[str, GateNode, str, str], None],
         new_pause_id: Callable[[], str],
         pause_timeout: float | None = None,
@@ -185,8 +185,10 @@ class GateEngine:
 
     # -- holds ----------------------------------------------------------------
 
-    def hold(self, point: str, node: GateNode, run_id: str) -> Hold:
-        """Register a held gate. Call only after :meth:`should_pause`."""
+    def hold(self, point: str, node: GateNode, run_id: str, reason: Any = None) -> Hold:
+        """Register a held gate. Call only after :meth:`should_pause` (or for a
+        built-in breakpoint such as the loop hold, whose details ride ``reason``
+        to ``on_paused`` — handed over per call, never shared between threads)."""
         future: Future[GateDecision] = Future()
         pause_id = self._new_pause_id()
         gate = _HeldGate(pause_id, node, point, run_id, future)
@@ -200,7 +202,7 @@ class GateEngine:
                 gate.timer = timer
                 timer.start()
         # Emitted after registration so a resume racing back finds the gate.
-        self._on_paused(pause_id, node, point, run_id)
+        self._on_paused(pause_id, node, point, run_id, reason)
         return Hold(pause_id, future)
 
     def resume(self, pause_id: str, action: str, output: Any = None) -> bool:

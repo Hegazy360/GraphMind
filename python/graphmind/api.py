@@ -20,11 +20,11 @@ nothing when GraphMind is disabled.
 from __future__ import annotations
 
 import threading
-import time
 from collections.abc import Callable, Iterable
 from typing import Any, TypeVar
 
 from ._version import __version__
+from .clock import elapsed_ms, monotonic_ms
 from .gate import GateDecision, GateNode
 from .ids import next_id
 from .protocol import NODE_KINDS
@@ -248,7 +248,7 @@ class Span:
 
     def _begin(self) -> None:
         self._instance_id = next_id("span")
-        self._started = time.monotonic()
+        self._started = monotonic_ms()
         self._session.start_node(
             node_id=self._node.node_id,
             kind=self._kind,
@@ -285,7 +285,7 @@ class Span:
         self._session.finish_node(
             node_id=self._node.node_id,
             instance_id=self._instance_id,
-            duration_ms=(time.monotonic() - self._started) * 1000.0,
+            duration_ms=elapsed_ms(self._started),
             status=status,
             output=output,
         )
@@ -303,7 +303,10 @@ def configure(**options: Any) -> GraphMind:
     Accepts everything :class:`GraphMind` accepts: ``app``, ``sdk``, ``url``,
     ``enabled``, ``meta``, ``connect_timeout``, ``handshake_timeout``,
     ``retry_interval``, ``buffer_size``, ``pause_timeout``, ``token_interval``,
-    ``env``, ``logger``.
+    ``env``, ``logger``, ``loop_guard`` (``False`` or a dict with ``threshold``,
+    ``mode``, ``ignore_keys``, ``allow_nodes``, ``kinds``) and the redaction
+    switches ``hide_inputs``, ``hide_outputs``, ``hide_tool_args``,
+    ``hide_tool_results`` (each also ``GRAPHMIND_HIDE_*`` in the environment).
     """
     global _default
     with _default_lock:

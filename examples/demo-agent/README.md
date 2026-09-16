@@ -35,7 +35,22 @@ that throw — the demo's hero moment. From the viewer you can:
 # from the repo root, with a graphmind server up (pnpm --filter graphmind-ai …):
 pnpm --filter demo-agent start        # mock mode
 pnpm --filter demo-agent start:live   # live mode (needs a key)
+pnpm --filter demo-agent start -- --loop   # the loop hold demo (mock only)
 ```
+
+## `--loop`: the loop hold
+
+`--loop` swaps in a scripted model that calls `searchFlights` with the **same
+arguments** on every step and never uses the answer. With a GraphMind server
+attached, `@graphmind-ai/sdk` holds the **third** identical call at its
+before-gate — the card reads *Loop: 3× searchFlights with identical
+arguments*, the inspector lists the earlier identical calls with their
+identical outputs — and every resume action works: **continue** lets that call
+run (the fourth is held again), **inject** hands the model a different result
+(the script notices and finishes), **abort** ends the run. Without a server the
+run completes on its own after eight steps and one `[graphmind] possible loop`
+warning reaches the console. Tune it with `GRAPHMIND_LOOP_THRESHOLD` (default
+3, `0` off) and `GRAPHMIND_ON_LOOP=pause|warn|off`.
 
 `graphmind demo --live` spawns this package's `src/main.ts` (via the local
 `tsx`) rather than importing it — the `ai` + provider dependencies live here,

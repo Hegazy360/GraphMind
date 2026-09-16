@@ -93,7 +93,8 @@ runs unattended and stops the instant something breaks, with full state, instead
 Fail-open is absolute. If you close the viewer, kill the server, or your laptop sleeps while a
 gate is held:
 
-- every held gate resolves `continue` immediately (measured under 100 ms);
+- every held gate resolves `continue` within 100 ms (`packages/client/test/session.test.ts` and
+  `python/tests/test_failopen.py` assert it);
 - breakpoints and mode are forgotten until a new handshake re-arms them;
 - your agent finishes as though nothing had ever attached.
 

@@ -31,6 +31,7 @@ import {
   type RunContext,
   type RunStatus,
 } from '@graphmind-ai/client';
+import { elapsedMs, now } from './clock.js';
 import { coerceInjected } from './coerce.js';
 import type { AdapterCore } from './core.js';
 import { gateFlow } from './gate-flow.js';
@@ -45,10 +46,11 @@ import {
 import { ServerState } from './server-state.js';
 import {
   isFunction,
-  isHandlerExtra,
   isObject,
+  isRequestTrailer,
+  requestContextOf,
   type AnyFn,
-  type RequestHandlerExtraLike,
+  type RequestTrailer,
 } from './sdk-types.js';
 
 /** Marks a Proxy we made, so wrapping twice is a no-op instead of a double gate. */
@@ -262,8 +264,9 @@ function wrapRegistration<R extends object>(
 /**
  * The decorated handler the SDK will call. Every MCP callback signature —
  * `(args, extra)`, `(extra)`, `(uri, extra)`, `(uri, variables, extra)` — puts
- * the `RequestHandlerExtra` last, so the wrapper reads the trailing argument
- * and leaves the rest of the call exactly as the SDK built it.
+ * the SDK's trailer last (the 1.x `RequestHandlerExtra`, or the 2.x context
+ * with its `mcpReq`), so the wrapper reads the trailing argument and leaves
+ * the rest of the call exactly as the SDK built it.
  */
 function wrapHandlerCallback(
   original: AnyFn,
@@ -272,10 +275,10 @@ function wrapHandlerCallback(
   state: ServerState,
 ): AnyFn {
   return async function graphmindHandler(this: unknown, ...args: unknown[]): Promise<unknown> {
-    let plan: { descriptor: RequestDescriptor; extra: RequestHandlerExtraLike | undefined } | undefined;
+    let plan: { descriptor: RequestDescriptor; extra: RequestTrailer | undefined } | undefined;
     try {
       const last = args.length > 0 ? args[args.length - 1] : undefined;
-      const extra = isHandlerExtra(last) ? last : undefined;
+      const extra = isRequestTrailer(last) ? last : undefined;
       const handlerArgs = extra === undefined ? args : args.slice(0, args.length - 1);
       plan = { descriptor: describeCallback(shape, ref, handlerArgs), extra };
     } catch {
@@ -321,36 +324,60 @@ function wrapProtocolServer<T extends object>(target: T, state: ServerState): T 
   }) as T;
 }
 
+/**
+ * `setRequestHandler` in its three spellings:
+ *
+ *   1.x  (RequestSchema, handler)            handler(request, extra)
+ *   2.x  (method, handler)                   handler(request, ctx)
+ *   2.x  (method, { params, result? }, handler)  handler(PARAMS, ctx)
+ *
+ * The handler is the last function argument; the method comes from the
+ * request itself when the handler gets one, and from the registration when
+ * (third form) it only gets the parsed params.
+ */
 function makeSetRequestHandler(target: object, original: AnyFn, state: ServerState): AnyFn {
   return (...args: unknown[]): unknown => {
-    const handler = args[1];
-    if (args.length < 2 || !isFunction(handler)) return original.apply(target, args);
+    let handlerIndex = -1;
+    for (let i = args.length - 1; i >= 1; i -= 1) {
+      if (isFunction(args[i])) {
+        handlerIndex = i;
+        break;
+      }
+    }
+    if (handlerIndex === -1) return original.apply(target, args);
+    const handler = args[handlerIndex] as AnyFn;
+    const methodHint = typeof args[0] === 'string' ? args[0] : undefined;
+    const paramsOnly = handlerIndex >= 2 && methodHint !== undefined;
 
     const wrapped = async function graphmindRequestHandler(
       this: unknown,
-      request: unknown,
+      first: unknown,
       extra: unknown,
     ): Promise<unknown> {
       let descriptor: RequestDescriptor | undefined;
       try {
-        descriptor = describeRequest(request);
+        descriptor = paramsOnly
+          ? describeRequest({ method: methodHint, params: first }, methodHint)
+          : describeRequest(first, methodHint);
       } catch {
         descriptor = undefined;
       }
       // Methods this adapter does not model (tools/list, initialize, ping, ...)
       // cost exactly one extra function call.
-      if (descriptor === undefined) return await handler.call(this, request, extra);
+      if (descriptor === undefined) return await handler.call(this, first, extra);
 
       const self = this;
       return await runInstrumentedRequest(
         state,
         descriptor,
-        isHandlerExtra(extra) ? extra : undefined,
-        (nextExtra) => handler.call(self, request, nextExtra ?? extra),
+        isRequestTrailer(extra) ? extra : undefined,
+        (nextExtra) => handler.call(self, first, nextExtra ?? extra),
       );
     };
 
-    return original.apply(target, [args[0], wrapped, ...args.slice(2)]);
+    const next = [...args];
+    next[handlerIndex] = wrapped;
+    return original.apply(target, next);
   };
 }
 
@@ -402,21 +429,22 @@ function prepareRequestOptions(
 async function runInstrumentedRequest(
   state: ServerState,
   descriptor: RequestDescriptor,
-  extra: RequestHandlerExtraLike | undefined,
-  invoke: (extra: RequestHandlerExtraLike | undefined) => unknown,
+  extra: RequestTrailer | undefined,
+  invoke: (extra: RequestTrailer | undefined) => unknown,
 ): Promise<unknown> {
   const core = state.core;
   const wait = core.maybeWaitForAttach();
   if (wait !== undefined) await wait;
 
   state.record(descriptor.kind, descriptor.name, descriptor.nodeId);
-  const sessionId = state.noteSessionId(extra?.sessionId);
-  const instanceId = state.instanceIdFor(extra?.requestId, sessionId);
+  const ids = requestContextOf(extra);
+  const sessionId = state.noteSessionId(ids?.sessionId);
+  const instanceId = state.instanceIdFor(ids?.requestId, sessionId);
 
   return await core.withRun(descriptor.runName, async (ctx) => {
     core.emitGraphHint(state.hintNodes(), ctx?.runId ?? 'no-run');
 
-    const serverStartedAt = Date.now();
+    const serverStartedAt = now();
     core.startNode({
       nodeId: state.nodeId,
       kind: 'server',
@@ -429,7 +457,7 @@ async function runInstrumentedRequest(
     const handlerExtra =
       extra === undefined
         ? undefined
-        : state.instrumentExtra(extra, ctx, descriptor.nodeId, (params, sctx, parentId, call) =>
+        : state.instrumentTrailer(extra, ctx, descriptor.nodeId, (params, sctx, parentId, call) =>
             gateSampling(state, params, sctx, parentId, call),
           );
 
@@ -454,7 +482,7 @@ async function runInstrumentedRequest(
         nodeId: state.nodeId,
         instanceId,
         output: undefined,
-        durationMs: Date.now() - serverStartedAt,
+        durationMs: elapsedMs(serverStartedAt),
         status,
         extra: { method: descriptor.method },
       });
@@ -544,10 +572,13 @@ function describeCallback(
  * A resource read has no registration to name it here, so the URI IS the
  * logical node — the one place where the low-level path is coarser than the
  * high-level one (which keeps a templated resource as a single node).
+ *
+ * `methodHint` is the method the handler was registered for (2.x passes it
+ * as a string); it is used when the request itself does not say.
  */
-function describeRequest(request: unknown): RequestDescriptor | undefined {
+function describeRequest(request: unknown, methodHint?: string): RequestDescriptor | undefined {
   if (!isObject(request)) return undefined;
-  const method = request['method'];
+  const method = typeof request['method'] === 'string' ? request['method'] : methodHint;
   const params = isObject(request['params']) ? request['params'] : {};
 
   if (method === 'tools/call') {

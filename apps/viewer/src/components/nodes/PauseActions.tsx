@@ -20,6 +20,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { isExportedRun } from '../../connection/FixtureConnection.js';
 import { injectAndResume, pausePointLabel, resumeGate, stepGate } from '../../lib/gate.js';
+import { loopBannerText } from '../../store/loop.js';
 import { useUiStore } from '../../store/uiStore.js';
 import { latestExecution, type NodeState, type Pause } from '../../store/types.js';
 
@@ -49,6 +50,14 @@ const LIVE_HINT =
   'Held by the debugger. Note: user-configured totalMs/stepMs/chunkMs timeouts can still abort a ' +
   'run during a long hold (per-tool toolMs is neutralized).';
 
+/** The loop hold: why this gate opened on its own, and what each verb does here. */
+const LOOP_HINT =
+  'GraphMind held this call because the model asked for the same tool with the same arguments ' +
+  'again and again (GRAPHMIND_LOOP_THRESHOLD, default 3). Continue runs it anyway; Inject ' +
+  'substitutes a result; Abort stops the run. Polling on purpose? Add the tool to ' +
+  'loopGuard.allowNodes (or GRAPHMIND_LOOP_ALLOW=<tool>, which also works for mcp-proxy), ' +
+  'or set GRAPHMIND_ON_LOOP=warn.';
+
 function Key({ children }: { children: string }) {
   return (
     <span className="gm-kbd gm-kbd--inline" aria-hidden>
@@ -68,6 +77,8 @@ export function PauseActions({
   const [injecting, setInjecting] = useState(false);
   const [draft, setDraft] = useState('');
   const [invalid, setInvalid] = useState(false);
+  /** Why the last inject was refused (e.g. it still contained the redaction placeholder). */
+  const [refusal, setRefusal] = useState<string | undefined>(undefined);
   const continueRef = useRef<HTMLButtonElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const injectRequest = useUiStore((s) => s.injectRequest);
@@ -88,6 +99,7 @@ export function PauseActions({
   const openInject = () => {
     setDraft(prefill);
     setInvalid(false);
+    setRefusal(undefined);
     setInjecting(true);
   };
 
@@ -100,6 +112,7 @@ export function PauseActions({
     if (injectRequest.variant !== variant) return;
     setDraft(prefill);
     setInvalid(false);
+    setRefusal(undefined);
     setInjecting(true);
   }, [injectRequest, pause.pauseId, variant, prefill]);
 
@@ -130,22 +143,42 @@ export function PauseActions({
       setInvalid(true);
       return;
     }
-    injectAndResume(runId, pause.pauseId, output);
+    const result = injectAndResume(runId, pause.pauseId, output);
+    if (!result.ok) {
+      // Keep the editor open and say why — closing it silently is how a
+      // refused inject used to look exactly like a successful one.
+      setRefusal(result.reason);
+      return;
+    }
+    setRefusal(undefined);
     setInjecting(false);
   };
 
   const where = pausePointLabel(pause.point);
   const pointLabel = replayed ? `Was held ${where}` : `Paused ${where}`;
+  // Loop hold (W5): the SDK's built-in breakpoint names itself — the label
+  // becomes the reason, in normal case because it carries the tool's name.
+  const loopLabel = loopBannerText(node, pause, replayed);
 
   return (
     <>
-      <div
-        className="gm-pause-label"
-        title={replayed ? RECORDED_HINT : LIVE_HINT}
-      >
-        <span className="gm-dot gm-dot--paused" />
-        {pointLabel}
-      </div>
+      {loopLabel !== undefined ? (
+        <div
+          className="gm-pause-label gm-pause-label--loop"
+          title={replayed ? RECORDED_HINT : LOOP_HINT}
+        >
+          <span className="gm-dot gm-dot--paused" />
+          {loopLabel}
+        </div>
+      ) : (
+        <div
+          className="gm-pause-label"
+          title={replayed ? RECORDED_HINT : LIVE_HINT}
+        >
+          <span className="gm-dot gm-dot--paused" />
+          {pointLabel}
+        </div>
+      )}
       {pause.point === 'error' && error !== undefined && hideError !== true && (
         <div className="gm-pause-error" title={`${error.name}: ${error.message}`}>
           {error.name}: {error.message}
@@ -215,6 +248,7 @@ export function PauseActions({
             onChange={(e) => {
               setDraft(e.target.value);
               setInvalid(false);
+              setRefusal(undefined);
             }}
             onKeyDown={(e) => {
               // Escape belongs to the editor — the app's Escape would clear
@@ -234,6 +268,11 @@ export function PauseActions({
               }
             }}
           />
+          {refusal !== undefined && (
+            <div className="gm-pause-note gm-inject-refusal" role="alert">
+              {refusal}
+            </div>
+          )}
           <div className="gm-actions gm-inject-actions">
             <button className="gm-action gm-action--primary" onClick={applyInject}>
               {invalid ? 'Invalid JSON' : 'Inject & resume'}

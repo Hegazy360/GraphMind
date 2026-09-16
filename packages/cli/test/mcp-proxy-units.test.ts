@@ -157,16 +157,19 @@ describe('protocol -> graph mapping', () => {
       nodeId: 'tool:search',
       kind: 'tool',
       name: 'search',
+      parentId: 'mcp:session',
     });
     expect(mapMethod('resources/read', { uri: 'file:///a' })).toEqual({
       nodeId: 'resource:file:///a',
       kind: 'resource',
       name: 'file:///a',
+      parentId: 'mcp:session',
     });
     expect(mapMethod('prompts/get', { name: 'summarize' })).toEqual({
       nodeId: 'prompt:summarize',
       kind: 'prompt',
       name: 'summarize',
+      parentId: 'mcp:session',
     });
   });
 
@@ -177,13 +180,17 @@ describe('protocol -> graph mapping', () => {
     });
   });
 
-  it('keeps protocol chatter visible as custom nodes named after the method', () => {
+  it('keeps protocol chatter visible as custom nodes named after the method, under mcp:protocol', () => {
     expect(mapMethod('initialize', {})).toEqual({
       nodeId: 'mcp:initialize',
       kind: 'custom',
       name: 'initialize',
+      parentId: 'mcp:protocol',
     });
-    expect(mapMethod('notifications/progress', {})).toMatchObject({ kind: 'custom' });
+    expect(mapMethod('notifications/progress', {})).toMatchObject({
+      kind: 'custom',
+      parentId: 'mcp:protocol',
+    });
   });
 
   it('degrades gracefully when the params are missing or malformed', () => {

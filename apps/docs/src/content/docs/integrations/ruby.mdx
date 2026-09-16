@@ -28,7 +28,7 @@ end
 Run `npx graphmind-ai` in another terminal and open `http://127.0.0.1:4747`. With nothing
 attached, every line above is a no-op.
 
-The gem is called **`graphmind`**, needs **Ruby ≥ 3.1** (verified on 3.3), and has **no runtime
+The gem is called **`graphmind`**, needs **Ruby ≥ 3.1** (CI runs 3.1 and 3.3), and has **no runtime
 dependencies** — the WebSocket client is hand-rolled over stdlib sockets, so adding a debugger to
 someone else's `Gemfile` cannot force a resolution on `faraday`, `websocket-driver` or
 `eventmachine`.
@@ -173,7 +173,77 @@ production check because there is no `NODE_ENV`:
 `prod` (case-insensitive) as production. A boring documented list rather than a heuristic, on
 purpose.
 
-`GRAPHMIND_URL` moves the ingest endpoint, exactly as elsewhere.
+`GRAPHMIND_URL` moves the ingest endpoint, exactly as elsewhere. The `GRAPHMIND_HIDE_*` and
+loop variables below are read too.
+
+## Durations and held time
+
+Nodes are timed with `Process.clock_gettime(Process::CLOCK_MONOTONIC, :float_millisecond)`.
+`durationMs` is fractional to 0.01 ms and is still wall-clock time, holds included.
+`node.finished` also carries `heldMs`, the time the debugger held that execution. The viewer
+shows ran time; see [durations](/reference/viewer/#durations). Checked against a real server:
+
+```text
+node.finished tool:search    durationMs=6.52  heldMs=0
+node.finished tool:search    durationMs=0.04  heldMs=0
+```
+
+For tests,
+`Graphmind::Clock.override = -> { ms }` replaces the duration clock, and
+`Graphmind::Session.new(clock:)` drives only the held-time accounting.
+
+## Recording less
+
+The same four switches as the TypeScript and Python SDKs, with the same placeholder and wire
+output: `GRAPHMIND_HIDE_INPUTS`, `GRAPHMIND_HIDE_OUTPUTS`, `GRAPHMIND_HIDE_TOOL_ARGS`,
+`GRAPHMIND_HIDE_TOOL_RESULTS` (`1` or `true`), or as options:
+
+```ruby
+Graphmind.configure(app: "checkout", hide_tool_args: true, hide_tool_results: true)
+```
+
+Either source turning a switch on turns it on, and options also accept `1` and `"true"`. Hashes
+with Symbol keys are redacted like String keys, because JSON writes both the same way.
+`session.redaction_switches` shows what is in effect. Checked with
+`GRAPHMIND_HIDE_TOOL_RESULTS=true` against a real server:
+
+```text
+node.finished tool:search  output="__REDACTED__"  redaction={"count":1,"keys":["output"]}
+```
+
+Exception messages (`node.error`) are never redacted, and the tool-only switches do not hide the
+same data inside LLM messages. The full rules are on
+[environment → recording less](/reference/environment/#recording-less).
+`test/test_redaction.rb` reproduces the shared conformance fixture byte for byte and matches the
+differential file generated from the TypeScript build.
+
+## Loop hold
+
+While a debugger is attached, the third call in a row of one tool with identical arguments, with
+no other tool call between, is held before it runs, on the calling thread only. This covers anything that goes through the
+gem's wrappers: `gm.tool`, `gm.wrap`, `wrap_tools`, `wrap_method`. With no debugger attached,
+nothing is held and one line is logged per streak:
+
+```text
+[graphmind] possible loop: search (tool:search) was called 3× in a row with identical arguments; no debugger is attached to hold it (start `npx graphmind-ai` to pause it there). Polling on purpose? add it to loop_guard: { allow_nodes: [...] } or GRAPHMIND_LOOP_ALLOW; GRAPHMIND_ON_LOOP=off silences this
+```
+
+```ruby
+Graphmind.configure(app: "checkout", loop_guard: { threshold: 5, allow_nodes: [:poll_job] })
+```
+
+`loop_guard:` takes `threshold`, `mode` (`"pause"`, `"warn"`, `"off"`), `allow_nodes`,
+`ignore_keys` and `kinds`, as Symbol, String or camelCase keys. `session.loop_guard_config` shows
+what is in effect. For each field the option wins over `GRAPHMIND_LOOP_THRESHOLD` /
+`GRAPHMIND_ON_LOOP` / `GRAPHMIND_LOOP_ALLOW`, which win over the default.
+
+Ruby-specific comparison rules: Symbol and String keys and values count as the same argument;
+Structs and other `#to_h` objects compare by `to_h`; other objects compare by `#inspect`.
+Comparison uses the full arguments, even though the recorded input is truncated at 200 items.
+Under `hide_inputs:`, or `hide_tool_args:` on a tool, the fingerprint is sent as
+`"__REDACTED__"`. Fingerprinting runs on every watched call and grows with argument size; the
+test bounds it at 0.5 ms for a 1 KB argument. The general rules are on
+[environment → loop hold](/reference/environment/#loop-hold).
 
 ## Options
 
@@ -185,8 +255,20 @@ purpose.
 | `enabled:` | kill-switch logic | Force on/off (`GRAPHMIND_DISABLED=1` still wins) |
 | `meta:` | — | Extra metadata on every `run.started` |
 | `pause_timeout:` | hold forever | Auto-continue a gate nobody resumes |
-| `buffer_size:` | 2000 | Replay ring buffer |
+| `buffer_size:` | 2000 | Replay ring buffer, in events (also capped at `max_buffer_bytes:`, 8 MiB) |
+| `hide_inputs:` … `hide_tool_results:` | `false` | [Recording less](#recording-less) |
+| `loop_guard:` | `{ threshold: 3, mode: "pause" }` | [Loop hold](#loop-hold); `false` turns it off |
 | `logger:` | `warn` | Where the rate-limited warnings go |
+
+## Oversized payloads
+
+A payload over 512 KB is shrunk to a preview before it leaves the gem, exactly as in the other SDKs —
+see [limits](/reference/limits/). One Ruby-specific caveat: when a cut lands inside an astral
+character (an emoji), the shrunk string carries a lone-surrogate escape, because the wire format is
+what JavaScript writes. The hub reads it fine, and the gem never re-parses its own frames. But Ruby's
+`JSON.parse` refuses a lone surrogate, so your own tooling that re-parses a stored or exported frame
+needs a permissive parser (for example `JSON.parse(text, allow_invalid_unicode: true)` where your JSON
+library offers it, or read those strings as bytes).
 
 ## Fail-open invariants
 

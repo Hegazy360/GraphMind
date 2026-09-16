@@ -6,6 +6,272 @@ this repo (`graphmind-ai`, `@graphmind-ai/sdk`, `@graphmind-ai/client`,
 `@graphmind-ai/langgraph`, `@graphmind-ai/mcp`, the Python `graphmind-ai`
 distribution, and the Ruby `graphmind` gem).
 
+## 0.5.0
+
+The release for the reviewer who has not decided yet: the platform engineer
+who opens the repo before opening the tool. Everything here was chosen after a
+research pass on the September 2026 landscape and an adversarial refutation of
+each candidate; the things that did not survive that are not in here.
+
+### Fixed — edges start and end on the cards, and never cross one
+
+Two defects hid behind "the edges look detached". The first was the known one:
+with five or more childless siblings the layout packs them into a grid, and the
+parent's bezier to a row-two card went straight through the row-one card above
+it (6 of 11 edges on a real MCP session). Edges are now routed orthogonally:
+down from the parent to a bus line in the layer gap, across, then down the
+column **gutter** to the target and in through its top handle, so a fan-out
+reads as one trunk with drops. The second was the real reason they looked
+loose: React Flow measures a node's handle positions once, when it mounts, and
+our cards mount mid entrance animation — so every edge was anchored to a
+phantom handle 60–100px from where the card ended up, for the life of the node.
+The canvas now draws edges from the layout's own geometry and ignores the
+measured handles. Both are guarded by a geometry harness: eleven fixtures
+(demo, MCP, 5/11/30-leaf fans, three nested levels, the 300-node stress run)
+must have zero edge–card crossings and zero overlapping cards, and a browser
+test samples the painted SVG paths every 4px against the real card boxes.
+
+### Changed — an MCP session shows the work and folds the protocol
+
+`graphmind mcp-proxy` used to render a session as eleven flat siblings, six of
+which were `initialize`, `notifications/initialized`, `tools/list`,
+`resources/list`, `prompts/list` and `ping`. Protocol traffic — handshake,
+discovery, keepalive, and any method GraphMind does not recognise — is now
+parented under one node named **protocol**, emitted with a new `collapsed`
+hint so the viewer opens it folded with a count ("6 protocol calls · 702ms");
+the work (`tools/call`, `resources/read`, `prompts/get`,
+`sampling/createMessage`, `elicitation/*`, `completion/complete`) sits directly
+under the session. Every folded call is still a node: a breakpoint on `ping`
+still holds, a failing `initialize` still pauses on the error gate and turns
+the folded card red. Work is recognised in the direction the protocol sends
+it: a `tools/call` travelling *from* the server (an echoing or hostile peer)
+is protocol traffic, not a second tool call — it used to be recorded as one.
+
+Three silent failures now speak. A server that logs to **stdout** (the MCP
+wire) — a `console.log`, or a structured logger writing one JSON object per
+line — gets one stderr line quoting the offending bytes with the fix, and a red
+"stdout noise" node under **protocol**; the bytes are still relayed unchanged.
+A command that cannot be spawned — `ENOENT`, or on Windows the synchronous
+`EINVAL` a `.cmd` target used to throw as a stack trace — prints one plain
+line, exits 127, and lands on the graph as a `SpawnError`. A server that exits
+before its first response prints the exit reason with the tail of its stderr
+(last 200 lines / 32KB kept) and puts both on the session node; Windows
+NTSTATUS exit codes are named. Such a session also ends its **run** with
+`status: error` — before, the node was red and the run list said `ok`.
+
+### Changed — durations are measured, and held time is not run time
+
+Every SDK timed nodes with the wall clock at millisecond resolution, so an MCP
+handler that took 80µs read `0ms` — a debugger saying it cannot measure. All
+three SDKs and the proxy now use a monotonic high-resolution clock
+(`performance.now()`, `time.perf_counter()`, `CLOCK_MONOTONIC`); `durationMs`
+is fractional to 0.01ms and the viewer renders `<0.1ms`, one decimal under
+10ms, integer ms under a second.
+
+And the developer's thinking time no longer counts as the agent's. While a
+gate is held, the node's duration kept running, so forty seconds at a
+breakpoint became a forty-second tool call that the slow filter, the stats and
+the exports treated as slow. `node.finished` and `node.error` now carry
+`heldMs` — the time this execution spent held at gates, including holds on
+its descendants — and every place the viewer shows, filters, sums or exports
+a duration uses **ran = durationMs − heldMs**: cards read `ran 2.4ms · held
+38.1s`, the timeline hatches the held part of a bar, the run list subtracts it.
+`durationMs` keeps its meaning (wall clock, held time included), so recorded
+runs and importers see no change; the viewer also derives held time from
+`exec.paused`/`exec.resumed` timestamps for streams that predate the field.
+
+### Added — releases a security reviewer can verify
+
+- **`publish-npm.yml`**: on a `v*` tag, builds, runs the full battery, checks
+  the tag against all ten declared versions, publishes the eight packages with
+  `pnpm -r publish --provenance` (npm's own `publish` does not rewrite
+  `workspace:*` and would ship uninstallable manifests — the workflow opens
+  every tarball to prove none survived), verifies the attestations and
+  `npm audit signatures` from a clean registry install, and creates a GitHub
+  Release with the tarballs, a CycloneDX 1.6 SBOM and `SHA256SUMS`. Idempotent:
+  a re-run for a published version is a no-op, a partial publish fails naming
+  the missing packages, a pre-release tag goes out under `next`, never
+  `latest`. Uses npm Trusted Publishing (OIDC) once the maintainer configures
+  it, `NPM_TOKEN` as a fallback, and a `dry_run` dispatch that does everything
+  but publish. The Python workflow now builds with a hash-pinned front-end
+  **and** back-end (`hatchling`), in a non-isolated environment.
+- **`DO_NOT_TRACK=1`** (or `true`) disables telemetry unconditionally — it
+  beats every `GRAPHMIND_TELEMETRY` value including `1`. **`GRAPHMIND_TELEMETRY=log`**
+  prints the exact payload to stderr and sends nothing.
+- **SECURITY.md** rewritten: supported versions, disclosure targets a solo
+  maintainer can keep, how to verify a release, and a localhost threat model
+  that maps CVE-2025-49596 (MCP Inspector) onto GraphMind precisely — the hub
+  binds loopback, browser-originated control frames are rejected (now proven by
+  a test), nothing spawns commands from network input, and any local process
+  running as you can connect, which is stated rather than hidden.
+- A **Security & compliance** page in the docs, written for the reviewer.
+
+### Fixed — CI told the truth again
+
+- The Ruby suite hung to the 15-minute limit in every run: `ruby/Gemfile.lock`
+  is git-ignored, `json` 3.0 shipped on 2026-09-07, and faraday 2.14.3's JSON
+  middleware still calls `JSON.parse(body, opts)` positionally, so every
+  ruby-openai request raised and the retry-at-error-gate test re-sent forever.
+  `json` is pinned below 3 in the test group with the reason inline, and every
+  thread wait in the suite is bounded — a hang is now a named failure in 10s.
+- A Python test read the frame list the instant `run.started` arrived, before
+  the two `node.started` frames — a race only a slow Windows runner loses.
+- A viewer e2e sampled a token stream twice and demanded a change between the
+  samples; on a two-worker runner the whole stream can land in between.
+- python and ruby jobs now emit their failing output as annotations, because
+  job logs need a GitHub login and annotations do not.
+
+### Wire protocol
+
+Additive, all optional, schema major unchanged: `node.started.collapsed`,
+`node.finished.heldMs` / `node.error.heldMs`, `exec.paused.reason` and
+`exec.paused.loop`, and a `redaction {count, keys}` summary on events whose
+payload was redacted.
+
+### Added — MCP SDK v2
+
+The TypeScript MCP SDK became a new package family on 2026-07-28
+(`@modelcontextprotocol/server` + `core`, 2.0.0) and `@graphmind-ai/mcp` only
+accepted the 1.x `sdk` package, so every server written since then was locked
+out of in-process debugging. `@graphmind-ai/mcp` now takes either generation as
+an **optional** peer (`/sdk >=1.26 <2` or `/server >=2 <3`), detected
+structurally from the object you hand to the same `wrapServer(...)` call: the
+v2 handler context (`ctx.mcpReq`) is recognised, the debugger's abort is
+chained into its signal, `requestSampling` / `send('sampling/createMessage')`
+are gated, and both spellings of `setRequestHandler` are wrapped. Wrap inside
+the factory when you use `serveStdio`. `graphmind mcp-proxy` needed no change
+and is now proven against v2 servers with both client generations, including
+the opt-in 2026-07-28 era (`server/discover` instead of `initialize`,
+`resultType` on every result) — the protocol fold, gates, inject, abort and
+retry all hold, and an injected value is stamped for the era the peers
+actually negotiated (`resultType`, plus `ttlMs`/`cacheScope` for
+`resources/read`), so a bare inject is accepted by a 2026 client too. Facts
+that shaped this are in the repo's internal
+decisions: the v2 client's default posture is still `initialize`; only
+`serveStdio` serves the 2026 era; a throwing v2 handler arrives as
+`isError: true`, not a JSON-RPC error; `'auto'` negotiation probes on a
+sibling process, which the proxy shows as a second, short run rather than
+hiding it.
+
+### Added — the debugger stops an agent that is repeating itself
+
+The most-reported agent failure is the same tool called with the same arguments
+again and again until a bill or a timeout ends it; every tool on the market
+shows you that afterwards. GraphMind now holds it while it is happening. The
+client fingerprints each tool call's arguments (canonical JSON — key order,
+whitespace and number spelling do not matter; MCP's per-request `_meta`, where
+clients put a fresh `progressToken`, is ignored; pagination keys are not, so
+page 3 of a listing is never "the same call" as page 2) and counts identical calls made
+back-to-back — any other tool call in between starts the count again, while
+LLM steps between them do not; on the third (`GRAPHMIND_LOOP_THRESHOLD`, default 3, `0` off)
+the before-gate holds **when a debugger is attached** — through the normal gate
+path, so timeouts and fail-open apply and Continue / Retry / Inject / Abort keep
+their meaning. The banner reads "Loop: 3× searchFlights with identical
+arguments" and the inspector lists the identical calls with their outputs, so
+you can see the model is not learning anything new; inject a different answer
+and it moves on. With no debugger attached it never holds — it warns once per
+streak and keeps counting, so a debugger that attaches late holds on the next
+identical call (`GRAPHMIND_ON_LOOP=pause|warn|off`; also `loopGuard: {threshold,
+mode, ignoreKeys, allowNodes, kinds}` on every adapter — `allowNodes`, or
+`GRAPHMIND_LOOP_ALLOW=pollJob,…` where options cannot be set such as under
+`graphmind mcp-proxy`, is the escape hatch for tools that legitimately poll). Detection lives in the client
+session, so every adapter and `graphmind mcp-proxy` got it with no code change.
+`exec.paused` carries `reason: 'loop'` and `loop: {repeats, firstSeq, lastSeq,
+fingerprint}`. The fingerprint is withheld wherever the input is: under
+`GRAPHMIND_HIDE_INPUTS` (or `_TOOL_ARGS` on a tool) and in every sanitised
+`graphmind record` export, because a hash of an input with a password removed
+is a dictionary attack away from the password. Fingerprinting costs about
+0.01 ms per KB of arguments on a watched tool's start; the detached gate path
+is unchanged. An input that cannot be read (a throwing getter or `toJSON`)
+breaks a streak instead of counting as a repeat. `pnpm --filter demo-agent start -- --loop` shows it.
+
+Why back-to-back and not "the third identical call anywhere in the run": under
+`graphmind mcp-proxy` a whole coding session is one run, and a constant-argument
+tool (`list_issues({})`, `git_status({})`) called at minute 1, 20 and 45 with
+dozens of other calls in between is not a loop — an early build held it. The
+accepted cost: a model alternating between two tools (search, read, search,
+read) is not held.
+
+Not built, on purpose: step and token budgets (LangGraph's `recursion_limit`,
+the AI SDK's `stopWhen` and their peers already cap runs) and any unattended
+abort policy — the case those come from is the one a live debugger is absent
+from.
+
+### Added — two answers for the security reviewer: record less, export safely
+
+- **Kill switches.** `GRAPHMIND_HIDE_INPUTS`, `GRAPHMIND_HIDE_OUTPUTS`,
+  `GRAPHMIND_HIDE_TOOL_ARGS` and `GRAPHMIND_HIDE_TOOL_RESULTS` (`1`/`true`; also
+  session options `hideInputs` … on every adapter) replace the whole field with
+  `"__REDACTED__"` inside the client *before* the ring buffer, so nothing
+  downstream — replay on attach, SQLite, the WebSocket, `graphmind record`, the
+  HTML export, the read-only MCP tools, the proxy — ever holds the hidden field; names,
+  kinds, timings, token counts and the shape of a stream (delta count, character
+  lengths) survive so the graph still reads. An environment switch is a floor
+  code cannot lower. Affected events carry `redaction: {count, keys}`; the
+  viewer shows a "hidden by …" chip where the value would be, and refuses to
+  inject a value that still contains the placeholder (the hub refuses too).
+  `node.error` is deliberately never redacted — at 3am the message is the clue.
+  Know the limit: the tool-only switches hide the tool node's own input and
+  output, but in an agent loop the same values also pass through the model
+  (`tool_use` in its output, `tool_result` in the next request) — set
+  `GRAPHMIND_HIDE_INPUTS`/`_OUTPUTS` to keep them out entirely. `graphmind
+  mcp-proxy` goes one step further on its own records: under
+  `HIDE_TOOL_RESULTS` a failed result is not quoted into the error, and under
+  `HIDE_INPUTS` the server's command-line arguments leave the run label and
+  metadata. An option set to `"true"` or `1` counts as on — privacy switches
+  fail closed.
+- **Exports sanitise by default.** `graphmind record` (NDJSON and `--html`)
+  replaces the values of secret-shaped keys — `authorization`, `cookie`,
+  `api_key`/`apikey`, `password`, `secret`, `client_secret`, `private_key`,
+  `access_token`, `refresh_token`, `token`, `bearer` — matched case-insensitively
+  as a whole key or a `_`/`-`/camelCase-delimited segment (`x-api-key`,
+  `accessToken` match; `max_tokens`, `tokenizer` do not) and prints what it
+  redacted. `--no-redact-secrets` keeps them. Keys, not values: a secret typed
+  into a prompt is exported as recorded; the switch above is the tool for that.
+  The credential-leak audit now covers the export layer.
+
+- **Fails closed.** If a payload cannot be read safely while a switch is on (a
+  getter or Proxy that throws, a malformed payload), the event is sent with
+  input, output and token text hidden and `redaction.failed: true`; if even its
+  identity fields cannot be read, it is dropped with one warning. A raw value is
+  never sent.
+
+What was *not* built, on purpose: a default-on regex pack, a redaction callback
+API, and cross-chunk streaming regexes — every platform ships masking already,
+and two of those designs would have blanked `max_tokens`.
+
+### Added — Python and Ruby get both, identically
+
+The Python SDK (`graphmind-ai`) and the Ruby gem implement the four
+`GRAPHMIND_HIDE_*` switches and the loop hold with the same env names
+(`GRAPHMIND_LOOP_THRESHOLD`, `GRAPHMIND_ON_LOOP`, `GRAPHMIND_LOOP_ALLOW`), the
+same placeholder and the same wire fields as the TypeScript client
+(`gm.configure(hide_inputs=True, loop_guard={...})`,
+`Graphmind.configure(hide_inputs: true, loop_guard: {...})`). "The same" is
+checked, not claimed: both shared conformance fixtures reproduce byte-for-byte
+in all three languages, and a differential file generated from the TypeScript
+build — 406 canonical values (doubles in every exponent range, astral and
+control characters, UTF-16 key order) and 120 redaction event streams — passes
+in Python and, for every value a Ruby string can hold, in Ruby. The ports are
+thread-safe where the TypeScript client did not need to be: loop details travel
+with each hold rather than through shared state, and `firstSeq`/`lastSeq` are
+taken under the session lock.
+
+### Docs
+
+- New pages: **Stability & versioning** (what 0.x means, the deprecation rule,
+  supported runtimes exactly as CI runs them, the `gm` protocol policy),
+  **Limits** (every size ceiling, buffer and timeout, read from the source), and
+  **Remote development** (devcontainers, Codespaces, WSL 2, SSH).
+- A gate-coverage matrix per adapter and language, and a Compatibility section
+  that lists exactly what CI runs.
+- Every claim was run before it was written, which found real errors: the
+  TypeScript replay buffer is 5,000 events / 8 MiB (the docs said 2,000); the
+  proxy lifts injected values into a proper result (a page still said verbatim);
+  the Docker recipe needs `GRAPHMIND_ALLOWED_ORIGINS=http://host.docker.internal:4747`,
+  and so does a port forwarded to a different local port.
+
+
 ## 0.4.4
 
 Three things found by the founder using it, which is the only way some of
@@ -49,7 +315,7 @@ Reported during the session rather than at exit, because an MCP host does not
 close the pipe on shutdown — it kills the child, so an exit-time message is
 the one message that never prints when it is needed.
 
-### Known, not fixed — edges cross the cards above them
+### Known, not fixed — edges cross the cards above them (fixed in 0.5.0)
 
 With five or more childless siblings the layout packs them into a grid, and
 the parent's edges to rows two and three are drawn straight through the cards

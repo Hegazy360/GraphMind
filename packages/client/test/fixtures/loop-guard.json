@@ -1,0 +1,2038 @@
+{
+  "version": 3,
+  "description": "Conformance fixture for the GraphMind loop guard, rule v3 (TS reference: packages/client/src/loop-guard.ts; binding rule: internal/decisions.md \"Loop hold v3: a loop is the same call BACK-TO-BACK\"). Ports must reproduce every `canonical` string byte for byte and every `fingerprint` (= first 32 hex chars of SHA-256 over the UTF-8 canonical string), and, for every `sequences` entry, feed the calls in order to ONE run (record the node.started, then consult the before-gate of that same call) and trip exactly at every entry of `trips` (`at` = 0-based call index whose before-gate holds, `repeats` = the count reported, `firstAt` = index of the streak's first call, i.e. what `firstSeq` points at when seq = index; `lastSeq` is always `at`); `tripsAt`/`repeatsAtTrip` repeat the first trip (null = never). Canonical form: JSON array [nodeId, input]; object keys sorted by UTF-16 code unit order (JS default sort; Python: sorted(keys, key=lambda k: k.encode(\"utf-16-be\"))); no whitespace; numbers in JS shortest round-trip form (1.0 -> 1, -0 -> 0, 1e21 -> 1e+21, NaN/Infinity -> null); strings escaped like JSON.stringify (\", \\\\, \\n, \\r, \\t, \\b, \\f, other controls < 0x20 as \\u00XX lowercase; non-ASCII kept raw); keys in `ignoreKeys` (default: only `_meta`) removed at EVERY nesting level (exact match) — pagination keys such as cursor/page/offset are NOT ignored by default; a missing input (`inputAbsent: true`) canonicalises to null. Counting (v3): per run, per node KIND, ONE streak {nodeId, fingerprint, count, firstSeq, lastSeq}. A start is WATCHED when the guard is enabled (threshold > 0, mode not off), its kind is in `kinds` (sequence field, default [\"tool\"]) and neither its nodeId nor its name is in `allowNodes` (exact match; name defaults to the nodeId after the first colon). A watched start with a readable input: same (nodeId, fingerprint) as its kind's streak -> count += 1; otherwise the streak is REPLACED by a fresh one with count 1. A watched start whose input cannot be read (`unreadable: true` — feed an input whose property read throws; also a nodeId that is not a string) CLEARS its kind's streak and has fingerprint null. Unwatched starts (other kinds, allow-listed nodes, guard off) touch no streak and have fingerprint null. The before-gate holds when its kind's streak has this nodeId, count >= threshold, and this count has not held yet (a retry with no new start does not hold again). Consequence: identical calls separated by another watched call of the same kind never trip; a model alternating two tools is not held.",
+  "defaults": {
+    "threshold": 3,
+    "mode": "pause",
+    "kinds": [
+      "tool"
+    ],
+    "ignoreKeys": [
+      "_meta"
+    ]
+  },
+  "canonical": [
+    {
+      "name": "flat object, keys sorted",
+      "nodeId": "tool:searchFlights",
+      "input": {
+        "to": "LIS",
+        "from": "AMS",
+        "pax": 2
+      },
+      "canonical": "[\"tool:searchFlights\",{\"from\":\"AMS\",\"pax\":2,\"to\":\"LIS\"}]",
+      "fingerprint": "b088eac0a007ffc51ee0d2e9e9d2ceb2"
+    },
+    {
+      "name": "same as above with keys in another order (must equal the previous fingerprint)",
+      "nodeId": "tool:searchFlights",
+      "input": {
+        "pax": 2,
+        "from": "AMS",
+        "to": "LIS"
+      },
+      "canonical": "[\"tool:searchFlights\",{\"from\":\"AMS\",\"pax\":2,\"to\":\"LIS\"}]",
+      "fingerprint": "b088eac0a007ffc51ee0d2e9e9d2ceb2"
+    },
+    {
+      "name": "nested objects and arrays sorted at every depth",
+      "nodeId": "tool:x",
+      "input": {
+        "b": [
+          3,
+          {
+            "z": true,
+            "y": null
+          }
+        ],
+        "a": {
+          "d": "e",
+          "c": []
+        }
+      },
+      "canonical": "[\"tool:x\",{\"a\":{\"c\":[],\"d\":\"e\"},\"b\":[3,{\"y\":null,\"z\":true}]}]",
+      "fingerprint": "a287b942df1383bbc8a95334e64a7da6"
+    },
+    {
+      "name": "integral float equals integer, -0 is 0, exponent form",
+      "nodeId": "tool:x",
+      "input": {
+        "n": 1,
+        "z": 0,
+        "big": 1e+21,
+        "small": 1e-7,
+        "frac": 0.1
+      },
+      "canonical": "[\"tool:x\",{\"big\":1e+21,\"frac\":0.1,\"n\":1,\"small\":1e-7,\"z\":0}]",
+      "fingerprint": "b90f2c60c761583815a555b31b7fd747"
+    },
+    {
+      "name": "strings keep inner whitespace and are JSON-escaped",
+      "nodeId": "tool:x",
+      "input": {
+        "s": "two  spaces\tand \"quotes\" \\ back\\slash\nnewline \u0001  é 😀"
+      },
+      "canonical": "[\"tool:x\",{\"s\":\"two  spaces\\tand \\\"quotes\\\" \\\\ back\\\\slash\\nnewline \\u0001  é 😀\"}]",
+      "fingerprint": "384cc150d0f63d35081019677d5d02d2"
+    },
+    {
+      "name": "empty input (no arguments) canonicalises to null",
+      "nodeId": "tool:getTime",
+      "input": null,
+      "inputAbsent": true,
+      "canonical": "[\"tool:getTime\",null]",
+      "fingerprint": "a80443848de3def47cecf418454f6c6a"
+    },
+    {
+      "name": "null input",
+      "nodeId": "tool:getTime",
+      "input": null,
+      "canonical": "[\"tool:getTime\",null]",
+      "fingerprint": "a80443848de3def47cecf418454f6c6a"
+    },
+    {
+      "name": "empty object and empty array",
+      "nodeId": "tool:x",
+      "input": {
+        "o": {},
+        "a": []
+      },
+      "canonical": "[\"tool:x\",{\"a\":[],\"o\":{}}]",
+      "fingerprint": "ce35e00d4ef1f49a17f7bfa6df09ccc6"
+    },
+    {
+      "name": "booleans and a scalar top-level input",
+      "nodeId": "tool:x",
+      "input": true,
+      "canonical": "[\"tool:x\",true]",
+      "fingerprint": "79b08ec559d6dc6bec179c362c90983e"
+    },
+    {
+      "name": "array top-level input",
+      "nodeId": "tool:x",
+      "input": [
+        1,
+        "a",
+        null,
+        {
+          "k": false
+        }
+      ],
+      "canonical": "[\"tool:x\",[1,\"a\",null,{\"k\":false}]]",
+      "fingerprint": "2264bf8693b459aef41eca15e08835ea"
+    },
+    {
+      "name": "default ignore key (_meta) removed at the top level; pagination keys are part of the call",
+      "nodeId": "tool:listIssues",
+      "input": {
+        "repo": "gm",
+        "cursor": "c1",
+        "page": 4,
+        "offset": 40,
+        "after": "x",
+        "before": "y",
+        "_meta": {
+          "progressToken": 17
+        }
+      },
+      "canonical": "[\"tool:listIssues\",{\"after\":\"x\",\"before\":\"y\",\"cursor\":\"c1\",\"offset\":40,\"page\":4,\"repo\":\"gm\"}]",
+      "fingerprint": "5193a8d6802bbbb38dc221f0d5f76df5"
+    },
+    {
+      "name": "default ignore key removed inside nested objects too (mcp-proxy shape: params = {name, arguments, _meta})",
+      "nodeId": "tool:listIssues",
+      "input": {
+        "name": "listIssues",
+        "arguments": {
+          "repo": "gm",
+          "cursor": "c2",
+          "_meta": {
+            "trace": "t"
+          }
+        },
+        "_meta": {
+          "progressToken": "tok-9",
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+        }
+      },
+      "canonical": "[\"tool:listIssues\",{\"arguments\":{\"cursor\":\"c2\",\"repo\":\"gm\"},\"name\":\"listIssues\"}]",
+      "fingerprint": "32cd4f37fa7751ee7f6cdf00d43e39d0"
+    },
+    {
+      "name": "similar-but-not-ignored keys stay (meta, _metadata, progressToken outside _meta)",
+      "nodeId": "tool:x",
+      "input": {
+        "meta": 1,
+        "_metadata": 2,
+        "progressToken": 3
+      },
+      "canonical": "[\"tool:x\",{\"_metadata\":2,\"meta\":1,\"progressToken\":3}]",
+      "fingerprint": "6cf427cf182207cc8703c121c0cdc8de"
+    },
+    {
+      "name": "custom ignore list replaces the defaults (_meta now counts, requestId does not)",
+      "nodeId": "tool:x",
+      "input": {
+        "q": 1,
+        "_meta": {
+          "progressToken": 1
+        },
+        "requestId": "r"
+      },
+      "ignoreKeys": [
+        "requestId"
+      ],
+      "canonical": "[\"tool:x\",{\"_meta\":{\"progressToken\":1},\"q\":1}]",
+      "fingerprint": "3468e1602d2fab684e3d78fbe4d78f8a"
+    },
+    {
+      "name": "empty ignore list keeps everything",
+      "nodeId": "tool:x",
+      "input": {
+        "q": 1,
+        "_meta": {
+          "progressToken": 1
+        }
+      },
+      "ignoreKeys": [],
+      "canonical": "[\"tool:x\",{\"_meta\":{\"progressToken\":1},\"q\":1}]",
+      "fingerprint": "3468e1602d2fab684e3d78fbe4d78f8a"
+    },
+    {
+      "name": "unicode key ordering is by UTF-16 code unit (JS default sort)",
+      "nodeId": "tool:x",
+      "input": {
+        "1": 6,
+        "é": 1,
+        "z": 2,
+        "a": 3,
+        "Z": 4,
+        "_": 5
+      },
+      "canonical": "[\"tool:x\",{\"1\":6,\"Z\":4,\"_\":5,\"a\":3,\"z\":2,\"é\":1}]",
+      "fingerprint": "487f72e35aa3850eb49c687cceb468bb"
+    },
+    {
+      "name": "MCP tools/call params as the proxy emits them",
+      "nodeId": "tool:echo",
+      "input": {
+        "name": "echo",
+        "arguments": {
+          "text": "same"
+        }
+      },
+      "canonical": "[\"tool:echo\",{\"arguments\":{\"text\":\"same\"},\"name\":\"echo\"}]",
+      "fingerprint": "5d97e3b00a06f43d6e0ddb0fc243544f"
+    }
+  ],
+  "sequences": [
+    {
+      "name": "three identical calls trip at index 2 with the default threshold",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:searchFlights",
+          "kind": "tool",
+          "input": {
+            "from": "AMS",
+            "to": "LIS"
+          }
+        },
+        {
+          "nodeId": "tool:searchFlights",
+          "kind": "tool",
+          "input": {
+            "from": "AMS",
+            "to": "LIS"
+          }
+        },
+        {
+          "nodeId": "tool:searchFlights",
+          "kind": "tool",
+          "input": {
+            "from": "AMS",
+            "to": "LIS"
+          }
+        }
+      ],
+      "fingerprints": [
+        "a633f0dbabf17dc90afcac4ca7154e11",
+        "a633f0dbabf17dc90afcac4ca7154e11",
+        "a633f0dbabf17dc90afcac4ca7154e11"
+      ],
+      "tripsAt": 2,
+      "repeatsAtTrip": 3,
+      "trips": [
+        {
+          "at": 2,
+          "repeats": 3,
+          "firstAt": 0
+        }
+      ]
+    },
+    {
+      "name": "identical arguments in a different key order still trip",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:searchFlights",
+          "kind": "tool",
+          "input": {
+            "from": "AMS",
+            "to": "LIS"
+          }
+        },
+        {
+          "nodeId": "tool:searchFlights",
+          "kind": "tool",
+          "input": {
+            "to": "LIS",
+            "from": "AMS"
+          }
+        },
+        {
+          "nodeId": "tool:searchFlights",
+          "kind": "tool",
+          "input": {
+            "to": "LIS",
+            "from": "AMS"
+          }
+        }
+      ],
+      "fingerprints": [
+        "a633f0dbabf17dc90afcac4ca7154e11",
+        "a633f0dbabf17dc90afcac4ca7154e11",
+        "a633f0dbabf17dc90afcac4ca7154e11"
+      ],
+      "tripsAt": 2,
+      "repeatsAtTrip": 3,
+      "trips": [
+        {
+          "at": 2,
+          "repeats": 3,
+          "firstAt": 0
+        }
+      ]
+    },
+    {
+      "name": "different arguments never trip",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:searchFlights",
+          "kind": "tool",
+          "input": {
+            "from": "AMS",
+            "to": "LIS"
+          }
+        },
+        {
+          "nodeId": "tool:searchFlights",
+          "kind": "tool",
+          "input": {
+            "from": "AMS",
+            "to": "OPO"
+          }
+        },
+        {
+          "nodeId": "tool:searchFlights",
+          "kind": "tool",
+          "input": {
+            "from": "AMS",
+            "to": "FAO"
+          }
+        },
+        {
+          "nodeId": "tool:searchFlights",
+          "kind": "tool",
+          "input": {
+            "from": "AMS",
+            "to": "LIS"
+          }
+        }
+      ],
+      "fingerprints": [
+        "a633f0dbabf17dc90afcac4ca7154e11",
+        "df3da258999e4fcab1ca9bece7862eb4",
+        "c9f80c1fa80ffc92999a0616ae298425",
+        "a633f0dbabf17dc90afcac4ca7154e11"
+      ],
+      "tripsAt": null,
+      "repeatsAtTrip": null,
+      "trips": []
+    },
+    {
+      "name": "a different call resets the streak, which then rebuilds and trips at index 4",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:s",
+          "kind": "tool",
+          "input": {
+            "q": 1
+          }
+        },
+        {
+          "nodeId": "tool:s",
+          "kind": "tool",
+          "input": {
+            "q": 1
+          }
+        },
+        {
+          "nodeId": "tool:s",
+          "kind": "tool",
+          "input": {
+            "q": 2
+          }
+        },
+        {
+          "nodeId": "tool:s",
+          "kind": "tool",
+          "input": {
+            "q": 2
+          }
+        },
+        {
+          "nodeId": "tool:s",
+          "kind": "tool",
+          "input": {
+            "q": 2
+          }
+        }
+      ],
+      "fingerprints": [
+        "4bf0c42cf0e729f4ae69dd73354ccb86",
+        "4bf0c42cf0e729f4ae69dd73354ccb86",
+        "7c12aa18d1ffcc33182158f05b58a68f",
+        "7c12aa18d1ffcc33182158f05b58a68f",
+        "7c12aa18d1ffcc33182158f05b58a68f"
+      ],
+      "tripsAt": 4,
+      "repeatsAtTrip": 3,
+      "trips": [
+        {
+          "at": 4,
+          "repeats": 3,
+          "firstAt": 2
+        }
+      ]
+    },
+    {
+      "name": "a paginated walk (a different cursor each call) is not a loop and never trips",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:listIssues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm",
+            "cursor": "a"
+          }
+        },
+        {
+          "nodeId": "tool:listIssues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm",
+            "cursor": "b"
+          }
+        },
+        {
+          "nodeId": "tool:listIssues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm",
+            "cursor": "c"
+          }
+        },
+        {
+          "nodeId": "tool:listIssues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm",
+            "cursor": "d"
+          }
+        }
+      ],
+      "fingerprints": [
+        "55d510d9863ff7b388946060fdc7b554",
+        "320012fba86507050b4a0415870bc402",
+        "622ce6a15858e218008989bad5ea7e60",
+        "f5f0abf6cc5e53baac5ea40e688a1011"
+      ],
+      "tripsAt": null,
+      "repeatsAtTrip": null,
+      "trips": []
+    },
+    {
+      "name": "opting in: ignoreKeys [\"cursor\"] makes pages of one query identical, so they trip",
+      "threshold": 3,
+      "ignoreKeys": [
+        "cursor"
+      ],
+      "calls": [
+        {
+          "nodeId": "tool:listIssues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm",
+            "cursor": "a"
+          }
+        },
+        {
+          "nodeId": "tool:listIssues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm",
+            "cursor": "b"
+          }
+        },
+        {
+          "nodeId": "tool:listIssues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm",
+            "cursor": "c"
+          }
+        }
+      ],
+      "fingerprints": [
+        "af33c8402dbf101b85d9cd166569931c",
+        "af33c8402dbf101b85d9cd166569931c",
+        "af33c8402dbf101b85d9cd166569931c"
+      ],
+      "tripsAt": 2,
+      "repeatsAtTrip": 3,
+      "trips": [
+        {
+          "at": 2,
+          "repeats": 3,
+          "firstAt": 0
+        }
+      ]
+    },
+    {
+      "name": "v3: another watched tool between identical calls replaces the streak (search, read, search, read is not held)",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:s",
+          "kind": "tool",
+          "input": {
+            "q": 1
+          }
+        },
+        {
+          "nodeId": "tool:r",
+          "kind": "tool",
+          "input": {
+            "id": 1
+          }
+        },
+        {
+          "nodeId": "tool:s",
+          "kind": "tool",
+          "input": {
+            "q": 1
+          }
+        },
+        {
+          "nodeId": "tool:r",
+          "kind": "tool",
+          "input": {
+            "id": 2
+          }
+        },
+        {
+          "nodeId": "tool:s",
+          "kind": "tool",
+          "input": {
+            "q": 1
+          }
+        }
+      ],
+      "fingerprints": [
+        "4bf0c42cf0e729f4ae69dd73354ccb86",
+        "8a53923c7455a8a18fd260c5e0c62871",
+        "4bf0c42cf0e729f4ae69dd73354ccb86",
+        "a44e7e8306537a6e26bc0a00e4803ee3",
+        "4bf0c42cf0e729f4ae69dd73354ccb86"
+      ],
+      "tripsAt": null,
+      "repeatsAtTrip": null,
+      "trips": []
+    },
+    {
+      "name": "allowNodes by nodeId never trips",
+      "threshold": 2,
+      "allowNodes": [
+        "tool:pollJob"
+      ],
+      "calls": [
+        {
+          "nodeId": "tool:pollJob",
+          "kind": "tool",
+          "input": {
+            "id": 7
+          }
+        },
+        {
+          "nodeId": "tool:pollJob",
+          "kind": "tool",
+          "input": {
+            "id": 7
+          }
+        },
+        {
+          "nodeId": "tool:pollJob",
+          "kind": "tool",
+          "input": {
+            "id": 7
+          }
+        }
+      ],
+      "fingerprints": [
+        null,
+        null,
+        null
+      ],
+      "tripsAt": null,
+      "repeatsAtTrip": null,
+      "trips": []
+    },
+    {
+      "name": "allowNodes by name never trips",
+      "threshold": 2,
+      "allowNodes": [
+        "heartbeat"
+      ],
+      "calls": [
+        {
+          "nodeId": "tool:heartbeat",
+          "kind": "tool",
+          "name": "heartbeat",
+          "input": {}
+        },
+        {
+          "nodeId": "tool:heartbeat",
+          "kind": "tool",
+          "name": "heartbeat",
+          "input": {}
+        }
+      ],
+      "fingerprints": [
+        null,
+        null
+      ],
+      "tripsAt": null,
+      "repeatsAtTrip": null,
+      "trips": []
+    },
+    {
+      "name": "llm nodes are not watched by default",
+      "threshold": 2,
+      "calls": [
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": []
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": []
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": []
+          }
+        }
+      ],
+      "fingerprints": [
+        null,
+        null,
+        null
+      ],
+      "tripsAt": null,
+      "repeatsAtTrip": null,
+      "trips": []
+    },
+    {
+      "name": "threshold 1 trips on the very first call",
+      "threshold": 1,
+      "calls": [
+        {
+          "nodeId": "tool:s",
+          "kind": "tool",
+          "input": {}
+        }
+      ],
+      "fingerprints": [
+        "e4c0dd0b7295ce635a15bceac4ebd511"
+      ],
+      "tripsAt": 0,
+      "repeatsAtTrip": 1,
+      "trips": [
+        {
+          "at": 0,
+          "repeats": 1,
+          "firstAt": 0
+        }
+      ]
+    },
+    {
+      "name": "threshold 0 disables the guard entirely",
+      "threshold": 0,
+      "calls": [
+        {
+          "nodeId": "tool:s",
+          "kind": "tool",
+          "input": {}
+        },
+        {
+          "nodeId": "tool:s",
+          "kind": "tool",
+          "input": {}
+        },
+        {
+          "nodeId": "tool:s",
+          "kind": "tool",
+          "input": {}
+        },
+        {
+          "nodeId": "tool:s",
+          "kind": "tool",
+          "input": {}
+        }
+      ],
+      "fingerprints": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "tripsAt": null,
+      "repeatsAtTrip": null,
+      "trips": []
+    },
+    {
+      "name": "no-argument calls are identical to each other",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:getTime",
+          "kind": "tool",
+          "input": null,
+          "inputAbsent": true
+        },
+        {
+          "nodeId": "tool:getTime",
+          "kind": "tool",
+          "input": null,
+          "inputAbsent": true
+        },
+        {
+          "nodeId": "tool:getTime",
+          "kind": "tool",
+          "input": null,
+          "inputAbsent": true
+        }
+      ],
+      "fingerprints": [
+        "a80443848de3def47cecf418454f6c6a",
+        "a80443848de3def47cecf418454f6c6a",
+        "a80443848de3def47cecf418454f6c6a"
+      ],
+      "tripsAt": 2,
+      "repeatsAtTrip": 3,
+      "trips": [
+        {
+          "at": 2,
+          "repeats": 3,
+          "firstAt": 0
+        }
+      ]
+    },
+    {
+      "name": "a 1.0 vs 1 argument is the same argument",
+      "threshold": 2,
+      "calls": [
+        {
+          "nodeId": "tool:s",
+          "kind": "tool",
+          "input": {
+            "n": 1
+          }
+        },
+        {
+          "nodeId": "tool:s",
+          "kind": "tool",
+          "input": {
+            "n": 1
+          }
+        }
+      ],
+      "fingerprints": [
+        "e66a00e43e1cb98e0375be88d27506cf",
+        "e66a00e43e1cb98e0375be88d27506cf"
+      ],
+      "tripsAt": 1,
+      "repeatsAtTrip": 2,
+      "trips": [
+        {
+          "at": 1,
+          "repeats": 2,
+          "firstAt": 0
+        }
+      ]
+    },
+    {
+      "name": "mcp-proxy shape: tools/call params repeated three times",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:echo",
+          "kind": "tool",
+          "input": {
+            "name": "echo",
+            "arguments": {
+              "text": "same"
+            }
+          }
+        },
+        {
+          "nodeId": "tool:echo",
+          "kind": "tool",
+          "input": {
+            "name": "echo",
+            "arguments": {
+              "text": "same"
+            }
+          }
+        },
+        {
+          "nodeId": "tool:echo",
+          "kind": "tool",
+          "input": {
+            "name": "echo",
+            "arguments": {
+              "text": "same"
+            }
+          }
+        }
+      ],
+      "fingerprints": [
+        "5d97e3b00a06f43d6e0ddb0fc243544f",
+        "5d97e3b00a06f43d6e0ddb0fc243544f",
+        "5d97e3b00a06f43d6e0ddb0fc243544f"
+      ],
+      "tripsAt": 2,
+      "repeatsAtTrip": 3,
+      "trips": [
+        {
+          "at": 2,
+          "repeats": 3,
+          "firstAt": 0
+        }
+      ]
+    },
+    {
+      "name": "mcp-proxy shape with a fresh _meta.progressToken on every request still trips",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:echo",
+          "kind": "tool",
+          "input": {
+            "name": "echo",
+            "arguments": {
+              "text": "same"
+            },
+            "_meta": {
+              "progressToken": 1
+            }
+          }
+        },
+        {
+          "nodeId": "tool:echo",
+          "kind": "tool",
+          "input": {
+            "name": "echo",
+            "arguments": {
+              "text": "same"
+            },
+            "_meta": {
+              "progressToken": 2
+            }
+          }
+        },
+        {
+          "nodeId": "tool:echo",
+          "kind": "tool",
+          "input": {
+            "name": "echo",
+            "arguments": {
+              "text": "same"
+            },
+            "_meta": {
+              "progressToken": 3
+            }
+          }
+        }
+      ],
+      "fingerprints": [
+        "5d97e3b00a06f43d6e0ddb0fc243544f",
+        "5d97e3b00a06f43d6e0ddb0fc243544f",
+        "5d97e3b00a06f43d6e0ddb0fc243544f"
+      ],
+      "tripsAt": 2,
+      "repeatsAtTrip": 3,
+      "trips": [
+        {
+          "at": 2,
+          "repeats": 3,
+          "firstAt": 0
+        }
+      ]
+    },
+    {
+      "name": "with an empty ignore list the changing progressToken makes the calls distinct",
+      "threshold": 3,
+      "ignoreKeys": [],
+      "calls": [
+        {
+          "nodeId": "tool:echo",
+          "kind": "tool",
+          "input": {
+            "name": "echo",
+            "arguments": {
+              "text": "same"
+            },
+            "_meta": {
+              "progressToken": 1
+            }
+          }
+        },
+        {
+          "nodeId": "tool:echo",
+          "kind": "tool",
+          "input": {
+            "name": "echo",
+            "arguments": {
+              "text": "same"
+            },
+            "_meta": {
+              "progressToken": 2
+            }
+          }
+        },
+        {
+          "nodeId": "tool:echo",
+          "kind": "tool",
+          "input": {
+            "name": "echo",
+            "arguments": {
+              "text": "same"
+            },
+            "_meta": {
+              "progressToken": 3
+            }
+          }
+        }
+      ],
+      "fingerprints": [
+        "dfc2d0a53ab22977f351d4812c51a34e",
+        "3b15c253df674923e5c641d88756a1da",
+        "c91ec59c79e8380d73fa515f7c3138b5"
+      ],
+      "tripsAt": null,
+      "repeatsAtTrip": null,
+      "trips": []
+    },
+    {
+      "name": "v3 (a): A, A, B, A, A with threshold 3 never trips (B replaced the streak)",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:read_file",
+          "kind": "tool",
+          "input": {
+            "path": "README.md"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        }
+      ],
+      "fingerprints": [
+        "a66533cde03e0966726927d8df52af39",
+        "a66533cde03e0966726927d8df52af39",
+        "77d892ec0bb807fee841a286a8557c2e",
+        "a66533cde03e0966726927d8df52af39",
+        "a66533cde03e0966726927d8df52af39"
+      ],
+      "tripsAt": null,
+      "repeatsAtTrip": null,
+      "trips": []
+    },
+    {
+      "name": "v3 (b): A, A, A back-to-back trips at the third",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        }
+      ],
+      "fingerprints": [
+        "a66533cde03e0966726927d8df52af39",
+        "a66533cde03e0966726927d8df52af39",
+        "a66533cde03e0966726927d8df52af39"
+      ],
+      "tripsAt": 2,
+      "repeatsAtTrip": 3,
+      "trips": [
+        {
+          "at": 2,
+          "repeats": 3,
+          "firstAt": 0
+        }
+      ]
+    },
+    {
+      "name": "v3 (c): A, llm step, A, llm step, A trips (an unwatched kind does not touch the tool streak)",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              {
+                "role": "user",
+                "content": "go"
+              }
+            ]
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              {
+                "role": "user",
+                "content": "go"
+              }
+            ]
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        }
+      ],
+      "fingerprints": [
+        "a66533cde03e0966726927d8df52af39",
+        null,
+        "a66533cde03e0966726927d8df52af39",
+        null,
+        "a66533cde03e0966726927d8df52af39"
+      ],
+      "tripsAt": 4,
+      "repeatsAtTrip": 3,
+      "trips": [
+        {
+          "at": 4,
+          "repeats": 3,
+          "firstAt": 0
+        }
+      ]
+    },
+    {
+      "name": "v3 (d): A, allow-listed tool, A, A trips at the third A (an allowed node is invisible)",
+      "threshold": 3,
+      "allowNodes": [
+        "tool:poll_job"
+      ],
+      "calls": [
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:poll_job",
+          "kind": "tool",
+          "input": {
+            "id": 7
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        }
+      ],
+      "fingerprints": [
+        "a66533cde03e0966726927d8df52af39",
+        null,
+        "a66533cde03e0966726927d8df52af39",
+        "a66533cde03e0966726927d8df52af39"
+      ],
+      "tripsAt": 3,
+      "repeatsAtTrip": 3,
+      "trips": [
+        {
+          "at": 3,
+          "repeats": 3,
+          "firstAt": 0
+        }
+      ]
+    },
+    {
+      "name": "v3 (e): A(x), A(y), A(x) never trips",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "other"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        }
+      ],
+      "fingerprints": [
+        "a66533cde03e0966726927d8df52af39",
+        "d65009c2c75d79fd23bb95eaf065481b",
+        "a66533cde03e0966726927d8df52af39"
+      ],
+      "tripsAt": null,
+      "repeatsAtTrip": null,
+      "trips": []
+    },
+    {
+      "name": "v3 (f): an unreadable input between identical calls clears the streak; it then rebuilds",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:read_file",
+          "kind": "tool",
+          "unreadable": true
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        }
+      ],
+      "fingerprints": [
+        "a66533cde03e0966726927d8df52af39",
+        "a66533cde03e0966726927d8df52af39",
+        null,
+        "a66533cde03e0966726927d8df52af39",
+        "a66533cde03e0966726927d8df52af39",
+        "a66533cde03e0966726927d8df52af39"
+      ],
+      "tripsAt": 5,
+      "repeatsAtTrip": 3,
+      "trips": [
+        {
+          "at": 5,
+          "repeats": 3,
+          "firstAt": 3
+        }
+      ]
+    },
+    {
+      "name": "v3 (f2): an unreadable input of the SAME tool clears the streak too",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "unreadable": true
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        }
+      ],
+      "fingerprints": [
+        "a66533cde03e0966726927d8df52af39",
+        "a66533cde03e0966726927d8df52af39",
+        null,
+        "a66533cde03e0966726927d8df52af39",
+        "a66533cde03e0966726927d8df52af39"
+      ],
+      "tripsAt": null,
+      "repeatsAtTrip": null,
+      "trips": []
+    },
+    {
+      "name": "v3 (g): kinds [tool, llm] keep one independent streak per kind",
+      "threshold": 3,
+      "kinds": [
+        "tool",
+        "llm"
+      ],
+      "calls": [
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              {
+                "role": "user",
+                "content": "go"
+              }
+            ]
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              {
+                "role": "user",
+                "content": "go"
+              }
+            ]
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              {
+                "role": "user",
+                "content": "go"
+              }
+            ]
+          }
+        }
+      ],
+      "fingerprints": [
+        "a66533cde03e0966726927d8df52af39",
+        "dbb20be9a98d39cdf0845bf98a01487e",
+        "a66533cde03e0966726927d8df52af39",
+        "dbb20be9a98d39cdf0845bf98a01487e",
+        "a66533cde03e0966726927d8df52af39",
+        "dbb20be9a98d39cdf0845bf98a01487e"
+      ],
+      "tripsAt": 4,
+      "repeatsAtTrip": 3,
+      "trips": [
+        {
+          "at": 4,
+          "repeats": 3,
+          "firstAt": 0
+        },
+        {
+          "at": 5,
+          "repeats": 3,
+          "firstAt": 1
+        }
+      ]
+    },
+    {
+      "name": "v3 (g2): kinds [tool, llm] — a different llm input breaks only the llm streak",
+      "threshold": 3,
+      "kinds": [
+        "tool",
+        "llm"
+      ],
+      "calls": [
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              {
+                "role": "user",
+                "content": "go"
+              }
+            ]
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              "different"
+            ]
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              {
+                "role": "user",
+                "content": "go"
+              }
+            ]
+          }
+        }
+      ],
+      "fingerprints": [
+        "a66533cde03e0966726927d8df52af39",
+        "dbb20be9a98d39cdf0845bf98a01487e",
+        "a66533cde03e0966726927d8df52af39",
+        "fe8a943cc9df8811315d7128ecac65e0",
+        "a66533cde03e0966726927d8df52af39",
+        "dbb20be9a98d39cdf0845bf98a01487e"
+      ],
+      "tripsAt": 4,
+      "repeatsAtTrip": 3,
+      "trips": [
+        {
+          "at": 4,
+          "repeats": 3,
+          "firstAt": 0
+        }
+      ]
+    },
+    {
+      "name": "v3 (h): long session — 3 identical list_issues calls, each separated by other tools, never trip",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:read_file",
+          "kind": "tool",
+          "input": {
+            "path": "src/f1-0.ts"
+          }
+        },
+        {
+          "nodeId": "tool:search_code",
+          "kind": "tool",
+          "input": {
+            "q": "term 1"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              1,
+              2
+            ]
+          }
+        },
+        {
+          "nodeId": "tool:read_file",
+          "kind": "tool",
+          "input": {
+            "path": "src/f1-3.ts"
+          }
+        },
+        {
+          "nodeId": "tool:search_code",
+          "kind": "tool",
+          "input": {
+            "q": "term 1"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              1,
+              5
+            ]
+          }
+        },
+        {
+          "nodeId": "tool:read_file",
+          "kind": "tool",
+          "input": {
+            "path": "src/f1-6.ts"
+          }
+        },
+        {
+          "nodeId": "tool:search_code",
+          "kind": "tool",
+          "input": {
+            "q": "term 1"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              1,
+              8
+            ]
+          }
+        },
+        {
+          "nodeId": "tool:read_file",
+          "kind": "tool",
+          "input": {
+            "path": "src/f1-9.ts"
+          }
+        },
+        {
+          "nodeId": "tool:search_code",
+          "kind": "tool",
+          "input": {
+            "q": "term 1"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              1,
+              11
+            ]
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:read_file",
+          "kind": "tool",
+          "input": {
+            "path": "src/f2-0.ts"
+          }
+        },
+        {
+          "nodeId": "tool:search_code",
+          "kind": "tool",
+          "input": {
+            "q": "term 2"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              2,
+              2
+            ]
+          }
+        },
+        {
+          "nodeId": "tool:read_file",
+          "kind": "tool",
+          "input": {
+            "path": "src/f2-3.ts"
+          }
+        },
+        {
+          "nodeId": "tool:search_code",
+          "kind": "tool",
+          "input": {
+            "q": "term 2"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              2,
+              5
+            ]
+          }
+        },
+        {
+          "nodeId": "tool:read_file",
+          "kind": "tool",
+          "input": {
+            "path": "src/f2-6.ts"
+          }
+        },
+        {
+          "nodeId": "tool:search_code",
+          "kind": "tool",
+          "input": {
+            "q": "term 2"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              2,
+              8
+            ]
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:read_file",
+          "kind": "tool",
+          "input": {
+            "path": "src/f3-0.ts"
+          }
+        },
+        {
+          "nodeId": "tool:search_code",
+          "kind": "tool",
+          "input": {
+            "q": "term 3"
+          }
+        },
+        {
+          "nodeId": "llm:step",
+          "kind": "llm",
+          "input": {
+            "messages": [
+              3,
+              2
+            ]
+          }
+        },
+        {
+          "nodeId": "tool:read_file",
+          "kind": "tool",
+          "input": {
+            "path": "src/f3-3.ts"
+          }
+        },
+        {
+          "nodeId": "tool:search_code",
+          "kind": "tool",
+          "input": {
+            "q": "term 3"
+          }
+        }
+      ],
+      "fingerprints": [
+        "a66533cde03e0966726927d8df52af39",
+        "ec788969a197926cb305f1fd3a1ca3e7",
+        "fa3712654ba5fb47069ec2fbed71c2b7",
+        null,
+        "f27e8e0c2d7888d302fd7d3b1772a542",
+        "fa3712654ba5fb47069ec2fbed71c2b7",
+        null,
+        "6208c77a8f72d3bc012e41e604fd8447",
+        "fa3712654ba5fb47069ec2fbed71c2b7",
+        null,
+        "2835d3dddb4a31d711e63c34fd1dc80c",
+        "fa3712654ba5fb47069ec2fbed71c2b7",
+        null,
+        "a66533cde03e0966726927d8df52af39",
+        "cf387c8775e86df3ad9ac9197d2449e1",
+        "bb9a639112a449eeac561b5f9b520380",
+        null,
+        "374ebf522176b48c4184d9f5038e5376",
+        "bb9a639112a449eeac561b5f9b520380",
+        null,
+        "b38fad266efeb49a0a3c3be8af18b198",
+        "bb9a639112a449eeac561b5f9b520380",
+        null,
+        "a66533cde03e0966726927d8df52af39",
+        "114fd18e856209039cc2f62356210362",
+        "808d79dcb33dbed8ef26d0d8ac477fe6",
+        null,
+        "caee3885653e36d0b6b2324a6ccc11ae",
+        "808d79dcb33dbed8ef26d0d8ac477fe6"
+      ],
+      "tripsAt": null,
+      "repeatsAtTrip": null,
+      "trips": []
+    },
+    {
+      "name": "v3 (h2): long session through mcp-proxy (params with a fresh _meta.progressToken) never trips",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "name": "list_issues",
+            "arguments": {},
+            "_meta": {
+              "progressToken": 10
+            }
+          }
+        },
+        {
+          "nodeId": "tool:get_me",
+          "kind": "tool",
+          "input": {
+            "name": "get_me",
+            "arguments": {},
+            "_meta": {
+              "progressToken": 11
+            }
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "name": "list_issues",
+            "arguments": {},
+            "_meta": {
+              "progressToken": 20
+            }
+          }
+        },
+        {
+          "nodeId": "tool:get_me",
+          "kind": "tool",
+          "input": {
+            "name": "get_me",
+            "arguments": {},
+            "_meta": {
+              "progressToken": 21
+            }
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "name": "list_issues",
+            "arguments": {},
+            "_meta": {
+              "progressToken": 30
+            }
+          }
+        },
+        {
+          "nodeId": "tool:get_me",
+          "kind": "tool",
+          "input": {
+            "name": "get_me",
+            "arguments": {},
+            "_meta": {
+              "progressToken": 31
+            }
+          }
+        }
+      ],
+      "fingerprints": [
+        "dead63de00243ba17a5a315176f3787a",
+        "24fa9979f63c5420d909d87e2ade22d0",
+        "dead63de00243ba17a5a315176f3787a",
+        "24fa9979f63c5420d909d87e2ade22d0",
+        "dead63de00243ba17a5a315176f3787a",
+        "24fa9979f63c5420d909d87e2ade22d0"
+      ],
+      "tripsAt": null,
+      "repeatsAtTrip": null,
+      "trips": []
+    },
+    {
+      "name": "v3: a 4th and 5th identical back-to-back call trip again (once per repeat)",
+      "threshold": 3,
+      "calls": [
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        }
+      ],
+      "fingerprints": [
+        "a66533cde03e0966726927d8df52af39",
+        "a66533cde03e0966726927d8df52af39",
+        "a66533cde03e0966726927d8df52af39",
+        "a66533cde03e0966726927d8df52af39",
+        "a66533cde03e0966726927d8df52af39"
+      ],
+      "tripsAt": 2,
+      "repeatsAtTrip": 3,
+      "trips": [
+        {
+          "at": 2,
+          "repeats": 3,
+          "firstAt": 0
+        },
+        {
+          "at": 3,
+          "repeats": 4,
+          "firstAt": 0
+        },
+        {
+          "at": 4,
+          "repeats": 5,
+          "firstAt": 0
+        }
+      ]
+    },
+    {
+      "name": "v3: the same input on a different tool of the same kind is a different call and replaces the streak",
+      "threshold": 2,
+      "calls": [
+        {
+          "nodeId": "tool:a",
+          "kind": "tool",
+          "input": {}
+        },
+        {
+          "nodeId": "tool:b",
+          "kind": "tool",
+          "input": {}
+        },
+        {
+          "nodeId": "tool:a",
+          "kind": "tool",
+          "input": {}
+        },
+        {
+          "nodeId": "tool:a",
+          "kind": "tool",
+          "input": {}
+        }
+      ],
+      "fingerprints": [
+        "0e61ba9be3a4b9e69983122366d31a16",
+        "bad48ca2be148e28af72ac77001c4d72",
+        "0e61ba9be3a4b9e69983122366d31a16",
+        "0e61ba9be3a4b9e69983122366d31a16"
+      ],
+      "tripsAt": 3,
+      "repeatsAtTrip": 2,
+      "trips": [
+        {
+          "at": 3,
+          "repeats": 2,
+          "firstAt": 2
+        }
+      ]
+    },
+    {
+      "name": "v3: the streak that trips has the firstSeq of its first back-to-back call, not of an older identical call",
+      "threshold": 2,
+      "calls": [
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:read_file",
+          "kind": "tool",
+          "input": {
+            "path": "README.md"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        }
+      ],
+      "fingerprints": [
+        "a66533cde03e0966726927d8df52af39",
+        "77d892ec0bb807fee841a286a8557c2e",
+        "a66533cde03e0966726927d8df52af39",
+        "a66533cde03e0966726927d8df52af39"
+      ],
+      "tripsAt": 3,
+      "repeatsAtTrip": 2,
+      "trips": [
+        {
+          "at": 3,
+          "repeats": 2,
+          "firstAt": 2
+        }
+      ]
+    },
+    {
+      "name": "v3: an allow-listed tool matched by NAME between identical calls is invisible",
+      "threshold": 2,
+      "allowNodes": [
+        "heartbeat"
+      ],
+      "calls": [
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        },
+        {
+          "nodeId": "tool:heartbeat",
+          "kind": "tool",
+          "name": "heartbeat",
+          "input": {}
+        },
+        {
+          "nodeId": "tool:list_issues",
+          "kind": "tool",
+          "input": {
+            "repo": "gm"
+          }
+        }
+      ],
+      "fingerprints": [
+        "a66533cde03e0966726927d8df52af39",
+        null,
+        "a66533cde03e0966726927d8df52af39"
+      ],
+      "tripsAt": 2,
+      "repeatsAtTrip": 2,
+      "trips": [
+        {
+          "at": 2,
+          "repeats": 2,
+          "firstAt": 0
+        }
+      ]
+    }
+  ]
+}

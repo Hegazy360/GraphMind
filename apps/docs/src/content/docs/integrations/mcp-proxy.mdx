@@ -82,16 +82,41 @@ Run `graphmind mcp-proxy` with no command and it prints a working recipe rather 
 
 ## What it reports
 
-One session node, and a node per request under it:
+One run per session. Under the session node, the calls that do work sit directly; everything
+else is folded under one node named **protocol**:
 
-| Method | `nodeId` | Kind |
-| --- | --- | --- |
-| `tools/call` | `tool:<name>` | `tool` |
-| `resources/read` | `resource:<uri>` | `resource` |
-| `prompts/get` | `prompt:<name>` | `prompt` |
-| `sampling/createMessage` | `llm:sampling` | `llm` |
-| the session | `mcp:session` | `server` |
-| everything else (`initialize`, `tools/list`, `ping`, `logging/*`, notifications) | `mcp:<method>` | `custom` |
+```text
+mcp:session                 kind server — the command you ran
+├─ protocol (mcp:protocol)  kind custom — opens folded in the viewer
+│  ├─ mcp:initialize, mcp:notifications/initialized, mcp:tools/list, mcp:ping, …
+│  └─ mcp:stdout-noise      only if the server writes non-JSON-RPC lines to stdout
+├─ tool:<name>              tools/call
+├─ resource:<uri>           resources/read
+├─ prompt:<name>            prompts/get
+├─ llm:sampling             sampling/createMessage (server → client)
+└─ mcp:elicitation/…, mcp:completion/complete
+```
+
+| Method | `nodeId` | Kind | Parent |
+| --- | --- | --- | --- |
+| `tools/call` (client → server) | `tool:<name>` | `tool` | `mcp:session` |
+| `resources/read` (client → server) | `resource:<uri>` | `resource` | `mcp:session` |
+| `prompts/get` (client → server) | `prompt:<name>` | `prompt` | `mcp:session` |
+| `completion/complete` (client → server) | `mcp:completion/complete` | `custom` | `mcp:session` |
+| `sampling/createMessage` (server → client) | `llm:sampling` | `llm` | `mcp:session` |
+| `elicitation/*` (server → client) | `mcp:elicitation/…` | `custom` | `mcp:session` |
+| the session | `mcp:session` | `server` | — |
+| everything else: `initialize`, `server/discover`, `*/list`, `ping`, `logging/setLevel`, subscriptions, `tasks/*`, notifications, **and any method GraphMind does not recognise** | `mcp:<method>` | `custom` | `mcp:protocol` |
+
+The direction matters. A `tools/call` that travels from the server to the client, as an
+echoing or hostile server might send, is protocol traffic, not a second tool call. It used to
+be recorded as one.
+
+**protocol** is created on the first protocol frame, so a session with only work has no empty
+card. It closes before the session with `output: { calls, errors, stdoutNoise }`. Folding is
+only how it is drawn. Every call inside is still a node: a breakpoint on `initialize` still
+holds, and a failing handshake call still pauses on the error gate and turns the folded card
+red. See [the viewer](/reference/viewer/#mcp-protocol-traffic-is-one-folded-card).
 
 `nodeId` is stable per *logical* node, so ten calls to one tool are ten instances of one node on
 the canvas rather than ten boxes — the same rule every GraphMind adapter follows. `instanceId` is
@@ -126,27 +151,135 @@ The `error` gate fires on a JSON-RPC error **and** on an MCP tool result carryin
 itself. Both are armed by default by `graphmind serve`, so a failing tool call pauses without
 any configuration.
 
-If your injected object has its own `jsonrpc` field it is sent as the whole frame; otherwise it
-becomes the `result`. That is the escape hatch for hand-crafting an error response.
+### What you inject, and what the client receives
 
-### Inject the result shape, not the payload
+MCP results are typed, and the client's SDK validates them. So the proxy lifts a bare value
+into the shape the method has to return, with the same rules as
+[`@graphmind-ai/mcp`](/integrations/mcp/#injecting-into-a-typed-result) (a parity test keeps
+the two implementations identical):
 
-<Aside type="caution" title="The proxy does not reshape what you inject">
-Your value becomes the JSON-RPC `result` **verbatim**. MCP results are typed, so at a
-`tools/call` gate you must inject a `CallToolResult`, not the data your tool would have returned:
+| You inject | At a `tools/call` gate, the client receives |
+| --- | --- |
+| A string | `{ "content": [{ "type": "text", "text": "…" }] }` |
+| An object | A text block with its JSON, **plus** `structuredContent`, so a tool with an `outputSchema` accepts it |
+| Something already shaped like the result (`content` or `structuredContent` present) | Exactly that |
+| A whole JSON-RPC frame (it has a `jsonrpc` key) | That frame, verbatim. This is how you answer with an `error` instead of a `result`. |
 
-```json
-{ "content": [{ "type": "text", "text": "{\"status\":\"blocked\"}" }] }
+`resources/read`, `prompts/get` and `sampling/createMessage` are lifted the same way into
+their own result shapes. A method GraphMind does not model is relayed as you typed it.
+
+On a session that negotiated the 2026-07-28 protocol, a lifted value also gets
+`resultType: "complete"`, plus `ttlMs: 0` and `cacheScope: "private"` for `resources/read`,
+because a 2026 client rejects a result without them. A whole frame is never changed. See
+[MCP SDK v2](#mcp-sdk-v2-and-the-2026-07-28-protocol) below.
+
+## When the server misbehaves
+
+Three failures used to be silent. Each now prints one plain line on stderr, where MCP hosts
+show server logs, and leaves a record on the graph.
+
+**The server writes to stdout.** Stdout is the MCP wire, so a `console.log`, or a logger writing
+one JSON object per line, corrupts it. On the first such line:
+
+```text
+graphmind mcp-proxy: the MCP server wrote a line to stdout that is not JSON-RPC: "debug: loading config from ./config.json" — stdout is the MCP wire; log to stderr instead (console.error, or your logger pointed at stderr). Relayed verbatim; the client may reject it. Further lines are counted, not printed.
 ```
 
-Inject the bare `{"status":"blocked"}` and the client receives a tool result with **no content** —
-it will not error, it will just be empty, which is a confusing five minutes. The same applies to
-`resources/read` (`{ "contents": [...] }`) and `prompts/get` (`{ "messages": [...] }`).
+At the end of the session:
 
-[`@graphmind-ai/mcp`](/integrations/mcp/#injecting-into-a-typed-result) lifts a bare value into
-the right shape for you. The proxy deliberately does not, because reshaping bytes is the one
-thing a byte-exact relay must not do.
-</Aside>
+```text
+graphmind mcp-proxy: 5 line(s) the server wrote to stdout were not JSON-RPC and were relayed verbatim — stdout is the MCP wire; log to stderr (see "stdout noise" on the graph)
+```
+
+The bytes are still relayed unchanged; the proxy does not edit the wire. The first 25 such lines
+each become a red execution of **stdout noise** under **protocol**, with the quoted text (up to
+200 bytes) as its input. Noise nodes are not gated. A line glued to a JSON frame without a
+newline cannot be told apart from the frame and is not detected.
+
+**The command cannot be started.**
+
+```text
+graphmind mcp-proxy: cannot run "no-such-mcp-server": spawn no-such-mcp-server ENOENT — the command was not found on PATH; check the "command" in your MCP client config
+```
+
+The proxy exits with code `127`, the session node carries a `SpawnError`, and the run ends
+with status `error`. On Windows, pointing at a `.cmd` or `.bat` (such as `npx`) fails with
+`EINVAL`, and the hint says to use `"command": "cmd"` with `["/c", "npx", …]` or to point at
+the `.exe` or the script itself. An `EACCES` hint says to make the file executable. Unless you
+passed `--wait-for-attach`, the proxy waits up to one second for GraphMind to attach before it
+exits, so the failure reaches the graph when a server is running.
+
+**The server exits before answering anything.** A missing environment variable or a crash on
+boot:
+
+```text
+graphmind mcp-proxy: the MCP server exited with code 2 before answering anything — its last stderr output was:
+    crash-server: line 1 of 3
+    crash-server: line 2 of 3
+    crash-server: line 3 of 3
+    Error: FATAL: DATABASE_URL is not set
+        at boot (crash-server.mjs:9:11)
+```
+
+The terminal shows the last 40 lines of the server's stderr. The session node's
+`McpServerExitedEarly` error carries the last 200 lines (32 KB), and the run ends with status
+`error`. With `--inherit-stderr`, the line tells you to look above instead, because the proxy
+did not capture it. Windows crash codes such as `3221225477` are named
+(`STATUS_ACCESS_VIOLATION`). A server that answered at least once and failed later keeps run
+status `ok`: that conversation did happen.
+
+The three examples above are real output from `graphmind mcp-proxy` against the test fixtures
+in `packages/cli/test/fixtures/mcp-proxy/`, run on 2026-09-14. The Windows cases are covered by
+an injected spawn failure on every platform; the real `.cmd` test runs only on Windows CI.
+
+## MCP SDK v2 and the 2026-07-28 protocol
+
+The proxy is wire-level, so it needed no change for the TypeScript MCP SDK v2
+(`@modelcontextprotocol/server` 2.0.0). It is tested against v2 servers with both the 1.x and
+the 2.0.0 clients. What you will see:
+
+- **Default posture: nothing new.** A v2 client still opens with `initialize` (2025-11-25)
+  unless it opts into version negotiation. Inject, retry, abort and every gate work as above.
+- **A v2 tool handler that throws** arrives as an `isError: true` result, not a JSON-RPC error.
+  The error gate catches both.
+- **A 2026-07-28 session** opens with `server/discover` instead of `initialize`. That call is
+  folded under **protocol**. Only servers started with `serveStdio(...)` speak this era. A plain
+  `McpServer.connect(new StdioServerTransport())` answers `server/discover` with `-32601`, the
+  default error gate holds that probe, and after you press Continue the client falls back to
+  `initialize`.
+- **`'auto'` negotiation with the SDK's base stdio transport** probes on a separate, short-lived
+  server process. Through the proxy that is a second `graphmind mcp-proxy` and a **second, short
+  run** holding only the `server/discover` probe, next to the real session.
+- **Inject is stamped for the era the peers negotiated**, as described above, so a bare value is
+  accepted by a 2026 client too.
+
+## Loop hold and recording less
+
+The proxy reports through the same client runtime as every adapter, so the
+[loop hold](/reference/environment/#loop-hold) and the
+[`GRAPHMIND_HIDE_*` switches](/reference/environment/#recording-less) apply. The proxy takes no
+session options, so configure them with environment variables on the proxy's command:
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "graphmind-ai", "mcp-proxy", "--", "node", "server.js"],
+  "env": { "GRAPHMIND_LOOP_ALLOW": "poll_job", "GRAPHMIND_HIDE_TOOL_RESULTS": "1" }
+}
+```
+
+- **Loop hold:** a client calling one tool three times back-to-back with identical arguments —
+  no other tool call in between — is held before the third request reaches the server. The whole
+  host session is one run, so a tool the agent calls now and then across a long session (a
+  `list_issues({})` at minute 1, 20 and 45 with other work between) is never held. The client gets its answer when you continue,
+  the GraphMind abort error (`-32099`) if you abort, and your lifted value if you inject. MCP's
+  per-request `_meta`, where clients put a fresh `progressToken`, is ignored when comparing
+  arguments. For a tool the client polls on purpose, set `GRAPHMIND_LOOP_ALLOW`.
+- **Hiding values:** the MCP client and server still exchange the real bytes; only what
+  GraphMind records is hidden. `GRAPHMIND_HIDE_TOOL_RESULTS` also keeps a failed result's content
+  out of its error message. `GRAPHMIND_HIDE_INPUTS` also drops the server's command-line
+  arguments from the run's metadata and label, which keep only the command name and the file
+  names of path arguments.
 
 ## Fail-open
 

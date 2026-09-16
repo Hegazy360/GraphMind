@@ -47,6 +47,8 @@ process.stdin.on('end', () => process.exit(0));
 `;
 
 export interface ProxyPeerOptions {
+  /** Extra environment for the proxy process (e.g. GRAPHMIND_ON_LOOP=off). */
+  env?: Record<string, string>;
   /** GraphMind server port to report to. Omit to point at a dead port. */
   port?: number;
   /** `--max-frame-bytes`. Minimum accepted by the CLI is 1024. */
@@ -80,7 +82,7 @@ export class ProxyPeer {
 
     const child = spawn(process.execPath, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, GRAPHMIND_TELEMETRY: '0', CI: '1' },
+      env: { ...process.env, GRAPHMIND_TELEMETRY: '0', CI: '1', ...(options.env ?? {}) },
     }) as ChildProcessWithoutNullStreams;
 
     const peer = new ProxyPeer(child, dir);

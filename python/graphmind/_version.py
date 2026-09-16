@@ -8,7 +8,8 @@ mislabels every recorded run.
 
 from __future__ import annotations
 
-from importlib.metadata import PackageNotFoundError, version as _installed_version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _installed_version
 
 try:
     __version__ = _installed_version("graphmind-ai")

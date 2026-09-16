@@ -170,8 +170,10 @@ module Graphmind
 
     # -- holds ---------------------------------------------------------------
 
-    # Register a held gate. Call only after #should_pause?.
-    def hold(point, node, run_id)
+    # Register a held gate. Call only after #should_pause? (or for a built-in
+    # breakpoint such as the loop hold, whose details ride `reason` to
+    # on_paused — handed over per call, never shared between threads).
+    def hold(point, node, run_id, reason = nil)
       pause_id = @new_pause_id.call
       hold = Hold.new(pause_id)
       timer = nil
@@ -187,7 +189,7 @@ module Graphmind
         @mutex.synchronize { @held[pause_id][:timer] = timer if @held.key?(pause_id) }
       end
       # Emitted after registration so a resume racing back always finds the gate.
-      safely { @on_paused.call(pause_id, node, point, run_id) }
+      safely { @on_paused.call(pause_id, node, point, run_id, reason) }
       hold
     end
 

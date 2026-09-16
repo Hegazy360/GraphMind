@@ -56,6 +56,78 @@ function toolResult(prompt: unknown, toolName: string): { value: unknown; isErro
   return found;
 }
 
+/** How many times the looping script will ask for the same flights before it gives up on its own. */
+export const LOOP_STEPS = 8;
+
+const LOOP_ARGS = { from: 'San Francisco', to: 'Tokyo', month: 'November', travelers: 2 };
+
+/**
+ * A scripted model stuck in a loop (`--loop`): every step it calls
+ * `searchFlights` with exactly the same arguments, gets exactly the same
+ * answer, and asks again. Nothing is wrong with the tool — the model just
+ * never uses what it was told. With a debugger attached, @graphmind-ai/sdk's
+ * loop hold stops the third identical call; without one the run burns
+ * through `LOOP_STEPS` steps and one warning reaches the console.
+ *
+ * Like the trip planner, the script reads its tool results from the prompt:
+ * if the debugger *injects* a result that differs from the canned one, the
+ * model notices new information and finishes instead of asking again.
+ */
+export function makeMockLoopingModel(): MockLanguageModelV4 {
+  let call = 0;
+  return new MockLanguageModelV4({
+    doStream: async (options: any) => {
+      const step = call++;
+      const last = toolResult(options.prompt, 'searchFlights');
+      const canned =
+        last !== undefined &&
+        !last.isError &&
+        (last.value as any)?.carrier === 'ANA' &&
+        (last.value as any)?.note === 'cheapest nonstop found';
+      const injected = last !== undefined && !canned;
+      let parts: StreamPart[];
+      if (injected) {
+        parts = [
+          { type: 'stream-start', warnings: [] },
+          ...textParts(
+            `t${step}`,
+            'That is different from what I kept getting — thank you. Booking around that fare and moving on to the itinerary. ',
+          ),
+          finish('stop'),
+        ];
+      } else if (step >= LOOP_STEPS - 1) {
+        parts = [
+          { type: 'stream-start', warnings: [] },
+          ...textParts(
+            `t${step}`,
+            `I searched flights ${step} times and kept getting ANA at ¥118,500 per person. I was going in circles; stopping here. `,
+          ),
+          finish('stop'),
+        ];
+      } else {
+        parts = [
+          { type: 'stream-start', warnings: [] },
+          ...textParts(
+            `t${step}`,
+            step === 0
+              ? 'Let me look up flights from San Francisco to Tokyo for two in November. '
+              : 'Hmm, let me double-check those flights once more before I plan anything. ',
+          ),
+          toolCall(`call-flights-${step + 1}`, 'searchFlights', LOOP_ARGS),
+          finish('tool-calls'),
+        ];
+      }
+      return {
+        stream: simulateReadableStream({
+          chunks: parts as any[],
+          initialDelayInMs: 120,
+          chunkDelayInMs: 25,
+        }),
+      };
+    },
+  });
+}
+
 export function makeMockTripPlannerModel(): MockLanguageModelV4 {
   let call = 0;
   return new MockLanguageModelV4({

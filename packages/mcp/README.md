@@ -29,9 +29,15 @@ ours written onto it.
 npm i -D @graphmind-ai/mcp graphmind-ai
 ```
 
-`@modelcontextprotocol/sdk` is a peer dependency (`>=1.26.0 <2`; the suite runs
-against both 1.26.0 and 1.30.0). Run the debugger with `npx graphmind-ai` and
-open the viewer at http://127.0.0.1:4747.
+The MCP SDK is a peer dependency, and both generations are supported:
+
+| SDK | peer range | what the suite runs |
+|---|---|---|
+| `@modelcontextprotocol/sdk` (1.x) | `>=1.26.0 <2` | 1.26.0 and 1.30.0 |
+| `@modelcontextprotocol/server` (2.x, with `@modelcontextprotocol/core`) | `>=2 <3` | 2.0.0, on the 2025-11-25 era and on 2026-07-28 |
+
+Both peers are optional — install the one your server uses. Run the debugger
+with `npx graphmind-ai` and open the viewer at http://127.0.0.1:4747.
 
 ## Usage
 
@@ -59,6 +65,50 @@ That is the whole integration. Nothing else in your server changes: the same
 registration calls, the same handler signatures, the same results.
 
 A runnable version is in [`example/stdio-server.mjs`](./example/stdio-server.mjs).
+
+### On the v2 SDK (`@modelcontextprotocol/server` 2.x)
+
+Same call, same behaviour — only your imports differ:
+
+```ts
+import { McpServer } from '@modelcontextprotocol/server';
+import { StdioServerTransport, serveStdio } from '@modelcontextprotocol/server/stdio';
+import { graphmind } from '@graphmind-ai/mcp';
+
+const gm = graphmind({ app: 'my-mcp-server' });
+const server = gm.wrapServer(new McpServer({ name: 'my-server', version: '1.0.0' }));
+server.registerTool('search', { inputSchema: { q: z.string() } }, async ({ q }, ctx) => ({
+  content: [{ type: 'text', text: await search(q) }],
+}));
+
+await server.connect(new StdioServerTransport());      // 2025-11-25 era only
+// or, to serve the 2026-07-28 era too — wrap INSIDE the factory:
+serveStdio(() => gm.wrapServer(buildServer()));
+```
+
+What the adapter does with v2 specifically, all verified by the suite:
+
+* the trailing **context** (`ctx.mcpReq.{id, method, signal, …}`) that replaced
+  the 1.x `RequestHandlerExtra` is recognised, so a zero-argument tool reports
+  an empty input and a templated resource reports its `variables` — never the
+  context object; `instanceId` is still `ctx.mcpReq.id` namespaced by the
+  connection;
+* `ctx.mcpReq.signal` is **chained** with the debugger's abort signal while
+  attached (never replaced); `ctx.mcpReq.requestSampling(...)` and
+  `ctx.mcpReq.send({ method: 'sampling/createMessage' })` become the gated
+  `llm:sampling` node under the request, exactly like 1.x `extra.sendRequest`;
+* the low-level `Server.setRequestHandler` is instrumented in both v2
+  spellings — `(method, handler)` and `(method, { params }, handler)`;
+* on the **2026-07-28 era** the SDK's own encode seam runs *after* our gate, so
+  a bare injected value (`"a string"`, `{ price: 42 }`) is stamped with
+  `resultType` / `ttlMs` / `cacheScope` by the SDK and accepted by a 2026
+  client. (Through `graphmind mcp-proxy` that stamping does not happen — see
+  the proxy docs.)
+* the `server` node's input carries `sdk: "@modelcontextprotocol/server"` (or
+  `/sdk`), read structurally off the object you wrapped, so a project with both
+  generations installed still tells its servers apart; the session-level badge
+  reports whichever package is installed (2.x preferred when both are), and
+  `graphmind({ sdk })` overrides it.
 
 ### Options
 
@@ -189,10 +239,18 @@ behind the proxy; you just get two views of the same traffic.
 * **The `server` node's label** comes from the `{ name, version }` you gave the
   SDK's server, read defensively off the SDK object; if that ever stops working
   it falls back to your `app` name (or pass `server: { name }`).
-* **Verified peers**: 1.26.0 and 1.30.0. The range in between is declared, not
-  tested; the adapter never imports the SDK and only duck-types the six
-  registration methods, `connect`, `.server`, `setRequestHandler` and
-  `createMessage`.
+* **Verified peers**: 1.26.0 and 1.30.0 on the 1.x line; 2.0.0 on the 2.x
+  line. The ranges in between are declared, not tested; the adapter never
+  imports either SDK and only duck-types the registration methods, `connect`,
+  `.server`, `setRequestHandler`, `createMessage` and the shape of the trailing
+  handler argument.
+* **v2 `elicitInput` and the `input_required` flow are not instrumented.** On
+  2026-07-28 a handler that needs client input answers `inputRequired(...)`
+  instead of issuing a request; the adapter records that answer as the node's
+  output and gates the retried call as a new execution. Sampling on the modern
+  era has no server→client channel by design (SEP-2577), so `requestSampling`
+  there fails inside the SDK and surfaces as the node's error, exactly as it
+  would without the adapter.
 * **The floor is a security floor.** The adapter works on older SDKs, but every
   release below 1.26.0 carries at least one high advisory — cross-client data
   leak through shared transport reuse (≤1.25.3), DNS-rebinding protection off

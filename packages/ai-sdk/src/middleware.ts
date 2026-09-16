@@ -24,6 +24,7 @@
  *  3. The observer emits batched `node.token` deltas and `node.finished`
  *     with usage on the finish part.
  */
+import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
 import { isAbortError, type GateNode } from '@graphmind-ai/client';
 import type { LanguageModelMiddleware } from 'ai';
 import type { AdapterCore } from './core.js';
@@ -128,14 +129,14 @@ async function instrumentStream<R extends StreamResultLike>(
   const begun = beginStep(core, params, model);
   if (begun === undefined) return await doStream();
   const { instanceId } = begun;
-  const startedAt = Date.now();
+  const startedAt = monotonicNow();
 
   const decision = await core.session.gate('before', LLM_GATE_NODE);
   if (decision.action === 'abort') {
     core.finishNode({
       nodeId: LLM_NODE_ID,
       output: undefined,
-      durationMs: Date.now() - startedAt,
+      durationMs: elapsedMs(startedAt),
       status: 'aborted',
       extra: { instanceId },
     });
@@ -152,7 +153,7 @@ async function instrumentStream<R extends StreamResultLike>(
     core.finishNode({
       nodeId: LLM_NODE_ID,
       output: undefined,
-      durationMs: Date.now() - startedAt,
+      durationMs: elapsedMs(startedAt),
       status: aborted ? 'aborted' : 'error',
       extra: { instanceId },
     });
@@ -228,7 +229,7 @@ async function observeStream(
       core.finishNode({
         nodeId: LLM_NODE_ID,
         output: { text },
-        durationMs: Date.now() - startedAt,
+        durationMs: elapsedMs(startedAt),
         status: 'error',
         extra: { instanceId },
       });
@@ -237,7 +238,7 @@ async function observeStream(
         nodeId: LLM_NODE_ID,
         output: { text, finishReason },
         usage,
-        durationMs: Date.now() - startedAt,
+        durationMs: elapsedMs(startedAt),
         status: 'ok',
         extra: { instanceId },
       });
@@ -249,7 +250,7 @@ async function observeStream(
       core.finishNode({
         nodeId: LLM_NODE_ID,
         output: { text },
-        durationMs: Date.now() - startedAt,
+        durationMs: elapsedMs(startedAt),
         status: aborted ? 'aborted' : 'error',
         extra: { instanceId },
       });
@@ -273,14 +274,14 @@ async function instrumentGenerate<R extends GenerateResultLike>(
   const begun = beginStep(core, params, model);
   if (begun === undefined) return await doGenerate();
   const { instanceId } = begun;
-  const startedAt = Date.now();
+  const startedAt = monotonicNow();
 
   const decision = await core.session.gate('before', LLM_GATE_NODE);
   if (decision.action === 'abort') {
     core.finishNode({
       nodeId: LLM_NODE_ID,
       output: undefined,
-      durationMs: Date.now() - startedAt,
+      durationMs: elapsedMs(startedAt),
       status: 'aborted',
       extra: { instanceId },
     });
@@ -296,7 +297,7 @@ async function instrumentGenerate<R extends GenerateResultLike>(
     core.finishNode({
       nodeId: LLM_NODE_ID,
       output: undefined,
-      durationMs: Date.now() - startedAt,
+      durationMs: elapsedMs(startedAt),
       status: aborted ? 'aborted' : 'error',
       extra: { instanceId },
     });
@@ -315,7 +316,7 @@ async function instrumentGenerate<R extends GenerateResultLike>(
       nodeId: LLM_NODE_ID,
       output: { text, finishReason: unifiedFinishReason(result.finishReason) },
       usage: mapUsage(result.usage),
-      durationMs: Date.now() - startedAt,
+      durationMs: elapsedMs(startedAt),
       status: 'ok',
       extra: { instanceId },
     });

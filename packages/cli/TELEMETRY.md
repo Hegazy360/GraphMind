@@ -2,7 +2,8 @@
 
 GraphMind collects a small amount of **anonymous** usage data. This page is
 the complete, honest description of what that means: exactly what is sent,
-why, and how to turn it off with one environment variable.
+why, how to see it for yourself, and how to turn it off with one environment
+variable.
 
 ## What is sent
 
@@ -13,8 +14,8 @@ about what it did:
 {
   "event": "serve",
   "installId": "3f8a2c1e-9b4d-4e7a-8c2f-1d5e6a7b8c9d",
-  "version": "0.0.1",
-  "ts": "2026-08-26T14:03:07.512Z"
+  "version": "0.5.0",
+  "ts": "2026-09-14T04:03:07.512Z"
 }
 ```
 
@@ -22,10 +23,10 @@ about what it did:
   `record`, `run-ingested`). Never arguments, file paths, prompts, traces,
   run data, or payloads of any kind.
 - **installId** — a random UUID generated on this machine the first time
-  telemetry fires, stored in `~/.graphmind/telemetry-id`. It identifies an
-  *installation*, not a person: it is not derived from your username,
-  hardware, email, or anything else about you. Delete the file to get a new
-  one.
+  telemetry fires, stored in `~/.graphmind/telemetry-id` (mode `0600`). It
+  identifies an *installation*, not a person: it is not derived from your
+  username, hardware, email, or anything else about you. Delete the file to
+  get a new one.
 - **version** — the `graphmind-ai` package version.
 - **ts** — the time the event fired.
 
@@ -45,10 +46,11 @@ whole business model of this data — deciding what to build next.
 
 ## How to opt out
 
-Set one environment variable:
+Either of these, whichever your setup already uses:
 
 ```sh
-export GRAPHMIND_TELEMETRY=0    # "false" also works
+export DO_NOT_TRACK=1           # the cross-tool convention (consoledonottrack.com); "true" also works
+export GRAPHMIND_TELEMETRY=0    # GraphMind's own switch; "false" also works
 ```
 
 When disabled, **nothing happens at all**: no request is made and no
@@ -62,6 +64,38 @@ To also remove the existing install id:
 rm ~/.graphmind/telemetry-id
 ```
 
+## How to see exactly what would be sent
+
+```sh
+GRAPHMIND_TELEMETRY=log graphmind demo
+# stderr:
+# [graphmind telemetry] {"event":"demo","installId":"3f8a…","version":"0.5.0","ts":"2026-09-14T04:03:07.512Z"}
+```
+
+`log` prints the byte-for-byte payload to **stderr** (stdout stays yours) and
+sends **nothing** — not a failed request, no request. It prints under `CI`
+too, because printing is the safe way to audit a build machine. It uses the
+real install id, creating `~/.graphmind/telemetry-id` if needed, so what you
+see is exactly what a send would carry.
+
+## Precedence
+
+Evaluated top to bottom; the first match wins.
+
+| Condition | Result |
+| --- | --- |
+| `DO_NOT_TRACK` is `1` or `true` (case-insensitive) | **Off.** Beats everything below, including `GRAPHMIND_TELEMETRY=1` and `=log`. |
+| `GRAPHMIND_TELEMETRY` is `0` or `false` | **Off.** |
+| `GRAPHMIND_TELEMETRY` is `log` | **Print to stderr, send nothing.** Also under `CI`. |
+| `CI` is set (to anything, even empty) | **Off.** |
+| Otherwise (including `GRAPHMIND_TELEMETRY=1`) | **Send.** |
+
+Values other than `1`/`true` for `DO_NOT_TRACK` (for example `0`, `false`,
+`no`) leave telemetry on — the variable is honoured only in the spellings the
+convention defines. The table is implemented by one pure function,
+`telemetryMode()` in `src/telemetry.ts`, and pinned by
+`test/telemetry.test.ts`.
+
 ## Mechanics and storage
 
 - Events are sent fire-and-forget to `https://graphmind.ai/api/telemetry`
@@ -71,7 +105,10 @@ rm ~/.graphmind/telemetry-id
   only in aggregate: per-day event counts, unique installs, and returning
   installs.
 - The implementation is small and open — see
-  [`packages/cli/src/telemetry.ts`](https://github.com/Hegazy360/graphmind/blob/master/packages/cli/src/telemetry.ts)
+  [`packages/cli/src/telemetry.ts`](https://github.com/Hegazy360/GraphMind/blob/master/packages/cli/src/telemetry.ts)
   for the client and
-  [`apps/web/api/telemetry.ts`](https://github.com/Hegazy360/graphmind/blob/master/apps/web/api/telemetry.ts)
+  [`apps/web/api/telemetry.ts`](https://github.com/Hegazy360/GraphMind/blob/master/apps/web/api/telemetry.ts)
   for the receiving end.
+- Telemetry is a **CLI-only** feature. `@graphmind-ai/sdk`,
+  `@graphmind-ai/client` and the other adapters make no outbound requests
+  except the WebSocket to your own local server.

@@ -7,6 +7,7 @@
  * parent chain and keep only that ancestry lit.
  */
 import type { NodeKind } from '@graphmind-ai/schema';
+import { ranMs } from '../lib/duration.js';
 import type { RunState } from './types.js';
 import { nodeStatus } from './types.js';
 
@@ -34,14 +35,18 @@ export function filterSummary(spec: FilterSpec): string {
   return parts.join(' · ');
 }
 
-/** Every execution duration recorded in the run, ascending. */
+/**
+ * Every execution's *ran* time in the run, ascending. Held time is excluded:
+ * a call the developer stared at for 40 s is not a slow call.
+ */
 function durations(run: RunState): number[] {
   const out: number[] = [];
   for (const nodeId of run.order) {
     const node = run.nodes[nodeId];
     if (node === undefined) continue;
     for (const exec of node.executions) {
-      if (exec.durationMs !== undefined) out.push(exec.durationMs);
+      const ran = ranMs(exec);
+      if (ran !== undefined) out.push(ran);
     }
   }
   return out.sort((a, b) => a - b);
@@ -93,7 +98,10 @@ function matchesStatus(run: RunState, nodeId: string, status: StatusFilter, slow
     case 'running':
       return nodeStatus(node) === 'running';
     case 'slow':
-      return node.executions.some((e) => e.durationMs !== undefined && e.durationMs >= slowMs);
+      return node.executions.some((e) => {
+        const ran = ranMs(e);
+        return ran !== undefined && ran >= slowMs;
+      });
   }
 }
 

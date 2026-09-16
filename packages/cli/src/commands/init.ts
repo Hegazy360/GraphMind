@@ -30,6 +30,8 @@ export interface Integration {
   /** An extra paragraph printed under the snippet, when one route is not the
    *  whole story (an MCP server can also be debugged without any code). */
   alsoTry?: string;
+  /** Pick the snippet from what was matched, when one integration spans package generations. */
+  snippetFor?: (matched: readonly string[]) => string;
 }
 
 const NODE_SNIPPET_AI_SDK = `import { graphmind } from '@graphmind-ai/sdk';
@@ -76,6 +78,22 @@ const gm = graphmind({ app: 'my-mcp-server' });
 const server = gm.wrapServer(new McpServer({ name: 'my-server', version: '1.0.0' }));
 
 server.registerTool('search', schema, async (args) => { /* ... */ });`;
+
+const NODE_SNIPPET_MCP_V2 = `import { graphmind } from '@graphmind-ai/mcp';
+import { McpServer } from '@modelcontextprotocol/server';
+import { serveStdio } from '@modelcontextprotocol/server/stdio';
+
+const gm = graphmind({ app: 'my-mcp-server' });
+
+// Wrap BEFORE you register anything, and wrap inside the factory: serveStdio
+// builds a server per connection.
+function buildServer() {
+  const server = gm.wrapServer(new McpServer({ name: 'my-server', version: '1.0.0' }));
+  server.registerTool('search', schema, async (args) => { /* ... */ });
+  return server;
+}
+
+serveStdio(buildServer);`;
 
 const NODE_SNIPPET_LANGGRAPH = `import { graphmind } from '@graphmind-ai/langgraph';
 
@@ -156,8 +174,14 @@ export const INTEGRATIONS: Integration[] = [
     framework: 'MCP server',
     ecosystem: 'node',
     pkg: '@graphmind-ai/mcp',
-    triggers: ['@modelcontextprotocol/sdk'],
+    // 1.x is `@modelcontextprotocol/sdk`; the 2.x family (2026-07-28) is a new
+    // package, `@modelcontextprotocol/server`. Both are supported peers.
+    triggers: ['@modelcontextprotocol/sdk', '@modelcontextprotocol/server'],
     snippet: NODE_SNIPPET_MCP,
+    snippetFor: (matched) =>
+      matched.includes('@modelcontextprotocol/server') && !matched.includes('@modelcontextprotocol/sdk')
+        ? NODE_SNIPPET_MCP_V2
+        : NODE_SNIPPET_MCP,
     docs: 'https://graphmind.ai/docs/integrations/mcp/',
     // The proxy needs nothing installed and works on a server in any
     // language, so it is the better first suggestion for most people — but it
@@ -370,11 +394,12 @@ export async function runInit(parsed: ParsedCli, io: InitIo = console): Promise<
 
   io.log('\n2. Instrument your app:\n');
   const shown = new Set<string>();
-  for (const { integration } of found) {
+  for (const { integration, matched } of found) {
     if (shown.has(integration.pkg + integration.id)) continue;
     shown.add(integration.pkg + integration.id);
     if (found.length > 1) io.log(`   --- ${integration.framework} ---`);
-    for (const line of integration.snippet.split('\n')) io.log(`   ${line}`);
+    const snippet = integration.snippetFor?.(matched) ?? integration.snippet;
+    for (const line of snippet.split('\n')) io.log(`   ${line}`);
     io.log('');
     if (integration.alsoTry !== undefined) {
       for (const line of integration.alsoTry.split('\n')) io.log(`   ${line}`);
@@ -391,7 +416,7 @@ export async function runInit(parsed: ParsedCli, io: InitIo = console): Promise<
     const target = join(dir, 'graphmind.example.ts');
     const body =
       found
-        .map(({ integration }) => `// ${integration.framework} — ${integration.docs}\n${integration.snippet}`)
+        .map(({ integration, matched }) => `// ${integration.framework} — ${integration.docs}\n${integration.snippetFor?.(matched) ?? integration.snippet}`)
         .join('\n\n') + '\n';
     try {
       writeFileSync(target, body);

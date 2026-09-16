@@ -21,10 +21,10 @@ from __future__ import annotations
 
 import functools
 import inspect
-import time
 from collections.abc import Callable, Mapping
 from typing import Any, TypeVar, Union
 
+from .clock import elapsed_ms, monotonic_ms
 from .errors import is_abort_error
 from .gate import GateNode
 from .ids import next_id, tool_node_id
@@ -246,7 +246,7 @@ def _run_sync(
     node = state.node()
     ctx = session.current_run()
     instance_id = next_id("call")
-    started = time.monotonic()
+    started = monotonic_ms()
     session.start_node(
         node_id=node.node_id,
         kind=state.kind,
@@ -260,7 +260,7 @@ def _run_sync(
         session.finish_node(
             node_id=node.node_id,
             instance_id=instance_id,
-            duration_ms=(time.monotonic() - started) * 1000.0,
+            duration_ms=elapsed_ms(started),
             status=status,
             output=output,
             extra=extra,
@@ -305,7 +305,7 @@ async def _run_async(
     node = state.node()
     ctx = session.current_run()
     instance_id = next_id("call")
-    started = time.monotonic()
+    started = monotonic_ms()
     session.start_node(
         node_id=node.node_id,
         kind=state.kind,
@@ -319,7 +319,7 @@ async def _run_async(
         session.finish_node(
             node_id=node.node_id,
             instance_id=instance_id,
-            duration_ms=(time.monotonic() - started) * 1000.0,
+            duration_ms=elapsed_ms(started),
             status=status,
             output=output,
             extra=extra,

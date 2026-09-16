@@ -261,7 +261,7 @@ export class SqliteStorage implements Storage {
       event.ts,
       event.type,
       event.nodeId,
-      serializePayload(event.payload).json,
+      serializePayload(event.payload, undefined, event.type).json,
     );
     return result.changes > 0;
   }

@@ -6,13 +6,16 @@
  * is generated (src/store/mcpFixture.ts) and replayed through the same
  * paced path as the bundled demo. What is under test is the thing a unit
  * test cannot see: that a session of JSON-RPC requests *reads* as one, that
- * each MCP kind is identifiable at a glance, and that a gate holds in an MCP
- * run exactly as it does in an agent run.
+ * each MCP kind is identifiable at a glance, that the protocol chatter folds
+ * into one card with counts instead of burying the work, and that a gate
+ * holds in an MCP run exactly as it does in an agent run.
  */
+import type { Locator, Page } from '@playwright/test';
 import { expect, nodeBody, nodeCard, openViewer, runStatusPill, test } from './harness.js';
 
 const NODES = {
   session: 'server:docs-mcp',
+  protocol: 'mcp:protocol',
   prompt: 'prompt:release_notes',
   changelog: 'resource:file:///CHANGELOG.md',
   issues: 'resource:db://issues/open',
@@ -21,9 +24,28 @@ const NODES = {
   sampling: 'llm:sampling',
 } as const;
 
-async function openMcpRun(page: import('@playwright/test').Page): Promise<void> {
+/** The six protocol calls the proxy folds under `mcp:protocol`. */
+const PROTOCOL = {
+  initialize: 'mcp:initialize',
+  initialized: 'mcp:notifications/initialized',
+  toolsList: 'mcp:tools/list',
+  resourcesList: 'mcp:resources/list',
+  templatesList: 'mcp:resources/templates/list',
+  promptsList: 'mcp:prompts/list',
+} as const;
+
+async function openMcpRun(page: Page): Promise<void> {
   await openViewer(page, { query: 'fixture=mcp' });
   await expect(nodeCard(page, NODES.session)).toBeVisible();
+}
+
+/** The fold chevron on a card; `aria-expanded` says which way it points. */
+function foldToggle(page: Page, nodeId: string): Locator {
+  return nodeCard(page, nodeId).locator('.gm-fold');
+}
+
+async function isFolded(page: Page, nodeId: string): Promise<boolean> {
+  return (await foldToggle(page, nodeId).getAttribute('aria-expanded')) === 'false';
 }
 
 test('an MCP session renders every kind, with its catalogue on screen from the start', async ({
@@ -54,6 +76,55 @@ test('an MCP session renders every kind, with its catalogue on screen from the s
 
   // The session counts requests, not "steps and tool calls".
   await expect(session).toContainText('request', { timeout: 25_000 });
+});
+
+test('protocol traffic is one card the user can fold and unfold, with counts', async ({ page }) => {
+  await openMcpRun(page);
+
+  // The group card is on the canvas as soon as the handshake starts, and the
+  // six protocol calls settle within the first second of the replay.
+  const protocol = nodeCard(page, NODES.protocol);
+  await expect(protocol).toBeVisible();
+  await expect(protocol.locator('.gm-node-title')).toHaveText('protocol');
+  await expect(foldToggle(page, NODES.protocol)).toBeVisible({ timeout: 25_000 });
+
+  // Whether the canvas opened it folded (sender hint honoured) or open, the
+  // user must be able to reach both states from the chevron.
+  if (!(await isFolded(page, NODES.protocol))) await foldToggle(page, NODES.protocol).click();
+  await expect(nodeBody(page, NODES.protocol)).toHaveClass(/gm-node--group/);
+  await expect(protocol).toContainText('6 protocol calls', { timeout: 25_000 });
+  await expect(protocol).toContainText('702ms');
+  await expect(protocol).not.toContainText('failed');
+  for (const nodeId of Object.values(PROTOCOL)) {
+    await expect(nodeCard(page, nodeId), `${nodeId} should be hidden inside the fold`).toHaveCount(0);
+  }
+  // The work is never folded away with the chatter.
+  await expect(nodeCard(page, NODES.search)).toBeVisible();
+  await expect(nodeCard(page, NODES.prompt)).toBeVisible();
+
+  // Unfold: the six protocol calls come back as ordinary cards.
+  await foldToggle(page, NODES.protocol).click();
+  await expect(nodeBody(page, NODES.protocol)).not.toHaveClass(/gm-node--group/);
+  for (const nodeId of Object.values(PROTOCOL)) {
+    await expect(nodeCard(page, nodeId)).toBeVisible();
+  }
+  await expect(nodeBody(page, PROTOCOL.initialize)).toHaveClass(/gm-node--ok/, { timeout: 25_000 });
+  await expect(nodeCard(page, PROTOCOL.initialize).locator('.gm-node-title')).toHaveText('initialize');
+});
+
+test('the protocol group opens folded on first sight (sender hint `collapsed: true`)', async ({
+  page,
+}) => {
+  // The proxy emits `node.started … collapsed: true`; applyEvent keeps the
+  // flag on NodeState and RunCanvas folds hinted roots once, on first sight,
+  // whatever the run size. The user's unfold is never re-folded.
+  await openMcpRun(page);
+  await expect(nodeBody(page, NODES.protocol)).toHaveClass(/gm-node--group/, { timeout: 25_000 });
+  await expect(nodeCard(page, PROTOCOL.initialize)).toHaveCount(0);
+  await expect(nodeCard(page, NODES.search)).toBeVisible();
+  // …and the user can still unfold it.
+  await foldToggle(page, NODES.protocol).click();
+  await expect(nodeCard(page, PROTOCOL.initialize)).toBeVisible();
 });
 
 test('MCP requests light up as the client makes them, and sampling streams', async ({ page }) => {

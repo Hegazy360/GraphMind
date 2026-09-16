@@ -223,3 +223,164 @@ export async function openPalette(page: Page): Promise<Locator> {
   await expect(palette).toBeVisible();
   return palette;
 }
+
+// ── canvas geometry, read off the real DOM ──────────────────────────────────
+
+export interface DomRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface DomNodeBox {
+  id: string;
+  rect: DomRect;
+  /** The 1px source (bottom) and target (top) handles, in client coordinates. */
+  sourceHandle: DomRect | null;
+  targetHandle: DomRect | null;
+  /** Every `.gm-action` button rendered inside this card. */
+  actions: DomRect[];
+}
+
+export interface DomEdgeSamples {
+  id: string;
+  source: string | null;
+  target: string | null;
+  /** Points along the rendered path, every `step` px plus the exact end. */
+  samples: { x: number; y: number }[];
+  /** Cumulative length of each sample (same index), so the ends can be inset. */
+  lengths: number[];
+  total: number;
+}
+
+export interface CanvasGeometry {
+  nodes: DomNodeBox[];
+  edges: DomEdgeSamples[];
+  inspector: DomRect | null;
+  canvas: DomRect | null;
+}
+
+/**
+ * Read cards, handles, action buttons and the rendered edge paths as client
+ * rectangles and points. The SVG path is sampled with `getPointAtLength` and
+ * mapped through its screen CTM, so what comes back is the path as painted,
+ * not the geometry the layout *intended*.
+ */
+export async function readCanvasGeometry(page: Page, step = 4): Promise<CanvasGeometry> {
+  return await page.evaluate((stepPx: number) => {
+    const box = (el: Element): DomRect => {
+      const r = el.getBoundingClientRect();
+      return { x: r.left, y: r.top, width: r.width, height: r.height };
+    };
+    const nodes: DomNodeBox[] = [];
+    const ids: string[] = [];
+    for (const el of document.querySelectorAll('.react-flow__node')) {
+      const id = el.getAttribute('data-id') ?? '';
+      ids.push(id);
+      const source = el.querySelector('.react-flow__handle.source');
+      const target = el.querySelector('.react-flow__handle.target');
+      nodes.push({
+        id,
+        rect: box(el),
+        sourceHandle: source === null ? null : box(source),
+        targetHandle: target === null ? null : box(target),
+        actions: [...el.querySelectorAll('.gm-action')].map(box),
+      });
+    }
+    // Edge ids are `e:<source>-><target>`; resolve against the node ids on
+    // screen rather than splitting on '->' so an id containing an arrow
+    // cannot fool the test.
+    const endpoints = (edgeId: string): { source: string | null; target: string | null } => {
+      for (const s of ids) {
+        const prefix = `e:${s}->`;
+        if (!edgeId.startsWith(prefix)) continue;
+        const t = edgeId.slice(prefix.length);
+        if (ids.includes(t)) return { source: s, target: t };
+      }
+      return { source: null, target: null };
+    };
+    const edges: DomEdgeSamples[] = [];
+    for (const g of document.querySelectorAll('.react-flow__edge')) {
+      const id = g.getAttribute('data-id') ?? '';
+      const path = g.querySelector<SVGPathElement>('path.react-flow__edge-path');
+      if (path === null) continue;
+      const total = path.getTotalLength();
+      const ctm = path.getScreenCTM();
+      const samples: { x: number; y: number }[] = [];
+      const lengths: number[] = [];
+      const at = (length: number): void => {
+        const p = path.getPointAtLength(length);
+        const q = ctm === null ? p : new DOMPoint(p.x, p.y).matrixTransform(ctm);
+        samples.push({ x: q.x, y: q.y });
+        lengths.push(length);
+      };
+      for (let l = 0; l < total; l += stepPx) at(l);
+      at(total);
+      edges.push({ id, ...endpoints(id), samples, lengths, total });
+    }
+    const inspector = document.querySelector('.gm-inspector');
+    const canvas = document.querySelector('.gm-canvas');
+    return {
+      nodes,
+      edges,
+      inspector: inspector === null ? null : box(inspector),
+      canvas: canvas === null ? null : box(canvas),
+    };
+  }, step);
+}
+
+/** Strictly inside `rect` deflated by `inset` on every side. */
+export function pointInside(p: { x: number; y: number }, rect: DomRect, inset = 0): boolean {
+  return (
+    p.x > rect.x + inset &&
+    p.x < rect.x + rect.width - inset &&
+    p.y > rect.y + inset &&
+    p.y < rect.y + rect.height - inset
+  );
+}
+
+/** Shortest distance from a point to a rectangle (0 when inside). */
+export function distanceToRect(p: { x: number; y: number }, rect: DomRect): number {
+  const dx = Math.max(rect.x - p.x, 0, p.x - (rect.x + rect.width));
+  const dy = Math.max(rect.y - p.y, 0, p.y - (rect.y + rect.height));
+  return Math.hypot(dx, dy);
+}
+
+/** Is `inner` within `outer` (with `slack` px of tolerance)? */
+export function rectWithin(inner: DomRect, outer: DomRect, slack = 1): boolean {
+  return (
+    inner.x >= outer.x - slack &&
+    inner.y >= outer.y - slack &&
+    inner.x + inner.width <= outer.x + outer.width + slack &&
+    inner.y + inner.height <= outer.y + outer.height + slack
+  );
+}
+
+/**
+ * Wait until the cards have stopped moving: two reads `quietMs` apart agree
+ * on every card's position. Layout moves animate for 420ms and the camera
+ * for up to ~1s, and a path sampled mid-slide is a path to nowhere.
+ */
+export async function waitForCanvasStill(page: Page, quietMs = 300): Promise<CanvasGeometry> {
+  let previous = await readCanvasGeometry(page);
+  for (let attempt = 0; attempt < 30; attempt++) {
+    await page.waitForTimeout(quietMs);
+    const next = await readCanvasGeometry(page);
+    const same =
+      next.nodes.length === previous.nodes.length &&
+      next.nodes.every((node, i) => {
+        const before = previous.nodes[i];
+        return (
+          before !== undefined &&
+          before.id === node.id &&
+          Math.abs(before.rect.x - node.rect.x) < 0.5 &&
+          Math.abs(before.rect.y - node.rect.y) < 0.5 &&
+          Math.abs(before.rect.height - node.rect.height) < 0.5
+        );
+      });
+    if (same && next.nodes.length > 0) return next;
+    previous = next;
+  }
+  throw new Error('canvas never came to rest');
+}

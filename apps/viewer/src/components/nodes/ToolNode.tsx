@@ -9,6 +9,7 @@ import type { NodeKind } from '@graphmind-ai/schema';
 import type { FlowNodeData } from '../../store/runStateToFlow.js';
 import { isExportedRun } from '../../connection/FixtureConnection.js';
 import { broadcastControl } from '../../connection/ServerConnection.js';
+import { fmtRanHeld, ranMs } from '../../lib/duration.js';
 import { fmtDuration } from '../../lib/format.js';
 import { kindLabel } from '../../lib/kinds.js';
 import { latestExecution, nodeStatus as statusOf } from '../../store/types.js';
@@ -83,8 +84,8 @@ function ToolNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
   const ungated = node.ungated === true;
 
   return (
+    <>
     <div className={`${statusClass(status, selected, flash)} gm-kind--${node.kind}`}>
-      <FlowHandles />
       <div className="gm-node-head">
         <CollapseToggle runId={runId} nodeId={nodeId} />
         {ungated ? (
@@ -116,12 +117,17 @@ function ToolNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
             injected
           </span>
         )}
-        {exec?.durationMs !== undefined && (
-          <span className="gm-node-ms">{fmtDuration(exec.durationMs)}</span>
+        {exec !== undefined && ranMs(exec) !== undefined && (
+          <span className="gm-node-ms" title={fmtRanHeld(exec)}>{fmtDuration(ranMs(exec) ?? 0)}</span>
         )}
       </div>
       <PauseBanner runId={runId} node={node} />
     </div>
+      {/* Outside the animated .gm-node on purpose: React Flow measures handle
+          bounds once, on mount, and the entrance keyframe would put that
+          measurement 60–100px off for the life of the node. */}
+      <FlowHandles />
+    </>
   );
 }
 

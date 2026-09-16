@@ -29,6 +29,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
 import { DebugState } from './debug-state.js';
+import { containsRedacted } from './redact-secrets.js';
 import {
   serializePayload,
   type RunSource,
@@ -347,7 +348,7 @@ export class Hub {
     // already-in-budget payload, measured at 0.29µs/event (~0.6% of one core
     // at 20k events/s) — cheap enough to prefer over widening the Storage
     // interface just to hand the JSON down.
-    const stored = serializePayload(envelope.payload);
+    const stored = serializePayload(envelope.payload, undefined, envelope.type);
     const inserted = this.storage.insertEvent({
       runId: envelope.runId,
       seq: envelope.seq,
@@ -635,6 +636,22 @@ export class Hub {
     const known = result.envelope;
     switch (known.type) {
       case 'exec.resume': {
+        // Inject guard (W7, defence in depth behind the viewer's own check in
+        // apps/viewer/src/lib/gate.ts): a value that still contains the
+        // redaction placeholder is the hidden payload pre-filled into the
+        // editor, not a result anyone meant to substitute. Refuse it here so
+        // no client — the viewer, a script on /ws/ui — can push
+        // "__REDACTED__" into a running app as a tool result.
+        if (known.payload.action === 'inject' && containsRedacted(known.payload.output)) {
+          this.sendToUi(conn, {
+            type: 'error',
+            runId: known.runId,
+            message:
+              'inject refused: this value contains redacted content ("__REDACTED__"); ' +
+              'edit it before injecting',
+          });
+          return;
+        }
         const owner = this.runOwners.get(known.runId);
         if (owner === undefined || !owner.attached) {
           this.sendToUi(conn, {

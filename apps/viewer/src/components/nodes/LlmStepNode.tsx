@@ -8,6 +8,7 @@
 import { memo } from 'react';
 import type { NodeProps, Node } from '@xyflow/react';
 import type { FlowNodeData } from '../../store/runStateToFlow.js';
+import { fmtRanHeld, ranMs } from '../../lib/duration.js';
 import { fmtDuration, fmtTokens } from '../../lib/format.js';
 import { useTokenSnapshot } from '../../hooks/useTokenSnapshot.js';
 import { latestExecution, nodeStatus as statusOf } from '../../store/types.js';
@@ -60,8 +61,8 @@ function LlmStepNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
   const usage = exec?.usage;
 
   return (
+    <>
     <div className={`${statusClass(status, selected, flash)} gm-kind--${node.kind}`}>
-      <FlowHandles />
       <div className="gm-node-head">
         <CollapseToggle runId={runId} nodeId={nodeId} />
         <StatusDot status={status} />
@@ -84,12 +85,17 @@ function LlmStepNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
         ) : (
           <span>{status === 'running' ? 'streaming…' : status === 'ghost' ? 'not started' : ''}</span>
         )}
-        {exec?.durationMs !== undefined && (
-          <span className="gm-node-ms">{fmtDuration(exec.durationMs)}</span>
+        {exec !== undefined && ranMs(exec) !== undefined && (
+          <span className="gm-node-ms" title={fmtRanHeld(exec)}>{fmtDuration(ranMs(exec) ?? 0)}</span>
         )}
       </div>
       <PauseBanner runId={runId} node={node} />
     </div>
+      {/* Outside the animated .gm-node on purpose: React Flow measures handle
+          bounds once, on mount, and the entrance keyframe would put that
+          measurement 60–100px off for the life of the node. */}
+      <FlowHandles />
+    </>
   );
 }
 

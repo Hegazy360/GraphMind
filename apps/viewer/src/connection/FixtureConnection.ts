@@ -12,6 +12,7 @@
  */
 import { useEffect, useMemo, useRef } from 'react';
 import type { ControlType, MessagePayloadMap } from '@graphmind-ai/schema';
+import { generateLoopRun } from '../store/loop.js';
 import { generateMcpRun } from '../store/mcpFixture.js';
 import { useRunStore } from '../store/runStore.js';
 import { tokenBuffers } from '../store/tokenBuffers.js';
@@ -69,12 +70,13 @@ const SYNTHETIC_SEQ_BASE = 100000;
  * (see store/mcpFixture.ts) — there is no recorded MCP run to ship yet, and
  * an MCP-shaped canvas has to be designable and testable regardless.
  */
-export type FixtureName = 'demo' | 'mcp';
+export type FixtureName = 'demo' | 'mcp' | 'loop';
 
 export function parseFixtureParam(search: string): FixtureName | null {
   const value = new URLSearchParams(search).get('fixture');
   if (value === null || value === '') return null;
   if (value === 'mcp') return 'mcp';
+  if (value === 'loop') return 'loop';
   return 'demo';
 }
 
@@ -98,7 +100,9 @@ export class FixtureConnection implements ServerConnection {
     const bundled =
       this.fixture === 'mcp'
         ? (generateMcpRun() as unknown as RawFixtureEnvelope[])
-        : (demoRun as unknown as RawFixtureEnvelope[]);
+        : this.fixture === 'loop'
+          ? (generateLoopRun() as unknown as RawFixtureEnvelope[])
+          : (demoRun as unknown as RawFixtureEnvelope[]);
     const recorded = (embedded ?? bundled).map((e) => ({
       ...e,
     }));

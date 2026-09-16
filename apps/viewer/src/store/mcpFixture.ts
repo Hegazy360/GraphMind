@@ -21,7 +21,13 @@
  *    the client's model for a completion is still a model call, and it
  *    streams;
  *  - one `resources/read` fails and holds an error gate, because that is the
- *    frame the product exists for and it must be reachable in an MCP run too.
+ *    frame the product exists for and it must be reachable in an MCP run too;
+ *  - protocol traffic — `initialize`, `notifications/initialized`, the three
+ *    listings, `ping` — is parented under one synthetic `mcp:protocol` node
+ *    (kind custom, name "protocol") whose `node.started` carries the
+ *    `collapsed: true` hint, exactly as `graphmind mcp-proxy` emits it. The
+ *    work stays directly under the session; the six protocol calls become one
+ *    "6 calls · 702ms" card the user can unfold.
  */
 import { PROTOCOL_VERSION } from '@graphmind-ai/schema';
 
@@ -38,6 +44,7 @@ export const MCP_RUN_ID = 'mcp-docs-9b4c';
 
 export const MCP_NODES = {
   session: 'server:docs-mcp',
+  protocol: 'mcp:protocol',
   prompt: 'prompt:release_notes',
   changelog: 'resource:file:///CHANGELOG.md',
   issues: 'resource:db://issues/open',
@@ -45,6 +52,19 @@ export const MCP_NODES = {
   create: 'tool:create_issue',
   sampling: 'llm:sampling',
 } as const;
+
+/** The protocol traffic folded under `mcp:protocol`, in wire order. */
+export const MCP_PROTOCOL_NODES = {
+  initialize: 'mcp:initialize',
+  initialized: 'mcp:notifications/initialized',
+  toolsList: 'mcp:tools/list',
+  resourcesList: 'mcp:resources/list',
+  templatesList: 'mcp:resources/templates/list',
+  promptsList: 'mcp:prompts/list',
+} as const;
+
+/** Sum of the protocol calls' durations — what the folded card shows. */
+export const MCP_PROTOCOL_TOTAL_MS = 702;
 
 const TEXT = [
   'Reading the changelog and the open issue list to draft release notes. ',
@@ -69,7 +89,7 @@ export function generateMcpRun(startTs: number = Date.now() - 12_000): FixtureEn
 
   emit('run.started', {
     app: 'docs-mcp',
-    sdk: { name: '@modelcontextprotocol/sdk', version: '1.19.0' },
+    sdk: { name: 'mcp-proxy', version: '0.5.0' },
     meta: {
       transport: 'stdio',
       client: 'claude-desktop/1.4.2',
@@ -140,6 +160,112 @@ export function generateMcpRun(startTs: number = Date.now() - 12_000): FixtureEn
     },
     180,
   );
+
+  // ── protocol traffic, folded ─────────────────────────────────────────────
+  // The proxy opens `mcp:protocol` on the first protocol frame, with the
+  // `collapsed` hint, and closes it when the session closes. Six calls whose
+  // durations sum to MCP_PROTOCOL_TOTAL_MS.
+  emit(
+    'node.started',
+    {
+      nodeId: MCP_NODES.protocol,
+      parentId: MCP_NODES.session,
+      kind: 'custom',
+      name: 'protocol',
+      instanceId: MCP_NODES.protocol,
+      input: {
+        about:
+          'MCP protocol traffic (handshake, discovery, keepalive, notifications); ' +
+          'tools/call, resources/read, prompts/get and sampling sit on the session node',
+      },
+      collapsed: true,
+    },
+    40,
+  );
+  const protocolCalls: { nodeId: string; method: string; params: unknown; output: unknown; ms: number }[] = [
+    {
+      nodeId: MCP_PROTOCOL_NODES.initialize,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2026-03-26',
+        clientInfo: { name: 'claude-desktop', version: '1.4.2' },
+        capabilities: { sampling: {}, roots: { listChanged: true } },
+      },
+      output: {
+        protocolVersion: '2026-03-26',
+        serverInfo: { name: 'docs-mcp', version: '0.4.0' },
+        capabilities: { tools: {}, resources: {}, prompts: {} },
+      },
+      ms: 318,
+    },
+    {
+      nodeId: MCP_PROTOCOL_NODES.initialized,
+      method: 'notifications/initialized',
+      params: undefined,
+      output: undefined,
+      ms: 1,
+    },
+    {
+      nodeId: MCP_PROTOCOL_NODES.toolsList,
+      method: 'tools/list',
+      params: {},
+      output: { tools: [{ name: 'search_issues' }, { name: 'create_issue' }] },
+      ms: 142,
+    },
+    {
+      nodeId: MCP_PROTOCOL_NODES.resourcesList,
+      method: 'resources/list',
+      params: {},
+      output: { resources: [{ uri: 'file:///CHANGELOG.md' }, { uri: 'db://issues/open' }] },
+      ms: 96,
+    },
+    {
+      nodeId: MCP_PROTOCOL_NODES.templatesList,
+      method: 'resources/templates/list',
+      params: {},
+      output: { resourceTemplates: [] },
+      ms: 61,
+    },
+    {
+      nodeId: MCP_PROTOCOL_NODES.promptsList,
+      method: 'prompts/list',
+      params: {},
+      output: { prompts: [{ name: 'release_notes' }] },
+      ms: 84,
+    },
+  ];
+  protocolCalls.forEach((call, i) => {
+    const instanceId = `proto-${i + 1}`;
+    const notification = call.method.startsWith('notifications/');
+    emit(
+      'node.started',
+      {
+        nodeId: call.nodeId,
+        parentId: MCP_NODES.protocol,
+        kind: 'custom',
+        name: call.method,
+        instanceId,
+        input: call.params,
+        method: call.method,
+        direction: 'client->server',
+        ...(notification ? { notification: true } : { jsonrpcId: i }),
+      },
+      20,
+    );
+    emit(
+      'node.finished',
+      {
+        nodeId: call.nodeId,
+        instanceId,
+        output: call.output,
+        durationMs: call.ms,
+        status: 'ok',
+        method: call.method,
+        ...(notification ? { notification: true } : {}),
+      },
+      call.ms,
+    );
+  });
 
   // ── prompts/get ──────────────────────────────────────────────────────────
   emit(
@@ -324,6 +450,17 @@ export function generateMcpRun(startTs: number = Date.now() - 12_000): FixtureEn
       status: 'ok',
     },
     520,
+  );
+  emit(
+    'node.finished',
+    {
+      nodeId: MCP_NODES.protocol,
+      instanceId: MCP_NODES.protocol,
+      output: { calls: protocolCalls.length, errors: 0, stdoutNoise: 0 },
+      durationMs: Math.max(1, ts - startTs),
+      status: 'ok',
+    },
+    200,
   );
   emit(
     'node.finished',

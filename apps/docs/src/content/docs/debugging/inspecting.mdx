@@ -19,10 +19,10 @@ not a rendered summary, the values themselves.
 
 | Field | Detail |
 | --- | --- |
-| **Input** | Tool arguments, or the messages and settings going into a model step |
+| **Input** | Tool arguments, or the messages and settings going into a model step. A value hidden by a `GRAPHMIND_HIDE_*` switch shows as a "hidden by …" chip. |
 | **Output** | The return value, or the model's completion |
 | **Error** | `name`, `message` and `stack` when the node threw |
-| **Duration** | Wall-clock milliseconds for that execution |
+| **Duration** | How long the code ran. Once a gate has held the execution, the inspector splits it into **ran** and **held**; see [durations](/reference/viewer/#durations). |
 | **Usage** | `inputTokens` / `outputTokens` on LLM nodes |
 | **Status** | `ok`, `error` or `aborted` |
 | **Instances** | Every execution of this logical node, newest first |
@@ -79,7 +79,7 @@ The inspector works the same on a finished run. Pick any run from the run picker
 node by node; the whole event stream is persisted in SQLite. The only difference is that a
 finished run has nothing to resume.
 
-If you attach *mid-run*, the client replays its ring buffer (2000 events by default) oldest-first
+If you attach *mid-run*, the client replays its ring buffer (5,000 events by default in TypeScript, 2,000 in Python and Ruby) oldest-first
 with the original sequence numbers, so you get the history you missed and the viewer
 deduplicates on `(runId, seq)`.
 

@@ -40,6 +40,9 @@ See [MCP tools](/reference/mcp/) for that one.
 | Outbound sampling / elicitation | as wire frames | with the handler's context |
 | `abort` | answers the caller with an error | cancels the handler's own `AbortSignal` |
 | Frames sent before your server finishes starting | yes | no |
+| Protocol traffic (`initialize`, listings, `ping`) | yes, folded under one **protocol** card | no: the SDK answers those before the adapter is involved |
+| A server that writes to stdout, or never starts | named on stderr and on the graph | no |
+| MCP SDK | any, over stdio (tested with 1.x and 2.0.0) | `@modelcontextprotocol/sdk` 1.x or `@modelcontextprotocol/server` 2.x |
 | One run is | the whole session | one incoming request |
 
 That last row is the difference you will notice first in the run list, and it follows from
@@ -129,8 +132,8 @@ npx graphmind-ai
 
 ## What the graph shows
 
-Every JSON-RPC request becomes a node under one session node. The three that matter get their
-own kinds, so a tool call looks like a tool call:
+Every JSON-RPC request becomes a node. The calls that do work sit directly under the session
+node and get their own kinds, so a tool call looks like a tool call:
 
 | Method | Node | Kind |
 | --- | --- | --- |
@@ -138,8 +141,16 @@ own kinds, so a tool call looks like a tool call:
 | `resources/read` | `resource:<uri>` | `resource` |
 | `prompts/get` | `prompt:<name>` | `prompt` |
 | `sampling/createMessage` (server → host) | `llm:sampling` | `llm` |
+| `elicitation/*`, `completion/complete` | `mcp:<method>` | `custom` |
 | the session itself | `mcp:session` | `server` |
-| everything else — `initialize`, `tools/list`, `ping`, `logging/*`, notifications | `mcp:<method>` | `custom` |
+
+Everything else, which is the handshake, the listings, `ping`, notifications and any method
+GraphMind does not recognise, goes under one node named **protocol**. The viewer opens it
+folded, as one card with counts, such as "6 nodes, 6 protocol calls, 702ms". A typical session
+therefore shows the server, one folded protocol card and the calls your assistant made,
+instead of a row of handshake siblings. Unfold it with the chevron. Every call inside is still
+a node you can break on, and a failing one still pauses on the error gate and turns the card
+red. The [proxy reference](/integrations/mcp-proxy/#what-it-reports) has the full mapping.
 
 Node identity follows the same rule as every other adapter: `nodeId` is stable per *logical*
 node, so one `tool:list_tasks` box lights up on every call, and `instanceId` separates the
@@ -153,6 +164,37 @@ process dies, because that is the first moment anyone can honestly say no answer
 
 **Your server's stderr lands in the run**, attached to the session and interleaved with the
 frames — so the logging you *are* allowed to write finally sits next to the request it was about.
+
+## A server that logs to stdout
+
+The most common way to break a stdio server is the `console.log` from the top of this page. The
+proxy tells you on the first offending line, on stderr, where your host shows server logs:
+
+```text
+graphmind mcp-proxy: the MCP server wrote a line to stdout that is not JSON-RPC: "debug: loading config from ./config.json" — stdout is the MCP wire; log to stderr instead (console.error, or your logger pointed at stderr). Relayed verbatim; the client may reject it. Further lines are counted, not printed.
+```
+
+On the graph, each of the first 25 such lines is a red **stdout noise** execution under
+**protocol**, with the text it printed. The session's summary line counts them all. A
+structured logger that prints one JSON object per line counts too: valid JSON that is not
+JSON-RPC is still noise. The proxy relays the bytes unchanged. It reports the problem and
+leaves the fix to you: point the logger at stderr.
+
+## A server that never starts
+
+Two failures used to leave you with an empty graph and a host that says the server
+disconnected:
+
+- **The command cannot be run.** The proxy prints
+  `cannot run "<command>": <reason> — <hint>`, exits with `127`, and the run ends red with a
+  `SpawnError`. On Windows, a `.cmd` target such as `npx` fails this way (`EINVAL`); the hint
+  says to use `"command": "cmd"` with `["/c", "npx", …]`.
+- **The server crashes before its first answer.** The proxy prints the exit reason and the last
+  40 lines of the server's stderr. The session node keeps the last 200 lines, and the run ends
+  red with `McpServerExitedEarly`.
+
+[MCP proxy → when the server misbehaves](/integrations/mcp-proxy/#when-the-server-misbehaves)
+shows the exact output.
 
 ## Holding a request
 
@@ -284,8 +326,8 @@ proxy is wired up before you involve a client.
 </Aside>
 
 <Aside type="caution" title="Leave the proxy in your config and your agent can hang">
-Pause-on-error is armed by default, and at the proxy a held gate stops that direction of the
-conversation. So if you add the proxy to `.mcp.json`, leave `graphmind serve` running and close
+Pause-on-error is armed by default, the loop hold holds a third identical tool call in a row,
+and at the proxy a held gate stops that direction of the conversation. So if you add the proxy to `.mcp.json`, leave `graphmind serve` running and close
 the viewer tab, the first failing tool call **holds with nobody watching** — from your agent's
 side the server has simply stopped answering. The proxy says so on its stderr, which is where
 MCP clients surface server logs:
@@ -297,8 +339,10 @@ graphmind mcp-proxy: HOLDING tools/call #5 at the error gate — resume it in ht
 Three ways out, in order of how much you want the debugger:
 
 - open the viewer and resume it — this is the feature working;
-- run `graphmind serve --pause-on-error off` to observe without ever stopping (breakpoints
-  live on the server, not on the proxy, so that is the flag that disarms them);
+- run `graphmind serve --pause-on-error off` to observe without stopping on errors (breakpoints
+  live on the server, not on the proxy, so that is the flag that disarms them), and add
+  `"env": { "GRAPHMIND_ON_LOOP": "warn" }` to the proxy's entry in your MCP config so a
+  repeated call is logged instead of held;
 - take the proxy back out of the config when you are done debugging.
 
 The in-process adapter has a milder version of the same thing: it holds, but only your handler

@@ -8,6 +8,15 @@ group :development, :test do
   gem "minitest", "~> 5.20"
   gem "rake", "~> 13.0"
 
+  # json 3.0 (2026-09-07) made JSON.parse's options keyword-only; faraday
+  # 2.14.3's JSON response middleware still calls JSON.parse(body, opts), so
+  # every ruby-openai request raises Faraday::ParsingError under json 3. That
+  # is faraday's bug, not this gem's, but it turned the CI suite into a hang
+  # (the retry-at-error-gate test re-sent forever). Pinned until a faraday
+  # release passes the options as keywords; Dependabot cannot propose 3.x
+  # while this line stands, so re-check it when faraday > 2.14.3 ships.
+  gem "json", "< 3"
+
   # Validates every emitted envelope against packages/schema/schema.json
   # (JSON Schema draft 2020-12). The suite degrades to structural checks if it
   # is missing rather than refusing to run.

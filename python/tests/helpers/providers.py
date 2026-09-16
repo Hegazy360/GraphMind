@@ -7,11 +7,10 @@ keys, no network, no monkey-patching of the SDK internals under test.
 
 from __future__ import annotations
 
+import importlib
 import json
 from collections.abc import Callable
 from typing import Any
-
-import importlib
 
 import httpx
 

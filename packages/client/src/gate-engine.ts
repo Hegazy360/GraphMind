@@ -13,6 +13,7 @@
  *  - Timers are unref'd so held bookkeeping never keeps the process alive.
  */
 import type { BreakpointMatcher, NodeKind, PausePoint, ResumeAction, RunMode } from '@graphmind-ai/schema';
+import { monotonicNow, normalizeDurationMs, type Clock } from './clock.js';
 
 export interface GateNode {
   nodeId: string;
@@ -31,8 +32,19 @@ export const CONTINUE_DECISION: GateDecision = Object.freeze({ action: 'continue
 export interface GateEngineCallbacks {
   /** A gate was registered and is now held. Emit `exec.paused` here. */
   onPaused(pauseId: string, node: GateNode, point: PausePoint, runId: string): void;
-  /** A held gate was released (by viewer, timeout, or fail-open). Emit `exec.resumed`. */
-  onResumed(pauseId: string, node: GateNode, action: ResumeAction, runId: string): void;
+  /**
+   * A held gate was released (by viewer, timeout, or fail-open). Emit
+   * `exec.resumed`. `heldMs` is how long the gate was held on the monotonic
+   * clock (>= 0, 0.01 ms resolution) — the debugger's share of the node's
+   * wall-clock duration.
+   */
+  onResumed(
+    pauseId: string,
+    node: GateNode,
+    action: ResumeAction,
+    runId: string,
+    heldMs: number,
+  ): void;
   newPauseId(): string;
 }
 
@@ -41,6 +53,7 @@ interface HeldGate {
   node: GateNode;
   point: PausePoint;
   runId: string;
+  /** Monotonic clock reading (see clock.ts) — never wall time. */
   openedAt: number;
   timer: ReturnType<typeof setTimeout> | undefined;
   resolve: (decision: GateDecision) => void;
@@ -69,6 +82,8 @@ export class GateEngine {
   constructor(
     private readonly callbacks: GateEngineCallbacks,
     private readonly pauseTimeoutMs: number | undefined,
+    /** Monotonic clock for hold accounting; injectable for tests. */
+    private readonly now: Clock = monotonicNow,
   ) {}
 
   /** Adopt the viewer's full state (from `hello.ack`). */
@@ -120,7 +135,7 @@ export class GateEngine {
         node,
         point,
         runId,
-        openedAt: Date.now(),
+        openedAt: this.now(),
         timer: undefined,
         resolve,
       };
@@ -158,7 +173,8 @@ export class GateEngine {
     if (gate === undefined) return false;
     this.held.delete(pauseId);
     if (gate.timer !== undefined) clearTimeout(gate.timer);
-    this.callbacks.onResumed(pauseId, gate.node, action, gate.runId);
+    const heldMs = normalizeDurationMs(this.now() - gate.openedAt);
+    this.callbacks.onResumed(pauseId, gate.node, action, gate.runId, heldMs);
     gate.resolve(decision);
     return true;
   }

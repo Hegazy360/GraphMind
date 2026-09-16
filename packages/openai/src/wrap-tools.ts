@@ -25,6 +25,7 @@
  * Completions, `{ call_id }` for the Responses API) or `{ toolCallId }`. It is
  * forwarded to your function unchanged.
  */
+import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
 import { isAbortError, type GateNode, type RunStatus } from '@graphmind-ai/client';
 import type { AdapterCore } from './core.js';
 import { LLM_NODE_ID, nextId, toolNodeId } from './ids.js';
@@ -89,7 +90,7 @@ function makeGatedTool(
     const node: GateNode = { nodeId: toolNodeId(toolName), kind: 'tool', name: toolName };
     const ctx = core.session.currentRun();
     const instanceId = instanceIdOf(args[1]);
-    const startedAt = Date.now();
+    const startedAt = monotonicNow();
     core.startNode({
       nodeId: node.nodeId,
       kind: 'tool',
@@ -104,7 +105,7 @@ function makeGatedTool(
         nodeId: node.nodeId,
         instanceId,
         output,
-        durationMs: Date.now() - startedAt,
+        durationMs: elapsedMs(startedAt),
         status,
         ...(extra !== undefined ? { extra } : {}),
       });

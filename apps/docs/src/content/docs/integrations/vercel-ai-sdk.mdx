@@ -200,7 +200,7 @@ still abort the surrounding run after a long hold. Prefer removing `timeout` whi
 | `enabled` | kill-switch logic | Force on/off (`GRAPHMIND_DISABLED=1` still wins) |
 | `meta` | — | Extra metadata merged into every `run.started` |
 | `pauseTimeoutMs` | hold forever | Auto-continue a gate nobody resumes |
-| `bufferSize` | `2000` | Replay ring buffer capacity |
+| `bufferSize` | `5000` | Replay ring buffer capacity (also capped at `maxBufferBytes`, default 8 MiB) |
 
 `gm.session` exposes the underlying session for `stats()` and custom events.
 

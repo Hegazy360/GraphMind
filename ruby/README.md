@@ -248,6 +248,69 @@ Concretely:
 
 ---
 
+## Recording less, and the loop hold (0.5)
+
+**Recording less.** Four kill switches replace values with `"__REDACTED__"` inside the gem, before the
+event is buffered or sent, so a debugger that attaches late, the database and every export only ever
+see the placeholder. Set them in the environment of the instrumented app, or as options:
+
+```ruby
+Graphmind.configure(hide_inputs: true, hide_outputs: true, hide_tool_args: true, hide_tool_results: true)
+```
+
+| Switch | Replaces |
+| --- | --- |
+| `GRAPHMIND_HIDE_INPUTS` / `hide_inputs:` | every node's `input`; streamed tool-argument deltas are emptied |
+| `GRAPHMIND_HIDE_OUTPUTS` / `hide_outputs:` | every node's `output`; every streamed delta is emptied (`v: ""`, `chars` kept) |
+| `GRAPHMIND_HIDE_TOOL_ARGS` / `hide_tool_args:` | tool nodes' `input` only |
+| `GRAPHMIND_HIDE_TOOL_RESULTS` / `hide_tool_results:` | tool nodes' `output` only |
+
+Env values `1` or `true` (any case); options also accept `1` and `"true"`. Either source turning a switch
+on turns it on. Hashes with Symbol keys are redacted too. The same keywords work on
+`Graphmind::Session.new`; `session.redaction_switches` shows what is in effect.
+
+**The loop hold.** While a debugger is attached, the third call of the same tool with identical
+arguments made **back-to-back** — no other tool call in between — is held before it runs (`exec.paused` with `reason: "loop"`). It applies to anything
+that goes through `Graphmind::Wrap` — `gm.tool`, `gm.wrap`, `wrap_tools`, `wrap_method`, spans, and the
+ruby_openai / ruby_llm tool paths — and holds threads individually (per Puma worker). Detached, or with
+`GRAPHMIND_ON_LOOP=warn`, nothing is held and one line per streak is logged, naming the tool but never
+its arguments.
+
+```ruby
+Graphmind.configure(app: "shop", loop_guard: { threshold: 5, mode: "warn", allow_nodes: [:poll_job] })  # or loop_guard: false
+```
+
+Back-to-back is per run: calling any other tool, or the same tool with other arguments, starts the
+count again, while LLM steps in between do not (model → tool → model → tool with identical calls is
+still a loop) and tools in `allow_nodes` / `GRAPHMIND_LOOP_ALLOW` are invisible. So a constant-argument
+tool called now and again across a long session is never held. Accepted limit: an agent alternating
+between two tools (search, read, search, read) is not held.
+
+Env: `GRAPHMIND_LOOP_THRESHOLD` (default 3, `0` off), `GRAPHMIND_ON_LOOP=pause|warn|off`,
+`GRAPHMIND_LOOP_ALLOW=poll_job,tool:heartbeat`. Symbol, String and camelCase option keys are accepted.
+"Identical" means canonical JSON: Symbol and String keys and values count as the same, structs and other
+`#to_h` objects compare by `to_h`, other objects by `#inspect`, MCP's `_meta` is ignored and pagination
+keys are not; the fingerprint uses the full arguments even though the recorded input is truncated at 200
+items. Under `hide_inputs` (or `hide_tool_args` on a tool) the fingerprint is sent as `"__REDACTED__"`.
+`session.loop_guard_config` shows the resolved settings.
+
+**Limits.**
+- `node.error` (exception messages and tracebacks) is never redacted — error text can echo data.
+- Redaction fails closed: if a payload cannot be inspected safely while a switch is on (a mapping whose
+  reads raise, a malformed payload), the event is sent with input/output/token text hidden and
+  `redaction.failed: true`, or dropped with one warning if even its identity fields are unreadable. The
+  raw value is never sent and nothing is raised into your app.
+- The tool-only switches hide the tool node's own input/output. In an agent loop the same values also
+  travel through the model's messages; set `GRAPHMIND_HIDE_INPUTS` and `GRAPHMIND_HIDE_OUTPUTS` to keep
+  them out entirely.
+- Hidden streamed text keeps its length (`chars`, counted in UTF-16 units like JavaScript).
+- Tools that legitimately poll with byte-identical arguments need `allow_nodes` or `GRAPHMIND_LOOP_ALLOW`.
+- LLM steps are not watched unless `kinds` includes `"llm"` (each kind keeps its own streak); identical
+  calls made in parallel are back-to-back too, so they count.
+- Cross-language equivalence is guaranteed for JSON-shaped arguments and checked against the TypeScript
+  client by two shared fixtures and a generated differential file.
+- Ruby strings cannot hold unpaired UTF-16 surrogates; such values are treated as unreadable (never a repeat).
+
 ## Kill switches and safety
 
 | Setting | Effect |

@@ -20,7 +20,7 @@
  * already existed keep their centroid, which stops the camera from jumping.
  */
 import type { FlowGraph, FlowNodeSpec } from '../store/runStateToFlow.js';
-import { LAYER_GAP, SIBLING_GAP, type PositionedNode } from './tidyTree.js';
+import { LAYER_GAP, LEAF_ROW_GAP, SIBLING_GAP, type LeafCell, type PositionedNode } from './tidyTree.js';
 
 export type LayoutMode = 'none' | 'resize' | 'append' | 'full';
 
@@ -29,6 +29,14 @@ export interface Placed {
   position: { x: number; y: number };
   width: number;
   height: number;
+  /**
+   * Grid cell of a packed leaf (see tidyTree.ts). Remembered alongside the
+   * position because the edge router reads it, and the `resize` / `append`
+   * modes below reuse positions without running the tidy tree — dropping it
+   * there would flip every packed edge from gutter-routed to straight through
+   * the row above the moment a gate opened.
+   */
+  leafCell?: LeafCell;
 }
 
 /** Below this, a full re-layout is cheap and looks better than appending. */
@@ -50,24 +58,95 @@ export function planLayout(
   }
 
   const added: FlowNodeSpec[] = [];
-  let resized = false;
+  const resized: FlowNodeSpec[] = [];
   for (const node of next.nodes) {
     const before = prev.get(node.id);
     if (before === undefined) {
       added.push(node);
       continue;
     }
-    if (before.width !== node.width || before.height !== node.height) resized = true;
+    if (before.width !== node.width || before.height !== node.height) resized.push(node);
   }
 
-  if (added.length === 0) return resized ? 'resize' : 'none';
+  if (added.length === 0) {
+    if (resized.length === 0) return 'none';
+    // A card may grow in place only into space nobody else holds. A paused
+    // node gains PAUSE_BANNER_HEIGHT; below a layer that is inside the layer
+    // gap, but a packed leaf on row 0 has only `leafRowGap` beneath it, and
+    // growing there puts its action row *under* the row-1 card — in a
+    // debugger, that is the resume button being unreachable. Re-lay out
+    // (anchored, so the camera does not jump) rather than overlap.
+    return resized.some((node) => growsIntoNeighbour(prev, node)) ? 'full' : 'resize';
+  }
   if (prev.size < APPEND_MIN_NODES) return 'full';
   if (added.length > APPEND_MAX_NEW) return 'full';
+  // A packed leaf with rows of its block beneath it cannot become a parent
+  // where it stands: wherever its child is put, the edge has to leave the
+  // leaf's bottom and cross the cards below it. The tidy tree lays such a
+  // node out as a branch beside the block — which is what a full pass does.
+  const parentOf = new Map<string, string>();
+  for (const edge of next.edges) {
+    if (!parentOf.has(edge.target)) parentOf.set(edge.target, edge.source);
+  }
+  if (added.some((node) => buriedInBlock(prev, parentOf.get(node.id)))) return 'full';
   return 'append';
 }
 
-/** Breathing room kept between an appended card and everything already placed. */
-const APPEND_MARGIN = 12;
+/**
+ * Would `node`, at its previous position but its new size, overlap another
+ * placed card — or the row gap the edge router jogs through above one?
+ *
+ * The edge into a row >= 1 packed leaf runs horizontally through the row gap
+ * above it (routeEdges.ts: `top - leafRowGap/2`), so that gap belongs to the
+ * line, not to the card above. A card can reach into it without touching the
+ * card below only in a mixed-height block — a tool (96) packed beside a
+ * childless llm step (164) has 68px of slack under it, less than the 92px
+ * banner but more than the 62px at which it would overlap — and growing there
+ * in place drew the row-1 edge straight through the paused card.
+ */
+function growsIntoNeighbour(prev: ReadonlyMap<string, Placed>, node: FlowNodeSpec): boolean {
+  const at = prev.get(node.id);
+  if (at === undefined) return false;
+  const left = at.position.x;
+  const top = at.position.y;
+  const right = left + node.width;
+  const bottom = top + node.height;
+  for (const other of prev.values()) {
+    if (other.id === node.id) continue;
+    const jogClearance = other.leafCell !== undefined && other.leafCell.row >= 1 ? LEAF_ROW_GAP : 0;
+    if (
+      left < other.position.x + other.width &&
+      right > other.position.x &&
+      top < other.position.y + other.height &&
+      bottom > other.position.y - jogClearance
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Is `parentId` a packed leaf with at least one row of its block below it? */
+function buriedInBlock(prev: ReadonlyMap<string, Placed>, parentId: string | undefined): boolean {
+  if (parentId === undefined) return false;
+  const cell = prev.get(parentId)?.leafCell;
+  if (cell === undefined) return false;
+  for (const other of prev.values()) {
+    const oc = other.leafCell;
+    if (oc !== undefined && oc.blockLeft === cell.blockLeft && oc.columnWidth === cell.columnWidth && oc.row > cell.row) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Room kept between an appended card and everything already placed. The
+ * same gap the tidy tree leaves between siblings, because that gap is where
+ * the edge router runs the drops to a block's lower rows (up to 42px left of
+ * a column); a card parked 12px off a block sat on top of those lines.
+ */
+const APPEND_MARGIN = SIBLING_GAP;
 
 /**
  * "Is this box free?" over the cards already on the canvas.
@@ -211,6 +290,29 @@ export function appendLayout(prev: ReadonlyMap<string, Placed>, next: FlowGraph)
   for (const edge of next.edges) {
     if (!parentOf.has(edge.target)) parentOf.set(edge.target, edge.source);
   }
+  // Where a parent's children belong. The tidy tree puts every child of a
+  // layer on one band, `LAYER_GAP` below the TALLEST card of the layer above,
+  // and the edge router runs every parent's bus line in that gap. Anchoring
+  // an arrival at `parent.bottom + LAYER_GAP` reproduces the band only when
+  // the parent is the tallest card on its row: a tool arriving under a
+  // 104px agent that shares a row with a 164px llm step would land 60px
+  // above the band, and its bus would run through the step. So the band is
+  // read off the canvas instead — from the parent's children if it has any
+  // (they are on it), else from the tallest card whose top is the parent's
+  // (the tidy tree gives a whole layer, and every row-0 leaf in it, one top).
+  const childBand = new Map<string, number>();
+  for (const edge of next.edges) {
+    const child = prev.get(edge.target);
+    if (child === undefined || parentOf.get(edge.target) !== edge.source) continue;
+    const current = childBand.get(edge.source);
+    if (current === undefined || child.position.y < current) childBand.set(edge.source, child.position.y);
+  }
+  const rowBottom = new Map<number, number>();
+  for (const entry of prev.values()) {
+    const bottom = entry.position.y + entry.height;
+    const current = rowBottom.get(entry.position.y);
+    if (current === undefined || bottom > current) rowBottom.set(entry.position.y, bottom);
+  }
 
   // Only the arrivals get a map of their own; `prev` is read where it lies.
   const added = new Map<string, Placed>();
@@ -239,8 +341,18 @@ export function appendLayout(prev: ReadonlyMap<string, Placed>, next: FlowGraph)
       parent !== undefined
         ? parent.position.x + parent.width / 2 - node.width / 2
         : boundsMaxX + SIBLING_GAP;
+    const parentBottom = parent === undefined ? 0 : parent.position.y + parent.height;
+    const layerBottom =
+      parent === undefined ? 0 : Math.max(parentBottom, rowBottom.get(parent.position.y) ?? parentBottom);
+    // Siblings already on screen set the band — unless one was dragged above
+    // its parent, in which case the geometric default is the sane one.
+    const siblingBand = parentId === undefined ? undefined : childBand.get(parentId);
     const anchorY =
-      parent !== undefined ? parent.position.y + parent.height + LAYER_GAP : boundsMinY;
+      parent === undefined
+        ? boundsMinY
+        : siblingBand !== undefined && siblingBand > parentBottom
+          ? siblingBand
+          : layerBottom + LAYER_GAP;
 
     let x = anchorX;
     const stride = node.width + SIBLING_GAP;
@@ -261,8 +373,12 @@ export function appendLayout(prev: ReadonlyMap<string, Placed>, next: FlowGraph)
 
   return next.nodes.map((node) => {
     const entry = lookup(node.id);
-    return { ...node, position: entry?.position ?? { x: 0, y: 0 } };
+    return withCell({ ...node, position: entry?.position ?? { x: 0, y: 0 } }, entry?.leafCell);
   });
+}
+
+function withCell(node: PositionedNode, cell: LeafCell | undefined): PositionedNode {
+  return cell === undefined ? node : { ...node, leafCell: cell };
 }
 
 function expand(bounds: Bounds, x: number, y: number, width: number, height: number): void {
@@ -303,6 +419,11 @@ export function anchorPositions(
   return positioned.map((node) => ({
     ...node,
     position: { x: node.position.x + dx, y: node.position.y + dy },
+    // The cell's block edge is a canvas x too: it moves with the cards or
+    // the router would descend through a gutter that is now `dx` away.
+    ...(node.leafCell !== undefined
+      ? { leafCell: { ...node.leafCell, blockLeft: node.leafCell.blockLeft + dx } }
+      : {}),
   }));
 }
 
@@ -311,8 +432,8 @@ export function resizeOnly(
   prev: ReadonlyMap<string, Placed>,
   next: FlowGraph,
 ): PositionedNode[] {
-  return next.nodes.map((node) => ({
-    ...node,
-    position: prev.get(node.id)?.position ?? { x: 0, y: 0 },
-  }));
+  return next.nodes.map((node) => {
+    const entry = prev.get(node.id);
+    return withCell({ ...node, position: entry?.position ?? { x: 0, y: 0 } }, entry?.leafCell);
+  });
 }

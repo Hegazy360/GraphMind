@@ -87,12 +87,28 @@ not know. The known set:
 | `run.started` | `{ app, sdk, meta? }` |
 | `run.finished` | `{ status, error? }` |
 | `graph.hint` | `{ nodes: GraphNodeHint[] }` — static structure, pre-rendered grey |
-| `node.started` | `{ nodeId, parentId?, kind, name, instanceId, input? }` |
-| `node.token` | `{ nodeId, deltas: TokenDelta[] }` — batched by the sender |
-| `node.finished` | `{ nodeId, instanceId?, output?, usage?, durationMs, status }` |
-| `node.error` | `{ nodeId, instanceId?, error }` |
-| `exec.paused` | `{ pauseId, nodeId, point }` |
+| `node.started` | `{ nodeId, parentId?, kind, name, instanceId, input?, collapsed?, redaction? }` |
+| `node.token` | `{ nodeId, deltas: TokenDelta[], redaction? }` — batched by the sender |
+| `node.finished` | `{ nodeId, instanceId?, output?, usage?, durationMs, heldMs?, status, redaction? }` |
+| `node.error` | `{ nodeId, instanceId?, error, heldMs? }` |
+| `exec.paused` | `{ pauseId, nodeId, point, reason?, loop? }` |
 | `exec.resumed` | `{ pauseId, action }` |
+
+Optional fields added in 0.5.0. Older receivers ignore them under the tolerance rules above:
+
+| Field | Meaning |
+| --- | --- |
+| `node.started.collapsed` | `true` asks the viewer to open this node folded. `graphmind mcp-proxy` sets it on its `mcp:protocol` group. |
+| `node.finished.durationMs` | Wall-clock time from start to finish, **including** time held at gates. Since 0.5.0 SDKs measure it on a monotonic clock, rounded to 0.01 ms and never negative. Older SDKs send whole milliseconds. |
+| `node.finished.heldMs` | Milliseconds of that time the debugger held this execution: the union of its own holds and holds on its descendants. Ran time is `durationMs - heldMs`, floored at 0. It is `0` when the execution was never held, and absent when the sender never saw the execution start. |
+| `node.error.heldMs` | Held time so far, at the moment of the error. |
+| `exec.paused.reason` | `'loop'` on a [loop hold](/reference/environment/#loop-hold). Other holds carry no reason today. |
+| `exec.paused.loop` | `{ repeats, firstSeq, lastSeq, fingerprint }`: how many identical calls in a row, the `seq` of the first and of the held call's `node.started`, and a 32-hex-character digest of the arguments. The digest is `"__REDACTED__"` when inputs are hidden, and `graphmind record` replaces it with `"__REDACTED__"` unless you pass `--no-redact-secrets`. |
+| `redaction` | `{ count, keys }` on an event whose payload a `GRAPHMIND_HIDE_*` switch changed: how many values were replaced and which fields (`input`, `output`, `deltas`). `failed: true` with `count: 0` marks an event whose payload could not be read safely, so its hidden field was replaced without being read. |
+
+A hidden value is the string `"__REDACTED__"`. A hidden token delta keeps its channel, and its
+text becomes `""` with a `chars` field holding the original length (counted in UTF-16 code
+units, as JavaScript counts them). `node.error` is never redacted.
 
 <Aside type="caution" title="Always send instanceId">
 `instanceId` is required on `node.started` and optional on `node.finished` / `node.error` for
@@ -168,6 +184,30 @@ Clients keep a bounded ring buffer of emitted events. On attach, the whole buffe
 oldest-first **with the original `seq` values**. Receivers deduplicate on `(runId, seq)` — the
 CLI's storage does it with `INSERT OR IGNORE` on that key, so re-ingesting a run is idempotent.
 
+## Oversized payloads
+
+A payload whose JSON is over **512 KB** (`MAX_PAYLOAD_BYTES`, UTF-8) is shrunk — by the server when it
+stores the event, and by the TypeScript client before it buffers or sends it, with the same function
+(`serializePayload` in `@graphmind-ai/schema`). A **valid event stays a valid event** of its type,
+within budget; it is never dropped for being big, so a node with a huge output still finishes.
+
+Shrinking marks what it did with loose fields every receiver can read:
+
+| Field | Where | Meaning |
+|---|---|---|
+| `__graphmindTruncated: true` | the payload, or any object inside it that was cut | this value is not the original |
+| `bytes` | the payload, or a shrunk top-level field | size of the original, before shrinking |
+| `preview` | same | the first 2,000 characters of the original JSON |
+| `fields` | the payload | top-level keys that were shrunk or dropped |
+| `keysDropped` | any object | how many keys past the first 256 were dropped |
+
+In order, it tries: trimming the largest fields (long strings keep their first 2,000 characters plus
+`…[graphmind: truncated]`, arrays become `[]`, objects keep their first 256 keys); then, if that cannot
+fit or would not validate, a **skeleton** with only the fields the event's schema defines (strings
+shortened further) so `nodeId`, `instanceId`, `status`, `error.name` and `error.message` survive; and
+only for a payload of an unknown type, a whole-payload marker. Receivers should render marked values as
+previews, never as the real data. Python and Ruby clients: see [limits](/reference/limits/).
+
 ## Using the JSON Schema
 
 ```ts
@@ -185,7 +225,7 @@ content so accidental contract drift fails CI.
 `PROTOCOL_VERSION` is a single integer acting as the MAJOR version. It bumps only on an
 incompatible change. Additions — new event types, new payload fields — are made under the
 existing version and absorbed by the tolerance rules above. Peers reject a mismatched `gm`
-rather than guessing.
+rather than guessing. The full policy is on [stability](/reference/stability/#the-wire-protocol).
 
 Next: [writing an adapter](/contributing/writing-an-adapter/) walks the whole implementation
 against this contract.

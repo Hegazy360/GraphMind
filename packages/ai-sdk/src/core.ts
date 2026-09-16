@@ -7,6 +7,7 @@
  * this class may throw into the host app. `session.emit` / `session.gate`
  * already guard internally; the helpers here guard their own bookkeeping.
  */
+import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
 import {
   GraphMindAbortError,
   toErrorInfo,
@@ -222,7 +223,7 @@ export class AdapterCore {
     if (this.providerToolStarts.size >= MAX_TRACKED_PROVIDER_CALLS) {
       this.providerToolStarts.clear();
     }
-    this.providerToolStarts.set(toolCallId, Date.now());
+    this.providerToolStarts.set(toolCallId, monotonicNow());
     this.startNode({
       nodeId: toolNodeId(toolName),
       kind: 'tool',
@@ -245,7 +246,7 @@ export class AdapterCore {
     this.finishNode({
       nodeId: toolNodeId(toolName),
       output: part.result,
-      durationMs: Date.now() - startedAt,
+      durationMs: elapsedMs(startedAt),
       status: part.isError === true ? 'error' : 'ok',
       extra: { providerExecuted: true, instanceId: toolCallId },
     });

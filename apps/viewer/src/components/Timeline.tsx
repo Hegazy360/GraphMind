@@ -304,7 +304,7 @@ export function Timeline({ runId }: { runId: string }) {
                       ui.selectNode(runId, row.nodeId);
                       ui.requestFocus(row.nodeId);
                     }}
-                    title={`${row.nodeId} — ${row.bars.length} execution${row.bars.length === 1 ? '' : 's'}, ${fmtDuration(row.totalMs)} total`}
+                    title={`${row.nodeId} — ${row.bars.length} execution${row.bars.length === 1 ? '' : 's'}, ${fmtDuration(row.totalMs)} ran${row.heldMs > 0 ? ` · ${fmtDuration(row.heldMs)} held` : ''}`}
                   >
                     <span className={`gm-timeline-kind gm-timeline-kind--${row.kind}`} aria-hidden />
                     <span className="gm-timeline-name">{row.name}</span>
@@ -337,7 +337,7 @@ export function Timeline({ runId }: { runId: string }) {
                             setTooltip({ x: e.clientX, y: e.clientY, bar, t0: model.t0 })
                           }
                           onMouseLeave={() => setTooltip(undefined)}
-                          aria-label={`${bar.name} execution ${bar.execIndex + 1}, ${fmtExactMs(bar.endTs - bar.startTs)}`}
+                          aria-label={`${bar.name} execution ${bar.execIndex + 1}, ran ${fmtExactMs(bar.ranMs)}${bar.heldMs > 0 ? `, held ${fmtExactMs(bar.heldMs)}` : ''}`}
                         >
                           {streamLeft !== undefined && streamWidth !== undefined && (
                             <span
@@ -345,8 +345,20 @@ export function Timeline({ runId }: { runId: string }) {
                               style={{ left: Math.max(0, streamLeft), width: streamWidth }}
                             />
                           )}
+                          {bar.held.map((h) => (
+                            // Held stretch: the debugger, not the node, owned this time.
+                            <span
+                              key={`${h.start}-${h.end}`}
+                              className="gm-bar-held"
+                              aria-hidden
+                              style={{
+                                left: Math.max(0, toX(h.start) - left),
+                                width: Math.max(1, toX(h.end) - toX(h.start)),
+                              }}
+                            />
+                          ))}
                           {width > 46 && (
-                            <span className="gm-bar-label">{fmtDuration(bar.endTs - bar.startTs)}</span>
+                            <span className="gm-bar-label">{fmtDuration(bar.ranMs)}</span>
                           )}
                         </button>
                       );
@@ -409,7 +421,7 @@ function TimelineHeader({
 }
 
 function BarTooltip({ x, y, bar, t0 }: Tooltip) {
-  const duration = bar.endTs - bar.startTs;
+  const wall = bar.endTs - bar.startTs;
   const wait =
     bar.streamStartTs === undefined ? undefined : Math.max(0, bar.streamStartTs - bar.startTs);
   return (
@@ -423,8 +435,16 @@ function BarTooltip({ x, y, bar, t0 }: Tooltip) {
         <dd>
           {fmtOffset(bar.startTs - t0)} · {fmtClockMs(bar.startTs)}
         </dd>
-        <dt>duration</dt>
-        <dd>{bar.running ? `${fmtExactMs(duration)} (running)` : fmtExactMs(duration)}</dd>
+        <dt>ran</dt>
+        <dd>{bar.running ? `${fmtExactMs(bar.ranMs)} (running)` : fmtExactMs(bar.ranMs)}</dd>
+        {bar.heldMs > 0 && (
+          <>
+            <dt>held</dt>
+            <dd>{fmtExactMs(bar.heldMs)} at a gate</dd>
+            <dt>wall</dt>
+            <dd>{fmtExactMs(wall)}</dd>
+          </>
+        )}
         {wait !== undefined && (
           <>
             <dt>first token</dt>

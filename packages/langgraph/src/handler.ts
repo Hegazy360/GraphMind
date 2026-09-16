@@ -25,6 +25,7 @@
  * hands the work to the `RunScope` of its root invocation so events carry that
  * run's id and `abort` reaches that run's AbortController.
  */
+import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
 import { isAbortError, type NodeKind, type RunContext, type TokenUsage } from '@graphmind-ai/client';
 import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { isDeliberateAbort, markDeliberate } from './abort.js';
@@ -537,7 +538,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       kind: parent?.kind ?? 'chain',
       name: parent?.name ?? '',
       instanceId: parent?.instanceId ?? runId,
-      startedAt: Date.now(),
+      startedAt: monotonicNow(),
       emitted: false,
       gatedByWrapper: false,
       langgraphTask: langgraphTask ?? parent?.langgraphTask,
@@ -561,7 +562,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       kind,
       name,
       instanceId,
-      startedAt: Date.now(),
+      startedAt: monotonicNow(),
       emitted: true,
       gatedByWrapper: false,
       langgraphTask,
@@ -619,7 +620,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       instanceId: record.instanceId,
       output,
       usage: opts.usage,
-      durationMs: Date.now() - record.startedAt,
+      durationMs: elapsedMs(record.startedAt),
       status,
       extra: opts.extra,
     });

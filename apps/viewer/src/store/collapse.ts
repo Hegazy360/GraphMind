@@ -6,8 +6,44 @@
  * Everything here is a pure projection of `RunState` — the collapsed set
  * itself lives in the UI store (per run), never in the reducer.
  */
+import { ranMs } from '../lib/duration.js';
 import { isContainerKind, kindMeta } from '../lib/kinds.js';
-import { nodeStatus, type NodeLifeStatus, type RunState } from './types.js';
+import { nodeStatus, type NodeLifeStatus, type NodeState, type RunState } from './types.js';
+
+/**
+ * The sender asked for this node to open folded: `node.started … collapsed:
+ * true` on the wire (schema 0.5: a loose, optional rendering hint). The MCP
+ * proxy sets it on `mcp:protocol`, the synthetic node that parents handshake,
+ * discovery and keepalive traffic, so a session opens showing the work
+ * (tools/call, resources/read, prompts/get, sampling) and one "6 calls ·
+ * 702ms" card for the rest.
+ *
+ * The reducer keeps the flag on `NodeState.collapsed`; it is read loosely
+ * here so this projection stays correct whether or not the field is typed.
+ */
+export function isHintedCollapsed(node: NodeState): boolean {
+  return (node as { collapsed?: unknown }).collapsed === true;
+}
+
+/**
+ * Nodes that should be folded because the SENDER said so, and that actually
+ * contain something (folding an empty node would just draw an empty group
+ * card). Meant to be applied on first sight of each node — once the user
+ * unfolds one, it stays unfolded; see RunCanvas.
+ */
+export function hintedCollapseRoots(
+  run: RunState,
+  index: Map<string, string[]> = childIndex(run),
+): string[] {
+  const roots: string[] = [];
+  for (const nodeId of run.order) {
+    const node = run.nodes[nodeId];
+    if (node === undefined || !isHintedCollapsed(node)) continue;
+    if ((index.get(nodeId) ?? []).length === 0) continue;
+    roots.push(nodeId);
+  }
+  return roots;
+}
 
 /** parentId → child nodeIds, in first-seen order. */
 export function childIndex(run: RunState): Map<string, string[]> {
@@ -138,7 +174,10 @@ export function summarizeGroup(
     for (const exec of node.executions) {
       if (exec.status === 'error') summary.errors += 1;
       if (exec.status === 'running') summary.running += 1;
-      if (exec.durationMs !== undefined) summary.durationMs += exec.durationMs;
+      // The folded badge sums time the code RAN; a gate held inside the group is
+      // the developer's time, not the group's (see lib/duration.ts).
+      const ran = ranMs(exec);
+      if (ran !== undefined) summary.durationMs += ran;
       if (exec.usage !== undefined) {
         summary.tokensIn += exec.usage.inputTokens;
         summary.tokensOut += exec.usage.outputTokens;
@@ -198,9 +237,16 @@ export function autoCollapseRoots(run: RunState, targetVisible = 60): string[] {
     for (const id of candidates) {
       for (const descendant of descendantsOf(run, id, index)) hidden.add(descendant);
     }
-    if (total - hidden.size <= targetVisible) return candidates;
+    if (total - hidden.size <= targetVisible) return withHinted(run, candidates, index);
   }
   return [];
+}
+
+/** Add the sender-hinted roots to a fold set, without duplicates. */
+function withHinted(run: RunState, roots: string[], index: Map<string, string[]>): string[] {
+  const out = [...roots];
+  for (const id of hintedCollapseRoots(run, index)) if (!out.includes(id)) out.push(id);
+  return out;
 }
 
 /**
@@ -215,8 +261,10 @@ export function collapsibleRoots(run: RunState, minSize = 2): string[] {
     const node = run.nodes[nodeId];
     if (node === undefined) continue;
     // Only container-ish kinds group (agents, chains, llm steps, MCP server
-    // sessions); a tool with children is rare but valid, and stays unfolded.
-    if (!isContainerKind(node.kind)) continue;
+    // sessions) — plus anything the sender explicitly asked to fold (the MCP
+    // proxy's `mcp:protocol` is a `custom` node). A tool with children is
+    // rare but valid, and stays unfolded.
+    if (!isContainerKind(node.kind) && !isHintedCollapsed(node)) continue;
     if (descendantsOf(run, nodeId, index).length < minSize) continue;
     roots.push(nodeId);
   }

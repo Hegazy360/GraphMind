@@ -12,6 +12,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
+import { redactStoredEvents } from './redact-secrets.js';
 import type { StoredEvent } from './storage.js';
 
 export interface ExportHtmlOptions {
@@ -21,6 +22,13 @@ export interface ExportHtmlOptions {
   schemaVersion: number;
   viewerDist: string;
   version: string;
+  /**
+   * Replace values under secret-shaped keys with "__REDACTED__" before
+   * embedding (see redact-secrets.ts). Default TRUE: a caller has to opt out
+   * of a safe export, never in. Idempotent, so events the command already
+   * sanitised (to print its summary) pass through unchanged.
+   */
+  redactSecrets?: boolean;
 }
 
 /** `</script>` inside embedded JSON would close our own tag; also dodge HTML comments. */
@@ -110,7 +118,8 @@ function readReferencedAsset(dir: string, reference: string): string {
 }
 
 export function buildRunHtml(options: ExportHtmlOptions): string {
-  const { runId, app, events, schemaVersion, viewerDist, version } = options;
+  const { runId, app, schemaVersion, viewerDist, version } = options;
+  const events = options.redactSecrets === false ? options.events : redactStoredEvents(options.events).events;
 
   const entry = readEntryAssets(viewerDist);
   const js = entry.js.map((ref) => readReferencedAsset(viewerDist, ref));

@@ -1,0 +1,128 @@
+---
+title: Stability & versioning
+description: What 0.x means for GraphMind, how a deprecation works, which runtimes are supported and for how long, the wire protocol's own version, and an honest statement about 1.0.
+sidebar:
+  order: 8
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+This page is the contract for upgrading. It also says where GraphMind has not yet earned a
+stronger contract.
+
+## One version for everything
+
+Every package ships at the same version number: the eight npm packages (`graphmind-ai` and the
+`@graphmind-ai/*` libraries), the Python distribution `graphmind-ai`, and the Ruby gem
+`graphmind`. `scripts/set-version.mjs` sets them together, and the release workflow refuses to
+publish a tag that does not match all ten declared versions. So `0.5.x` of the Python SDK goes
+with `0.5.x` of the CLI.
+
+The Ruby gem is not published to RubyGems yet. It is versioned with the rest so that the day it
+ships, its number already means the same thing.
+
+## What 0.x means
+
+GraphMind is at `0.x`. Under [semantic versioning](https://semver.org/) that means the public
+API is not yet frozen. In practice:
+
+| Release | May contain |
+| --- | --- |
+| **Patch** (`0.5.0` → `0.5.1`) | Bug fixes and documentation only. No change a working setup has to react to. |
+| **Minor** (`0.5.x` → `0.6.0`) | New features, **and changes of behaviour**, each named in the [CHANGELOG](https://github.com/Hegazy360/GraphMind/blob/master/CHANGELOG.md) under its release. |
+
+Changes of behaviour in a minor are not hypothetical. 0.5.0 turned on two things by default:
+the [loop hold](/reference/environment/#loop-hold), which holds the third identical tool call
+in a row while a debugger is attached, and secret-key redaction in
+[`graphmind record`](/reference/cli/#secret-looking-keys-are-redacted-by-default). Both have an
+off switch (`GRAPHMIND_ON_LOOP=off`, `--no-redact-secrets`), and both are described in the
+CHANGELOG. Read it before a minor upgrade.
+
+## Deprecation
+
+Removing something you can name is handled differently from changing a default. That covers
+an exported function, an option, a CLI flag or command, an environment variable, or a wire
+field a sender emits:
+
+1. **Deprecated in a minor.** The CHANGELOG says so, and using it prints a warning at runtime,
+   once per process, naming its replacement.
+2. **Removed in the next major**, not before.
+
+Nothing is deprecated today. The runtime warning is a commitment for the first deprecation, not
+code that exists yet.
+
+Out of scope: internal modules that are not exported from a package's entry point, the
+viewer's DOM and CSS, and the exact wording of log lines and error messages. They change when
+they need to.
+
+## Supported versions
+
+From [`SECURITY.md`](https://github.com/Hegazy360/GraphMind/blob/master/SECURITY.md#supported-versions):
+
+| Version | Receives |
+| --- | --- |
+| Latest minor | Security fixes as patch releases |
+| Previous minor | Security fixes for **90 days** after the next minor ships |
+| Older | Nothing; upgrade |
+
+## Supported runtimes
+
+A runtime is supported when CI runs the test suite on it. The declared floor in each package
+manifest matches the oldest version CI runs:
+
+| Component | Declared | CI runs |
+| --- | --- | --- |
+| npm packages and the CLI | `engines.node >=22.13` | Node 22.x and 24.x, on Linux, Windows and macOS |
+| Python SDK | `requires-python >=3.10` | Python 3.10 and 3.13, on Linux and Windows |
+| Ruby gem | `required_ruby_version >= 3.1.0` | Ruby 3.1 and 3.3, on Linux |
+
+Versions between the floor and the newest CI line (Python 3.11 and 3.12, Ruby 3.2) are expected
+to work but are not run. Runtimes CI does not run at all (Bun, Deno, edge runtimes, Python on
+macOS) are not claimed. The per-SDK version ranges are on [integrations → compatibility](/integrations/#compatibility).
+
+Dropping a runtime from CI is a change of behaviour. It happens in a minor and is named in the
+CHANGELOG, never in a patch.
+
+## The wire protocol
+
+The envelope's `gm` field is the protocol's own major version, separate from the package
+version. It is `1` today (`PROTOCOL_VERSION`, `packages/schema/src/constants.ts`).
+
+- **Additions do not bump it.** New event types and new payload fields are added under `gm: 1`.
+  Receivers must keep unknown fields and tolerate unknown event types. Every payload in
+  `@graphmind-ai/schema` is a loose object, so this is enforced by the schema itself. 0.5.0
+  added `collapsed`, `heldMs`, `exec.paused.reason` / `loop` and `redaction` this way: an older
+  viewer ignores them, and a newer viewer reads older recordings.
+- **An incompatible change bumps it.** Examples: removing a field, changing a field's meaning
+  or type, changing the handshake. Peers reject an envelope whose `gm` differs from their own
+  rather than guess. A `gm` bump goes with a major release of the packages.
+- **Meanings are kept.** `durationMs` is an example. When 0.5.0 needed a separate held-time
+  number, it added `heldMs` next to `durationMs` rather than changing what `durationMs` means,
+  so recorded runs and third-party importers read the same as before.
+
+The handshake (`hello` / `hello.ack`) carries both sides' `versions.protocol` and their
+capabilities, so a viewer can tell what a client supports before using it. See the
+[wire protocol reference](/reference/wire-protocol/).
+
+## Stored data
+
+Runs are stored in SQLite as the envelopes that arrived, keyed by `(run_id, seq)`. A newer
+viewer reads runs recorded by older SDKs; that is what the tolerance rules above are for.
+Stored data is not migrated in place. If a future release ever needs to, the CHANGELOG will
+say so and the old database will stay readable or be exportable with `graphmind record`.
+
+## 1.0
+
+There is no date for 1.0, and this page will not invent one.
+
+`1.0` will mean the deprecation rule above covers **every** change of behaviour, not only
+removals. That is a promise worth making only after the surfaces have held still under real
+use. GraphMind is young: its protocol and adapter APIs have had little use outside this
+repository's own test suites and samples, and 0.5.0 still changed defaults. 1.0 is declared when a few minors in a row ship with nothing a
+user has to react to, and when people outside this repository depend on it and say so. Until
+then, pin a minor (`~0.5.0`, `graphmind-ai~=0.5.0`) if an upgrade surprise would cost you.
+
+<Aside type="note" title="If this page and the code disagree">
+The code wins, and the page is wrong. [Open an issue](https://github.com/Hegazy360/GraphMind/issues)
+and it will be corrected in the next release.
+</Aside>

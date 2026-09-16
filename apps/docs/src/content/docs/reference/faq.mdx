@@ -20,11 +20,13 @@ environment. Nothing overrides it.
 
 ## What does it cost when nothing is attached?
 
-Effectively nothing. An awaited gate short-circuits to a shared resolved promise — the test suite
-asserts an average under 1 ms, and the design spike measured 0.03 ms worst case. Events go to an
-in-memory ring buffer and no further.
+Very little. An awaited gate short-circuits to a shared resolved promise, and
+`packages/client/test/overhead.test.ts` asserts an average and a p99 under 1 ms per gate. Events
+go to an in-memory ring buffer and no further. Two costs grow with your payloads: each event is
+serialised into that buffer, and since 0.5.0 each tool call's arguments are fingerprinted for
+the [loop hold](/reference/environment/#loop-hold) (`GRAPHMIND_ON_LOOP=off` skips it).
 
-Fully disabled, the cost is zero: the wrappers are the identity function.
+Fully disabled, the wrappers are the identity function: you get your own objects back.
 
 ## Can it break my app?
 
@@ -33,7 +35,8 @@ degrades to a no-op, and logs one rate-limited warning. The one thing that propa
 is an error thrown by *your* function inside `gm.run` — that is yours.
 
 If the debugger disconnects while gates are held, every gate releases with `continue` within
-milliseconds and your agent finishes as though nothing had attached.
+100 ms (asserted in `packages/client/test/session.test.ts`) and your agent finishes as though
+nothing had attached.
 
 ## Where does my data go?
 
@@ -61,7 +64,9 @@ overview page.
 ## Does it support my framework?
 
 Adapters ship for the Vercel AI SDK, the Anthropic SDK, the OpenAI SDK, LangGraph/LangChain (JS),
-Python (`openai`, `anthropic`, `langgraph`) and Ruby. See [integrations](/integrations/).
+MCP servers on SDK 1.x and 2.x, Python (`openai`, `anthropic`, `langgraph`) and Ruby (the gem is
+not on RubyGems yet). See [integrations](/integrations/), which also lists exactly which
+runtime and SDK versions CI runs.
 
 **MCP servers** are a special case with a better answer: `graphmind mcp-proxy` debugs one in
 **any language with no code changes at all**, because it sits on the protocol rather than inside
@@ -73,8 +78,9 @@ real one — the protocol is nine event types over one WebSocket.
 
 ## Can I use it with a hosted or serverless app?
 
-Locally, yes — run the app in dev and the debugger on the same machine. From a container, point
-`GRAPHMIND_URL` at `host.docker.internal` (see [environment](/reference/environment/)).
+Locally, yes — run the app in dev and GraphMind on the same machine. In a container, a
+Codespace, WSL 2 or over SSH, run `npx graphmind-ai` where the agent runs and forward port 4747
+to your browser (see [remote development](/guides/remote-development/)).
 
 Against a *deployed* app, no. The adapter dials `127.0.0.1`, there is no auth on the ingest
 socket, and exposing it would hand anyone who reached it your prompts and control of your agent.

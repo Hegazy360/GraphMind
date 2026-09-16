@@ -34,7 +34,7 @@ class TestGates < Minitest::Test
     assert_equal 1, session.stats.held_gates
 
     viewer.resume(paused["payload"]["pauseId"], "continue")
-    assert_equal "results for flights", worker.value
+    assert_equal "results for flights", value_of(worker)
 
     refute_nil body_ran_at
     assert_operator body_ran_at, :>, pause_seen_at + 250,
@@ -56,7 +56,7 @@ class TestGates < Minitest::Test
     paused = viewer.wait_for_frame("exec.paused").first
     viewer.resume(paused["payload"]["pauseId"], "inject", { "flights" => 2 })
 
-    assert_equal({ "flights" => 2 }, worker.value)
+    assert_equal({ "flights" => 2 }, value_of(worker))
     refute ran, "the body must not run when the debugger injects a result"
 
     finished = viewer.wait_for_frame("node.finished").first
@@ -86,7 +86,7 @@ class TestGates < Minitest::Test
     assert_equal "error", paused["payload"]["point"]
     viewer.resume(paused["payload"]["pauseId"], "retry")
 
-    assert_equal "ok on attempt 2", worker.value
+    assert_equal "ok on attempt 2", value_of(worker)
     assert_equal 2, attempts
 
     error_frame = viewer.frames_of("node.error").first
@@ -105,7 +105,7 @@ class TestGates < Minitest::Test
     paused = viewer.wait_for_frame("exec.paused").first
     viewer.resume(paused["payload"]["pauseId"], "inject", "recovered")
 
-    assert_equal "recovered", worker.value
+    assert_equal "recovered", value_of(worker)
     finished = viewer.wait_for_frame("node.finished").first
     assert_equal true, finished["payload"]["recoveredFromError"]
   end
@@ -127,7 +127,7 @@ class TestGates < Minitest::Test
     paused = viewer.wait_for_frame("exec.paused").first
     viewer.resume(paused["payload"]["pauseId"], "continue")
 
-    error = worker.value
+    error = value_of(worker)
     assert_instance_of ArgumentError, error
     assert_equal "original", error.message
   end
@@ -150,7 +150,7 @@ class TestGates < Minitest::Test
     paused = viewer.wait_for_frame("exec.paused").first
     viewer.resume(paused["payload"]["pauseId"], "abort")
 
-    outcome, ctx_aborted, error = worker.value
+    outcome, ctx_aborted, error = value_of(worker)
     assert_equal :aborted, outcome
     assert ctx_aborted, "the run context should report aborted"
     assert_instance_of Graphmind::AbortError, error
@@ -171,7 +171,7 @@ class TestGates < Minitest::Test
     assert_equal "after", paused["payload"]["point"]
     viewer.resume(paused["payload"]["pauseId"], "inject", "swapped")
 
-    assert_equal "swapped", worker.value
+    assert_equal "swapped", value_of(worker)
   end
 
   def test_step_mode_pauses_at_every_before_point
@@ -183,7 +183,7 @@ class TestGates < Minitest::Test
     paused = viewer.wait_for_frame("exec.paused").first
     assert_equal "before", paused["payload"]["point"]
     viewer.resume(paused["payload"]["pauseId"], "continue")
-    assert_equal "value", worker.value
+    assert_equal "value", value_of(worker)
   end
 
   def test_mode_set_control_arms_stepping_at_runtime
@@ -226,7 +226,7 @@ class TestGates < Minitest::Test
 
     viewer.kill_abruptly
 
-    assert_equal "ran anyway", worker.value
+    assert_equal "ran anyway", value_of(worker)
     refute_nil released_at
     assert_operator released_at - killed_at, :<, 2000,
                     "fail-open took too long after the debugger vanished"
@@ -241,7 +241,7 @@ class TestGates < Minitest::Test
     viewer.wait_for_frame("exec.paused")
 
     session.dispose
-    assert_equal "ran", worker.value
+    assert_equal "ran", value_of(worker)
   end
 
   def test_pause_timeout_auto_continues_a_gate_nobody_resumes
@@ -253,7 +253,7 @@ class TestGates < Minitest::Test
     worker = Thread.new { tool.call }
     viewer.wait_for_frame("exec.paused")
 
-    assert_equal "ran", worker.value
+    assert_equal "ran", value_of(worker)
     elapsed = now_ms - started
     assert_operator elapsed, :>, 250, "the gate should have held for the timeout"
     assert_operator elapsed, :<, 3000, "the gate should not have held forever"

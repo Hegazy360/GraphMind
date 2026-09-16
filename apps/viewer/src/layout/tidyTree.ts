@@ -33,8 +33,32 @@
  */
 import type { FlowEdgeSpec, FlowNodeSpec } from '../store/runStateToFlow.js';
 
+/**
+ * Where a packed leaf sits inside its parent's leaf block. This is what the
+ * edge router (routeEdges.ts) needs to reach a row >= 1 leaf *through the
+ * column gutter* instead of straight through the row-0 card above it:
+ *
+ *  - `column`/`row`   — grid cell, both zero-based;
+ *  - `blockLeft`      — canvas x of the block's left edge (column 0's cell);
+ *  - `columnWidth`    — width of one cell (the widest leaf in the block; a
+ *                       narrower leaf is centred inside its cell).
+ *
+ * Column pitch is `columnWidth + siblingGap`, so the gutter left of column
+ * `c` is centred on `blockLeft + c * (columnWidth + siblingGap) - siblingGap/2`.
+ * Every row is left-aligned to `blockLeft` — a centred short last row would
+ * put its gutters under the cards of the row above.
+ */
+export interface LeafCell {
+  column: number;
+  row: number;
+  blockLeft: number;
+  columnWidth: number;
+}
+
 export interface PositionedNode extends FlowNodeSpec {
   position: { x: number; y: number };
+  /** Present only for a childless node packed into its parent's leaf grid. */
+  leafCell?: LeafCell;
 }
 
 export interface TidyTreeOptions {
@@ -59,14 +83,32 @@ interface Measured {
   leafColumns: number;
   leafRows: number;
   leafBlockWidth: number;
+  /** Width of the children row (leaf block + branch subtrees + gaps). */
+  childrenWidth: number;
   /** Total horizontal space this subtree needs. */
   width: number;
 }
 
+/**
+ * The gaps are also the edge router's right of way (routeEdges.ts), so they
+ * are sized for the lines as well as for the cards:
+ *
+ *  - `layerGap` 118: exceeds PAUSE_BANNER_HEIGHT (92) so a paused card can
+ *    grow its action bar in place without touching the layer below, and it
+ *    is where every parent's horizontal bus line runs (at half the gap).
+ *  - `siblingGap` 46: a column gutter carries the drops to the rows below —
+ *    one line per row from row 1 down, offset 3px each (GUTTER_LANE_PX), so
+ *    four rows spread 9px plus a 2.2px paused stroke, leaving >= 14px clear
+ *    of the card on either side. Unchanged from 0.4.
+ *  - `leafRowGap` 30 (was 26): the jog into a row >= 1 leaf runs midway
+ *    through this gap with an 8px rounded corner at each end; 15px of
+ *    clearance keeps the corner and the thicker paused/error strokes from
+ *    reading as if they touch the card above. The smallest bump that does.
+ */
 const DEFAULTS = {
   layerGap: 118,
   siblingGap: 46,
-  leafRowGap: 26,
+  leafRowGap: 30,
   maxLeafColumns: 8,
 } as const;
 
@@ -78,6 +120,14 @@ const DEFAULTS = {
 export const LAYER_GAP = DEFAULTS.layerGap;
 /** Horizontal gap between siblings and between subtrees. */
 export const SIBLING_GAP = DEFAULTS.siblingGap;
+/** Vertical gap between the rows of a packed leaf block. */
+export const LEAF_ROW_GAP = DEFAULTS.leafRowGap;
+/** The gaps the canvas lays out with — hand these to `routeEdges`. */
+export const LAYOUT_GAPS = {
+  layerGap: DEFAULTS.layerGap,
+  siblingGap: DEFAULTS.siblingGap,
+  leafRowGap: DEFAULTS.leafRowGap,
+} as const;
 
 /**
  * The layout entry point used by the canvas. Synchronous on purpose: at
@@ -191,6 +241,7 @@ export function tidyTreeLayout(
       leafColumns: 0,
       leafRows: 0,
       leafBlockWidth: 0,
+      childrenWidth: 0,
       width: node.width,
     };
   };
@@ -242,6 +293,7 @@ export function tidyTreeLayout(
       blocks += 1;
     }
     if (blocks > 1) childrenWidth += (blocks - 1) * siblingGap;
+    entry.childrenWidth = childrenWidth;
     entry.width = Math.max(entry.node.width, childrenWidth);
   }
 
@@ -256,6 +308,7 @@ export function tidyTreeLayout(
   // Pass 3 — placement, pre-order over an explicit stack. Each frame carries
   // the left edge its subtree owns, so siblings can be pushed in any order.
   const positions = new Map<string, { x: number; y: number }>();
+  const leafCells = new Map<string, LeafCell>();
   const placeStack: { entry: Measured; left: number }[] = [];
   let rootLeft = 0;
   for (const entry of measuredRoots) {
@@ -271,7 +324,9 @@ export function tidyTreeLayout(
       y: nodeY,
     });
 
-    let cursor = left;
+    // A parent wider than its children row centres the row under itself
+    // (the subtree's width is the parent's, so the slack is on both sides).
+    let cursor = left + Math.max(0, entry.width - entry.childrenWidth) / 2;
     if (entry.leafColumns > 0) {
       let leafWidth = 0;
       let leafHeight = 0;
@@ -280,17 +335,18 @@ export function tidyTreeLayout(
         if (leaf.height > leafHeight) leafHeight = leaf.height;
       }
       const childY = layerY[entry.depth + 1] ?? nodeY + entry.node.height + layerGap;
+      const blockLeft = cursor;
       entry.leaves.forEach((leaf, index) => {
         const column = index % entry.leafColumns;
         const row = Math.floor(index / entry.leafColumns);
-        // Centre the final, possibly short, row under the block.
-        const inRow = Math.min(entry.leaves.length - row * entry.leafColumns, entry.leafColumns);
-        const rowWidth = inRow * leafWidth + (inRow - 1) * siblingGap;
-        const rowLeft = cursor + (entry.leafBlockWidth - rowWidth) / 2;
+        // Every row is left-aligned to the block, the short last row too:
+        // the edge router reaches row >= 1 through the column gutters, and a
+        // centred last row would put its gutters under the cards above it.
         positions.set(leaf.id, {
-          x: rowLeft + column * (leafWidth + siblingGap) + (leafWidth - leaf.width) / 2,
+          x: blockLeft + column * (leafWidth + siblingGap) + (leafWidth - leaf.width) / 2,
           y: childY + row * (leafHeight + leafRowGap),
         });
+        leafCells.set(leaf.id, { column, row, blockLeft, columnWidth: leafWidth });
       });
       cursor += entry.leafBlockWidth + siblingGap;
     }
@@ -300,8 +356,12 @@ export function tidyTreeLayout(
     }
   }
 
-  return nodes.map((node) => ({
-    ...node,
-    position: positions.get(node.id) ?? { x: 0, y: 0 },
-  }));
+  return nodes.map((node) => {
+    const cell = leafCells.get(node.id);
+    return {
+      ...node,
+      position: positions.get(node.id) ?? { x: 0, y: 0 },
+      ...(cell !== undefined ? { leafCell: cell } : {}),
+    };
+  });
 }

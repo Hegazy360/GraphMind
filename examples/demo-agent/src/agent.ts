@@ -19,13 +19,21 @@ import { anthropic } from '@ai-sdk/anthropic';
 import { openai } from '@ai-sdk/openai';
 import { graphmind, isAbortError, type WrapModelInput } from '@graphmind-ai/sdk';
 import { stepCountIs, streamText } from 'ai';
-import { makeMockTripPlannerModel } from './mock-model.js';
+import { LOOP_STEPS, makeMockLoopingModel, makeMockTripPlannerModel } from './mock-model.js';
 import { demoTools } from './tools.js';
 
 export type TripPlannerMode = 'mock' | 'live';
 
+/**
+ * `planner` (default) is the trip planner with the planted currency bug;
+ * `loop` is a model that calls `searchFlights` with the same arguments over
+ * and over — the loop hold demo (`--loop`; mock mode only).
+ */
+export type TripPlannerScenario = 'planner' | 'loop';
+
 export interface TripPlannerOptions {
   mode: TripPlannerMode;
+  scenario?: TripPlannerScenario;
   /** GraphMind ingest endpoint. Default: GRAPHMIND_URL or ws://127.0.0.1:4747/ingest. */
   url?: string;
   /** Run name (the agent node's label). Default 'plan-tokyo-trip'. */
@@ -42,6 +50,9 @@ const PROMPT =
   'Plan a 5-day trip to Tokyo in November for 2 people flying from San Francisco, ' +
   'budget $3,800. Search flights, check the weather, convert the total cost to USD, ' +
   'verify it against the budget, then summarize the plan.';
+
+const LOOP_PROMPT =
+  'Find round-trip flights from San Francisco to Tokyo for 2 people in November and plan around them.';
 
 function resolveLiveModel(): WrapModelInput {
   const override = process.env['GRAPHMIND_DEMO_MODEL'];
@@ -69,17 +80,24 @@ export async function runTripPlanner(options: TripPlannerOptions): Promise<TripP
   const attached = await gm.session.ready();
   log(attached ? 'attached to GraphMind' : 'no GraphMind server found — running undebugged');
 
+  const loop = options.scenario === 'loop';
   try {
     const model = gm.wrapModel(
-      options.mode === 'live' ? resolveLiveModel() : makeMockTripPlannerModel(),
+      loop
+        ? makeMockLoopingModel()
+        : options.mode === 'live'
+          ? resolveLiveModel()
+          : makeMockTripPlannerModel(),
     );
     const tools = gm.wrapTools(demoTools);
-    const result = await gm.run(options.runName ?? 'plan-tokyo-trip', async () => {
+    const result = await gm.run(options.runName ?? (loop ? 'loop-flights' : 'plan-tokyo-trip'), async () => {
       const stream = streamText({
         model,
         tools,
-        prompt: PROMPT,
-        stopWhen: stepCountIs(6),
+        prompt: loop ? LOOP_PROMPT : PROMPT,
+        // The looping script gives up on its own after LOOP_STEPS; the cap
+        // here is one more so the framework's limit is never what stops it.
+        stopWhen: stepCountIs(loop ? LOOP_STEPS + 1 : 6),
         onError: () => {}, // tool errors are part of the show
       });
       await stream.consumeStream();

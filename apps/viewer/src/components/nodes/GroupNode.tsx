@@ -35,8 +35,8 @@ function GroupNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
   if (node === undefined || summary === undefined) return null;
 
   return (
+    <>
     <div className={`${statusClass(summary.status, selected, flash)} gm-node--group gm-kind--${node.kind}`}>
-      <FlowHandles />
       <span className="gm-group-stack" aria-hidden />
       <div className="gm-node-head">
         <CollapseToggle runId={runId} nodeId={nodeId} />
@@ -61,9 +61,14 @@ function GroupNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
         <span className="gm-badge-count" title={`${summary.nodes} nodes folded into this card`}>
           {fmtCount(summary.nodes)} nodes
         </span>
-        <span>
+        <span
+          className="gm-node-meta-fill"
+          title={`${summary.steps > 0 ? `${fmtCount(summary.steps)} steps · ` : ''}${fmtCount(summary.tools)} ${
+            node.nodeId === 'mcp:protocol' ? 'protocol calls' : 'calls'
+          }${summary.errors > 0 ? ` · ${fmtCount(summary.errors)} failed` : ''}`}
+        >
           {summary.steps > 0 && `${fmtCount(summary.steps)} steps · `}
-          {fmtCount(summary.tools)} calls
+          {fmtCount(summary.tools)} {node.nodeId === 'mcp:protocol' ? 'protocol calls' : 'calls'}
           {summary.errors > 0 && (
             <span className="gm-text-err"> · {fmtCount(summary.errors)} failed</span>
           )}
@@ -72,6 +77,11 @@ function GroupNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
       </div>
       <PauseBanner runId={runId} node={node} />
     </div>
+      {/* Outside the animated .gm-node on purpose: React Flow measures handle
+          bounds once, on mount, and the entrance keyframe would put that
+          measurement 60–100px off for the life of the node. */}
+      <FlowHandles />
+    </>
   );
 }
 

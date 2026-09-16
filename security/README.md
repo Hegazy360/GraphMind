@@ -107,7 +107,11 @@ passing vacuously when an agent silently fails to run.
 ## Surfaces audited
 
 Every one of these is collected from a real run, for each of the three
-first-party adapters, and grepped:
+first-party adapters, and grepped. Since 0.5.0 the two exports are sanitised
+by default (values under secret-shaped keys become `__REDACTED__`), so for
+them the audit asserts both directions: by-design canaries under non-secret
+keys survive, canaries under secret-shaped keys do not, and
+`--no-redact-secrets` brings them back (`tests/export-redaction.test.ts`).
 
 1. **The SQLite database** — read as raw bytes, including the `-wal` and `-shm`
    files, so a value that never made it into a parsed row still gets caught.

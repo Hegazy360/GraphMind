@@ -76,6 +76,8 @@ is most likely to be debugging.
 The order matters. Gate **before** you start the work, so a hold has nothing in flight:
 
 ```ts
+import { elapsedMs, monotonicNow } from '@graphmind-ai/client';
+
 async function instrumentedCall(params) {
   const nodeId = 'llm:step';
   const instanceId = nextStepId();
@@ -84,18 +86,18 @@ async function instrumentedCall(params) {
     nodeId, kind: 'llm', name: 'step', instanceId, input: params,
   });
 
+  const startedAt = monotonicNow();
   const decision = await session.gate('before', { nodeId, kind: 'llm', name: 'step' });
   if (decision.action === 'inject') return decision.output;
   if (decision.action === 'abort') throw ctx.signal.reason;
 
-  const startedAt = Date.now();
   try {
     const result = await original(params, { signal: ctx.signal });
     session.emit('node.finished', {
       nodeId, instanceId,
       output: result,
       usage: { inputTokens: result.usage.input, outputTokens: result.usage.output },
-      durationMs: Date.now() - startedAt,
+      durationMs: elapsedMs(startedAt),
       status: 'ok',
     });
     return result;
@@ -108,6 +110,16 @@ async function instrumentedCall(params) {
   }
 }
 ```
+
+Time with `monotonicNow()` / `elapsedMs()`, not `Date.now()`: they are monotonic, fractional to
+0.01 ms and never negative. Start the clock before the gate and report the whole wall-clock
+span as `durationMs`. Do not subtract hold time yourself: the session adds `heldMs` to
+`node.finished` and `node.error`, and the viewer shows ran time from the two.
+
+Emitting `node.started` **before** `gate('before')`, with the real `input`, is also what the
+[loop hold](/reference/environment/#loop-hold) needs. The session fingerprints the input there
+and holds a repeat at the gate. The `GRAPHMIND_HIDE_*` switches are applied inside `emit`. Your
+adapter gets both without writing any code for them.
 
 If the framework streams, tee the stream and emit batched `node.token` deltas (one batch per node
 per ~34 ms is what the reference adapter uses — about 30/sec, smooth without flooding). **Tee,
@@ -196,7 +208,7 @@ Non-negotiable, and what a review will check:
    behaviour, warn once (rate-limited). The host's own errors propagate untouched.
 
 2. **Identity when disabled.** `if (!session.enabled) return input;` at the top of every wrapper.
-   Zero overhead, zero surface.
+   Return the object you were given, with nothing added.
 
 3. **Fast path when detached.** Never do work that only matters when a viewer is watching. The
    session's `gate()` already short-circuits; do not add your own cost around it.
@@ -205,8 +217,8 @@ Non-negotiable, and what a review will check:
    bookkeeping. If you find yourself needing one, that is a change to `@graphmind-ai/client` —
    open an issue.
 
-5. **Zero overhead when detached, measurably.** Assert it in a test, like the reference adapter
-   does.
+5. **Cheap when detached, measurably.** Assert a budget in a test, as
+   `packages/client/test/overhead.test.ts` and `packages/anthropic/test/observe.test.ts` do.
 
 </Steps>
 

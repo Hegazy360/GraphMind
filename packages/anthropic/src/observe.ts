@@ -16,6 +16,7 @@
  * (`server_tool_use` — web search, code execution, ...) run on Anthropic's
  * side and cannot be held, so they are observed and marked `ungated`.
  */
+import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
 import { isAbortError, type RunContext, type RunStatus } from '@graphmind-ai/client';
 import type { AdapterCore } from './core.js';
 import { LLM_NODE_ID, toolNodeId } from './ids.js';
@@ -42,7 +43,7 @@ export class StepReporter {
     readonly instanceId: string,
     readonly scopeId: string,
     readonly ctx: RunContext | undefined,
-    readonly startedAt: number = Date.now(),
+    readonly startedAt: number = monotonicNow(),
   ) {}
 
   get done(): boolean {
@@ -76,7 +77,7 @@ export class StepReporter {
       instanceId: this.instanceId,
       output,
       usage: mapUsage(usage),
-      durationMs: Date.now() - this.startedAt,
+      durationMs: elapsedMs(this.startedAt),
       status,
       ...(extra !== undefined ? { extra } : {}),
     });
@@ -106,7 +107,7 @@ export class StepReporter {
         const { id, name } = block;
         if (typeof id !== 'string' || typeof name !== 'string') return;
         if (this.serverTools.has(id)) return;
-        this.serverTools.set(id, { name, startedAt: Date.now() });
+        this.serverTools.set(id, { name, startedAt: monotonicNow() });
         this.core.startNode({
           nodeId: toolNodeId(name),
           kind: 'tool',
@@ -129,7 +130,7 @@ export class StepReporter {
           nodeId: toolNodeId(started.name),
           instanceId: id,
           output: block.content,
-          durationMs: Date.now() - started.startedAt,
+          durationMs: elapsedMs(started.startedAt),
           status:
             typeof content?.type === 'string' && content.type.endsWith('_error') ? 'error' : 'ok',
           extra: { serverExecuted: true },

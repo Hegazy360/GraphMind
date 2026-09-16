@@ -239,9 +239,9 @@ that is already running keeps running unless it observes the run signal itself.
 ## Fail-open invariants
 
 - **Disabled** (`enabled: false` or a kill switch): `wrapClient`, `wrapTools` and `tool` return
-  their inputs unchanged — identity, zero overhead, nothing emitted, no network.
+  their inputs unchanged — identity, nothing emitted, no network.
 - **Enabled but detached**: gates resolve `continue` on a shared-resolved-promise fast path;
-  events go to the replay ring buffer only. Measured well under 0.5 ms per fully gated tool call.
+  events go to the replay ring buffer only. `test/observe.test.ts` asserts under 0.5 ms per fully gated tool call.
 - The adapter **never throws into your app**. Internal failures — including unserialisable
   payloads — degrade to rate-limited warnings and uninstrumented behaviour; your results and your
   errors pass through untouched.

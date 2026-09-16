@@ -14,6 +14,7 @@
  * gates; the adapter never throws into the host app; a debugger that
  * disconnects mid-hold auto-continues every held gate.
  */
+import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
 import { createRequire } from 'node:module';
 import {
   createSession,
@@ -176,7 +177,7 @@ export function graphmind(options: GraphmindOptions = {}): Graphmind {
       if (attachWait !== undefined) await attachWait;
       return session.run(name, async (ctx) => {
         const nodeId = agentNodeId(name);
-        const startedAt = Date.now();
+        const startedAt = monotonicNow();
         core.startNode({
           nodeId,
           kind: 'agent',
@@ -190,7 +191,7 @@ export function graphmind(options: GraphmindOptions = {}): Graphmind {
             nodeId,
             instanceId: ctx.runId,
             output: undefined,
-            durationMs: Date.now() - startedAt,
+            durationMs: elapsedMs(startedAt),
             status: ctx.signal.aborted ? 'aborted' : 'ok',
           });
           return result;
@@ -207,7 +208,7 @@ export function graphmind(options: GraphmindOptions = {}): Graphmind {
             nodeId,
             instanceId: ctx.runId,
             output: undefined,
-            durationMs: Date.now() - startedAt,
+            durationMs: elapsedMs(startedAt),
             status: aborted ? 'aborted' : 'error',
           });
           throw error; // the host's own error — always propagates

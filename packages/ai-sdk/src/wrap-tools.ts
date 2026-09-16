@@ -22,6 +22,7 @@
  * Provider-executed tools have no local `execute`; they pass through
  * untouched and are observed from the stream tee instead.
  */
+import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
 import { isAbortError, type GateNode, type RunStatus } from '@graphmind-ai/client';
 import type { ToolSet } from 'ai';
 import type { AdapterCore } from './core.js';
@@ -75,7 +76,7 @@ function makeExecute(core: AdapterCore, toolName: string, original: ExecuteFn): 
     const node: GateNode = { nodeId: toolNodeId(toolName), kind: 'tool', name: toolName };
     const ctx = core.session.currentRun();
     const instanceId = instanceIdOf(options);
-    const startedAt = Date.now();
+    const startedAt = monotonicNow();
     core.startNode({
       nodeId: node.nodeId,
       kind: 'tool',
@@ -90,7 +91,7 @@ function makeExecute(core: AdapterCore, toolName: string, original: ExecuteFn): 
       core.finishNode({
         nodeId: node.nodeId,
         output,
-        durationMs: Date.now() - startedAt,
+        durationMs: elapsedMs(startedAt),
         status,
         extra: { instanceId, ...extra },
       });
@@ -172,7 +173,7 @@ function makeStreamingExecute(core: AdapterCore, toolName: string, original: Exe
       const node: GateNode = { nodeId: toolNodeId(toolName), kind: 'tool', name: toolName };
       const ctx = core.session.currentRun();
       const instanceId = instanceIdOf(options);
-      const startedAt = Date.now();
+      const startedAt = monotonicNow();
       core.startNode({
         nodeId: node.nodeId,
         kind: 'tool',
@@ -188,7 +189,7 @@ function makeStreamingExecute(core: AdapterCore, toolName: string, original: Exe
         core.finishNode({
           nodeId: node.nodeId,
           output,
-          durationMs: Date.now() - startedAt,
+          durationMs: elapsedMs(startedAt),
           status,
           extra: { instanceId, streaming: true, ...extra },
         });

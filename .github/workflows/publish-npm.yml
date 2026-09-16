@@ -1,0 +1,364 @@
+# Publish the eight npm packages from a `v*` tag, with provenance, and cut the
+# GitHub Release that a security reviewer can verify.
+#
+# SHAPE
+#   npm: verify    build + full test battery + tag == every version + pack proof
+#                  + dry-run publish + SBOM + release notes. Runs for dry runs too.
+#   npm: publish   needs verify. `pnpm -r publish --provenance` via npm Trusted
+#                  Publishing (OIDC, no secret) or NPM_TOKEN if that secret
+#                  exists. Idempotent: already-published versions are skipped,
+#                  a partial publish fails and names what is missing. Then
+#                  verify-published, provenance and `npm audit signatures` from
+#                  a clean registry install.
+#   npm: release   needs publish. `gh release create` for the tag with the eight
+#                  tarballs, the CycloneDX SBOM, SHA256SUMS and the CHANGELOG
+#                  section as the body. Skipped if the release already exists.
+#
+# Why `pnpm -r publish` and not `npm publish`: the workspace manifests say
+# `"@graphmind-ai/schema": "workspace:*"`. pnpm rewrites that to the real
+# version on pack/publish; npm does not, and would ship manifests nobody can
+# install. scripts/release/pack.mjs opens every tarball and fails the job if a
+# `workspace:` specifier survived.
+#
+# EDGE CASES THIS FILE IS BUILT AROUND
+#   - a tag on a commit whose tests fail must not publish: publish `needs`
+#     verify, and verify runs the same battery as CI (ci.yml does not run on tags)
+#   - re-running for an already-published version is a no-op success
+#     (publish-npm.mjs + pnpm's own skip + `gh release view` before create)
+#   - workflow_dispatch with dry_run performs everything except upload/release
+#   - a pre-release tag (v0.5.0-rc.1) publishes under the `next` dist-tag, so
+#     `latest` never points at an RC (scripts/release/publish-npm.mjs)
+#   - the release is not done until a stranger can install it:
+#     scripts/verify-published.mjs polls the registry through replica lag
+#
+# All logic lives in scripts/release/*.mjs (unit-tested with `node --test
+# scripts/release/test/`); this file only sequences it.
+name: Publish npm
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: build, test, check versions, pack, SBOM — but do not publish or release'
+        type: boolean
+        default: true
+
+# Least privilege: read-only by default; each job raises exactly what it needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-npm-${{ github.ref }}
+  cancel-in-progress: false # never cancel a publish half-way
+
+env:
+  GRAPHMIND_TELEMETRY: '0'
+  # A real publish happens only from a tag push, or a dispatch that turned
+  # dry_run off. Every job reads this one expression.
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify:
+    name: 'npm: verify'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.versions.outputs.version }}
+      dry_run: ${{ env.DRY_RUN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm (corepack, pinned by packageManager)
+        run: |
+          corepack enable
+          corepack prepare --activate
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.x'
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Tag == every workspace version (npm x8, PyPI, gem)
+        id: versions
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" != "true" ] && [ "$REF_TYPE" != "tag" ]; then
+            echo "::error::a real publish runs only from a v* tag (got $REF_TYPE $REF_NAME). Re-run with dry_run, or push a tag."
+            exit 1
+          fi
+          if [ "$REF_TYPE" = "tag" ]; then
+            node scripts/release/check-versions.mjs --tag "$REF_NAME" --output "$RUNNER_TEMP/version.txt"
+          else
+            echo "dry run from $REF_TYPE $REF_NAME: checking the repo agrees with itself"
+            node scripts/release/check-versions.mjs --output "$RUNNER_TEMP/version.txt"
+          fi
+          echo "version=$(cat "$RUNNER_TEMP/version.txt")" >> "$GITHUB_OUTPUT"
+
+      - name: Build packages
+        run: pnpm -r --filter './packages/**' run build
+
+      - name: Build viewer (and bundle into CLI)
+        # The graphmind-ai tarball ships packages/cli/viewer-dist; without this
+        # step it would publish a server with no UI.
+        run: pnpm build:viewer
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test (packages + viewer + web)
+        # The same gate ci.yml runs on every push. It has to run HERE because
+        # ci.yml triggers on branches, not tags: a tag on a red commit must
+        # not publish, and this job is the only thing standing in the way.
+        run: pnpm test:all
+
+      - name: Security audit (secret-leak, run isolation, protocol fuzz)
+        run: pnpm test:security
+
+      - name: Release-script unit tests
+        run: node --test 'scripts/release/test/*.test.mjs'
+
+      - name: Pack all eight, prove no workspace:* survived
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release"
+          node scripts/release/pack.mjs --out "$RUNNER_TEMP/release/tarballs"
+
+      - name: Dry-run publish (pnpm validates every manifest without uploading)
+        run: node scripts/release/publish-npm.mjs --dry-run --summary "$RUNNER_TEMP/release/dry-run-summary.json"
+
+      - name: CycloneDX SBOM (one per release, from a clean npm install of the tarballs)
+        env:
+          VERSION: ${{ steps.versions.outputs.version }}
+        run: node scripts/release/sbom.mjs --tarballs "$RUNNER_TEMP/release/tarballs" --out "$RUNNER_TEMP/release/graphmind-$VERSION.cdx.json"
+
+      - name: Release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ steps.versions.outputs.version }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/release/release-notes.mjs --version "$VERSION" --out "$RUNNER_TEMP/release/release-notes.md"
+
+      - name: Checksums
+        working-directory: ${{ runner.temp }}/release
+        run: |
+          set -euo pipefail
+          cp tarballs/*.tgz .
+          sha256sum ./*.tgz ./*.cdx.json > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload release assets (tarballs, SBOM, notes, checksums)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets
+          path: |
+            ${{ runner.temp }}/release/*.tgz
+            ${{ runner.temp }}/release/*.cdx.json
+            ${{ runner.temp }}/release/SHA256SUMS
+            ${{ runner.temp }}/release/release-notes.md
+            ${{ runner.temp }}/release/dry-run-summary.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Summary
+        env:
+          VERSION: ${{ steps.versions.outputs.version }}
+        run: |
+          {
+            echo "## Publish npm — verify"
+            echo
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "**DRY RUN** for \`$VERSION\`: built, tested, versions agree, eight tarballs packed and validated, SBOM generated. Nothing was published."
+            else
+              echo "\`$VERSION\` verified; proceeding to publish."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: 'npm: publish'
+    needs: verify
+    # Fail closed: run only when verify positively said "not a dry run". An
+    # empty or missing output (a future refactor that loses it) must skip, not
+    # publish.
+    if: needs.verify.outputs.dry_run == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # `npm` environment: configure it in the repo (Settings > Environments) and
+    # name it in each package's Trusted Publisher config. Optional protection
+    # rules (required reviewer, wait timer) apply here and only here.
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write # npm Trusted Publishing + provenance attestation. Nothing else.
+    steps:
+      - name: Refuse to publish unless this is positively not a dry run
+        # Belt and braces for the job-level `if` above: the same DRY_RUN
+        # expression, re-checked inside the job before anything is checked out.
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" != "false" ]; then
+            echo "::error::publish job reached with DRY_RUN='$DRY_RUN' — refusing to publish."
+            exit 1
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm (corepack, pinned by packageManager)
+        run: |
+          corepack enable
+          corepack prepare --activate
+
+      # Deliberately NO `registry-url` here: setup-node would then write
+      # `_authToken=${NODE_AUTH_TOKEN}` into .npmrc unconditionally. Older npm
+      # refused to start on an unset variable there ("Failed to replace env in
+      # config"); npm 11/12 and pnpm 11 only warn (checked 2026-09-14), but the
+      # OIDC path should not carry a dangling token reference at all. The token
+      # line is appended below only when the secret actually exists.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.x'
+          cache: pnpm
+
+      - name: npm >= 11.5.1 (Trusted Publishing floor)
+        # pnpm publish shells out to the `npm` on PATH, so ITS version is the
+        # one that matters. Node 24 ships npm 11.x; the floor for OIDC
+        # publishing is 11.5.1. Upgrade in-job only if the image is behind.
+        run: |
+          set -euo pipefail
+          have="$(npm --version)"
+          if node -e "import('./scripts/release/lib.mjs').then(m => process.exit(m.satisfiesMin(process.argv[1], '11.5.1') ? 0 : 1))" "$have"; then
+            echo "npm $have OK (>= 11.5.1)"
+          else
+            echo "npm $have is below 11.5.1 — installing npm@11.19.1"
+            npm install -g npm@11.19.1
+            npm --version
+          fi
+
+      - name: 'Choose auth: Trusted Publishing (OIDC) or NPM_TOKEN fallback'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            # Token fallback, only when the secret exists. The token itself is
+            # referenced by env-var name so it never lands in a file.
+            echo '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' >> "$HOME/.npmrc"
+            echo "auth: NPM_TOKEN secret (fallback). Provenance still comes from this job's OIDC identity."
+            echo "::notice::Publishing with the NPM_TOKEN secret. Configure Trusted Publishing on npmjs.com for each package to retire the token (see SECURITY.md)."
+          else
+            echo "auth: npm Trusted Publishing (OIDC) — no token configured, none needed."
+          fi
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm -r --filter './packages/**' run build
+
+      - name: Build viewer (and bundle into CLI)
+        run: pnpm build:viewer
+
+      - name: Publish (pnpm -r publish --provenance; skips what already exists)
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node scripts/release/publish-npm.mjs --summary "$RUNNER_TEMP/publish-summary.json"
+
+      - name: Every package installable at this version (polls through replica lag)
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: node scripts/verify-published.mjs "$VERSION"
+
+      - name: Provenance attestations present on the registry
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: node scripts/release/verify-provenance.mjs --version "$VERSION" --require "$RUNNER_TEMP/publish-summary.json"
+
+      - name: npm audit signatures in a clean registry install
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: node scripts/release/audit-signatures.mjs --version "$VERSION" --require "$RUNNER_TEMP/publish-summary.json"
+
+      - name: Upload publish summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: publish-summary
+          path: ${{ runner.temp }}/publish-summary.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Summary
+        if: always()
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          {
+            echo "## Publish npm — publish \`$VERSION\`"
+            echo
+            if [ -f "$RUNNER_TEMP/publish-summary.json" ]; then
+              node -e '
+                const s = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+                console.log(`- published now: ${s.published.length ? s.published.join(", ") : "(none)"}`);
+                console.log(`- already on the registry: ${s.already.length ? s.already.join(", ") : "(none)"}`);
+                if (s.missing.length) console.log(`- **MISSING**: ${s.missing.join(", ")}`);
+              ' "$RUNNER_TEMP/publish-summary.json"
+            else
+              echo "- publish step did not produce a summary (it failed before running)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: 'npm: release'
+    needs: [verify, publish]
+    # Fail closed: run only when verify positively said "not a dry run". An
+    # empty or missing output (a future refactor that loses it) must skip, not
+    # publish.
+    if: needs.verify.outputs.dry_run == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the release and upload its assets; only this job
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release
+
+      - name: Create the GitHub Release (no-op if it already exists)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        working-directory: ${{ runner.temp }}/release
+        run: |
+          set -euo pipefail
+          rm -f dry-run-summary.json
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::Release $TAG already exists — leaving it untouched (re-run is a no-op)."
+            gh release view "$TAG" --json assets --jq '.assets[].name'
+            exit 0
+          fi
+          ls -l
+          gh release create "$TAG" \
+            --verify-tag \
+            --title "GraphMind $VERSION" \
+            --notes-file release-notes.md \
+            ./*.tgz ./*.cdx.json SHA256SUMS
+          echo "- Release **$TAG** created with $(ls ./*.tgz | wc -l | tr -d ' ') tarballs, the CycloneDX SBOM and SHA256SUMS." >> "$GITHUB_STEP_SUMMARY"

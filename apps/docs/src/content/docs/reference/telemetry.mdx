@@ -13,11 +13,39 @@ ships in the package.
 
 <Aside type="tip" title="Opt out in one line">
 ```sh
-export GRAPHMIND_TELEMETRY=0   # "false" also works
+export DO_NOT_TRACK=1          # the cross-tool convention; "true" also works
+export GRAPHMIND_TELEMETRY=0   # GraphMind's own switch; "false" also works
 ```
 When disabled, **nothing happens at all** — no request is made and no install-id file is
 created. It is also disabled automatically whenever `CI` is set.
 </Aside>
+
+## See exactly what would be sent
+
+```sh
+GRAPHMIND_TELEMETRY=log graphmind runs
+```
+
+```text
+[graphmind telemetry] {"event":"runs","installId":"3b5090c5-a699-4d4a-870a-894a9bda09f8","version":"0.4.4","ts":"2026-09-14T09:27:34.803Z"}
+```
+
+`log` prints the record to stderr and sends nothing, including under `CI`. It creates the
+install-id file if there is none, so the printed record is the one that would be sent.
+
+## Precedence
+
+Checked top to bottom; the first match wins:
+
+| Setting | Result |
+| --- | --- |
+| `DO_NOT_TRACK=1` or `true` (any case) | Off. Beats every value below, including `GRAPHMIND_TELEMETRY=1` and `log`. |
+| `GRAPHMIND_TELEMETRY=0` or `false` | Off |
+| `GRAPHMIND_TELEMETRY=log` | Printed to stderr, not sent |
+| `CI` set to anything | Off |
+| Otherwise | Sent |
+
+`DO_NOT_TRACK` values other than `1` and `true`, such as `yes`, are ignored.
 
 ## What is sent
 

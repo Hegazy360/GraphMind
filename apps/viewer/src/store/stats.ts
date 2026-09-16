@@ -7,6 +7,7 @@
  * blended rate. It is here to answer "which step is eating the budget",
  * never to reconcile a bill.
  */
+import { heldMsOf, ranMs, runHeldMs } from '../lib/duration.js';
 import type { RunState, NodeState } from './types.js';
 
 /** Blended per-million-token rate (mid-tier frontier model, 2026). */
@@ -22,9 +23,12 @@ export interface NodeStats {
   /** Executions after the first — retries, loops, repeated tool calls. */
   retries: number;
   errors: number;
+  /** Sum of what the executions themselves took — held time excluded. */
   totalMs: number;
   avgMs: number;
   maxMs: number;
+  /** Time the debugger held this node's executions, summed. */
+  heldMs: number;
   tokensIn: number;
   tokensOut: number;
   estCostUsd: number;
@@ -33,14 +37,17 @@ export interface NodeStats {
 export function nodeStats(node: NodeState): NodeStats {
   let totalMs = 0;
   let maxMs = 0;
+  let heldMs = 0;
   let timed = 0;
   let errors = 0;
   let tokensIn = 0;
   let tokensOut = 0;
   for (const exec of node.executions) {
-    if (exec.durationMs !== undefined) {
-      totalMs += exec.durationMs;
-      maxMs = Math.max(maxMs, exec.durationMs);
+    const ran = ranMs(exec);
+    if (ran !== undefined) {
+      totalMs += ran;
+      maxMs = Math.max(maxMs, ran);
+      heldMs += heldMsOf(exec);
       timed += 1;
     }
     if (exec.status === 'error' || exec.error !== undefined) errors += 1;
@@ -56,6 +63,7 @@ export function nodeStats(node: NodeState): NodeStats {
     totalMs,
     avgMs: timed === 0 ? 0 : totalMs / timed,
     maxMs,
+    heldMs,
     tokensIn,
     tokensOut,
     estCostUsd: estimateCostUsd(tokensIn, tokensOut),
@@ -71,8 +79,12 @@ export interface RunStats {
   tokensIn: number;
   tokensOut: number;
   estCostUsd: number;
-  /** Wall-clock span of the run so far. */
+  /** Wall-clock span of the run so far — held time INCLUDED (it is wall time). */
   wallMs: number;
+  /** Wall time during which some gate in the run was held (union of pauses). */
+  heldMs: number;
+  /** `wallMs - heldMs`: the span the run was actually running. */
+  ranMs: number;
 }
 
 export function runStats(run: RunState, now: number = Date.now()): RunStats {
@@ -86,6 +98,8 @@ export function runStats(run: RunState, now: number = Date.now()): RunStats {
     tokensOut: 0,
     estCostUsd: 0,
     wallMs: 0,
+    heldMs: 0,
+    ranMs: 0,
   };
   for (const nodeId of run.order) {
     const node = run.nodes[nodeId];
@@ -103,6 +117,8 @@ export function runStats(run: RunState, now: number = Date.now()): RunStats {
   const start = run.meta.startedTs;
   if (start !== undefined) {
     stats.wallMs = Math.max(0, (run.meta.finishedTs ?? now) - start);
+    stats.heldMs = Math.min(stats.wallMs, runHeldMs(run, run.meta.finishedTs ?? now));
+    stats.ranMs = Math.max(0, stats.wallMs - stats.heldMs);
   }
   return stats;
 }
@@ -113,7 +129,8 @@ export function runStats(run: RunState, now: number = Date.now()): RunStats {
  */
 export interface FailureContext {
   parent?: { nodeId: string; name: string; kind: string };
-  siblings: { nodeId: string; name: string; status: string; durationMs?: number }[];
+  /** `ranMs` is the sibling's last execution minus held time. */
+  siblings: { nodeId: string; name: string; status: string; ranMs?: number }[];
 }
 
 export function failureContext(run: RunState, nodeId: string): FailureContext {
@@ -128,11 +145,12 @@ export function failureContext(run: RunState, nodeId: string): FailureContext {
       const sibling = run.nodes[id];
       if (sibling === undefined || sibling.parentId !== parentId) continue;
       const last = sibling.executions[sibling.executions.length - 1];
+      const ran = last === undefined ? undefined : ranMs(last);
       siblings.push({
         nodeId: id,
         name: sibling.name,
         status: last?.status ?? 'idle',
-        ...(last?.durationMs !== undefined ? { durationMs: last.durationMs } : {}),
+        ...(ran !== undefined ? { ranMs: ran } : {}),
       });
     }
   }

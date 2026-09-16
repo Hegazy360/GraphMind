@@ -1,13 +1,22 @@
 /**
  * `graphmind record <runId> [--out <file>]` — export a persisted run's
  * envelope stream from storage to NDJSON (one wire envelope per line, the
- * same shape `graphmind demo` replays and `WS /ingest` accepts).
+ * same shape `graphmind demo` replays and `WS /ingest` accepts), or with
+ * `--html` a self-contained viewer page.
+ *
+ * Both formats are sanitised BY DEFAULT: values under secret-shaped keys
+ * (api_key, authorization, token, password, … — see redact-secrets.ts)
+ * become "__REDACTED__", and the command says how many it replaced.
+ * `--no-redact-secrets` keeps them. Redaction is by key only; a secret typed
+ * into a prompt is recorded on purpose and still travels with the export,
+ * which is why the --html path warns before you share the file.
  */
 import { existsSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { ParsedCli } from '../args.js';
 import { buildRunHtml } from '../export-html.js';
 import { resolveDbPath, resolveViewerDist } from '../paths.js';
+import { redactStoredEvents, redactionSummaryLine } from '../redact-secrets.js';
 import { SqliteStorage } from '../sqlite-storage.js';
 import { recordTelemetry } from '../telemetry.js';
 import { VERSION } from '../version.js';
@@ -49,6 +58,20 @@ export async function runRecord(parsed: ParsedCli): Promise<number> {
     }
     const page = storage.listEvents(runId);
 
+    // Export sanitisation (W7): one walk for both formats, so NDJSON and HTML
+    // can never disagree about what left the machine. `buildRunHtml` applies
+    // the same idempotent walk again by default; a second pass is a no-op.
+    const redact = parsed.flags.redactSecrets;
+    const sanitised = redact ? redactStoredEvents(page.events) : undefined;
+    const events = sanitised === undefined ? page.events : sanitised.events;
+    const summary = (): void => {
+      if (sanitised === undefined) {
+        console.log('secrets NOT redacted (--no-redact-secrets): the file holds every value as recorded');
+      } else {
+        console.log(redactionSummaryLine(sanitised.count, sanitised.keys.size));
+      }
+    };
+
     if (parsed.flags.html) {
       const viewerDist = resolveViewerDist(undefined);
       if (!existsSync(viewerDist)) {
@@ -64,10 +87,11 @@ export async function runRecord(parsed: ParsedCli): Promise<number> {
         html = buildRunHtml({
           runId,
           app: run.app,
-          events: page.events,
+          events,
           schemaVersion: run.schemaVersion,
           viewerDist,
           version: VERSION,
+          redactSecrets: redact,
         });
       } catch (error) {
         console.error(
@@ -79,7 +103,8 @@ export async function runRecord(parsed: ParsedCli): Promise<number> {
       }
       writeFileSync(htmlPath, html);
       const kb = Math.round(Buffer.byteLength(html) / 1024);
-      console.log(`exported run ${runId} (${page.events.length} events) → ${htmlPath} (${kb} KB)`);
+      console.log(`exported run ${runId} (${events.length} events) → ${htmlPath} (${kb} KB)`);
+      summary();
       console.log('Open it in any browser, or send it to someone — it needs no server.');
       console.log('It contains this run\'s prompts, tool inputs and outputs: check before sharing.');
       return 0;
@@ -87,7 +112,7 @@ export async function runRecord(parsed: ParsedCli): Promise<number> {
 
     const outPath = resolve(parsed.flags.out ?? `graphmind-run-${safeFileName(runId)}.ndjson`);
     const ndjson =
-      page.events
+      events
         .map((event) =>
           JSON.stringify({
             gm: run.schemaVersion,
@@ -100,7 +125,8 @@ export async function runRecord(parsed: ParsedCli): Promise<number> {
         )
         .join('\n') + '\n';
     writeFileSync(outPath, ndjson);
-    console.log(`recorded ${page.events.length} events of run ${runId} → ${outPath}`);
+    console.log(`recorded ${events.length} events of run ${runId} → ${outPath}`);
+    summary();
     return 0;
   } finally {
     storage.close();

@@ -11,6 +11,7 @@
  * (except the one abort it is asked to raise); a debugger that disconnects
  * mid-hold auto-continues every held gate.
  */
+import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
 import {
   createSession,
   isAbortError,
@@ -288,14 +289,14 @@ export function graphmind(options: GraphmindOptions = {}): Graphmind {
       if (attachWait !== undefined) await attachWait;
       return session.run(name, async (ctx) => {
         const nodeId = agentNodeId(name);
-        const startedAt = Date.now();
+        const startedAt = monotonicNow();
         core.startNode({ nodeId, kind: 'agent', name, instanceId: ctx.runId });
         try {
           const result = await fn(ctx);
           core.finishNode({
             nodeId,
             instanceId: ctx.runId,
-            durationMs: Date.now() - startedAt,
+            durationMs: elapsedMs(startedAt),
             status: ctx.signal.aborted ? 'aborted' : 'ok',
           });
           return result;
@@ -305,7 +306,7 @@ export function graphmind(options: GraphmindOptions = {}): Graphmind {
           core.finishNode({
             nodeId,
             instanceId: ctx.runId,
-            durationMs: Date.now() - startedAt,
+            durationMs: elapsedMs(startedAt),
             status: aborted ? 'aborted' : 'error',
           });
           throw error; // the host's own error — always propagates

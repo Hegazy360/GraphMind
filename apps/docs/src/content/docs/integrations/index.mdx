@@ -74,7 +74,7 @@ breaks on your framework's next minor release.
   <LinkCard
     title="Ruby"
     href="/integrations/ruby/"
-    description="The graphmind gem — ruby-openai and RubyLLM, gated tools, and a Rails-shaped install."
+    description="The graphmind gem (not on RubyGems yet) — ruby-openai and RubyLLM, gated tools, and a Rails-shaped install."
   />
   <LinkCard
     title="Anything else"
@@ -88,11 +88,102 @@ breaks on your framework's next minor release.
 | Guarantee | Meaning |
 | --- | --- |
 | Never throws into your app | Internal failures degrade to a no-op plus one rate-limited warning |
-| Identity when disabled | `wrapClient` / `wrapTools` return their input unchanged — zero overhead |
-| Fast path when detached | Gates resolve from a shared promise; events go to the ring buffer only |
-| Auto-continue on disconnect | Every held gate releases with `continue` |
+| Identity when disabled | `wrapClient` / `wrapTools` return the very object you passed in |
+| Fast path when detached | Gates resolve from a shared promise; events go to the ring buffer only. `packages/client/test/overhead.test.ts` asserts an average and a p99 under 1 ms per awaited gate. |
+| Auto-continue on disconnect | Every held gate releases with `continue`, within 100 ms (`packages/client/test/session.test.ts`) |
 | `instanceId` on every event | Correct attribution when the same node runs concurrently |
 | Kill switches honoured | `GRAPHMIND_DISABLED=1`; off under `NODE_ENV=production` unless `GRAPHMIND=1` |
+
+## Gate coverage
+
+What each adapter can actually do, and how each cell is known. A framework's extension points
+decide what is possible. A callback can hold work but cannot replace a result; a wrapper that
+owns the call site can.
+
+**Legend:**
+
+- ✅ exercised by a test in that adapter's own suite.
+- ◐ provided by the shared session runtime (`@graphmind-ai/client`, or the Python / Ruby
+  session) and tested there, but not through this adapter.
+- ○ in the code, but no test pins it.
+- ⚠ available, with the caveat in the footnote.
+- ❌ not possible at this attachment point.
+
+| Adapter / attachment point | before LLM | before tool | after tool | on error | inject | retry | loop hold | `GRAPHMIND_HIDE_*` | `GRAPHMIND_DISABLED` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **`@graphmind-ai/sdk`** (AI SDK) | ✅ holds before the request; abort only¹ | ✅ | ○² | ✅ tool | ✅ tool | ✅ tool | ◐ | ◐ | ✅ |
+| **`@graphmind-ai/anthropic`** | ✅ abort only¹ | ✅ | ✅ | ✅ tool | ✅ tool | ✅ tool | ◐ | ◐³ | ✅ |
+| **`@graphmind-ai/openai`** | ✅ with inject, retry and an `after` gate | ✅ | ○² | ✅ LLM and tool | ✅ LLM and tool | ✅ LLM and tool | ◐ | ◐ | ✅ |
+| **`@graphmind-ai/langgraph`**, callback handler | ✅ | ✅ | observe only | ✅ | ❌ warns, continues | ❌ warns, continues | ◐⁴ | ◐ | ✅ |
+| **`@graphmind-ai/langgraph`**, wrapped tools | — | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ | ◐ | ✅ |
+| **`@graphmind-ai/mcp`** (in-process) | ✅ sampling | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ | ◐ | ✅ |
+| **`graphmind mcp-proxy`** | ✅ sampling | ✅ | ✅ response gate | ✅ JSON-RPC error and `isError` | ✅ | ✅ re-sends the request | ✅ | ✅ | ✅⁵ |
+| **Python** `@gm.tool` / `wrap_tools` | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Python** OpenAI / Anthropic `create` | ✅ with inject and retry | — | — | ✅ | ✅ | ✅ | — | ◐ | ✅ |
+| **Python** Anthropic `messages.stream` | ✅ in `__enter__` | — | — | ✅ | ❌ | ❌ | — | ◐ | ✅ |
+| **Python** LangChain handlers | ✅ | ✅ | observe only | ✅ | ❌ warns, continues | ❌ warns, continues | ✅⁴ | ◐ | ✅ |
+| **Ruby** `gm.tool` / `wrap` / `wrap_method` | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Ruby** ruby-openai | ✅ with inject | — | — | ✅ | ✅ | ✅ | — | ◐ | ◐ |
+| **Ruby** RubyLLM | ✅ with inject and retry | ✅ | ○ | ✅ | ✅ LLM and tool | ✅ LLM | ◐ | ◐ | ◐ |
+
+1. The AI SDK and Anthropic adapters hold a model call before the request goes out, and
+   `abort` works there. `inject` and `retry` are treated as `continue` at that gate. A provider
+   error is recorded and rethrown to your loop, not held.
+2. The code calls the `after` gate (`packages/ai-sdk/src/wrap-tools.ts`,
+   `packages/openai/src/wrap-tools.ts`), but no test in that package pins a pause at `after`
+   on a tool.
+3. The security suite's export audit runs a real Anthropic-adapter agent through `graphmind
+   record` (`security/tests/export-redaction.test.ts`). That covers export redaction, not the
+   `GRAPHMIND_HIDE_*` switches.
+4. A loop hold at a callback-only gate holds, but `inject` there degrades to `continue`, as at
+   any callback gate. Python's case is tested
+   (`test_a_langchain_tool_called_through_the_callback_handler_is_held`); the TypeScript
+   handler's is not.
+5. With `GRAPHMIND_DISABLED=1` the proxy relays bytes, records nothing, and says so on stderr:
+   `GraphMind is disabled in this environment (…); relaying only, nothing is recorded`
+   (`packages/cli/test/mcp-proxy-cli.test.ts`).
+
+The loop hold and the `GRAPHMIND_HIDE_*` switches live in the session every adapter emits
+through, so ◐ there means the same code path as the ✅ cells, reached through a different
+adapter. The session tests: `packages/client/test/loop-hold.test.ts`,
+`redaction-session.test.ts`, `python/tests/test_loop_guard.py`, `test_redaction.py`,
+`ruby/test/test_loop_guard.rb`, `test_redaction.rb`. The per-framework pages go deeper: the
+[LangGraph matrix](/integrations/langgraph/#capability-matrix) and the
+[Python matrix](/integrations/python/#capability-matrix).
+
+## Compatibility
+
+Every row is something CI runs. A runtime or version CI does not run is not claimed.
+
+**Runtimes** (`.github/workflows/ci.yml`):
+
+| | Runs on |
+| --- | --- |
+| npm packages and the CLI | Node **22.x** and **24.x** × **Linux, Windows, macOS**. `engines.node >=22.13`. |
+| CommonJS | Each of the eight packages is packed, installed from the tarball and `require()`d, on Node 22 on Linux and Windows (`cold-package-smoke`). |
+| Python SDK | Python **3.10** and **3.13** on Linux and Windows. `requires-python >=3.10`. |
+| Ruby gem | Ruby **3.1** and **3.3** on Linux; the gem is built and installed into a clean `GEM_HOME`. Not published to RubyGems yet. |
+| Viewer | The built bundle in headless Chromium (Playwright). |
+
+**SDK versions** (`.github/workflows/sdk-compat.yml`). Each adapter's own suite runs with the
+SDK pinned at the floor and at the ceiling of its declared peer range:
+
+| Adapter | Declared peer range | Pinned in CI |
+| --- | --- | --- |
+| `@graphmind-ai/sdk` | `ai >=6 <8` | 6.0.270 (floor, partial: one suite, because the test fixtures use an `ai@7`-only mock), 7.0.0, 7.0.83 |
+| `@graphmind-ai/anthropic` | `@anthropic-ai/sdk >=0.60.0 <1` | 0.60.0, 0.121.0 |
+| `@graphmind-ai/openai` | `openai >=5 <8` | 5.0.0 (two tests skipped for an upstream gap fixed in 6.45.0), 6.45.0, 7.7.0 |
+| `@graphmind-ai/langgraph` | `@langchain/core >=0.3.40 <2`, `@langchain/langgraph >=0.3 <2` | core 0.3.40 + langgraph 0.3.0; core 1.2.9 + langgraph 1.4.13 |
+| `@graphmind-ai/mcp` | optional peers: `@modelcontextprotocol/sdk >=1.26.0 <2` **or** `@modelcontextprotocol/server >=2 <3` | 1.x: 1.30.0 from the lockfile in `ci.yml`, plus 1.26.0 through an aliased install (`test/peer-compat.test.ts`). 2.x: 2.0.0, the only 2.x release, so floor and ceiling are the same. |
+| `graphmind mcp-proxy` | any MCP server over stdio | Against real SDK servers with the 1.x client, and with the 2.0.0 `@modelcontextprotocol/server` and `client` in both the 2025-11-25 and 2026-07-28 protocol eras |
+
+A weekly canary runs each adapter against that day's `latest` of its SDK. It is advisory and
+does not block a release.
+
+Python extras declare floors (`openai>=1.40`, `anthropic>=0.34`, `langchain-core>=0.3`), and the
+Ruby test group installs `ruby-openai` and `ruby_llm`. CI installs whatever currently resolves
+for those, so the floors are declared but **not run**. For how long each runtime stays
+supported, see [stability](/reference/stability/#supported-runtimes).
 
 <Aside type="note" title="Adapter maturity">
 `@graphmind-ai/sdk` (Vercel AI SDK) is the reference adapter and the most exercised. The

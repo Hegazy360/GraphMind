@@ -301,19 +301,100 @@ The Python package holds the identical contract:
 
 - **Never raises into your app.** Internal failures degrade to a rate-limited warning on stderr
   and uninstrumented behaviour. Your own exceptions propagate untouched.
-- **Cheap when detached.** Measured by the package's own `tests/test_overhead.py`: ~0.09 µs per
-  wrapped call when disabled, ~9.5 µs when enabled but detached (two envelopes into the replay
-  ring buffer), ~0.12 µs for a detached gate check.
+- **Cheap when detached.** `tests/test_overhead.py` holds the budgets: under 20 µs per wrapped
+  call when disabled, under 1 ms per wrapped call when enabled but detached (two envelopes into
+  the replay ring buffer), and under 20 µs per detached gate check.
 - **Fails open.** A debugger that disconnects mid-hold releases every gate with `continue` in
   well under 100 ms. An `atexit` hook does the same at interpreter exit, and the transport thread
   is a daemon, so GraphMind can never keep a process alive.
 - **Bounded memory and payloads.** Events emitted while detached go into a ring buffer (default
-  2000) and are replayed with their original `seq` when a viewer attaches. Prompts, arguments and
+  2,000 events, `buffer_size`) and are replayed with their original `seq` when a viewer attaches. Prompts, arguments and
   results are depth-, width- and length-capped before serialization.
 - **`fork()`-safe.** The loop thread is re-created in the child, so pre-forking servers
   (gunicorn, uvicorn workers, Celery) keep working.
 - **Off in production.** See below.
 - **Local-first.** Events go to `ws://127.0.0.1:4747/ingest` and no further.
+
+## Durations and held time
+
+Nodes are timed with `time.perf_counter()`, a monotonic high-resolution clock. `durationMs` is
+fractional to 0.01 ms, so a 60 µs tool shows `<0.1ms` rather than `0ms`. `durationMs` is still
+wall-clock time and includes any time a gate held the node. `node.finished` also carries
+`heldMs`: the time the debugger held that execution, including holds on anything inside it. The
+viewer shows ran time (`durationMs - heldMs`); see [durations](/reference/viewer/#durations).
+
+Checked against a real server:
+
+```text
+node.finished tool:search    durationMs=0.6   heldMs=0
+node.finished tool:search    durationMs=0.05  heldMs=0
+node.finished agent:py-docs  durationMs=0.78  heldMs=0
+```
+
+For tests, `graphmind.clock.set_clock(fn)` substitutes the duration clock (a function returning
+milliseconds), and `Session(clock=...)` drives only the held-time accounting.
+
+## Recording less
+
+The same four switches as the TypeScript client, with the same placeholder and the same wire
+output: `GRAPHMIND_HIDE_INPUTS`, `GRAPHMIND_HIDE_OUTPUTS`, `GRAPHMIND_HIDE_TOOL_ARGS`,
+`GRAPHMIND_HIDE_TOOL_RESULTS` (`1` or `true`), or as options:
+
+```python
+gm = graphmind.init(app="support-agent", hide_tool_args=True, hide_tool_results=True)
+```
+
+Either the environment or the option turning a switch on turns it on; `hide_inputs=False` cannot
+undo `GRAPHMIND_HIDE_INPUTS=1`. Options also accept `1`, `"1"` and `"true"`. The hidden value
+becomes `"__REDACTED__"` before the event is buffered, so a debugger that attaches later never
+sees it. This covers `@gm.tool`, spans, the OpenAI and Anthropic instrumentation (streamed tokens
+included) and the LangChain handlers. Checked with `GRAPHMIND_HIDE_TOOL_ARGS=1` against a real
+server:
+
+```text
+node.started tool:search  input="__REDACTED__"  redaction={"count":1,"keys":["input"]}
+```
+
+Exception messages and tracebacks (`node.error`) are never redacted. The tool-only switches do
+not hide the same data inside LLM messages; use `hide_inputs` and `hide_outputs` for that. The
+full rules are on [environment → recording less](/reference/environment/#recording-less).
+Conformance with the TypeScript client is tested, not assumed: `tests/test_redaction.py`
+reproduces the shared fixture byte for byte and matches a differential file generated from the
+TypeScript build.
+
+## Loop hold
+
+While a debugger is attached, the third call in a row of one tool with identical arguments, with
+no other tool call between, is held before it runs, with reason `loop`. **Continue** runs it, and the next identical call is
+held again. **Inject** substitutes a result; through a LangChain callback it degrades to
+continue, as at any callback gate. **Abort** raises `GraphMindAbortError`. A retry does not
+hold twice. With no debugger attached nothing is held and one line is logged per streak:
+
+```text
+[graphmind] possible loop: search (tool:search) was called 3× in a row with identical arguments; no debugger is attached to hold it (start `npx graphmind-ai` to pause it there). Polling on purpose? add it to loop_guard={'allow_nodes': [...]} or GRAPHMIND_LOOP_ALLOW; GRAPHMIND_ON_LOOP=off silences this
+```
+
+```python
+gm = graphmind.init(
+    app="support-agent",
+    loop_guard={"threshold": 5, "allow_nodes": ["poll_job"]},  # or loop_guard=False
+)
+```
+
+`loop_guard` takes `threshold`, `mode` (`"pause"`, `"warn"`, `"off"`), `allow_nodes`,
+`ignore_keys` and `kinds`; camelCase keys are accepted too. For each field the option wins
+over `GRAPHMIND_LOOP_THRESHOLD` / `GRAPHMIND_ON_LOOP` / `GRAPHMIND_LOOP_ALLOW`, which win over
+the default. Python-specific comparison rules: Pydantic models compare by `model_dump()`, sets
+ignore order, bytes are compared exactly, other objects compare by `repr()`, and an argument
+that raises while being read is never counted as a repeat. Under `hide_inputs`, or
+`hide_tool_args` on a tool, the loop's fingerprint is sent as `"__REDACTED__"`.
+
+Fingerprinting runs on every watched tool call, attached or not; the test bounds it at 0.5 ms
+for a 1 KB argument (`test_fingerprinting_a_1kb_input_is_cheap`), and it grows with argument
+size. In a server that does not wrap each request in `gm.run`, every request shares one implicit
+run, so the same call three times back-to-back across three separate requests counts as a loop.
+Wrap requests in runs, or use `allow_nodes`. The general rules are on
+[environment → loop hold](/reference/environment/#loop-hold).
 
 ## Environment
 
@@ -322,6 +403,8 @@ The Python package holds the identical contract:
 | `GRAPHMIND_URL` | Ingest endpoint (default `ws://127.0.0.1:4747/ingest`) |
 | `GRAPHMIND_DISABLED` | `1` disables instrumentation — beats an explicit `enabled=True` in code |
 | `GRAPHMIND` | `1` re-enables it in a production-looking environment |
+| `GRAPHMIND_HIDE_INPUTS` / `_OUTPUTS` / `_TOOL_ARGS` / `_TOOL_RESULTS` | `1` or `true`: [record less](#recording-less) |
+| `GRAPHMIND_LOOP_THRESHOLD` / `GRAPHMIND_ON_LOOP` / `GRAPHMIND_LOOP_ALLOW` | The [loop hold](#loop-hold) |
 
 "Production-looking" is a deliberately boring, documented rule rather than a heuristic: the
 **first** variable that is set out of `GRAPHMIND_ENV`, `ENVIRONMENT`, `APP_ENV`, `PYTHON_ENV`,

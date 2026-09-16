@@ -271,8 +271,7 @@ are not touched at all.
 
 ## Fail-open invariants
 
-- Disabled session: `wrapClient` / `wrapTools` return their inputs unchanged (identity, zero
-  overhead).
+- Disabled session: `wrapClient` / `wrapTools` return their inputs unchanged (identity).
 - Enabled but detached: gates resolve `continue` on a fast path; events go to the replay ring
   buffer only.
 - The adapter never throws into the host app; internal failures degrade to rate-limited warnings

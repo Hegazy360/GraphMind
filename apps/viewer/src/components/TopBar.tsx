@@ -209,7 +209,16 @@ export function TopBar({ runId }: { runId: string }) {
           <Stat value={fmtCount(stats.steps)} label="steps" optional />
           <Stat value={fmtCount(stats.tools)} label="tool calls" />
           {stats.errors > 0 && <Stat value={fmtCount(stats.errors)} label="errors" tone="error" />}
-          <Stat value={fmtDuration(stats.wallMs)} label="wall" />
+          <Stat
+            value={fmtDuration(stats.wallMs)}
+            label="wall"
+            {...(stats.heldMs > 0
+              ? { title: `${fmtDuration(stats.ranMs)} running · ${fmtDuration(stats.heldMs)} held at gates` }
+              : {})}
+          />
+          {stats.heldMs > 0 && (
+            <Stat value={fmtDuration(stats.heldMs)} label="held" title="Time a gate held execution — not run time" />
+          )}
           {stats.tokensIn + stats.tokensOut > 0 && (
             <>
               <Stat

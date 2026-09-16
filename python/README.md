@@ -250,6 +250,69 @@ mis-attributed.
 
 ---
 
+## Recording less, and the loop hold (0.5)
+
+**Recording less.** Four kill switches replace values with `"__REDACTED__"` inside the SDK, before the
+event is buffered or sent, so a debugger that attaches late, the database and every export only ever
+see the placeholder. Set them in the environment of the instrumented app, or as options:
+
+```python
+gm.configure(hide_inputs=True, hide_outputs=True, hide_tool_args=True, hide_tool_results=True)
+```
+
+| Switch | Replaces |
+| --- | --- |
+| `GRAPHMIND_HIDE_INPUTS` / `hide_inputs` | every node's `input`; streamed tool-argument deltas are emptied |
+| `GRAPHMIND_HIDE_OUTPUTS` / `hide_outputs` | every node's `output`; every streamed delta is emptied (`v: ""`, `chars` kept) |
+| `GRAPHMIND_HIDE_TOOL_ARGS` / `hide_tool_args` | tool nodes' `input` only |
+| `GRAPHMIND_HIDE_TOOL_RESULTS` / `hide_tool_results` | tool nodes' `output` only |
+
+Env values `1` or `true` (any case); options also accept `1`, `"1"` and `"true"`. Either source turning a
+switch on turns it on — `hide_inputs=False` cannot switch off `GRAPHMIND_HIDE_INPUTS=1`. Affected events
+carry `redaction: {count, keys}`. Works for `@gm.tool`, spans, the OpenAI/Anthropic instrumentation
+(streamed tokens included) and the LangChain handler.
+
+**The loop hold.** While a debugger is attached, the third call of the same tool with identical
+arguments made **back-to-back** — no other tool call in between — is held before it runs (`exec.paused` with `reason: "loop"` and `loop: {repeats,
+firstSeq, lastSeq, fingerprint}`). Continue runs it (the next identical call is held again), Inject
+substitutes a result (through the LangChain callback it degrades to continue), Abort raises
+`GraphMindAbortError`; a retry does not hold twice. Detached, or with `GRAPHMIND_ON_LOOP=warn`, nothing
+is held and one line per streak is logged, naming the tool but never its arguments.
+
+```python
+gm.configure(loop_guard={"threshold": 5, "mode": "warn", "allow_nodes": ["poll_job"]})  # or loop_guard=False
+```
+
+Back-to-back is per run: calling any other tool, or the same tool with other arguments, starts the
+count again, while LLM steps in between do not (model → tool → model → tool with identical calls is
+still a loop) and tools in `allow_nodes` / `GRAPHMIND_LOOP_ALLOW` are invisible. So a constant-argument
+tool called now and again across a long session is never held. Accepted limit: an agent alternating
+between two tools (search, read, search, read) is not held.
+
+Env: `GRAPHMIND_LOOP_THRESHOLD` (default 3, `0` off), `GRAPHMIND_ON_LOOP=pause|warn|off`,
+`GRAPHMIND_LOOP_ALLOW=poll_job,tool:heartbeat`. Each field is option first, then env, then default;
+`allow_nodes` and `ignore_keys` replace their defaults. "Identical" means canonical JSON: keys sorted,
+`1.0 == 1`, MCP's `_meta` ignored, pagination keys not ignored; Pydantic models compare by
+`model_dump()`, sets are order-independent, other objects by `repr()`. An argument whose conversion
+raises is never counted as a repeat. Under `hide_inputs` (or `hide_tool_args` on a tool) the fingerprint
+is sent as `"__REDACTED__"`. Loop holds obey `pause_timeout` and are released if the debugger disconnects.
+
+**Limits.**
+- `node.error` (exception messages and tracebacks) is never redacted — error text can echo data.
+- Redaction fails closed: if a payload cannot be inspected safely while a switch is on (a mapping whose
+  reads raise, a malformed payload), the event is sent with input/output/token text hidden and
+  `redaction.failed: true`, or dropped with one warning if even its identity fields are unreadable. The
+  raw value is never sent and nothing is raised into your app.
+- The tool-only switches hide the tool node's own input/output. In an agent loop the same values also
+  travel through the model's messages; set `GRAPHMIND_HIDE_INPUTS` and `GRAPHMIND_HIDE_OUTPUTS` to keep
+  them out entirely.
+- Hidden streamed text keeps its length (`chars`, counted in UTF-16 units like JavaScript).
+- Tools that legitimately poll with byte-identical arguments need `allow_nodes` or `GRAPHMIND_LOOP_ALLOW`.
+- LLM steps are not watched unless `kinds` includes `"llm"` (each kind keeps its own streak); identical
+  calls made in parallel are back-to-back too, so they count.
+- Cross-language equivalence is guaranteed for JSON-shaped arguments and checked against the TypeScript
+  client by two shared fixtures and a generated differential file.
+
 ## Attaching, and the kill switches
 
 The transport is lazy: it connects on first use with a 300 ms budget, then

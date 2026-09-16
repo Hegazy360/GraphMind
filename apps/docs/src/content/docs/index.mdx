@@ -22,16 +22,16 @@ import { withBase } from '../../lib/with-base.js';
 <div class="gm-hero not-content">
   <p class="gm-eyebrow">Open source · MIT · Local-first</p>
   <h1>The live debugger for AI&nbsp;agents.</h1>
-  <p class="gm-tagline">Attaches while it&rsquo;s happening.</p>
+  <p class="gm-tagline">Holds the call while it&rsquo;s happening.</p>
   <p class="gm-lede">
-    Phoenix and Langfuse show you what your agent <em>did</em>. GraphMind attaches to the run
-    itself: watch execution as a live graph, hold the agent at a gate, read every input, output
-    and token, substitute a result, and let it carry on.
+    Tracing tools show you what your agent <em>did</em>. GraphMind stops it before the LLM call,
+    before or after a tool, or on the error, while the real arguments are still live. Read every
+    input, output and token, substitute a result, and let it carry on.
   </p>
 
   <div class="gm-cta-row">
     <a class="gm-btn gm-btn--primary" href={withBase("/start/install/")}>Install &amp; first run</a>
-    <a class="gm-btn gm-btn--ghost" href={withBase("/start/what-is-graphmind/")}>Why a debugger?</a>
+    <a class="gm-btn gm-btn--ghost" href={withBase("/start/what-is-graphmind/")}>Why hold a run?</a>
   </div>
 
   <code class="gm-cmd">npx graphmind-ai demo</code>
@@ -51,7 +51,7 @@ import { withBase } from '../../lib/with-base.js';
 <CardGrid>
   <LinkCard
     title="What GraphMind is"
-    description="Live debugger vs. post-hoc observability — the honest comparison, and when each one wins."
+    description="Holding a run while it happens vs. reading a trace afterwards — the honest comparison, and when each one wins."
     href="/start/what-is-graphmind/"
   />
   <LinkCard
@@ -86,14 +86,25 @@ import { withBase } from '../../lib/with-base.js';
     Replace a tool's result — or a failure — with a value you type, and let the agent keep
     running on it. Test the recovery path without touching your code.
   </Card>
+  <Card title="Stop an agent that repeats itself" icon="error">
+    The third call in a row to the same tool with the same arguments is held before it runs,
+    with every earlier call and its output beside it. Inject a different answer and the model
+    moves on. Only while a debugger is attached; one warning otherwise.
+  </Card>
   <Card title="Debug an MCP server" icon="puzzle">
     You cannot printf-debug a server whose stdout *is* the protocol. Put `graphmind mcp-proxy`
     between the host and the server: see every request, hold one, inject a response. Any
     language, no code changes.
   </Card>
   <Card title="Fails open, always" icon="approve-check">
-    No debugger attached? Instrumentation is a no-op. Debugger disconnects mid-hold? Every gate
-    auto-continues. Your production path never waits on a viewer.
+    No debugger attached? Gates take a fast path. Debugger disconnects mid-hold? Every gate
+    continues within 100 ms. Off under `NODE_ENV=production` unless you turn it on.
+  </Card>
+  <Card title="Ready for a security review" icon="seti:lock">
+    Loopback only, no account; run data never leaves the machine (the one outbound request is an
+    anonymous CLI usage record, off with `DO_NOT_TRACK=1`). `GRAPHMIND_HIDE_*` keeps prompts and
+    results out of the recording; exports redact secret keys by default.
+    [Security & compliance](/reference/security/).
   </Card>
 </CardGrid>
 
@@ -104,8 +115,8 @@ import { withBase } from '../../lib/with-base.js';
   <LinkCard title="Anthropic SDK" href="/integrations/anthropic/" description="@graphmind-ai/anthropic — wrapClient + wrapTools" />
   <LinkCard title="OpenAI SDK" href="/integrations/openai/" description="@graphmind-ai/openai — wrapClient + wrapTools" />
   <LinkCard title="LangGraph / LangChain" href="/integrations/langgraph/" description="@graphmind-ai/langgraph — callback handler" />
-  <LinkCard title="MCP servers" href="/debugging/mcp-servers/" description="graphmind mcp-proxy — any language, no code changes" />
+  <LinkCard title="MCP servers" href="/debugging/mcp-servers/" description="graphmind mcp-proxy — any language, no code changes; @graphmind-ai/mcp for SDK 1.x and 2.x" />
   <LinkCard title="Python" href="/integrations/python/" description="openai · anthropic · langgraph" />
-  <LinkCard title="Ruby" href="/integrations/ruby/" description="gated callables · ruby-openai · RubyLLM" />
+  <LinkCard title="Ruby" href="/integrations/ruby/" description="gated callables · ruby-openai · RubyLLM (not on RubyGems yet)" />
   <LinkCard title="Anything else" href="/integrations/other-frameworks/" description="Import a trace, or write a 200-line adapter" />
 </CardGrid>

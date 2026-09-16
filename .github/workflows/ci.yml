@@ -271,7 +271,35 @@ jobs:
         run: ruff check . || echo "ruff not configured as a dev dep; skipping"
       - name: Test
         working-directory: python
-        run: pytest -q
+        shell: bash
+        # Keep the output: the failure step below turns its tail into
+        # annotations, because job logs need a GitHub login to read and the
+        # annotations do not.
+        run: |
+          set -o pipefail
+          pytest -q -rfE 2>&1 | tee pytest.log
+      - name: Surface the failing tests as annotations
+        if: failure()
+        working-directory: python
+        shell: bash
+        run: |
+          python - <<'EOF'
+          import os, pathlib
+          log = pathlib.Path("pytest.log").read_text(errors="replace").splitlines()
+          tail = log[-60:]
+          # One annotation per failing test line, then the tail for context.
+          fails = [l for l in log if l.startswith(("FAILED", "ERROR"))][:8]
+          for l in fails:
+              print(f"::error title=pytest ({os.environ.get('MATRIX', '')})::{l}")
+          body = "%0A".join(tail)
+          print(f"::error title=pytest tail ({os.environ.get('MATRIX', '')})::{body}")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a") as fh:
+                  fh.write("### pytest tail\n```\n" + "\n".join(tail) + "\n```\n")
+          EOF
+        env:
+          MATRIX: ${{ matrix.os }} py${{ matrix.python }}
       - name: Build wheel + sdist
         working-directory: python
         run: |
@@ -301,7 +329,30 @@ jobs:
           working-directory: ruby
       - name: Test
         working-directory: ruby
-        run: bundle exec rake test
+        # Verbose so each finished test is on record, under an internal
+        # timeout well inside the job's 15 minutes: a suite that hangs must
+        # reach the failure step below (a job cancelled by the runner never
+        # does), and the last verbose line names the test that hung.
+        run: |
+          set -o pipefail
+          timeout 11m bundle exec rake test TESTOPTS="--verbose" 2>&1 | tee rake.log
+      - name: Surface the failing or hung tests as annotations
+        if: failure()
+        working-directory: ruby
+        run: |
+          ruby - <<'EOF'
+          log = File.readlines("rake.log", chomp: true)
+          tail = log.last(60)
+          fails = log.grep(/^\s*\d+\)\s+(Failure|Error)|Failure:|Error:/).first(8)
+          label = "ruby #{ENV["MATRIX"]}"
+          fails.each { |l| puts "::error title=minitest (#{label})::#{l}" }
+          puts "::error title=minitest tail (#{label})::#{tail.join("%0A")}"
+          if (path = ENV["GITHUB_STEP_SUMMARY"])
+            File.open(path, "a") { |f| f.puts "### minitest tail", "```", tail, "```" }
+          end
+          EOF
+        env:
+          MATRIX: ${{ matrix.ruby }}
       - name: Build the gem
         working-directory: ruby
         run: |
@@ -510,7 +561,7 @@ jobs:
         # defects they described were fixed).
         env:
           RESULT: ${{ runner.temp }}/security-audit.json
-          MIN_TESTS: '165'
+          MIN_TESTS: '170'
         run: |
           set -euo pipefail
           node -e '

@@ -214,3 +214,34 @@ describe('applyEvent — token + unknown handling', () => {
     expect(runs2[RUN]?.nodes['llm:s1']?.executions[0]?.status).toBe('running');
   });
 });
+
+describe('applyEvent — the sender\'s `collapsed` hint (0.5.0)', () => {
+  it('keeps the hint on the node, sticky across later executions that omit it', () => {
+    const runs1 = reduce([
+      ev('node.started', {
+        nodeId: 'mcp:protocol',
+        kind: 'custom',
+        name: 'protocol',
+        instanceId: 'p1',
+        collapsed: true,
+      }),
+    ]);
+    expect(runs1[RUN]?.nodes['mcp:protocol']?.collapsed).toBe(true);
+
+    const runs2 = reduce(
+      [
+        ev('node.finished', { nodeId: 'mcp:protocol', instanceId: 'p1', durationMs: 1, status: 'ok' }),
+        ev('node.started', { nodeId: 'mcp:protocol', kind: 'custom', name: 'protocol', instanceId: 'p2' }),
+      ],
+      runs1,
+    );
+    expect(runs2[RUN]?.nodes['mcp:protocol']?.collapsed).toBe(true);
+  });
+
+  it('is absent for a node that was never hinted', () => {
+    const runs = reduce([
+      ev('node.started', { nodeId: 'tool:t', kind: 'tool', name: 't', instanceId: 't1' }),
+    ]);
+    expect(runs[RUN]?.nodes['tool:t']?.collapsed).toBeUndefined();
+  });
+});

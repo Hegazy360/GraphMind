@@ -26,12 +26,12 @@ site in ``gm.span``) — that owns the call and can replace it.
 
 from __future__ import annotations
 
-import time
 from collections import OrderedDict
 from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
+from ..clock import elapsed_ms, monotonic_ms
 from ..errors import GraphMindAbortError, to_error_info
 from ..gate import GateNode
 from ..ids import agent_node_id
@@ -75,7 +75,7 @@ class _Node:
         self.kind = kind
         self.name = name
         self.instance_id = instance_id
-        self.started = time.monotonic()
+        self.started = monotonic_ms()
 
     def gate_node(self) -> GateNode:
         return GateNode(self.node_id, self.kind, self.name)
@@ -206,7 +206,7 @@ class _Core:
         self.session.finish_node(
             node_id=node.node_id,
             instance_id=node.instance_id,
-            duration_ms=(time.monotonic() - node.started) * 1000.0,
+            duration_ms=elapsed_ms(node.started),
             status=status,
             output=output,
             usage=usage,

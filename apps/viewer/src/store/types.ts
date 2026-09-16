@@ -27,7 +27,15 @@ export interface NodeExecution {
   status: 'running' | RunStatus;
   error?: ErrorInfo;
   usage?: TokenUsage;
+  /**
+   * Wall-clock duration as the adapter measured it — INCLUDING time the
+   * debugger held the node at a gate. Never show this raw: see lib/duration.
+   */
   durationMs?: number;
+  /** The debugger's share of `durationMs`, as emitted by the SDK (0.5+). */
+  heldMs?: number;
+  /** Held time derived from exec.paused/exec.resumed timestamps (older streams). */
+  derivedHeldMs?: number;
   startedTs: number;
   finishedTs?: number;
   /** The debugger substituted this result (`exec.resume` action `inject`). */
@@ -35,6 +43,27 @@ export interface NodeExecution {
   /** Streaming tool execute (AsyncIterable) — observed, not gated mid-stream. */
   streaming?: boolean;
   chunks?: number;
+  /**
+   * Envelope seq of this execution's `node.started`. Lets a loop hold
+   * (`Pause.loop.firstSeq..lastSeq`) name exactly which executions were the
+   * identical calls.
+   */
+  seq?: number;
+}
+
+/** Why a gate held (0.5.0+ senders; older streams omit it). */
+export type PauseReason = 'breakpoint' | 'error' | 'step' | 'loop';
+
+/** `exec.paused.loop`: the streak of identical calls that tripped the loop hold. */
+export interface LoopInfo {
+  /** Consecutive identical calls so far, the held one included. */
+  repeats: number;
+  /** Envelope seq of the first `node.started` in the streak. */
+  firstSeq: number;
+  /** Envelope seq of the held call's `node.started`. */
+  lastSeq: number;
+  /** Fingerprint of (nodeId, canonical input) they all share. */
+  fingerprint: string;
 }
 
 /**
@@ -53,6 +82,8 @@ export interface NodeState {
    * cannot be paused — breakpoints on it never fire.
    */
   ungated?: boolean;
+  /** The sender asked for this node to open folded (`node.started.collapsed`, 0.5.0). */
+  collapsed?: boolean;
   executions: NodeExecution[];
   /** Set while an `exec.paused` gate on this node is unresolved. */
   activePauseId?: string;
@@ -66,6 +97,18 @@ export interface Pause {
   ts: number;
   active: boolean;
   resolvedAction?: ResumeAction;
+  /** Envelope ts of the `exec.resumed` that released it. */
+  resolvedTs?: number;
+  /**
+   * The executions this hold sat inside: the held node's instance, every
+   * open ancestor's, and the run's root node — the same attribution the SDK
+   * ledgers use for `heldMs`. Drives derived held time and the timeline hatch.
+   */
+  heldBy?: { nodeId: string; instanceId: string }[];
+  /** Why the gate held. `loop` = the SDK's built-in loop breakpoint. */
+  reason?: PauseReason;
+  /** Present when `reason` is `loop`. */
+  loop?: LoopInfo;
 }
 
 export interface RunMeta {

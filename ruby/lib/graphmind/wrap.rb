@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative "clock"
 require_relative "errors"
 require_relative "gate_engine"
 require_relative "ids"
@@ -43,7 +44,7 @@ module Graphmind
       node = GateNode.new(node_id, kind, name)
       ctx = session.current_run
       instance_id = Ids.next_id("call")
-      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      started = Clock.now_ms
       session.start_node(node_id: node_id, kind: kind, name: name, instance_id: instance_id,
                          parent_id: parent_id, input: input)
 
@@ -51,7 +52,7 @@ module Graphmind
         session.finish_node(
           node_id: node_id,
           instance_id: instance_id,
-          duration_ms: (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000.0,
+          duration_ms: Clock.elapsed_ms(started),
           status: status,
           output: output,
           extra: extra

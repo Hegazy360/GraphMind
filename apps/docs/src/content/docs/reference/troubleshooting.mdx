@@ -33,7 +33,7 @@ Work down this list; it is ordered by how often each one is the answer.
 
    ```ts
    console.log(gm.session.stats());
-   // { enabled, attached, buffered, dropped, heldGates, seq }
+   // { enabled, attached, buffered, dropped, lost, pendingGaps, heldGates, seq }
    ```
 
    `enabled: false` means a kill switch fired — `GRAPHMIND_DISABLED=1`, or `NODE_ENV=production`
@@ -56,6 +56,12 @@ Work down this list; it is ordered by how often each one is the answer.
 6. **Look for a warning.** The client warns once per failure kind per minute with a `[graphmind]`
    prefix. It never throws, so the warning is the only signal.
 
+7. **Through `graphmind mcp-proxy`?** About 1.5 s into a session the proxy says on stderr
+   whether it attached (`attached — watch it at http://127.0.0.1:4747`) or found nothing
+   (`GraphMind is not running at ws://…, so nothing is being recorded yet`). A server that
+   cannot be started, or exits before answering, is named on stderr too; see
+   [MCP proxy](/integrations/mcp-proxy/#when-the-server-misbehaves).
+
 </Steps>
 
 ## Port 4747 is already in use
@@ -75,6 +81,14 @@ GRAPHMIND_URL=ws://127.0.0.1:4848/ingest node agent.js
 ```
 
 If you use MCP, pass `--port 4848` there too or its deep links will point at the wrong viewer.
+
+## A tool call pauses with "Loop: 3× … with identical arguments"
+
+That is the [loop hold](/reference/environment/#loop-hold): the agent called the same tool with
+the same arguments three times in a row while a debugger was attached. If the tool polls on
+purpose, exempt it with `loopGuard: { allowNodes: ['pollJob'] }` or
+`GRAPHMIND_LOOP_ALLOW=pollJob` (the only way under `graphmind mcp-proxy`). To log instead of
+holding, set `GRAPHMIND_ON_LOOP=warn`; to turn it off, `GRAPHMIND_ON_LOOP=off`.
 
 ## Gates never pause
 
@@ -148,8 +162,13 @@ GRAPHMIND_ALLOWED_ORIGINS=http://localhost:5199,http://127.0.0.1:5199 graphmind
 ```
 
 You will also hit it if you reach the server through a hostname that is not a loopback name —
-a `.local` alias, a container hostname, a rebinding domain. Use `127.0.0.1` or `localhost`, or
-tunnel (an SSH tunnel presents as loopback and works).
+a `.local` alias, a container hostname such as `host.docker.internal`, a rebinding domain.
+Use `127.0.0.1` or `localhost`, or name that host in `GRAPHMIND_ALLOWED_ORIGINS`.
+
+**A blank viewer through a forwarded port** (SSH `-L`, VS Code, a devcontainer) is the same
+check. The forward passes the `Host` check, but the browser's origin must use the server's own
+port number. Forward 4747 to local 4747, or set `GRAPHMIND_ALLOWED_ORIGINS` to the origin in
+your address bar. See [remote development](/guides/remote-development/).
 
 `GRAPHMIND_ALLOWED_ORIGINS='*'` turns the check off. That is a real hole — a page you visit can
 then read every recorded run and resume a paused one with an injected result — so only do it on

@@ -39,9 +39,46 @@ export function resumeGate(runId: string, pauseId: string, action: ResumeAction)
   sendControl(sourceOf(runId), 'exec.resume', { pauseId, action }, runId);
 }
 
-/** Substitute a result for the held call and carry on. */
-export function injectAndResume(runId: string, pauseId: string, output: unknown): void {
+/**
+ * The placeholder the instrumented app writes in place of a hidden value
+ * (GRAPHMIND_HIDE_INPUTS / _OUTPUTS / _TOOL_ARGS / _TOOL_RESULTS). Identical
+ * to @graphmind-ai/client's `REDACTED` by contract.
+ */
+export const REDACTED_PLACEHOLDER = '__REDACTED__';
+
+/**
+ * Why an inject must be refused, or `undefined` when it may go. The inject
+ * editor pre-fills with the held node's recorded output/input, and under a
+ * kill switch that is the placeholder: pressing "Inject & resume" without
+ * editing would hand the app the string "__REDACTED__" as a tool result.
+ * Anything whose JSON form still contains the placeholder — as a value,
+ * inside a string, or as a key — is refused in plain words. The server
+ * applies the same rule (packages/cli/src/hub.ts) as defence in depth.
+ */
+export function injectRefusal(output: unknown): string | undefined {
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(output);
+  } catch {
+    json = undefined;
+  }
+  if (typeof json === 'string' && json.includes(REDACTED_PLACEHOLDER)) {
+    return 'this value contains redacted content; edit it before injecting';
+  }
+  return undefined;
+}
+
+export type InjectResult = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Substitute a result for the held call and carry on. Returns `{ok:false,
+ * reason}` — and sends nothing — when the value contains redacted content.
+ */
+export function injectAndResume(runId: string, pauseId: string, output: unknown): InjectResult {
+  const reason = injectRefusal(output);
+  if (reason !== undefined) return { ok: false, reason };
   sendControl(sourceOf(runId), 'exec.resume', { pauseId, action: 'inject', output }, runId);
+  return { ok: true };
 }
 
 /**

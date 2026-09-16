@@ -121,3 +121,13 @@ links and the landing page's "Docs" nav item point at `graphmind.ai/docs` and wo
 Everything here is grounded in the actual packages (`packages/schema`, `packages/client`,
 `packages/ai-sdk`, `packages/cli` and their READMEs). Do not document behaviour that is not
 implemented — if it is aspirational, leave it out or say plainly that it is not there yet.
+
+A number on a page is either a named constant in the source, a test that asserts it, or a
+measurement with a date. Performance claims cite the test that measures them. Test counts come
+from the counting script, never from memory:
+
+```sh
+node apps/docs/scripts/count-tests.mjs          # collected test cases per suite (fast)
+node apps/docs/scripts/count-tests.mjs --run    # also runs them and reports passes
+# PYTHON=<python> and RUBY_BIN=<dir with ruby/bundle> select the interpreters
+```

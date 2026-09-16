@@ -6,7 +6,7 @@
  * from the first byte, so everything this file prints goes to stderr.
  */
 import type { Readable, Writable } from 'node:stream';
-import { resolveUrl } from '@graphmind-ai/client';
+import { resolveEnabled, resolveUrl } from '@graphmind-ai/client';
 import type { ParsedCli } from '../args.js';
 import { mcpProxyHelp } from '../mcp-proxy/help.js';
 import { startMcpProxy } from '../mcp-proxy/proxy.js';
@@ -61,7 +61,9 @@ export async function runMcpProxy(parsed: ParsedCli, io: McpProxyIo = defaultIo(
     parsed.flags.port === undefined ? undefined : `ws://127.0.0.1:${parsed.flags.port}/ingest`;
   const effectiveUrl = resolveUrl(url, process.env as Record<string, string | undefined>);
   err(`graphmind mcp-proxy v${VERSION}: proxying ${argv.join(' ')}`);
-  err(`graphmind mcp-proxy: reporting to ${effectiveUrl}`);
+  if (resolveEnabled(undefined, process.env as Record<string, string | undefined>)) {
+    err(`graphmind mcp-proxy: reporting to ${effectiveUrl}`);
+  }
 
   const handle = startMcpProxy({
     command,
@@ -93,6 +95,16 @@ export async function runMcpProxy(parsed: ParsedCli, io: McpProxyIo = defaultIo(
   // Reported here rather than at exit because an MCP host does not close the
   // pipe on shutdown, it KILLS the child — so an exit-time message is the one
   // message that never prints where it is needed.
+  if (!handle.session.enabled) {
+    // GRAPHMIND_DISABLED=1 (or a production-looking env without GRAPHMIND=1):
+    // the session will never attach, so "not running … start it" would send
+    // the user to fix the wrong thing.
+    err(
+      'graphmind mcp-proxy: GraphMind is disabled in this environment (GRAPHMIND_DISABLED=1, or ' +
+        'NODE_ENV=production without GRAPHMIND=1); relaying only, nothing is recorded',
+    );
+    return await handle.done;
+  }
   void handle.session
     .ready({ timeoutMs: ATTACH_NOTICE_MS })
     .then((attached) => {
