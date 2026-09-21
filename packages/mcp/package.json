@@ -63,7 +63,7 @@
     "@types/ws": "^8.18.1",
     "mcp-sdk-floor": "npm:@modelcontextprotocol/sdk@1.26.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11",
+    "vitest": "^5.0.1",
     "ws": "^8.21.3",
     "zod": "^4.4.3"
   },
