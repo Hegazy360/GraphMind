@@ -188,12 +188,16 @@ jobs:
             args: ''
             min_tests: 68
           # --- @graphmind-ai/mcp (peers: @modelcontextprotocol/sdk >=1.26.0 <2 | @modelcontextprotocol/server >=2 <3) ---
-          # v2 is a new package family (server + core, client for the suite). Only 2.0.0
+          # v2 is a new package family (server + core, client for the suite).
+          # `core` is NOT pinned: it is `server`'s own dependency, at exactly the
+          # server's version (server@2.0.0 -> core 2.0.0), so it is installed under
+          # server, never at the top of this package — where the pin assertion
+          # below looks. Pinning server pins core. Only 2.0.0
           # exists today, so floor == ceiling; the weekly canary picks up 2.x.y.
-          - label: 'mcp / @modelcontextprotocol/server@2.0.0 (+client, core) — v2 floor = ceiling'
+          - label: 'mcp / @modelcontextprotocol/server@2.0.0 (+client) — v2 floor = ceiling'
             pkg: '@graphmind-ai/mcp'
             dir: packages/mcp
-            pins: '@modelcontextprotocol/server=2.0.0 @modelcontextprotocol/client=2.0.0 @modelcontextprotocol/core=2.0.0'
+            pins: '@modelcontextprotocol/server=2.0.0 @modelcontextprotocol/client=2.0.0'
             args: 'test/v2'
             min_tests: 36
           # --- graphmind-ai (mcp-proxy) against the v2 family: wire-level, so this is the
@@ -202,7 +206,7 @@ jobs:
           - label: 'mcp-proxy / @modelcontextprotocol/server@2.0.0 + client@2.0.0'
             pkg: 'graphmind-ai'
             dir: packages/cli
-            pins: '@modelcontextprotocol/server=2.0.0 @modelcontextprotocol/client=2.0.0 @modelcontextprotocol/core=2.0.0'
+            pins: '@modelcontextprotocol/server=2.0.0 @modelcontextprotocol/client=2.0.0'
             args: 'mcp-proxy-v2'
             min_tests: 23
 
@@ -402,7 +406,7 @@ jobs:
             min_tests: 68
           - pkg: '@graphmind-ai/mcp'
             dir: packages/mcp
-            sdks: '@modelcontextprotocol/server @modelcontextprotocol/client @modelcontextprotocol/core'
+            sdks: '@modelcontextprotocol/server @modelcontextprotocol/client'
             min_tests: 77
 
     env:
