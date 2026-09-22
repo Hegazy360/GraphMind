@@ -163,6 +163,36 @@ auto-continue, disconnect fail-open, dispose) it emits `exec.resumed`.
 Parallel gates are independent: two concurrent tool calls hold two pauses,
 each resumable on its own (spike assertions b.1–b.4).
 
+### Edited input (0.6.0)
+
+An adapter that can run a call with different arguments says so per gate:
+
+```ts
+const decision = await session.gate('before', node, {
+  editable: true,
+  // for tools: merge the edit onto the LIVE arguments, then check your schema
+  validateInput: (proposed) => {
+    const merged = mergeToolInput(liveArgs, proposed);
+    return merged.ok ? mySchemaCheck(merged.value) : merged;
+  },
+});
+if (decision.action === 'continue' && 'input' in decision) liveArgs = decision.input;
+```
+
+The pause is offered as `editable` only when the app announced `edit-input`
+(`GRAPHMIND_DISABLE_EDIT_INPUT` turns it off, same spellings as the other
+switches) and the debugger lists it in `hello.ack.hubCapabilities`. An edit is
+valid as `continue` at `before` or `retry` at `after`/`error`; anything else,
+an input holding `"__REDACTED__"` or a truncation marker, or a validator that
+refuses, throws or takes longer than 4 s is answered with `exec.refused` and
+the gate **stays held** under the same pause id. A disconnect or pause
+timeout while validating continues with the original input.
+`exec.resumed.edited.after` records the input that ran, redacted like the
+node's input (`HIDE_INPUTS`, or `HIDE_TOOL_ARGS` on a tool).
+
+`gate('after', node, { result })` hands the call's result to the session's
+after-gate detectors (smart holds); it is never sent through this option.
+
 ## Abort (why there is an AbortController)
 
 Spike RESULTS.md, risk #4: throwing a plain `Error` out of SDK middleware

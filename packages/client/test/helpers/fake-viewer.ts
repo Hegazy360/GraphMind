@@ -33,6 +33,13 @@ export interface FakeViewerOptions {
   gm?: number;
   /** `versions.protocol` inside hello.ack. Default: same as gm. */
   ackProtocol?: number;
+  /**
+   * `hubCapabilities` inside hello.ack (what a 0.6 debugger implements).
+   * Default: absent, like a 0.5 debugger.
+   */
+  hubCapabilities?: string[] | undefined;
+  /** Echo the app's own `capabilities` in hello.ack, as the real hub does. Default: a fixed list. */
+  echoCapabilities?: boolean;
 }
 
 export class FakeViewer {
@@ -109,6 +116,16 @@ export class FakeViewer {
     });
   }
 
+  /** What the next hello.ack says in `hubCapabilities` (undefined: omit it). */
+  setHubCapabilities(capabilities: string[] | undefined): void {
+    this.options.hubCapabilities = capabilities;
+  }
+
+  /** `exec.resume` with any payload fields (input, requestId, ...). */
+  resumeWith(payload: { pauseId: string; action: ResumeAction; [key: string]: unknown }): void {
+    this.sendControl('exec.resume', payload);
+  }
+
   setBreakpoint(matcher: BreakpointMatcher): void {
     this.sendControl('breakpoint.set', { matcher });
   }
@@ -157,9 +174,12 @@ export class FakeViewer {
             protocol: this.options.ackProtocol ?? this.options.gm ?? PROTOCOL_VERSION,
             viewer: 'fake-viewer/0.0.0',
           },
-          capabilities: ['pause', 'step', 'inject', 'retry', 'abort'],
+          capabilities: this.options.echoCapabilities === true
+            ? frame.payload['capabilities']
+            : ['pause', 'step', 'inject', 'retry', 'abort'],
           breakpoints: this.options.breakpoints ?? [],
           mode: this.options.mode ?? 'run',
+          ...(this.options.hubCapabilities === undefined ? {} : { hubCapabilities: this.options.hubCapabilities }),
         });
       }
     });

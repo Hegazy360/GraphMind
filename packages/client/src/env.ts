@@ -14,6 +14,10 @@
  *   GRAPHMIND_LOOP_THRESHOLD  non-negative integer, default 3; 0 disables.
  *   GRAPHMIND_ON_LOOP         pause (default) | warn | off.
  *   GRAPHMIND_LOOP_ALLOW      comma-separated node ids/names never held (tools that poll).
+ *
+ * Edited input (0.6.0, see edit-input.ts):
+ *   GRAPHMIND_DISABLE_EDIT_INPUT  kill switch (killSwitchOn spelling): `edit-input`
+ *                                 is not announced and every edit is refused.
  */
 
 export type EnvLike = Record<string, string | undefined>;

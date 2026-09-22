@@ -114,6 +114,9 @@ describe('the client and the CLI read only documented environment variables', ()
     'GRAPHMIND_HIDE_OUTPUTS',
     'GRAPHMIND_HIDE_TOOL_ARGS',
     'GRAPHMIND_HIDE_TOOL_RESULTS',
+    // 0.6.0 — edited input kill switch (client). Removes a capability; carries
+    // no user data.
+    'GRAPHMIND_DISABLE_EDIT_INPUT',
     'CI',
   ];
 

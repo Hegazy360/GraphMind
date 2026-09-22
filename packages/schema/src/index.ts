@@ -94,6 +94,7 @@ export {
   MAX_PAYLOAD_BYTES,
   MAX_SHRINK_KEYS,
   MAX_TRIM_FIELDS,
+  TRUNCATION_SUFFIX,
   isTruncatedPayload,
   serializePayload,
   type TruncatedPayload,

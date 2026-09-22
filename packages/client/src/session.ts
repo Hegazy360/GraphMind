@@ -10,8 +10,10 @@
  *  - Fail-open: disconnect/dispose auto-continues every held gate.
  *  - Kill switches: GRAPHMIND_DISABLED=1 always disables; NODE_ENV=production
  *    disables unless GRAPHMIND=1. Disabled sessions never touch the network.
+ *  - Edited input (0.6.0, contract C2): honoured only where every condition
+ *    holds — see `handleResume`. A refused edit leaves the gate held.
  */
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { AsyncLocalStorage, AsyncResource } from 'node:async_hooks';
 import {
   KNOWN_CAPABILITIES,
   MAX_PAYLOAD_BYTES,
@@ -33,13 +35,26 @@ import {
   type SdkInfo,
 } from '@graphmind-ai/schema';
 import { type Clock, monotonicNow, normalizeDurationMs } from './clock.js';
-import { resolveEnabled, resolveUrl, type EnvLike } from './env.js';
+import {
+  VALIDATOR_FAILED,
+  normalizeValidation,
+  proposedValueRefusal,
+  sanitizeShortText,
+  wireCopy,
+  type InputValidation,
+  type Refusal,
+  type ValidateInput,
+} from './edit-input.js';
+import { killSwitchOn, resolveEnabled, resolveUrl, type EnvLike } from './env.js';
 import { GraphMindAbortError, isAbortError, toErrorInfo } from './errors.js';
 import {
   CONTINUE_DECISION,
   GateEngine,
   type GateDecision,
   type GateNode,
+  type HeldGateView,
+  type ResumeInfo,
+  type ValidationTicket,
 } from './gate-engine.js';
 import { HeldLedger } from './held-ledger.js';
 import {
@@ -54,8 +69,83 @@ import { REDACTED, Redactor, resolveRedaction } from './redaction.js';
 import { RingBuffer } from './ring-buffer.js';
 import { RateLimitedWarner, type WarnSink } from './safe.js';
 import { Transport, type WebSocketConstructor } from './transport.js';
+import { CLIENT_VERSION } from './version.js';
 
-export const CLIENT_VERSION = '0.1.0';
+/**
+ * How long an adapter's `validateInput` may take before the edit is refused
+ * (code `shape`) and the gate reopened. Below the debugger's 5 s wait for an
+ * answer to a resume, so a slow validator never outlives the request it
+ * answers — and a validator that never settles cannot wedge a gate that no
+ * resume could then release.
+ */
+export const VALIDATION_TIMEOUT_MS = 4000;
+
+/** Longest `exec.resume.requestId` echoed back (the debugger's are ~36 chars). */
+const MAX_REQUEST_ID_LENGTH = 256;
+
+/** Smart-hold details (`exec.paused.smart`, with `reason: 'breakpoint'`). */
+export type SmartInfo = NonNullable<EventPayloadMap['exec.paused']['smart']>;
+
+/**
+ * What an after-gate detector sees (W4's smart holds): the gated call and its
+ * result, as the adapter passed it in `GateOptions.result`. Read-only, never
+ * sent — whatever a detector concludes travels only as `SmartInfo`.
+ */
+export interface AfterGateContext {
+  readonly runId: string;
+  readonly node: GateNode;
+  readonly result: unknown;
+}
+
+/**
+ * An after-gate detector: return why the gate should hold, or undefined. It
+ * is consulted only while a debugger is attached, only at `after` gates that
+ * passed a `result`. A throw counts as "no hold".
+ */
+export type GateDetector = (context: AfterGateContext) => SmartInfo | undefined;
+
+/** Per-call options for `session.gate` (0.6.0). Omitted: the 0.5 behaviour exactly. */
+export interface GateOptions {
+  /**
+   * The call's result, at an `after` gate: what the after-gate detectors
+   * inspect. Never sent or stored through this option (`node.finished`
+   * records the output, as before).
+   */
+  result?: unknown;
+  /**
+   * This adapter can run the call with an edited input at this gate (0.6.0:
+   * tool arguments). The pause is offered as `editable` only when the app
+   * announced `edit-input` (GRAPHMIND_DISABLE_EDIT_INPUT off) and the
+   * debugger listed it in `hello.ack.hubCapabilities`. An accepted edit comes
+   * back as `decision.input`: `continue` at `before`, `retry` at `after` /
+   * `error` — run the call with it.
+   */
+  editable?: boolean;
+  /**
+   * Checks and completes a proposed input before the call runs with it — for
+   * tool arguments, `mergeToolInput(liveArgs, proposed)` followed by the
+   * tool's own schema. Omitted: the proposed input is used as it is. Runs in
+   * the gated call's async context; may be async. A throw, a rejection, a
+   * malformed verdict or no verdict within VALIDATION_TIMEOUT_MS refuses the
+   * edit (`exec.refused`) and the gate stays held.
+   */
+  validateInput?: ValidateInput;
+}
+
+/** What `gate()` hands the hold it is about to open (see `pendingPause`). */
+interface PendingPause {
+  loop: LoopInfo | undefined;
+  smart: SmartInfo | undefined;
+  /** Every edit condition held when the pause opened: `exec.paused.editable`. */
+  editable: boolean;
+  /** The adapter's validator, bound to the gated call's async context. */
+  validate: ValidateInput | undefined;
+}
+
+/** An editable pause, for as long as it is held. */
+interface EditablePause {
+  validate: ValidateInput | undefined;
+}
 
 export interface RunContext {
   readonly runId: string;
@@ -210,8 +300,10 @@ export interface Session {
   /**
    * The core gating primitive: await before/after/error boundaries. Resolves
    * `{action:'continue'}` synchronously-fast when detached or not matching.
+   * `options` (0.6.0) passes the call's result to the after-gate detectors
+   * and makes the pause editable; see GateOptions.
    */
-  gate(point: PausePoint, node: GateNode): Promise<GateDecision>;
+  gate(point: PausePoint, node: GateNode, options?: GateOptions): Promise<GateDecision>;
   /** Diagnostics snapshot (also used by tests). */
   stats(): SessionStats;
   /** Release held gates, close the socket, stop timers. Idempotent. */
@@ -264,12 +356,23 @@ class SessionImpl implements Session {
   /** Loop hold: back-to-back identical tool calls (rule v3), consulted at gate('before'). */
   private readonly loopGuard: LoopGuard;
   /**
-   * Loop details for the hold `gate()` is about to open. `GateEngine.hold`
-   * calls `onPaused` synchronously inside its Promise executor, so this is
-   * set immediately before `hold()` and consumed inside `onPaused` — never
-   * across a tick, never shared between two gates.
+   * Why the hold `gate()` is about to open holds, and whether it is
+   * editable. `GateEngine.hold` calls `onPaused` synchronously inside its Promise
+   * executor, so this is set immediately before `hold()` and consumed inside
+   * `onPaused` — never across a tick, never shared between two gates.
    */
-  private pendingLoop: LoopInfo | undefined;
+  private pendingPause: PendingPause | undefined;
+  /** Held pauses offered as `editable`, by pauseId; removed on release. */
+  private readonly editablePauses = new Map<string, EditablePause>();
+  /** GRAPHMIND_DISABLE_EDIT_INPUT is off: `edit-input` is announced in `hello`. */
+  private readonly editInputEnabled: boolean;
+  /**
+   * What the attached debugger implements (`hello.ack.hubCapabilities`).
+   * Undefined for a 0.5 debugger, which sends none, and while detached.
+   */
+  private hubCapabilities: ReadonlySet<string> | undefined;
+  /** After-gate detectors (W4's smart holds). Empty: `after` gates are unchanged. */
+  private readonly detectors: GateDetector[] = [];
   private readonly als = new AsyncLocalStorage<RunContext>();
   private readonly newPauseId = makeCounterIds('pause');
 
@@ -296,6 +399,7 @@ class SessionImpl implements Session {
     const env = options.env ?? process.env;
     this.enabled = resolveEnabled(options.enabled, env);
     this.warner = new RateLimitedWarner(options.warnIntervalMs, options.logger);
+    this.editInputEnabled = !killSwitchOn(env['GRAPHMIND_DISABLE_EDIT_INPUT']);
     this.appName = options.appName ?? 'node';
     this.sdk = options.sdk ?? { name: 'custom', version: '0.0.0' };
     this.meta = options.meta;
@@ -330,23 +434,33 @@ class SessionImpl implements Session {
       {
         newPauseId: this.newPauseId,
         onPaused: (pauseId, node, point, runId) => {
-          // Loop hold (W5): the built-in breakpoint says why it fired. Taken
-          // FIRST so a throw anywhere below can never leave it behind for the
-          // next, unrelated hold.
-          const loop = this.pendingLoop;
-          this.pendingLoop = undefined;
+          // Why it holds (loop hold, smart hold) and whether it is editable.
+          // Taken FIRST so a throw anywhere below can never leave it behind
+          // for the next, unrelated hold.
+          const pending = this.pendingPause;
+          this.pendingPause = undefined;
+          if (pending?.editable === true) {
+            this.editablePauses.set(pauseId, { validate: pending.validate });
+          }
           this.ledger.holdOpened(pauseId, runId, node.nodeId, point);
-          this.emitInternal(
-            'exec.paused',
-            loop === undefined
-              ? { pauseId, nodeId: node.nodeId, point }
-              : { pauseId, nodeId: node.nodeId, point, reason: 'loop', loop: this.loopOnWire(loop, node) },
-            runId,
-          );
+          this.emitInternal('exec.paused', this.pausedPayload(pauseId, node, point, pending), runId);
         },
-        onResumed: (pauseId, _node, action, runId) => {
+        onResumed: (pauseId, node, action, runId, _heldMs, info) => {
+          this.editablePauses.delete(pauseId);
           this.ledger.holdClosed(pauseId);
-          this.emitInternal('exec.resumed', { pauseId, action }, runId);
+          this.guard('resumed', () => {
+            this.emitInternal(
+              'exec.resumed',
+              {
+                pauseId,
+                action,
+                ...(info?.edited === undefined ? {} : { edited: info.edited }),
+                ...(info?.requestId === undefined ? {} : { requestId: info.requestId }),
+              },
+              runId,
+              node.kind,
+            );
+          });
         },
       },
       options.pauseTimeoutMs,
@@ -473,26 +587,33 @@ class SessionImpl implements Session {
     });
   }
 
-  gate(point: PausePoint, node: GateNode): Promise<GateDecision> {
+  gate(point: PausePoint, node: GateNode, options?: GateOptions): Promise<GateDecision> {
     if (!this.active()) return CONTINUE_PROMISE;
     try {
       this.ensureStarted();
       // Fast path: detached, or attached with nothing matching. The loop hold
       // (W5) is a built-in breakpoint consulted only when attached, only at
       // 'before', only in mode 'pause' — detached, the fast path is untouched.
+      // The after-gate detectors likewise run only when attached, only at
+      // 'after', only when the adapter passed options and a detector exists.
       const loop =
         point === 'before' && this.transport.attached && this.loopGuard.mode === 'pause'
           ? this.loopGuard.consult(this.resolveRunId(), node.kind, node.nodeId, node.name)
           : undefined;
+      const smart =
+        point === 'after' && options !== undefined && this.detectors.length > 0 && this.transport.attached
+          ? this.detect(node, options)
+          : undefined;
       if (
         loop === undefined &&
+        smart === undefined &&
         (!this.transport.attached || !this.engine.shouldPause(point, node))
       ) {
         return CONTINUE_PROMISE;
       }
       const ctx = this.currentRun();
       const runId = this.resolveRunId();
-      this.pendingLoop = loop;
+      this.pendingPause = { loop, smart, ...this.editabilityOf(options) };
       return this.engine.hold(point, node, runId).then(
         (decision) => {
           if (decision.action === 'abort') {
@@ -632,6 +753,266 @@ class SessionImpl implements Session {
   }
 
   /**
+   * `exec.paused`: the 0.5 fields in their 0.5 order, then why a built-in
+   * breakpoint held (loop hold at `before`, smart hold at `after`), then
+   * `editable` — present only when true, so a pause nobody can edit, and
+   * every pause under a 0.5 debugger, is byte-identical to 0.5.
+   */
+  private pausedPayload(
+    pauseId: string,
+    node: GateNode,
+    point: PausePoint,
+    pending: PendingPause | undefined,
+  ): EventPayloadMap['exec.paused'] {
+    const payload: EventPayloadMap['exec.paused'] = { pauseId, nodeId: node.nodeId, point };
+    if (pending?.loop !== undefined) {
+      payload.reason = 'loop';
+      payload.loop = this.loopOnWire(pending.loop, node);
+    } else if (pending?.smart !== undefined) {
+      payload.reason = 'breakpoint';
+      payload.smart = this.smartOnWire(pending.smart, node);
+    }
+    if (pending?.editable === true) payload.editable = true;
+    return payload;
+  }
+
+  /**
+   * The after-gate detectors' verdict on this call, or undefined. The
+   * result is read once; a detector that throws is skipped. Never throws.
+   */
+  private detect(node: GateNode, options: GateOptions): SmartInfo | undefined {
+    let result: unknown;
+    try {
+      if (!('result' in options)) return undefined;
+      result = options.result;
+    } catch {
+      return undefined;
+    }
+    const context: AfterGateContext = Object.freeze({ runId: this.resolveRunId(), node, result });
+    for (const detector of this.detectors) {
+      try {
+        const hit = detector(context);
+        if (hit !== undefined) return hit;
+      } catch {
+        // a detector never breaks a gate
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Smart hold details as they may leave the process: `detail` is short
+   * printable text, and it is dropped whenever a switch hides this node's
+   * input or output — a detector explains in terms of the values it saw.
+   */
+  private smartOnWire(smart: SmartInfo, node: GateNode): SmartInfo {
+    const s = this.redactor.switches;
+    const tool = node.kind === 'tool';
+    const hidden =
+      s.hideInputs || s.hideOutputs || (tool && (s.hideToolArgs || s.hideToolResults));
+    const detail = hidden ? undefined : sanitizeShortText(smart.detail);
+    return detail === undefined ? { rule: smart.rule } : { rule: smart.rule, detail };
+  }
+
+  // -- edited input (contract C2) --------------------------------------------
+
+  /** The debugger enabled edits and this app did not turn them off. */
+  private editsHonoured(): boolean {
+    return this.editInputEnabled && this.hubCapabilities?.has('edit-input') === true;
+  }
+
+  /**
+   * Whether the pause about to open is offered as editable, and the validator
+   * that will check an edit — bound HERE, in the gated call's async context,
+   * so it later runs there and not in the transport's (AsyncLocalStorage
+   * state, including `session.currentRun()`, is the host's).
+   */
+  private editabilityOf(options: GateOptions | undefined): Pick<PendingPause, 'editable' | 'validate'> {
+    if (options === undefined || !this.editsHonoured()) return { editable: false, validate: undefined };
+    let editable: unknown;
+    let validate: unknown;
+    try {
+      editable = options.editable;
+      validate = options.validateInput;
+    } catch {
+      return { editable: false, validate: undefined };
+    }
+    if (editable !== true) return { editable: false, validate: undefined };
+    return {
+      editable: true,
+      validate: typeof validate === 'function' ? AsyncResource.bind(validate as ValidateInput) : undefined,
+    };
+  }
+
+  /**
+   * An `exec.resume` for a held gate. Without `input`: released as in 0.5
+   * (the inject guard aside). With `input`, the edit is refused — the gate
+   * stays held, `exec.refused` says why — unless, in this order:
+   *   1. this app announced `edit-input`           else `disabled`
+   *   2. the debugger listed it in hubCapabilities else `disabled`
+   *   3. the pause was offered as `editable`       else `unsupported`
+   *   4. `continue` at `before`, or `retry` at `after` / `error`   else `shape`
+   *   5. the input holds no placeholder / truncation marker  else `placeholder` / `truncated`
+   *   6. the adapter's validator accepts it        else its code, or `shape`
+   * An accepted edit releases the gate with `decision.input`, and
+   * `exec.resumed.edited.after` records it. Unknown pauses, and a gate that
+   * is validating an edit, ignore the resume.
+   */
+  private handleResume(payload: MessagePayloadMap['exec.resume']): void {
+    const { pauseId, action, output, input } = payload;
+    const gate = this.engine.peek(pauseId);
+    if (gate === undefined || gate.state !== 'held') return;
+    const requestId =
+      typeof payload.requestId === 'string' && payload.requestId.length <= MAX_REQUEST_ID_LENGTH
+        ? payload.requestId
+        : undefined;
+    if (input === undefined) {
+      // Inject guard, client side (C2): the placeholder or a truncated preview
+      // is never substituted for a result. Only under a 0.6 debugger — one
+      // that sends hubCapabilities also understands `exec.refused`; a 0.5
+      // debugger keeps 0.5 behaviour (and guards the placeholder itself).
+      if (action === 'inject' && this.hubCapabilities !== undefined) {
+        const refusal = proposedValueRefusal(output);
+        if (refusal !== undefined) {
+          this.emitRefused(gate, refusal, requestId);
+          return;
+        }
+      }
+      this.engine.resume(pauseId, action as ResumeAction, output, requestId === undefined ? undefined : { requestId });
+      return;
+    }
+    const refusal = this.editRefusal(gate, action as ResumeAction) ?? proposedValueRefusal(input);
+    if (refusal !== undefined) {
+      this.emitRefused(gate, refusal, requestId);
+      return;
+    }
+    const ticket = this.engine.beginValidation(pauseId);
+    if (ticket === undefined) return;
+    this.validateEdit(ticket, gate, action as 'continue' | 'retry', input, requestId);
+  }
+
+  /** Conditions 1-4 of `handleResume`. */
+  private editRefusal(gate: HeldGateView, action: ResumeAction): Refusal | undefined {
+    if (!this.editInputEnabled) {
+      return { code: 'disabled', message: 'input edits are turned off in this app (GRAPHMIND_DISABLE_EDIT_INPUT)' };
+    }
+    if (this.hubCapabilities?.has('edit-input') !== true) {
+      return { code: 'disabled', message: 'this debugger has not enabled input edits' };
+    }
+    if (!this.editablePauses.has(gate.pauseId)) {
+      return { code: 'unsupported', message: 'this pause cannot run with an edited input' };
+    }
+    const fits =
+      (action === 'continue' && gate.point === 'before') ||
+      (action === 'retry' && (gate.point === 'after' || gate.point === 'error'));
+    if (!fits) {
+      return {
+        code: 'shape',
+        message: 'an edited input needs continue at a before gate, or retry at an after or error gate',
+      };
+    }
+    return undefined;
+  }
+
+  /**
+   * Run the adapter's validator on a proposed input (the gate is
+   * `validating`). A synchronous verdict is applied at once; a promise is
+   * awaited up to VALIDATION_TIMEOUT_MS. Whatever the validator does, exactly
+   * one verdict is applied — and none at all once a pause timeout or a detach
+   * has released the gate with its original input (the ticket is stale).
+   */
+  private validateEdit(
+    ticket: ValidationTicket,
+    gate: HeldGateView,
+    action: 'continue' | 'retry',
+    input: unknown,
+    requestId: string | undefined,
+  ): void {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const finish = (result: unknown): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      this.guard('edit-input', () =>
+        this.applyVerdict(ticket, gate, action, normalizeValidation(result), requestId),
+      );
+    };
+    const validate = this.editablePauses.get(gate.pauseId)?.validate;
+    let outcome: unknown;
+    let then: unknown;
+    try {
+      outcome = validate === undefined ? { ok: true, value: input } : validate(input);
+      then =
+        (typeof outcome === 'object' && outcome !== null) || typeof outcome === 'function'
+          ? (outcome as { then?: unknown }).then
+          : undefined;
+    } catch {
+      finish(VALIDATOR_FAILED);
+      return;
+    }
+    if (typeof then !== 'function') {
+      finish(outcome);
+      return;
+    }
+    timer = setTimeout(() => {
+      finish({
+        ok: false,
+        code: 'shape',
+        message: `the input was not validated within ${VALIDATION_TIMEOUT_MS / 1000} s`,
+      } satisfies InputValidation);
+    }, VALIDATION_TIMEOUT_MS);
+    timer.unref?.();
+    Promise.resolve(outcome as PromiseLike<unknown>).then(finish, () => finish(VALIDATOR_FAILED));
+  }
+
+  /**
+   * Accepted: release the gate with the edit, recorded as its JSON wire copy
+   * (an edit with no JSON form is refused rather than run unrecorded).
+   * Refused: reopen the gate — same pauseId, timer and held interval — and
+   * say why. Stale tickets change nothing.
+   */
+  private applyVerdict(
+    ticket: ValidationTicket,
+    gate: HeldGateView,
+    action: 'continue' | 'retry',
+    verdict: InputValidation,
+    requestId: string | undefined,
+  ): void {
+    let refusal: Refusal;
+    if (verdict.ok) {
+      const copy = wireCopy(verdict.value);
+      if (copy !== undefined) {
+        const info: ResumeInfo = { edited: { after: copy.value } };
+        if (requestId !== undefined) info.requestId = requestId;
+        this.engine.completeValidation(ticket, { action, input: verdict.value }, info);
+        return;
+      }
+      refusal = { code: 'shape', message: 'the validated input has no JSON form, so it cannot be recorded' };
+    } else {
+      refusal = verdict.message === undefined ? { code: verdict.code } : { code: verdict.code, message: verdict.message };
+    }
+    if (this.engine.reopen(ticket)) this.emitRefused(gate, refusal, requestId);
+  }
+
+  /** `exec.refused`, redacted by the paused node's kind (see redaction.ts). */
+  private emitRefused(gate: HeldGateView, refusal: Refusal, requestId: string | undefined): void {
+    this.guard('refused', () => {
+      this.emitInternal(
+        'exec.refused',
+        {
+          pauseId: gate.pauseId,
+          code: refusal.code,
+          ...(refusal.message === undefined ? {} : { message: refusal.message }),
+          ...(requestId === undefined ? {} : { requestId }),
+        },
+        gate.runId,
+        gate.node.kind,
+      );
+    });
+  }
+
+  /**
    * Loop hold (W5): `exec.paused.loop` as it may leave the process. The
    * fingerprint is an unsalted digest of this node's input; when a redaction
    * switch hides that input (`hideInputs`, or `hideToolArgs` on a tool), a
@@ -686,6 +1067,8 @@ class SessionImpl implements Session {
     type: T,
     payload: EventPayloadMap[T],
     runId: string,
+    /** The paused node's kind, for exec.resumed / exec.refused redaction. */
+    nodeKind?: NodeKind,
   ): number | undefined {
     // Coarse redaction (W7) runs FIRST, before the ring buffer and before any
     // other bookkeeping reads the payload: the kill switches must hold for
@@ -695,7 +1078,7 @@ class SessionImpl implements Session {
     // safely nor replaced by a valid failed form — the event is not emitted
     // (the redactor already warned) and takes NO seq, so the seqs of emitted
     // events stay consecutive (decision "A dropped event takes no seq").
-    const redacted = this.redactor.apply(type, payload, runId);
+    const redacted = this.redactor.apply(type, payload, runId, nodeKind);
     if (redacted === undefined) return undefined;
     const seq = this.nextSeq();
     let json: string;
@@ -998,7 +1381,10 @@ class SessionImpl implements Session {
   private buildHello(): string {
     const payload: MessagePayloadMap['hello'] = {
       versions: { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION },
-      capabilities: [...KNOWN_CAPABILITIES],
+      // `edit-input` unless GRAPHMIND_DISABLE_EDIT_INPUT is on (C2 condition a).
+      capabilities: this.editInputEnabled
+        ? [...KNOWN_CAPABILITIES]
+        : KNOWN_CAPABILITIES.filter((capability) => capability !== 'edit-input'),
       app: this.appName,
       sdk: this.sdk,
       // Echoing the token from the last `hello.ack` is what lets the debugger
@@ -1018,6 +1404,12 @@ class SessionImpl implements Session {
       this.sessionToken = ack.sessionToken;
     }
     this.guard('attach', () => {
+      // What THIS debugger implements (0.6.0+); a 0.5 debugger sends none and
+      // is never offered an editable pause. Not the echoed `capabilities`.
+      const hub = (ack as { hubCapabilities?: unknown }).hubCapabilities;
+      this.hubCapabilities = Array.isArray(hub)
+        ? new Set(hub.filter((entry): entry is string => typeof entry === 'string'))
+        : undefined;
       this.engine.arm(ack.breakpoints, ack.mode);
       // Holes first: what they describe is older than anything still buffered.
       this.flushGapMarkers();
@@ -1045,8 +1437,10 @@ class SessionImpl implements Session {
 
   private handleDetached(): void {
     this.guard('detach', () => {
-      // FAIL-OPEN: no debugger, no holds. Also forget its breakpoints/mode;
-      // the next hello.ack re-arms them.
+      // FAIL-OPEN: no debugger, no holds. Also forget its breakpoints/mode
+      // and capabilities; the next hello.ack re-arms them. A gate validating
+      // an edit continues with its ORIGINAL input.
+      this.hubCapabilities = undefined;
       this.engine.disarm();
       this.engine.releaseAll();
     });
@@ -1055,11 +1449,9 @@ class SessionImpl implements Session {
   private handleControl(envelope: KnownEnvelope): void {
     this.guard('control', () => {
       switch (envelope.type) {
-        case 'exec.resume': {
-          const { pauseId, action, output } = envelope.payload;
-          this.engine.resume(pauseId, action as ResumeAction, output);
+        case 'exec.resume':
+          this.handleResume(envelope.payload);
           break;
-        }
         case 'breakpoint.set':
           this.engine.addBreakpoint(envelope.payload.matcher);
           break;

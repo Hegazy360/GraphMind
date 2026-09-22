@@ -5,13 +5,19 @@
  */
 export {
   createSession,
-  CLIENT_VERSION,
+  VALIDATION_TIMEOUT_MS,
+  type AfterGateContext,
+  type GateDetector,
+  type GateOptions,
   type Session,
   type SessionOptions,
   type SessionStats,
+  type SmartInfo,
   type ReadyOptions,
   type RunContext,
 } from './session.js';
+
+export { CLIENT_VERSION } from './version.js';
 
 export {
   CONTINUE_DECISION,
@@ -20,6 +26,16 @@ export {
   type GateDecision,
   type GateNode,
 } from './gate-engine.js';
+
+// Edited input (0.6.0): what an adapter's `validateInput` returns, and the
+// default rule for tool arguments (top-level keys replace the live ones).
+export {
+  MAX_REFUSAL_MESSAGE,
+  mergeToolInput,
+  type InputValidation,
+  type RefusalCode,
+  type ValidateInput,
+} from './edit-input.js';
 
 export { GraphMindAbortError, isAbortError, toErrorInfo } from './errors.js';
 

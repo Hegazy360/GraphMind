@@ -67,6 +67,22 @@ if (existsSync(pyproject)) {
   // second constant to keep in step here — that is deliberate.
 }
 
+// The TypeScript client reports its version in `hello` from a constant (a
+// runtime read of package.json breaks inside bundled host apps), so it is
+// rewritten here with the package; packages/client/test/version.test.ts
+// fails if the two ever disagree.
+const clientVersion = join(root, 'packages', 'client', 'src', 'version.ts');
+if (existsSync(clientVersion)) {
+  const text = readFileSync(clientVersion, 'utf8');
+  const next = text.replace(/^(export const CLIENT_VERSION = )'[^']+'/m, `$1'${version}'`);
+  if (next !== text) {
+    writeFileSync(clientVersion, next);
+    console.log(`${'client CLIENT_VERSION'.padEnd(26)} -> ${version}`);
+  } else if (!text.includes(`CLIENT_VERSION = '${version}'`)) {
+    console.warn('packages/client/src/version.ts: no CLIENT_VERSION constant updated');
+  }
+}
+
 // The Ruby gem ships from the same repo and shares the version. Its constant
 // is the source of truth (the gemspec reads it), so this is the only place.
 const rubyVersion = join(root, 'ruby', 'lib', 'graphmind', 'version.rb');

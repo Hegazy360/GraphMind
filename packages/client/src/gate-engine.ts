@@ -11,6 +11,18 @@
  *    disconnect and on dispose).
  *  - An optional per-gate pause timeout auto-continues a gate nobody resumes.
  *  - Timers are unref'd so held bookkeeping never keeps the process alive.
+ *
+ * Edited input (0.6.0, contract C2) adds one state. A gate is `held` until a
+ * resume arrives; a resume that carries an edited input first moves it to
+ * `validating` (`beginValidation`) while the session checks the edit on the
+ * host's side. The verdict either releases it with the edit
+ * (`completeValidation`) or puts it back to `held` (`reopen`) — SAME pauseId,
+ * same pause-timeout timer, same `openedAt`, so held time is one interval
+ * from the first pause to the final release, however many edits were
+ * refused in between. While validating, plain resumes are ignored (the
+ * debugger answers a second resumer itself), and a pause timeout or
+ * `releaseAll()` still releases the gate with a plain `continue` — the
+ * ORIGINAL input — and the late verdict lands nowhere (fail-open).
  */
 import type { BreakpointMatcher, NodeKind, PausePoint, ResumeAction, RunMode } from '@graphmind-ai/schema';
 import { monotonicNow, normalizeDurationMs, type Clock } from './clock.js';
@@ -21,11 +33,43 @@ export interface GateNode {
   name: string;
 }
 
+/**
+ * What the adapter does next. `input` is present only when the debugger
+ * edited the call's input and the edit was accepted (`continue` at a `before`
+ * gate, `retry` at an `after` / `error` gate): run the call with it instead of
+ * the live input. Test with `'input' in decision`.
+ */
 export type GateDecision =
-  | { action: 'continue' }
-  | { action: 'retry' }
+  | { action: 'continue'; input?: unknown }
+  | { action: 'retry'; input?: unknown }
   | { action: 'abort' }
   | { action: 'inject'; output: unknown };
+
+/** Extra facts about a release, carried into `exec.resumed`. */
+export interface ResumeInfo {
+  /** Echo of `exec.resume.requestId` (absent on timeout / fail-open releases). */
+  requestId?: string;
+  /** The gate runs with an edited input; `after` is its wire copy. */
+  edited?: { after: unknown };
+}
+
+/** A held gate as the session may inspect it (a copy; never the live record). */
+export interface HeldGateView {
+  pauseId: string;
+  node: GateNode;
+  point: PausePoint;
+  runId: string;
+  state: 'held' | 'validating';
+}
+
+/**
+ * Names one validation of one gate. A verdict is applied only while its
+ * ticket is the gate's current one, so a verdict that arrives after a pause
+ * timeout or a detach released the gate is dropped.
+ */
+export interface ValidationTicket {
+  readonly pauseId: string;
+}
 
 export const CONTINUE_DECISION: GateDecision = Object.freeze({ action: 'continue' });
 
@@ -44,6 +88,7 @@ export interface GateEngineCallbacks {
     action: ResumeAction,
     runId: string,
     heldMs: number,
+    info: ResumeInfo | undefined,
   ): void;
   newPauseId(): string;
 }
@@ -57,6 +102,10 @@ interface HeldGate {
   openedAt: number;
   timer: ReturnType<typeof setTimeout> | undefined;
   resolve: (decision: GateDecision) => void;
+  /** `validating` while an edited input is checked (see the module comment). */
+  state: 'held' | 'validating';
+  /** The current validation's ticket; undefined while `held`. */
+  ticket: ValidationTicket | undefined;
 }
 
 export function matcherMatches(
@@ -138,6 +187,8 @@ export class GateEngine {
         openedAt: this.now(),
         timer: undefined,
         resolve,
+        state: 'held',
+        ticket: undefined,
       };
       if (this.pauseTimeoutMs !== undefined) {
         gate.timer = setTimeout(() => {
@@ -150,11 +201,60 @@ export class GateEngine {
     });
   }
 
-  /** Route a viewer `exec.resume` to its held gate. Unknown ids are ignored. */
-  resume(pauseId: string, action: ResumeAction, output?: unknown): boolean {
+  /**
+   * Route a viewer `exec.resume` to its held gate. Unknown ids are ignored,
+   * and so is a gate that is validating an edit (its verdict decides).
+   */
+  resume(pauseId: string, action: ResumeAction, output?: unknown, info?: ResumeInfo): boolean {
+    if (this.held.get(pauseId)?.state !== 'held') return false;
     const decision: GateDecision =
       action === 'inject' ? { action: 'inject', output } : { action };
-    return this.settle(pauseId, decision, action);
+    return this.settle(pauseId, decision, action, info);
+  }
+
+  /** The held gate with this id, if any. */
+  peek(pauseId: string): HeldGateView | undefined {
+    const gate = this.held.get(pauseId);
+    if (gate === undefined) return undefined;
+    return { pauseId, node: gate.node, point: gate.point, runId: gate.runId, state: gate.state };
+  }
+
+  /**
+   * `held` -> `validating`: an edited input for this gate is about to be
+   * checked. Returns the ticket the verdict must present, or undefined when
+   * the gate is unknown or already validating.
+   */
+  beginValidation(pauseId: string): ValidationTicket | undefined {
+    const gate = this.held.get(pauseId);
+    if (gate === undefined || gate.state !== 'held') return undefined;
+    const ticket: ValidationTicket = Object.freeze({ pauseId });
+    gate.state = 'validating';
+    gate.ticket = ticket;
+    return ticket;
+  }
+
+  /**
+   * `validating` -> `held`: the edit was refused and the gate waits for the
+   * next resume, under the same pauseId, timer and held interval. False when
+   * the ticket is stale (the gate was released meanwhile).
+   */
+  reopen(ticket: ValidationTicket): boolean {
+    const gate = this.held.get(ticket.pauseId);
+    if (gate === undefined || gate.ticket !== ticket) return false;
+    gate.state = 'held';
+    gate.ticket = undefined;
+    return true;
+  }
+
+  /**
+   * `validating` -> released with the accepted edit. False when the ticket is
+   * stale: a pause timeout or a detach already continued the gate with its
+   * original input.
+   */
+  completeValidation(ticket: ValidationTicket, decision: GateDecision, info?: ResumeInfo): boolean {
+    const gate = this.held.get(ticket.pauseId);
+    if (gate === undefined || gate.ticket !== ticket) return false;
+    return this.settle(ticket.pauseId, decision, decision.action, info);
   }
 
   /** FAIL-OPEN: release every held gate with `continue`. Returns count. */
@@ -168,13 +268,25 @@ export class GateEngine {
     return this.held.size;
   }
 
-  private settle(pauseId: string, decision: GateDecision, action: ResumeAction): boolean {
+  private settle(
+    pauseId: string,
+    decision: GateDecision,
+    action: ResumeAction,
+    info?: ResumeInfo,
+  ): boolean {
     const gate = this.held.get(pauseId);
     if (gate === undefined) return false;
     this.held.delete(pauseId);
+    gate.ticket = undefined;
     if (gate.timer !== undefined) clearTimeout(gate.timer);
     const heldMs = normalizeDurationMs(this.now() - gate.openedAt);
-    this.callbacks.onResumed(pauseId, gate.node, action, gate.runId, heldMs);
+    try {
+      this.callbacks.onResumed(pauseId, gate.node, action, gate.runId, heldMs, info);
+    } catch {
+      // The session guards its callbacks; this is the last line. A failure
+      // while announcing the release must never leave the host awaiting a
+      // gate that is no longer registered, nor throw into a timer.
+    }
     gate.resolve(decision);
     return true;
   }

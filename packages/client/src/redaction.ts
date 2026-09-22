@@ -40,6 +40,19 @@
  * nodeId prefix every adapter uses (decisions.md #1). Erring towards
  * redaction is the safe direction for a privacy switch.
  *
+ * Two debugger events carry values that belong to a node's input (0.6.0,
+ * contract C2), and are covered by the same switches as that input —
+ * HIDE_INPUTS, or HIDE_TOOL_ARGS when the paused node is a tool (the session
+ * passes the pause's kind; an unknown kind counts as a tool):
+ *
+ *   exec.resumed.edited  {after: "__REDACTED__"} — the edited input the call ran with
+ *   exec.refused.message omitted — it comes from the adapter's validator and
+ *                        may describe the input it refused
+ *
+ * with `redaction: {count, keys: ["edited"] | ["message"]}`. Their failed
+ * forms keep `pauseId`, `action` / `code` and `requestId`, hide `edited` and
+ * drop `message`, with `redaction.failed`.
+ *
  * The session applies this inside `emitInternal`, BEFORE the ring buffer, so
  * replay-on-attach, the WebSocket, storage, exports and the read-only MCP
  * server all see the same redacted event — nothing downstream can bypass it.
@@ -75,7 +88,7 @@
  *
  * Never throws, never mutates the adapter's object.
  */
-import { NodeKindSchema, RunStatusSchema } from '@graphmind-ai/schema';
+import { NodeKindSchema, RefusalCodeSchema, ResumeActionSchema, RunStatusSchema } from '@graphmind-ai/schema';
 import type { EventPayloadMap, EventType, NodeKind, TokenDelta } from '@graphmind-ai/schema';
 import { killSwitchOn, type EnvLike } from './env.js';
 
@@ -184,6 +197,8 @@ class Uninspectable extends Error {}
 
 const NODE_KINDS: ReadonlySet<string> = new Set(NodeKindSchema.options);
 const RUN_STATUSES: ReadonlySet<string> = new Set(RunStatusSchema.options);
+const RESUME_ACTIONS: ReadonlySet<string> = new Set(ResumeActionSchema.options);
+const REFUSAL_CODES: ReadonlySet<string> = new Set(RefusalCodeSchema.options);
 /** Read failed. Distinct from every value a payload can hold. */
 const UNREADABLE: unique symbol = Symbol('unreadable');
 
@@ -251,12 +266,20 @@ export class Redactor {
 
   /**
    * Redact one event. Every switch off, or a type other than node.started /
-   * node.finished / node.token: the very same object. Otherwise a plain copy
-   * (see the module comment) — redacted, unchanged, or the failed form — or
-   * `undefined`, meaning the event must NOT be emitted. Never throws.
+   * node.finished / node.token / exec.resumed / exec.refused: the very same
+   * object. Otherwise a plain copy (see the module comment) — redacted,
+   * unchanged, or the failed form — or `undefined`, meaning the event must
+   * NOT be emitted. `nodeKind` is the paused node's kind, for exec.resumed /
+   * exec.refused (which do not name their node). Never throws.
    */
-  apply<T extends EventType>(type: T, payload: EventPayloadMap[T], runId: string): EventPayloadMap[T] | undefined {
+  apply<T extends EventType>(
+    type: T,
+    payload: EventPayloadMap[T],
+    runId: string,
+    nodeKind?: NodeKind,
+  ): EventPayloadMap[T] | undefined {
     if (!this.active) return payload;
+    if (type === 'exec.resumed' || type === 'exec.refused') return this.onPauseAnswer(type, payload, nodeKind);
     if (type !== 'node.started' && type !== 'node.finished' && type !== 'node.token') return payload;
     try {
       if (!isRecord(payload)) throw new Uninspectable('payload is not an object');
@@ -272,6 +295,99 @@ export class Redactor {
     } catch {
       return this.failClosed(type, payload, runId);
     }
+  }
+
+  // -- exec.resumed / exec.refused (edited input) -----------------------------
+
+  /**
+   * The input-shaped parts of a pause's answer, hidden exactly when the
+   * paused node's input is (module comment). Not covered: the very same
+   * object. Covered: a copy from a one-read snapshot, or the failed form.
+   */
+  private onPauseAnswer<T extends EventType>(
+    type: T,
+    payload: EventPayloadMap[T],
+    nodeKind: NodeKind | undefined,
+  ): EventPayloadMap[T] | undefined {
+    const s = this.switches;
+    const covered = s.hideInputs || (s.hideToolArgs && (nodeKind === undefined || nodeKind === 'tool'));
+    if (!covered) return payload;
+    try {
+      if (!isRecord(payload)) throw new Uninspectable('payload is not an object');
+      const p = snapshot(payload);
+      identity(p, 'pauseId');
+      if (type === 'exec.resumed') {
+        const edited = p['edited'];
+        if (edited === undefined) return p as EventPayloadMap[T];
+        if (isRecord(edited) && Object.keys(edited).length === 1 && read(edited, 'after') === REDACTED) {
+          return p as EventPayloadMap[T]; // already the placeholder: left alone, not counted
+        }
+        return {
+          ...p,
+          edited: { after: REDACTED },
+          redaction: mergeSummary(p['redaction'], 1, 'edited'),
+        } as EventPayloadMap[T];
+      }
+      if (!('message' in p) || p['message'] === undefined) return p as EventPayloadMap[T];
+      const out: Record<string, unknown> = { ...p, redaction: mergeSummary(p['redaction'], 1, 'message') };
+      delete out['message'];
+      return out as EventPayloadMap[T];
+    } catch {
+      return this.failClosedAnswer(type, payload);
+    }
+  }
+
+  /**
+   * Failed form of a pause answer: identity copied best-effort, `edited`
+   * hidden (kept as the placeholder when it may have been there), `message`
+   * dropped. `undefined` when `pauseId` and `action` / `code` cannot be read
+   * as valid values — the event is then dropped.
+   */
+  private failClosedAnswer<T extends EventType>(type: T, payload: unknown): EventPayloadMap[T] | undefined {
+    let out: Record<string, unknown> | undefined;
+    try {
+      out = this.failedAnswerForm(type, payload);
+    } catch {
+      out = undefined;
+    }
+    if (out === undefined) {
+      this.report(
+        'redaction:dropped',
+        `a ${type} event could not be redacted and its identity fields could not be read; ` +
+          'dropped it rather than send data a GRAPHMIND_HIDE_* switch hides',
+      );
+      return undefined;
+    }
+    this.report(
+      'redaction:failed',
+      `redaction failed on a ${type} event (unreadable or malformed payload); ` +
+        'sent it with the edited input / refusal message hidden and redaction.failed set',
+    );
+    return out as EventPayloadMap[T];
+  }
+
+  private failedAnswerForm(type: EventType, payload: unknown): Record<string, unknown> | undefined {
+    if (typeof payload !== 'object' || payload === null) return undefined;
+    const pauseId = read(payload, 'pauseId');
+    if (!isString(pauseId)) return undefined;
+    const requestId = read(payload, 'requestId');
+    const echo = isString(requestId) ? { requestId } : {};
+    if (type === 'exec.resumed') {
+      const action = read(payload, 'action');
+      if (!isString(action) || !RESUME_ACTIONS.has(action)) return undefined;
+      // Unreadable counts as present: an edit the record cannot rule out.
+      const mayHaveEdit = read(payload, 'edited') !== undefined;
+      return {
+        pauseId,
+        action,
+        ...(mayHaveEdit ? { edited: { after: REDACTED } } : {}),
+        ...echo,
+        redaction: { count: 0, keys: ['edited'], failed: true },
+      };
+    }
+    const code = read(payload, 'code');
+    if (!isString(code) || !REFUSAL_CODES.has(code)) return undefined;
+    return { pauseId, code, ...echo, redaction: { count: 0, keys: ['message'], failed: true } };
   }
 
   // -- fail closed -------------------------------------------------------------
