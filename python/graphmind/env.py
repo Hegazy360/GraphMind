@@ -57,10 +57,27 @@ def looks_like_production(env: EnvLike | None = None) -> bool:
     return False
 
 
+_KILL_SWITCH_OFF = frozenset({"", "0", "false", "off", "no"})
+
+
+def kill_switch_on(value: object) -> bool:
+    """A kill switch or privacy switch read from the environment.
+
+    ON for any string except empty, ``0``, ``false``, ``off`` and ``no``
+    (case-insensitive, surrounding whitespace ignored); unset (``None``) is
+    off. These switches exist to keep data out of a recording or to turn
+    instrumentation off, so an unexpected spelling (``yes``, ``on``) must err
+    towards the switch being on. Mirrors ``killSwitchOn`` in the TS client.
+    """
+    if not isinstance(value, str):
+        return False
+    return value.strip().lower() not in _KILL_SWITCH_OFF
+
+
 def resolve_enabled(explicit: bool | None = None, env: EnvLike | None = None) -> bool:
     """Apply the kill-switch precedence documented in this module."""
     source = _env(env)
-    if source.get("GRAPHMIND_DISABLED") == "1":
+    if kill_switch_on(source.get("GRAPHMIND_DISABLED")):
         return False
     if explicit is not None:
         return explicit

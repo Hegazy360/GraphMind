@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative "env"
 require_relative "protocol"
 
 module Graphmind
@@ -118,12 +119,10 @@ module Graphmind
 
     module_function
 
-    # `1` or `true`, case-insensitive, surrounding whitespace ignored.
+    # A GRAPHMIND_HIDE_* value that turns its switch ON: anything but unset,
+    # empty, `0`, `false`, `off` and `no` (Graphmind::Env.kill_switch_on?).
     def env_flag_on?(value)
-      return false unless value.is_a?(String)
-
-      text = value.strip.downcase
-      %w[1 true].include?(text)
+      Graphmind::Env.kill_switch_on?(value)
     rescue StandardError
       false
     end

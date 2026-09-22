@@ -74,6 +74,7 @@ import threading
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from .env import kill_switch_on
 from .protocol import NODE_KINDS, RUN_STATUSES
 
 REDACTED = "__REDACTED__"
@@ -147,11 +148,13 @@ class RedactionSwitches:
 
 
 def env_flag_on(value: Any) -> bool:
-    """``1`` or ``true``, case-insensitive, surrounding whitespace ignored."""
-    if not isinstance(value, str):
-        return False
-    text = value.strip().lower()
-    return text in ("1", "true")
+    """A ``GRAPHMIND_HIDE_*`` value that turns its switch ON.
+
+    Anything but unset, empty, ``0``, ``false``, ``off`` and ``no``
+    (case-insensitive, surrounding whitespace ignored) — see
+    :func:`graphmind.env.kill_switch_on`.
+    """
+    return kill_switch_on(value)
 
 
 def option_flag_on(value: Any) -> bool:

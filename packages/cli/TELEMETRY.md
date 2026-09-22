@@ -84,7 +84,7 @@ Evaluated top to bottom; the first match wins.
 
 | Condition | Result |
 | --- | --- |
-| `DO_NOT_TRACK` is `1` or `true` (case-insensitive) | **Off.** Beats everything below, including `GRAPHMIND_TELEMETRY=1` and `=log`. |
+| `DO_NOT_TRACK` is set to anything except empty, `0`, `false`, `off` or `no` (case-insensitive) | **Off.** Beats everything below, including `GRAPHMIND_TELEMETRY=1` and `=log`. |
 | `GRAPHMIND_TELEMETRY` is `0` or `false` | **Off.** |
 | `GRAPHMIND_TELEMETRY` is `log` | **Print to stderr, send nothing.** Also under `CI`. |
 | `CI` is set (to anything, even empty) | **Off.** |

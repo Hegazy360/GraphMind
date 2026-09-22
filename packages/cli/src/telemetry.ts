@@ -47,9 +47,14 @@ export type TelemetryMode = 'send' | 'log' | 'off';
 export const LOG_PREFIX = '[graphmind telemetry] ';
 
 /** `1` / `true`, case-insensitive, surrounding whitespace ignored. */
+/**
+ * DO_NOT_TRACK is a kill switch: any value but unset, empty, `0`, `false`,
+ * `off` and `no` means "do not track" (consoledonottrack.com asks for `1`;
+ * `yes` or `on` from a user who meant it must not be ignored).
+ */
 function isOn(value: string | undefined): boolean {
   const v = (value ?? '').trim().toLowerCase();
-  return v === '1' || v === 'true';
+  return v !== '' && v !== '0' && v !== 'false' && v !== 'off' && v !== 'no';
 }
 
 /**

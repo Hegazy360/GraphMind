@@ -267,7 +267,7 @@ gm.configure(hide_inputs=True, hide_outputs=True, hide_tool_args=True, hide_tool
 | `GRAPHMIND_HIDE_TOOL_ARGS` / `hide_tool_args` | tool nodes' `input` only |
 | `GRAPHMIND_HIDE_TOOL_RESULTS` / `hide_tool_results` | tool nodes' `output` only |
 
-Env values `1` or `true` (any case); options also accept `1`, `"1"` and `"true"`. Either source turning a
+Any env value except empty, `0`, `false`, `off` and `no` (any case) turns a switch on — an unexpected spelling such as `yes` errs towards hiding; options accept `True`, `1` and the same strings. Either source turning a
 switch on turns it on — `hide_inputs=False` cannot switch off `GRAPHMIND_HIDE_INPUTS=1`. Affected events
 carry `redaction: {count, keys}`. Works for `@gm.tool`, spans, the OpenAI/Anthropic instrumentation
 (streamed tokens included) and the LangChain handler.

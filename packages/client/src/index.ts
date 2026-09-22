@@ -27,7 +27,7 @@ export { GraphMindAbortError, isAbortError, toErrorInfo } from './errors.js';
 // Date.now() (millisecond granularity reads a 80µs handler as `0ms`).
 export { monotonicNow, elapsedMs, normalizeDurationMs, setClock, type Clock } from './clock.js';
 
-export { DEFAULT_URL, resolveEnabled, resolveUrl, type EnvLike } from './env.js';
+export { DEFAULT_URL, killSwitchOn, resolveEnabled, resolveUrl, type EnvLike } from './env.js';
 
 // Coarse redaction (the four GRAPHMIND_HIDE_* kill switches). `REDACTED` is
 // the placeholder every hidden value becomes; `Redactor` is exported so the

@@ -14,8 +14,9 @@
  *   GRAPHMIND_HIDE_TOOL_RESULTS  node.finished.output when the instance's kind
  *                                is tool; deltas streamed by a tool node
  *
- * Env values `1` / `true` (case-insensitive) turn a switch on; each is also a
- * session option (`hideInputs`, …). Either source turning a switch on turns it
+ * Any env value except unset, empty, `0`, `false`, `off` and `no` turns a
+ * switch on (killSwitchOn: an unexpected spelling must not record
+ * everything); each is also a session option (`hideInputs`, …). Either source turning a switch on turns it
  * on: an environment switch is a floor that code cannot lower.
  *
  * Every affected event carries `redaction: {count, keys}` — how many values
@@ -76,7 +77,7 @@
  */
 import { NodeKindSchema, RunStatusSchema } from '@graphmind-ai/schema';
 import type { EventPayloadMap, EventType, NodeKind, TokenDelta } from '@graphmind-ai/schema';
-import type { EnvLike } from './env.js';
+import { killSwitchOn, type EnvLike } from './env.js';
 
 /** The placeholder every hidden value becomes. Shared by every language port. */
 export const REDACTED = '__REDACTED__';
@@ -105,11 +106,12 @@ export const NO_REDACTION: Readonly<RedactionSwitches> = Object.freeze({
   hideToolResults: false,
 });
 
-/** `1` or `true`, case-insensitive, surrounding whitespace ignored. */
+/**
+ * A GRAPHMIND_HIDE_* value that turns its switch ON: anything but unset,
+ * empty, `0`, `false`, `off` and `no` (see killSwitchOn in env.ts).
+ */
 export function envFlagOn(value: string | undefined): boolean {
-  if (typeof value !== 'string') return false;
-  const v = value.trim().toLowerCase();
-  return v === '1' || v === 'true';
+  return killSwitchOn(value);
 }
 
 /**

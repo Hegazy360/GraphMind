@@ -161,12 +161,15 @@ class TestDifferential:
 
 
 class TestSwitches:
-    @pytest.mark.parametrize("value", ["1", "true", "TRUE", " True ", "\t1\n"])
+    @pytest.mark.parametrize(
+        "value", ["1", "true", "TRUE", " True ", "\t1\n", "yes", "on", "2", "1.0", "truee"]
+    )
     def test_env_values_that_turn_a_switch_on(self, value: str) -> None:
+        # A privacy switch fails closed on spelling: anything but an off word.
         assert env_flag_on(value) is True
 
     @pytest.mark.parametrize(
-        "value", [None, "", "0", "false", "yes", "on", "2", "1.0", "truee", 1, True]
+        "value", [None, "", "  ", "0", "false", "FALSE", " off ", "no", "No", 1, True]
     )
     def test_env_values_that_do_not(self, value: Any) -> None:
         assert env_flag_on(value) is False

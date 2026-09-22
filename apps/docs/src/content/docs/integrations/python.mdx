@@ -338,7 +338,7 @@ milliseconds), and `Session(clock=...)` drives only the held-time accounting.
 
 The same four switches as the TypeScript client, with the same placeholder and the same wire
 output: `GRAPHMIND_HIDE_INPUTS`, `GRAPHMIND_HIDE_OUTPUTS`, `GRAPHMIND_HIDE_TOOL_ARGS`,
-`GRAPHMIND_HIDE_TOOL_RESULTS` (`1` or `true`), or as options:
+`GRAPHMIND_HIDE_TOOL_RESULTS` (any value but `0`, `false`, `off`, `no` or empty turns one on), or as options:
 
 ```python
 gm = graphmind.init(app="support-agent", hide_tool_args=True, hide_tool_results=True)
@@ -401,9 +401,9 @@ Wrap requests in runs, or use `allow_nodes`. The general rules are on
 | Variable | Meaning |
 | --- | --- |
 | `GRAPHMIND_URL` | Ingest endpoint (default `ws://127.0.0.1:4747/ingest`) |
-| `GRAPHMIND_DISABLED` | `1` disables instrumentation — beats an explicit `enabled=True` in code |
+| `GRAPHMIND_DISABLED` | `1` (or any value but `0`, `false`, `off`, `no`) disables instrumentation — beats an explicit `enabled=True` in code |
 | `GRAPHMIND` | `1` re-enables it in a production-looking environment |
-| `GRAPHMIND_HIDE_INPUTS` / `_OUTPUTS` / `_TOOL_ARGS` / `_TOOL_RESULTS` | `1` or `true`: [record less](#recording-less) |
+| `GRAPHMIND_HIDE_INPUTS` / `_OUTPUTS` / `_TOOL_ARGS` / `_TOOL_RESULTS` | any value but `0`, `false`, `off`, `no`: [record less](#recording-less) |
 | `GRAPHMIND_LOOP_THRESHOLD` / `GRAPHMIND_ON_LOOP` / `GRAPHMIND_LOOP_ALLOW` | The [loop hold](#loop-hold) |
 
 "Production-looking" is a deliberately boring, documented rule rather than a heuristic: the

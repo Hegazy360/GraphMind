@@ -183,13 +183,13 @@ test.each([
 
 test('telemetryMode: the full precedence table', () => {
   // DO_NOT_TRACK wins over everything, in every spelling the convention allows.
-  for (const dnt of ['1', 'true', 'TRUE', ' True ', '1 ']) {
+  for (const dnt of ['1', 'true', 'TRUE', ' True ', '1 ', 'yes', 'on', '2']) {
     expect(telemetryMode({ DO_NOT_TRACK: dnt }), dnt).toBe('off');
     expect(telemetryMode({ DO_NOT_TRACK: dnt, GRAPHMIND_TELEMETRY: '1' }), `${dnt} vs =1`).toBe('off');
     expect(telemetryMode({ DO_NOT_TRACK: dnt, GRAPHMIND_TELEMETRY: 'log' }), `${dnt} vs =log`).toBe('off');
   }
-  // Only 1/true count: a DO_NOT_TRACK that is set but "off" changes nothing.
-  for (const dnt of ['0', 'false', '', 'no', 'yes', '2']) {
+  // A kill switch: only the off spellings (and empty) leave telemetry alone.
+  for (const dnt of ['0', 'false', '', ' ', 'no', 'OFF']) {
     expect(telemetryMode({ DO_NOT_TRACK: dnt }), dnt).toBe('send');
   }
   // GRAPHMIND_TELEMETRY.

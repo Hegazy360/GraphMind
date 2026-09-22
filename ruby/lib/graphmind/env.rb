@@ -52,9 +52,22 @@ module Graphmind
       false
     end
 
+    KILL_SWITCH_OFF = ["", "0", "false", "off", "no"].freeze
+
+    # A kill switch or privacy switch read from the environment: on for any
+    # String except empty, `0`, `false`, `off` and `no` (case-insensitive,
+    # surrounding whitespace ignored); nil is off. An unexpected spelling
+    # (`yes`, `on`) must err towards the switch being on. Mirrors
+    # `killSwitchOn` in the TS client.
+    def kill_switch_on?(value)
+      return false unless value.is_a?(String)
+
+      !KILL_SWITCH_OFF.include?(value.strip.downcase)
+    end
+
     def resolve_enabled(explicit = nil, env = nil)
       src = source(env)
-      return false if src["GRAPHMIND_DISABLED"] == "1"
+      return false if kill_switch_on?(src["GRAPHMIND_DISABLED"])
       return explicit unless explicit.nil?
 
       !(production?(src) && src["GRAPHMIND"] != "1")

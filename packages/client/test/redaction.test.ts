@@ -66,12 +66,14 @@ function finished(
   };
 }
 
-describe('envFlagOn', () => {
-  it('accepts 1 and true, case-insensitively, with surrounding whitespace', () => {
-    for (const v of ['1', 'true', 'TRUE', 'True', ' true ', ' 1']) expect(envFlagOn(v), v).toBe(true);
+describe('envFlagOn (a privacy switch fails closed on spelling)', () => {
+  it('is on for any value except the off spellings — including yes, on and garbage', () => {
+    for (const v of ['1', 'true', 'TRUE', 'True', ' true ', ' 1', 'yes', 'on', 'Y', '2', 'truthy', 'enabled']) {
+      expect(envFlagOn(v), v).toBe(true);
+    }
   });
-  it('rejects everything else (0, false, yes, on, empty, unset)', () => {
-    for (const v of ['0', 'false', 'yes', 'on', '', '  ', 'truthy', '2', undefined]) {
+  it('is off only for unset, empty and 0 / false / off / no (any case, padded)', () => {
+    for (const v of [undefined, '', '  ', '0', 'false', 'FALSE', ' off ', 'no', 'No']) {
       expect(envFlagOn(v), String(v)).toBe(false);
     }
   });
@@ -106,12 +108,17 @@ describe('resolveRedaction: option vs env precedence', () => {
     expect(resolveRedaction({ hideOutputs: true }, { GRAPHMIND_HIDE_OUTPUTS: '0' })).toEqual(
       on({ hideOutputs: true }),
     );
-    // An env value that is not a flag does nothing.
-    expect(resolveRedaction({ hideToolArgs: false }, { GRAPHMIND_HIDE_TOOL_ARGS: 'nope' })).toEqual(ALL_OFF);
+    // An env value that is not an off spelling turns the switch on: it must
+    // not silently record what the user tried to hide.
+    expect(resolveRedaction({ hideToolArgs: false }, { GRAPHMIND_HIDE_TOOL_ARGS: 'nope' })).toEqual(
+      on({ hideToolArgs: true }),
+    );
+    expect(resolveRedaction({ hideToolArgs: false }, { GRAPHMIND_HIDE_TOOL_ARGS: 'no' })).toEqual(ALL_OFF);
   });
 
   it('ignores garbage options without throwing', () => {
-    expect(resolveRedaction({ hideInputs: 'yes' as unknown as boolean }, {})).toEqual(ALL_OFF);
+    expect(resolveRedaction({ hideInputs: 'yes' as unknown as boolean }, {})).toEqual(on({ hideInputs: true }));
+    expect(resolveRedaction({ hideInputs: 'no' as unknown as boolean }, {})).toEqual(ALL_OFF);
     expect(resolveRedaction(null as unknown as undefined, {})).toEqual(ALL_OFF);
   });
 });
@@ -555,8 +562,10 @@ describe('verifier: what HIDE_TOOL_ARGS / HIDE_TOOL_RESULTS do NOT cover (docume
 describe('integrator: option switches fail closed', () => {
   it('true, 1, "1", "true" (any case, padded) turn an option switch on; everything else is off', async () => {
     const { optionFlagOn, resolveRedaction } = await import('../src/redaction.js');
-    for (const on of [true, 1, '1', 'true', 'TRUE', ' True ']) expect(optionFlagOn(on), JSON.stringify(on)).toBe(true);
-    for (const off of [false, 0, '0', 'false', 'yes', '', null, undefined, 2, {}, []]) {
+    for (const on of [true, 1, '1', 'true', 'TRUE', ' True ', 'yes', 'on']) {
+      expect(optionFlagOn(on), JSON.stringify(on)).toBe(true);
+    }
+    for (const off of [false, 0, '0', 'false', 'off', 'no', '', null, undefined, 2, {}, []]) {
       expect(optionFlagOn(off), JSON.stringify(off)).toBe(false);
     }
     // A JS config that says hideInputs: 'true' must not silently record inputs.

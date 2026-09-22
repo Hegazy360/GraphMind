@@ -285,7 +285,7 @@ re-enables. The same applies to `--html`.
 | `GRAPHMIND_PAUSE_ON_ERROR` | CLI | `on` (default), `off`, or a node kind — scope of the default error breakpoint (`--pause-on-error` beats it) |
 | `GRAPHMIND_ABANDON_GRACE_MS` | CLI | How long a run keeps `status: running` after its app disconnects before being marked `abandoned` (default 15000) |
 | `GRAPHMIND_URL` | instrumented app | Ingest endpoint for adapters (default `ws://127.0.0.1:4747/ingest`) |
-| `GRAPHMIND_DISABLED` | instrumented app | `1` disables instrumentation — beats everything, including explicit `enabled: true` |
+| `GRAPHMIND_DISABLED` | instrumented app | `1` (or any value except empty, `0`, `false`, `off`, `no`) disables instrumentation — beats everything, including explicit `enabled: true` |
 | `GRAPHMIND` | instrumented app | `1` re-enables instrumentation under `NODE_ENV=production` (disabled there by default) |
 
 > **Redaction switches — what they do not cover.** The tool-only switches hide the tool node's own `input` / `output`. In an agent loop the same values also travel through the model: its `tool_use` blocks (LLM output) and the `tool_result` messages of the next request (LLM input). To keep tool arguments and results out of the recording entirely, set `GRAPHMIND_HIDE_INPUTS` (and `GRAPHMIND_HIDE_OUTPUTS`). Error messages are never redacted. Under `GRAPHMIND_HIDE_TOOL_RESULTS`, `graphmind mcp-proxy` does not quote a failed (`isError`) result into the error either; under `GRAPHMIND_HIDE_INPUTS` it drops the server's command-line arguments from the run label and metadata.

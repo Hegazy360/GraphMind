@@ -23,6 +23,16 @@ class TestFailOpen < Minitest::Test
     refute session.enabled?
   end
 
+  # Until 0.6 only the exact string "1" disabled.
+  def test_graphmind_disabled_is_a_kill_switch_in_every_spelling
+    ["1", "true", "TRUE", " yes ", "on", "2"].each do |value|
+      refute Graphmind::Env.resolve_enabled(true, { "GRAPHMIND_DISABLED" => value }), value.inspect
+    end
+    ["", "  ", "0", "false", "off", "NO"].each do |value|
+      assert Graphmind::Env.resolve_enabled(nil, { "GRAPHMIND_DISABLED" => value }), value.inspect
+    end
+  end
+
   def test_production_like_env_disables_unless_opted_in
     refute Graphmind::Env.resolve_enabled(nil, { "RAILS_ENV" => "production" })
     assert Graphmind::Env.resolve_enabled(nil, { "RAILS_ENV" => "development" })

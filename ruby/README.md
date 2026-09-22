@@ -265,7 +265,7 @@ Graphmind.configure(hide_inputs: true, hide_outputs: true, hide_tool_args: true,
 | `GRAPHMIND_HIDE_TOOL_ARGS` / `hide_tool_args:` | tool nodes' `input` only |
 | `GRAPHMIND_HIDE_TOOL_RESULTS` / `hide_tool_results:` | tool nodes' `output` only |
 
-Env values `1` or `true` (any case); options also accept `1` and `"true"`. Either source turning a switch
+Any env value except empty, `0`, `false`, `off` and `no` (any case) turns a switch on — an unexpected spelling such as `yes` errs towards hiding; options accept `true`, `1` and the same strings. Either source turning a switch
 on turns it on. Hashes with Symbol keys are redacted too. The same keywords work on
 `Graphmind::Session.new`; `session.redaction_switches` shows what is in effect.
 

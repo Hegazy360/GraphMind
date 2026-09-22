@@ -201,7 +201,7 @@ For tests,
 
 The same four switches as the TypeScript and Python SDKs, with the same placeholder and wire
 output: `GRAPHMIND_HIDE_INPUTS`, `GRAPHMIND_HIDE_OUTPUTS`, `GRAPHMIND_HIDE_TOOL_ARGS`,
-`GRAPHMIND_HIDE_TOOL_RESULTS` (`1` or `true`), or as options:
+`GRAPHMIND_HIDE_TOOL_RESULTS` (any value but `0`, `false`, `off`, `no` or empty turns one on), or as options:
 
 ```ruby
 Graphmind.configure(app: "checkout", hide_tool_args: true, hide_tool_results: true)

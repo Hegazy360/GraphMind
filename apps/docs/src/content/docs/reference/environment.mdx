@@ -19,7 +19,7 @@ import { Aside } from '@astrojs/starlight/components';
 | `GRAPHMIND_KEEP_RUNS` | Runs to keep (default 200); `--keep` beats it |
 | `GRAPHMIND_KEEP_DAYS` | Days to keep (default 30); `--days` beats it |
 | `GRAPHMIND_TELEMETRY` | `0` or `false` disables [telemetry](/reference/telemetry/). `log` prints the exact record to stderr, prefixed `[graphmind telemetry] `, and sends nothing, even when `CI` is set. Any other value leaves telemetry on unless `CI` is set. |
-| `DO_NOT_TRACK` | `1` or `true` (any case, surrounding spaces ignored) disables telemetry. It beats every `GRAPHMIND_TELEMETRY` value, including `1` and `log`. Other values such as `yes` are ignored. |
+| `DO_NOT_TRACK` | Any value except empty, `0`, `false`, `off` and `no` (any case, surrounding spaces ignored) disables telemetry — `1`, `true` and `yes` all count. It beats every `GRAPHMIND_TELEMETRY` value, including `1` and `log`. |
 | `CI` | Set to anything, telemetry is off (unless `GRAPHMIND_TELEMETRY=log`) |
 | `GRAPHMIND_TELEMETRY_URL` | Override the telemetry endpoint (used by tests) |
 | `GRAPHMIND_HOME` | Directory for the telemetry install id (default `~/.graphmind`) |
@@ -31,12 +31,12 @@ import { Aside } from '@astrojs/starlight/components';
 | Variable | Meaning |
 | --- | --- |
 | `GRAPHMIND_URL` | Ingest endpoint for adapters (default `ws://127.0.0.1:4747/ingest`) |
-| `GRAPHMIND_DISABLED` | `1` disables instrumentation — beats everything, including an explicit `enabled: true` |
+| `GRAPHMIND_DISABLED` | `1` (or any value except empty, `0`, `false`, `off`, `no`) disables instrumentation — beats everything, including an explicit `enabled: true` |
 | `GRAPHMIND` | `1` re-enables instrumentation under `NODE_ENV=production` (disabled there by default) |
-| `GRAPHMIND_HIDE_INPUTS` | `1` or `true`: every node's `input` is recorded as `"__REDACTED__"`. See [recording less](#recording-less). |
-| `GRAPHMIND_HIDE_OUTPUTS` | `1` or `true`: every node's `output`, and the text of every streamed token, is recorded as hidden |
-| `GRAPHMIND_HIDE_TOOL_ARGS` | `1` or `true`: tool nodes' `input` only |
-| `GRAPHMIND_HIDE_TOOL_RESULTS` | `1` or `true`: tool nodes' `output` only |
+| `GRAPHMIND_HIDE_INPUTS` | On (see values below): every node's `input` is recorded as `"__REDACTED__"`. See [recording less](#recording-less). |
+| `GRAPHMIND_HIDE_OUTPUTS` | On: every node's `output`, and the text of every streamed token, is recorded as hidden |
+| `GRAPHMIND_HIDE_TOOL_ARGS` | On: tool nodes' `input` only |
+| `GRAPHMIND_HIDE_TOOL_RESULTS` | On: tool nodes' `output` only |
 | `GRAPHMIND_LOOP_THRESHOLD` | How many identical calls in a row count as a loop. Default `3`; `0` turns the loop hold off; anything that is not a whole number ≥ 0 falls back to `3`. See [loop hold](#loop-hold). |
 | `GRAPHMIND_ON_LOOP` | `pause` (default: hold when a debugger is attached, warn when not), `warn` (never hold, warn once per streak), or `off`. `0`, `false` and `none` also mean `off`; any other value falls back to `pause`. |
 | `GRAPHMIND_LOOP_ALLOW` | Comma-separated node ids or tool names that are never held as a loop, e.g. `pollJob,tool:heartbeat` |
@@ -99,7 +99,7 @@ GRAPHMIND_HIDE_TOOL_RESULTS=true
   node.finished tool:search  output="__REDACTED__"                    redaction={"count":1,"keys":["output"]}
 ```
 
-- **Values:** `1` or `true`, in any case, with surrounding spaces ignored. Anything else is off.
+- **Values:** anything except empty, `0`, `false`, `off` and `no` (any case, surrounding spaces ignored) turns a switch on. A switch whose job is to keep data out of the recording errs towards on: `yes`, `on` or a typo hides rather than records. (Before 0.6.0 only `1` and `true` counted.)
 - **Env and option:** either one turning a switch on turns it on. An app cannot pass
   `hideInputs: false` to undo `GRAPHMIND_HIDE_INPUTS=1`. An option set to `1`, `"1"` or
   `"true"` counts as on, so a config file that spells it as a string does not quietly record.

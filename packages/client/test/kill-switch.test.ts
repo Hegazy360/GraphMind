@@ -18,6 +18,17 @@ describe('resolveEnabled precedence', () => {
     expect(resolveEnabled(undefined, { GRAPHMIND_DISABLED: '1', GRAPHMIND: '1' })).toBe(false);
   });
 
+  it('GRAPHMIND_DISABLED is a kill switch in every spelling but the off words', () => {
+    // Until 0.6 only the exact string "1" disabled: GRAPHMIND_DISABLED=true
+    // left instrumentation on in the environment someone meant to turn off.
+    for (const v of ['1', 'true', 'TRUE', ' yes ', 'on', '2']) {
+      expect(resolveEnabled(true, { GRAPHMIND_DISABLED: v }), v).toBe(false);
+    }
+    for (const v of ['', '  ', '0', 'false', 'off', 'NO']) {
+      expect(resolveEnabled(undefined, { GRAPHMIND_DISABLED: v }), JSON.stringify(v)).toBe(true);
+    }
+  });
+
   it('explicit option beats NODE_ENV', () => {
     expect(resolveEnabled(true, { NODE_ENV: 'production' })).toBe(true);
     expect(resolveEnabled(false, {})).toBe(false);

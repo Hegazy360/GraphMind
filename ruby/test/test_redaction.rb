@@ -99,8 +99,11 @@ class TestRedaction < Minitest::Test
   # -- switches ----------------------------------------------------------------
 
   def test_env_and_option_spellings
-    ["1", "true", "TRUE", " True ", "\t1\n"].each { |v| assert Graphmind::Redaction.env_flag_on?(v), v.inspect }
-    [nil, "", "0", "false", "yes", "on", "2", "1.0", 1, true].each do |v|
+    # A privacy switch fails closed on spelling: anything but an off word.
+    ["1", "true", "TRUE", " True ", "\t1\n", "yes", "on", "2", "1.0"].each do |v|
+      assert Graphmind::Redaction.env_flag_on?(v), v.inspect
+    end
+    [nil, "", "  ", "0", "false", "FALSE", " off ", "no", "No", 1, true].each do |v|
       refute Graphmind::Redaction.env_flag_on?(v), v.inspect
     end
     [true, 1, 1.0, "1", "true"].each { |v| assert Graphmind::Redaction.option_flag_on?(v), v.inspect }

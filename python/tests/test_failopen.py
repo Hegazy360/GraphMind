@@ -142,6 +142,17 @@ def test_graphmind_disabled_env_beats_an_explicit_enable() -> None:
     assert resolve_enabled(None, {"GRAPHMIND_DISABLED": "1"}) is False
 
 
+@pytest.mark.parametrize("value", ["1", "true", "TRUE", " yes ", "on", "2"])
+def test_graphmind_disabled_is_a_kill_switch_in_every_spelling(value: str) -> None:
+    # Until 0.6 only the exact string "1" disabled.
+    assert resolve_enabled(True, {"GRAPHMIND_DISABLED": value}) is False
+
+
+@pytest.mark.parametrize("value", ["", "  ", "0", "false", "off", "NO"])
+def test_graphmind_disabled_off_words_leave_it_enabled(value: str) -> None:
+    assert resolve_enabled(None, {"GRAPHMIND_DISABLED": value}) is True
+
+
 def test_production_disables_unless_opted_in() -> None:
     assert resolve_enabled(None, {"ENVIRONMENT": "production"}) is False
     assert resolve_enabled(None, {"ENVIRONMENT": "prod"}) is False

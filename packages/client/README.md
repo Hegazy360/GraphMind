@@ -134,7 +134,7 @@ cannot lower.
 
 > **What the tool-only switches do not cover.** The tool-only switches hide the tool node's own `input` / `output`. In an agent loop the same values also travel through the model: its `tool_use` blocks (LLM output) and the `tool_result` messages of the next request (LLM input). To keep tool arguments and results out of the recording entirely, set `GRAPHMIND_HIDE_INPUTS` (and `GRAPHMIND_HIDE_OUTPUTS`). Error messages are never redacted.
 
-Values `1` or `true`, case-insensitive (as options: `true`, `1`, `"1"` or `"true"` — a privacy switch fails closed). Redaction runs inside the session
+Any value except empty, `0`, `false`, `off` and `no`, case-insensitive (as options: `true`, `1`, or those strings — a privacy switch fails closed, so a misspelling hides rather than records). Redaction runs inside the session
 before the ring buffer, so late-attaching debuggers, SQLite, exports,
 `graphmind mcp-proxy` recordings and the read-only MCP tools only ever see the
 placeholder; run names, node names, kinds, ids, timings and token counts are
