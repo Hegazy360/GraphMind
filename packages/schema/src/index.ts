@@ -44,6 +44,8 @@ export {
   LoopInfoSchema,
   PauseReasonSchema,
   RedactionSummarySchema,
+  RefusalCodeSchema,
+  SmartInfoSchema,
 } from './events.js';
 
 export {

@@ -56,8 +56,22 @@ export type ErrorInfo = z.infer<typeof ErrorInfoSchema>;
 /** Token usage of an LLM node. */
 export const TokenUsageSchema = z
   .looseObject({
+    /**
+     * Prompt tokens. With `inclusive: true` (0.6.0+) this is the TOTAL
+     * including cached tokens (read and written); without the marker it is
+     * whatever the sender's provider reported (Anthropic reported the
+     * uncached tail only).
+     */
     inputTokens: z.number().int().nonnegative(),
     outputTokens: z.number().int().nonnegative(),
+    /** `inputTokens` counts cached tokens too. Absent on 0.5.x events. */
+    inclusive: z.boolean().optional(),
+    /** Prompt tokens served from the provider's cache. Omitted when not reported. */
+    cacheReadTokens: z.number().int().nonnegative().optional(),
+    /** Prompt tokens written to the provider's cache. Omitted when not reported. */
+    cacheWriteTokens: z.number().int().nonnegative().optional(),
+    /** Output tokens spent on reasoning (included in `outputTokens`). */
+    reasoningTokens: z.number().int().nonnegative().optional(),
   })
   .meta({ id: 'TokenUsage' });
 export type TokenUsage = z.infer<typeof TokenUsageSchema>;

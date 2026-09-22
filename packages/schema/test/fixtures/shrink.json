@@ -69,11 +69,22 @@
       "nodeId": null,
       "point": null,
       "reason": "optional",
-      "loop": "optional"
+      "loop": "optional",
+      "smart": "optional",
+      "editable": "optional"
+    },
+    "exec.refused": {
+      "pauseId": null,
+      "code": null,
+      "message": "optional",
+      "requestId": "optional"
     },
     "exec.resumed": {
       "pauseId": null,
-      "action": null
+      "action": null,
+      "edited": "optional",
+      "requestId": "optional",
+      "principal": "optional"
     }
   },
   "cases": [

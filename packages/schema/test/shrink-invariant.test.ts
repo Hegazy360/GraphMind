@@ -87,6 +87,7 @@ const BASES: Record<EventType, () => Record<string, unknown>> = {
     loop: { repeats: 3, firstSeq: 1, lastSeq: 3, fingerprint: 'abc' },
   }),
   'exec.resumed': () => ({ pauseId: 'p1', action: 'inject' }),
+  'exec.refused': () => ({ pauseId: 'p1', code: 'schema', message: 'amount: expected a number' }),
 };
 
 function isValid(type: EventType, payload: unknown): boolean {

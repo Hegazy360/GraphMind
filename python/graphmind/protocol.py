@@ -46,6 +46,7 @@ EVENT_TYPES = frozenset(
         "node.finished",
         "node.error",
         "exec.paused",
+        "exec.refused",
         "exec.resumed",
     }
 )

@@ -29,6 +29,9 @@
       "$ref": "#/$defs/envelope.exec.paused"
     },
     {
+      "$ref": "#/$defs/envelope.exec.refused"
+    },
+    {
       "$ref": "#/$defs/envelope.exec.resumed"
     },
     {
@@ -625,7 +628,7 @@
         "payload"
       ],
       "additionalProperties": {
-        "$ref": "#/$defs/__schema59"
+        "$ref": "#/$defs/__schema63"
       }
     },
     "__schema50": {
@@ -690,6 +693,18 @@
         },
         "outputTokens": {
           "$ref": "#/$defs/__schema57"
+        },
+        "inclusive": {
+          "$ref": "#/$defs/__schema58"
+        },
+        "cacheReadTokens": {
+          "$ref": "#/$defs/__schema59"
+        },
+        "cacheWriteTokens": {
+          "$ref": "#/$defs/__schema60"
+        },
+        "reasoningTokens": {
+          "$ref": "#/$defs/__schema61"
         }
       },
       "required": [
@@ -697,7 +712,7 @@
         "outputTokens"
       ],
       "additionalProperties": {
-        "$ref": "#/$defs/__schema58"
+        "$ref": "#/$defs/__schema62"
       }
     },
     "__schema56": {
@@ -710,28 +725,46 @@
       "minimum": 0,
       "maximum": 9007199254740991
     },
-    "__schema58": {},
-    "__schema59": {},
+    "__schema58": {
+      "type": "boolean"
+    },
+    "__schema59": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema60": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema61": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema62": {},
+    "__schema63": {},
     "envelope.node.error": {
       "type": "object",
       "properties": {
         "gm": {
-          "$ref": "#/$defs/__schema60"
-        },
-        "seq": {
-          "$ref": "#/$defs/__schema61"
-        },
-        "ts": {
-          "$ref": "#/$defs/__schema62"
-        },
-        "runId": {
-          "$ref": "#/$defs/__schema63"
-        },
-        "type": {
           "$ref": "#/$defs/__schema64"
         },
-        "payload": {
+        "seq": {
           "$ref": "#/$defs/__schema65"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema66"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema67"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema68"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema69"
         }
       },
       "required": [
@@ -743,29 +776,29 @@
         "payload"
       ],
       "additionalProperties": {
-        "$ref": "#/$defs/__schema66"
+        "$ref": "#/$defs/__schema70"
       }
     },
-    "__schema60": {
+    "__schema64": {
       "type": "number",
       "const": 1
     },
-    "__schema61": {
+    "__schema65": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
     },
-    "__schema62": {
+    "__schema66": {
       "type": "number"
     },
-    "__schema63": {
+    "__schema67": {
       "type": "string"
     },
-    "__schema64": {
+    "__schema68": {
       "type": "string",
       "const": "node.error"
     },
-    "__schema65": {
+    "__schema69": {
       "type": "object",
       "properties": {
         "nodeId": {
@@ -788,27 +821,27 @@
       ],
       "additionalProperties": {}
     },
-    "__schema66": {},
+    "__schema70": {},
     "envelope.exec.paused": {
       "type": "object",
       "properties": {
         "gm": {
-          "$ref": "#/$defs/__schema67"
-        },
-        "seq": {
-          "$ref": "#/$defs/__schema68"
-        },
-        "ts": {
-          "$ref": "#/$defs/__schema69"
-        },
-        "runId": {
-          "$ref": "#/$defs/__schema70"
-        },
-        "type": {
           "$ref": "#/$defs/__schema71"
         },
-        "payload": {
+        "seq": {
           "$ref": "#/$defs/__schema72"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema73"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema74"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema75"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema76"
         }
       },
       "required": [
@@ -820,29 +853,29 @@
         "payload"
       ],
       "additionalProperties": {
-        "$ref": "#/$defs/__schema73"
+        "$ref": "#/$defs/__schema77"
       }
     },
-    "__schema67": {
+    "__schema71": {
       "type": "number",
       "const": 1
     },
-    "__schema68": {
+    "__schema72": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
     },
-    "__schema69": {
+    "__schema73": {
       "type": "number"
     },
-    "__schema70": {
+    "__schema74": {
       "type": "string"
     },
-    "__schema71": {
+    "__schema75": {
       "type": "string",
       "const": "exec.paused"
     },
-    "__schema72": {
+    "__schema76": {
       "type": "object",
       "properties": {
         "pauseId": {
@@ -883,6 +916,24 @@
             },
             "fingerprint": {
               "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "repeat",
+                "cycle",
+                "error-repeat"
+              ]
+            },
+            "period": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "laps": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
             }
           },
           "required": [
@@ -892,6 +943,28 @@
             "fingerprint"
           ],
           "additionalProperties": {}
+        },
+        "smart": {
+          "type": "object",
+          "properties": {
+            "rule": {
+              "type": "string",
+              "enum": [
+                "error-result",
+                "truncated-tool-call"
+              ]
+            },
+            "detail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "rule"
+          ],
+          "additionalProperties": {}
+        },
+        "editable": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -909,27 +982,27 @@
         "error"
       ]
     },
-    "__schema73": {},
-    "envelope.exec.resumed": {
+    "__schema77": {},
+    "envelope.exec.refused": {
       "type": "object",
       "properties": {
         "gm": {
-          "$ref": "#/$defs/__schema74"
-        },
-        "seq": {
-          "$ref": "#/$defs/__schema75"
-        },
-        "ts": {
-          "$ref": "#/$defs/__schema76"
-        },
-        "runId": {
-          "$ref": "#/$defs/__schema77"
-        },
-        "type": {
           "$ref": "#/$defs/__schema78"
         },
-        "payload": {
+        "seq": {
           "$ref": "#/$defs/__schema79"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema80"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema81"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema82"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema83"
         }
       },
       "required": [
@@ -941,29 +1014,113 @@
         "payload"
       ],
       "additionalProperties": {
-        "$ref": "#/$defs/__schema80"
+        "$ref": "#/$defs/__schema84"
       }
     },
-    "__schema74": {
+    "__schema78": {
       "type": "number",
       "const": 1
     },
-    "__schema75": {
+    "__schema79": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
     },
-    "__schema76": {
+    "__schema80": {
       "type": "number"
     },
-    "__schema77": {
+    "__schema81": {
       "type": "string"
     },
-    "__schema78": {
+    "__schema82": {
+      "type": "string",
+      "const": "exec.refused"
+    },
+    "__schema83": {
+      "type": "object",
+      "properties": {
+        "pauseId": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string",
+          "enum": [
+            "schema",
+            "shape",
+            "placeholder",
+            "truncated",
+            "disabled",
+            "unsupported"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pauseId",
+        "code"
+      ],
+      "additionalProperties": {}
+    },
+    "__schema84": {},
+    "envelope.exec.resumed": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema85"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema86"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema87"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema88"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema89"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema90"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema91"
+      }
+    },
+    "__schema85": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema86": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema87": {
+      "type": "number"
+    },
+    "__schema88": {
+      "type": "string"
+    },
+    "__schema89": {
       "type": "string",
       "const": "exec.resumed"
     },
-    "__schema79": {
+    "__schema90": {
       "type": "object",
       "properties": {
         "pauseId": {
@@ -971,6 +1128,22 @@
         },
         "action": {
           "$ref": "#/$defs/ResumeAction"
+        },
+        "edited": {
+          "type": "object",
+          "properties": {
+            "after": {}
+          },
+          "required": [
+            "after"
+          ],
+          "additionalProperties": {}
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "principal": {
+          "type": "string"
         }
       },
       "required": [
@@ -988,98 +1161,27 @@
         "abort"
       ]
     },
-    "__schema80": {},
+    "__schema91": {},
     "envelope.exec.resume": {
       "type": "object",
       "properties": {
         "gm": {
-          "$ref": "#/$defs/__schema81"
-        },
-        "seq": {
-          "$ref": "#/$defs/__schema82"
-        },
-        "ts": {
-          "$ref": "#/$defs/__schema83"
-        },
-        "runId": {
-          "$ref": "#/$defs/__schema84"
-        },
-        "type": {
-          "$ref": "#/$defs/__schema85"
-        },
-        "payload": {
-          "$ref": "#/$defs/__schema86"
-        }
-      },
-      "required": [
-        "gm",
-        "seq",
-        "ts",
-        "runId",
-        "type",
-        "payload"
-      ],
-      "additionalProperties": {
-        "$ref": "#/$defs/__schema87"
-      }
-    },
-    "__schema81": {
-      "type": "number",
-      "const": 1
-    },
-    "__schema82": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 9007199254740991
-    },
-    "__schema83": {
-      "type": "number"
-    },
-    "__schema84": {
-      "type": "string"
-    },
-    "__schema85": {
-      "type": "string",
-      "const": "exec.resume"
-    },
-    "__schema86": {
-      "type": "object",
-      "properties": {
-        "pauseId": {
-          "type": "string"
-        },
-        "action": {
-          "$ref": "#/$defs/ResumeAction"
-        },
-        "output": {}
-      },
-      "required": [
-        "pauseId",
-        "action"
-      ],
-      "additionalProperties": {}
-    },
-    "__schema87": {},
-    "envelope.breakpoint.set": {
-      "type": "object",
-      "properties": {
-        "gm": {
-          "$ref": "#/$defs/__schema88"
-        },
-        "seq": {
-          "$ref": "#/$defs/__schema89"
-        },
-        "ts": {
-          "$ref": "#/$defs/__schema90"
-        },
-        "runId": {
-          "$ref": "#/$defs/__schema91"
-        },
-        "type": {
           "$ref": "#/$defs/__schema92"
         },
-        "payload": {
+        "seq": {
           "$ref": "#/$defs/__schema93"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema94"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema95"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema96"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema97"
         }
       },
       "required": [
@@ -1094,66 +1196,48 @@
         "$ref": "#/$defs/__schema98"
       }
     },
-    "__schema88": {
+    "__schema92": {
       "type": "number",
       "const": 1
     },
-    "__schema89": {
+    "__schema93": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
     },
-    "__schema90": {
-      "type": "number"
-    },
-    "__schema91": {
-      "type": "string"
-    },
-    "__schema92": {
-      "type": "string",
-      "const": "breakpoint.set"
-    },
-    "__schema93": {
-      "type": "object",
-      "properties": {
-        "matcher": {
-          "$ref": "#/$defs/BreakpointMatcher"
-        }
-      },
-      "required": [
-        "matcher"
-      ],
-      "additionalProperties": {}
-    },
-    "BreakpointMatcher": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "$ref": "#/$defs/__schema94"
-        },
-        "name": {
-          "$ref": "#/$defs/__schema95"
-        },
-        "point": {
-          "$ref": "#/$defs/__schema96"
-        }
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/__schema97"
-      }
-    },
     "__schema94": {
-      "$ref": "#/$defs/NodeKind"
+      "type": "number"
     },
     "__schema95": {
       "type": "string"
     },
     "__schema96": {
-      "$ref": "#/$defs/PausePoint"
+      "type": "string",
+      "const": "exec.resume"
     },
-    "__schema97": {},
+    "__schema97": {
+      "type": "object",
+      "properties": {
+        "pauseId": {
+          "type": "string"
+        },
+        "action": {
+          "$ref": "#/$defs/ResumeAction"
+        },
+        "output": {},
+        "input": {},
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pauseId",
+        "action"
+      ],
+      "additionalProperties": {}
+    },
     "__schema98": {},
-    "envelope.breakpoint.clear": {
+    "envelope.breakpoint.set": {
       "type": "object",
       "properties": {
         "gm": {
@@ -1184,7 +1268,7 @@
         "payload"
       ],
       "additionalProperties": {
-        "$ref": "#/$defs/__schema105"
+        "$ref": "#/$defs/__schema109"
       }
     },
     "__schema99": {
@@ -1204,7 +1288,7 @@
     },
     "__schema103": {
       "type": "string",
-      "const": "breakpoint.clear"
+      "const": "breakpoint.set"
     },
     "__schema104": {
       "type": "object",
@@ -1218,27 +1302,54 @@
       ],
       "additionalProperties": {}
     },
-    "__schema105": {},
-    "envelope.mode.set": {
+    "BreakpointMatcher": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/__schema105"
+        },
+        "name": {
+          "$ref": "#/$defs/__schema106"
+        },
+        "point": {
+          "$ref": "#/$defs/__schema107"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema108"
+      }
+    },
+    "__schema105": {
+      "$ref": "#/$defs/NodeKind"
+    },
+    "__schema106": {
+      "type": "string"
+    },
+    "__schema107": {
+      "$ref": "#/$defs/PausePoint"
+    },
+    "__schema108": {},
+    "__schema109": {},
+    "envelope.breakpoint.clear": {
       "type": "object",
       "properties": {
         "gm": {
-          "$ref": "#/$defs/__schema106"
-        },
-        "seq": {
-          "$ref": "#/$defs/__schema107"
-        },
-        "ts": {
-          "$ref": "#/$defs/__schema108"
-        },
-        "runId": {
-          "$ref": "#/$defs/__schema109"
-        },
-        "type": {
           "$ref": "#/$defs/__schema110"
         },
-        "payload": {
+        "seq": {
           "$ref": "#/$defs/__schema111"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema112"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema113"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema114"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema115"
         }
       },
       "required": [
@@ -1250,29 +1361,95 @@
         "payload"
       ],
       "additionalProperties": {
-        "$ref": "#/$defs/__schema112"
+        "$ref": "#/$defs/__schema116"
       }
     },
-    "__schema106": {
+    "__schema110": {
       "type": "number",
       "const": 1
     },
-    "__schema107": {
+    "__schema111": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
     },
-    "__schema108": {
+    "__schema112": {
       "type": "number"
     },
-    "__schema109": {
+    "__schema113": {
       "type": "string"
     },
-    "__schema110": {
+    "__schema114": {
+      "type": "string",
+      "const": "breakpoint.clear"
+    },
+    "__schema115": {
+      "type": "object",
+      "properties": {
+        "matcher": {
+          "$ref": "#/$defs/BreakpointMatcher"
+        }
+      },
+      "required": [
+        "matcher"
+      ],
+      "additionalProperties": {}
+    },
+    "__schema116": {},
+    "envelope.mode.set": {
+      "type": "object",
+      "properties": {
+        "gm": {
+          "$ref": "#/$defs/__schema117"
+        },
+        "seq": {
+          "$ref": "#/$defs/__schema118"
+        },
+        "ts": {
+          "$ref": "#/$defs/__schema119"
+        },
+        "runId": {
+          "$ref": "#/$defs/__schema120"
+        },
+        "type": {
+          "$ref": "#/$defs/__schema121"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema122"
+        }
+      },
+      "required": [
+        "gm",
+        "seq",
+        "ts",
+        "runId",
+        "type",
+        "payload"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema123"
+      }
+    },
+    "__schema117": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema118": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema119": {
+      "type": "number"
+    },
+    "__schema120": {
+      "type": "string"
+    },
+    "__schema121": {
       "type": "string",
       "const": "mode.set"
     },
-    "__schema111": {
+    "__schema122": {
       "type": "object",
       "properties": {
         "mode": {
@@ -1291,27 +1468,27 @@
         "step"
       ]
     },
-    "__schema112": {},
+    "__schema123": {},
     "envelope.hello": {
       "type": "object",
       "properties": {
         "gm": {
-          "$ref": "#/$defs/__schema113"
+          "$ref": "#/$defs/__schema124"
         },
         "seq": {
-          "$ref": "#/$defs/__schema114"
+          "$ref": "#/$defs/__schema125"
         },
         "ts": {
-          "$ref": "#/$defs/__schema115"
+          "$ref": "#/$defs/__schema126"
         },
         "runId": {
-          "$ref": "#/$defs/__schema116"
+          "$ref": "#/$defs/__schema127"
         },
         "type": {
-          "$ref": "#/$defs/__schema117"
+          "$ref": "#/$defs/__schema128"
         },
         "payload": {
-          "$ref": "#/$defs/__schema118"
+          "$ref": "#/$defs/__schema129"
         }
       },
       "required": [
@@ -1323,29 +1500,29 @@
         "payload"
       ],
       "additionalProperties": {
-        "$ref": "#/$defs/__schema119"
+        "$ref": "#/$defs/__schema130"
       }
     },
-    "__schema113": {
+    "__schema124": {
       "type": "number",
       "const": 1
     },
-    "__schema114": {
+    "__schema125": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
     },
-    "__schema115": {
+    "__schema126": {
       "type": "number"
     },
-    "__schema116": {
+    "__schema127": {
       "type": "string"
     },
-    "__schema117": {
+    "__schema128": {
       "type": "string",
       "const": "hello"
     },
-    "__schema118": {
+    "__schema129": {
       "type": "object",
       "properties": {
         "versions": {
@@ -1388,27 +1565,27 @@
       ],
       "additionalProperties": {}
     },
-    "__schema119": {},
+    "__schema130": {},
     "envelope.hello.ack": {
       "type": "object",
       "properties": {
         "gm": {
-          "$ref": "#/$defs/__schema120"
+          "$ref": "#/$defs/__schema131"
         },
         "seq": {
-          "$ref": "#/$defs/__schema121"
+          "$ref": "#/$defs/__schema132"
         },
         "ts": {
-          "$ref": "#/$defs/__schema122"
+          "$ref": "#/$defs/__schema133"
         },
         "runId": {
-          "$ref": "#/$defs/__schema123"
+          "$ref": "#/$defs/__schema134"
         },
         "type": {
-          "$ref": "#/$defs/__schema124"
+          "$ref": "#/$defs/__schema135"
         },
         "payload": {
-          "$ref": "#/$defs/__schema125"
+          "$ref": "#/$defs/__schema136"
         }
       },
       "required": [
@@ -1420,29 +1597,29 @@
         "payload"
       ],
       "additionalProperties": {
-        "$ref": "#/$defs/__schema126"
+        "$ref": "#/$defs/__schema137"
       }
     },
-    "__schema120": {
+    "__schema131": {
       "type": "number",
       "const": 1
     },
-    "__schema121": {
+    "__schema132": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
     },
-    "__schema122": {
+    "__schema133": {
       "type": "number"
     },
-    "__schema123": {
+    "__schema134": {
       "type": "string"
     },
-    "__schema124": {
+    "__schema135": {
       "type": "string",
       "const": "hello.ack"
     },
-    "__schema125": {
+    "__schema136": {
       "type": "object",
       "properties": {
         "versions": {
@@ -1480,6 +1657,12 @@
         },
         "sessionToken": {
           "type": "string"
+        },
+        "hubCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -1490,6 +1673,6 @@
       ],
       "additionalProperties": {}
     },
-    "__schema126": {}
+    "__schema137": {}
   }
 }

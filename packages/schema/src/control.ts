@@ -27,6 +27,15 @@ export const ControlPayloadSchemas = {
     pauseId: z.string(),
     action: ResumeActionSchema,
     output: z.unknown().optional(),
+    /**
+     * An edited input to run the call with (0.6.0+, capability `edit-input`,
+     * only where `exec.paused.editable`). Valid with `continue` at a
+     * `before` gate and `retry` at an `after`/`error` gate. For a tool, the
+     * arguments object: its top-level keys replace the live ones.
+     */
+    input: z.unknown().optional(),
+    /** Correlates the app's `exec.resumed` / `exec.refused` answer. */
+    requestId: z.string().optional(),
   }),
 
   /** Add a breakpoint. Matchers are deduplicated by exact field equality. */
@@ -90,6 +99,12 @@ export const HandshakePayloadSchemas = {
      * still satisfies the schema.
      */
     sessionToken: z.string().optional(),
+    /**
+     * What THIS debugger implements (0.6.0+), set by the debugger itself —
+     * unlike `capabilities`, which echoes the app's list. A client honours an
+     * `exec.resume.input` only when this contains `edit-input`.
+     */
+    hubCapabilities: z.array(z.string()).optional(),
   }),
 } as const;
 

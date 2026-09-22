@@ -91,8 +91,14 @@ module Graphmind
         "nodeId" => nil, "instanceId" => :optional,
         "error" => { "name" => nil, "message" => nil, "stack" => :optional }.freeze, "heldMs" => :optional
       },
-      "exec.paused" => { "pauseId" => nil, "nodeId" => nil, "point" => nil, "reason" => :optional, "loop" => :optional },
-      "exec.resumed" => { "pauseId" => nil, "action" => nil }
+      "exec.paused" => {
+        "pauseId" => nil, "nodeId" => nil, "point" => nil, "reason" => :optional, "loop" => :optional,
+        "smart" => :optional, "editable" => :optional
+      },
+      "exec.refused" => { "pauseId" => nil, "code" => nil, "message" => :optional, "requestId" => :optional },
+      "exec.resumed" => {
+        "pauseId" => nil, "action" => nil, "edited" => :optional, "requestId" => :optional, "principal" => :optional
+      }
     }.transform_values(&:freeze).freeze
 
     # Raised internally when a value has no JSON text (see the module comment).
@@ -628,6 +634,9 @@ module Graphmind
       PAUSE_REASONS = %w[breakpoint error step loop].freeze
       RESUME_ACTIONS = %w[continue retry inject abort].freeze
       TOKEN_CHANNELS = %w[text reasoning tool-args].freeze
+      LOOP_KINDS = %w[repeat cycle error-repeat].freeze
+      SMART_RULES = %w[error-result truncated-tool-call].freeze
+      REFUSAL_CODES = %w[schema shape placeholder truncated disabled unsupported].freeze
 
       module_function
 
@@ -674,10 +683,21 @@ module Graphmind
             required(payload, "nodeId") { |v| str?(v) } &&
             required(payload, "point") { |v| enum?(v, PAUSE_POINTS) } &&
             optional(payload, "reason") { |v| enum?(v, PAUSE_REASONS) } &&
-            optional(payload, "loop") { |v| loop_info?(v) }
+            optional(payload, "loop") { |v| loop_info?(v) } &&
+            optional(payload, "smart") { |v| smart_info?(v) } &&
+            optional(payload, "editable") { |v| bool?(v) }
+        when "exec.refused"
+          required(payload, "pauseId") { |v| str?(v) } &&
+            required(payload, "code") { |v| enum?(v, REFUSAL_CODES) } &&
+            optional(payload, "message") { |v| str?(v) } &&
+            optional(payload, "requestId") { |v| str?(v) }
         when "exec.resumed"
           required(payload, "pauseId") { |v| str?(v) } &&
-            required(payload, "action") { |v| enum?(v, RESUME_ACTIONS) }
+            required(payload, "action") { |v| enum?(v, RESUME_ACTIONS) } &&
+            # z.looseObject({after: z.unknown()}): zod v4 requires the key.
+            optional(payload, "edited") { |v| v.is_a?(Hash) && Shrink.lookup(v, "after")[0] } &&
+            optional(payload, "requestId") { |v| str?(v) } &&
+            optional(payload, "principal") { |v| str?(v) }
         else
           true
         end
@@ -732,7 +752,18 @@ module Graphmind
 
       def usage?(value)
         value.is_a?(Hash) && required(value, "inputTokens") { |v| count?(v) } &&
-          required(value, "outputTokens") { |v| count?(v) }
+          required(value, "outputTokens") { |v| count?(v) } &&
+          optional(value, "inclusive") { |v| bool?(v) } &&
+          optional(value, "cacheReadTokens") { |v| count?(v) } &&
+          optional(value, "cacheWriteTokens") { |v| count?(v) } &&
+          optional(value, "reasoningTokens") { |v| count?(v) }
+      end
+
+      def bool?(value) = true.equal?(value) || false.equal?(value)
+
+      def smart_info?(value)
+        value.is_a?(Hash) && required(value, "rule") { |v| enum?(v, SMART_RULES) } &&
+          optional(value, "detail") { |v| str?(v) }
       end
 
       def redaction?(value)
@@ -743,7 +774,10 @@ module Graphmind
       def loop_info?(value)
         value.is_a?(Hash) && required(value, "repeats") { |v| count?(v) } &&
           required(value, "firstSeq") { |v| count?(v) } && required(value, "lastSeq") { |v| count?(v) } &&
-          required(value, "fingerprint") { |v| str?(v) }
+          required(value, "fingerprint") { |v| str?(v) } &&
+          optional(value, "kind") { |v| enum?(v, LOOP_KINDS) } &&
+          optional(value, "period") { |v| count?(v) && v.positive? } &&
+          optional(value, "laps") { |v| count?(v) && v.positive? }
       end
 
       def count?(value) = safe_integer?(value) && value >= 0

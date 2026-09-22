@@ -274,6 +274,7 @@ VALID = {
         "loop": {"repeats": 3, "firstSeq": 1, "lastSeq": 3, "fingerprint": "f"},
     },
     "exec.resumed": {"pauseId": "p", "action": "retry"},
+    "exec.refused": {"pauseId": "p", "code": "schema", "message": "amount: expected a number"},
 }
 
 
@@ -315,7 +316,7 @@ def test_the_payload_check_agrees_with_schema_json_on_thousands_of_mutations() -
             if is_valid_event_payload(type_, payload) != schema_ok:
                 disagreements.append((type_, payload, schema_ok))
             checked += 1
-    assert checked == 3600
+    assert checked == 400 * len(VALID)
     assert disagreements == []
 
 
@@ -399,6 +400,7 @@ FREE_STRINGS = {
     "node.error": ["nodeId"],
     "exec.paused": ["pauseId", "nodeId"],
     "exec.resumed": ["pauseId"],
+    "exec.refused": ["pauseId"],
 }
 
 

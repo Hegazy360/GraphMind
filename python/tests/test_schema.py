@@ -104,6 +104,7 @@ def test_every_frame_from_a_full_run_validates(
         ),
         ("exec.paused", {"pauseId": "p", "nodeId": "tool:x", "point": "before"}),
         ("exec.resumed", {"pauseId": "p", "action": "inject"}),
+        ("exec.refused", {"pauseId": "p", "code": "schema"}),
     ],
 )
 def test_each_event_type_validates(
@@ -123,6 +124,7 @@ def test_all_event_types_are_covered_by_the_parametrized_cases() -> None:
         "node.error",
         "exec.paused",
         "exec.resumed",
+        "exec.refused",
     }
     assert covered == set(EVENT_TYPES)
 

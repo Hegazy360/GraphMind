@@ -31,6 +31,6 @@ describe('schema.json golden file', () => {
     expect(schema['$schema']).toBe('https://json-schema.org/draft/2020-12/schema');
     expect(schema['$id']).toContain(`/v${PROTOCOL_VERSION}/`);
     expect(Array.isArray(schema['anyOf'])).toBe(true);
-    expect((schema['anyOf'] as unknown[]).length).toBe(15);
+    expect((schema['anyOf'] as unknown[]).length).toBe(16);
   });
 });

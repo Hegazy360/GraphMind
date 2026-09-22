@@ -338,6 +338,9 @@ _RUN_STATUSES = frozenset({"ok", "error", "aborted"})
 _PAUSE_POINTS = frozenset({"before", "after", "error"})
 _RESUME_ACTIONS = frozenset({"continue", "retry", "inject", "abort"})
 _PAUSE_REASONS = frozenset({"breakpoint", "error", "step", "loop"})
+_LOOP_KINDS = frozenset({"repeat", "cycle", "error-repeat"})
+_SMART_RULES = frozenset({"error-result", "truncated-tool-call"})
+_REFUSAL_CODES = frozenset({"schema", "shape", "placeholder", "truncated", "disabled", "unsupported"})
 _TOKEN_CHANNELS = frozenset({"text", "reasoning", "tool-args"})
 
 _ABSENT = object()
@@ -368,6 +371,15 @@ def _is_nonneg_int(value: Any) -> bool:
 
 def _is_str(value: Any) -> bool:
     return isinstance(value, str)
+
+
+def _is_bool(value: Any) -> bool:
+    return isinstance(value, bool)
+
+
+def _is_pos_int(value: Any) -> bool:
+    """``z.number().int().positive()``."""
+    return _is_nonneg_int(value) and value > 0
 
 
 def _optional(payload: dict[str, Any], key: str, check: Any) -> bool:
@@ -404,6 +416,10 @@ def _usage(value: Any) -> bool:
         isinstance(value, dict)
         and _is_nonneg_int(value.get("inputTokens", _ABSENT))
         and _is_nonneg_int(value.get("outputTokens", _ABSENT))
+        and _optional(value, "inclusive", _is_bool)
+        and _optional(value, "cacheReadTokens", _is_nonneg_int)
+        and _optional(value, "cacheWriteTokens", _is_nonneg_int)
+        and _optional(value, "reasoningTokens", _is_nonneg_int)
     )
 
 
@@ -414,7 +430,23 @@ def _loop_info(value: Any) -> bool:
         and _is_nonneg_int(value.get("firstSeq", _ABSENT))
         and _is_nonneg_int(value.get("lastSeq", _ABSENT))
         and _is_str(value.get("fingerprint", _ABSENT))
+        and _optional(value, "kind", _in(_LOOP_KINDS))
+        and _optional(value, "period", _is_pos_int)
+        and _optional(value, "laps", _is_pos_int)
     )
+
+
+def _smart_info(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and _in(_SMART_RULES)(value.get("rule", _ABSENT))
+        and _optional(value, "detail", _is_str)
+    )
+
+
+def _edited(value: Any) -> bool:
+    """``z.looseObject({after: z.unknown()})``: zod v4 requires the key."""
+    return isinstance(value, dict) and "after" in value
 
 
 def _graph_node(value: Any) -> bool:
@@ -505,11 +537,28 @@ def _exec_paused(p: dict[str, Any]) -> bool:
         and _in(_PAUSE_POINTS)(p.get("point", _ABSENT))
         and _optional(p, "reason", _in(_PAUSE_REASONS))
         and _optional(p, "loop", _loop_info)
+        and _optional(p, "smart", _smart_info)
+        and _optional(p, "editable", _is_bool)
+    )
+
+
+def _exec_refused(p: dict[str, Any]) -> bool:
+    return (
+        _is_str(p.get("pauseId", _ABSENT))
+        and _in(_REFUSAL_CODES)(p.get("code", _ABSENT))
+        and _optional(p, "message", _is_str)
+        and _optional(p, "requestId", _is_str)
     )
 
 
 def _exec_resumed(p: dict[str, Any]) -> bool:
-    return _is_str(p.get("pauseId", _ABSENT)) and _in(_RESUME_ACTIONS)(p.get("action", _ABSENT))
+    return (
+        _is_str(p.get("pauseId", _ABSENT))
+        and _in(_RESUME_ACTIONS)(p.get("action", _ABSENT))
+        and _optional(p, "edited", _edited)
+        and _optional(p, "requestId", _is_str)
+        and _optional(p, "principal", _is_str)
+    )
 
 
 _VALIDATORS: dict[str, Any] = {
@@ -521,6 +570,7 @@ _VALIDATORS: dict[str, Any] = {
     "node.finished": _node_finished,
     "node.error": _node_error,
     "exec.paused": _exec_paused,
+    "exec.refused": _exec_refused,
     "exec.resumed": _exec_resumed,
 }
 
@@ -579,8 +629,22 @@ SKELETON_PLANS: dict[str, dict[str, Any]] = {
         "point": None,
         "reason": "optional",
         "loop": "optional",
+        "smart": "optional",
+        "editable": "optional",
     },
-    "exec.resumed": {"pauseId": None, "action": None},
+    "exec.refused": {
+        "pauseId": None,
+        "code": None,
+        "message": "optional",
+        "requestId": "optional",
+    },
+    "exec.resumed": {
+        "pauseId": None,
+        "action": None,
+        "edited": "optional",
+        "requestId": "optional",
+        "principal": "optional",
+    },
 }
 
 

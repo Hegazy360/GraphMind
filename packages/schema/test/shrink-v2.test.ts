@@ -408,6 +408,7 @@ describe('every known event type has a skeleton', () => {
         'node.error': { nodeId: 'n', error: { name: 'E', message: 'm' } },
         'exec.paused': { pauseId: 'p', nodeId: 'n', point: 'before' },
         'exec.resumed': { pauseId: 'p', action: 'abort' },
+        'exec.refused': { pauseId: 'p', code: 'shape' },
       };
       const payload = { ...huge, ...base[type] };
       for (const maxBytes of [4096, 5000, 65_536, MAX_PAYLOAD_BYTES]) {

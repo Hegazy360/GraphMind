@@ -39,6 +39,11 @@ export const KNOWN_CAPABILITIES = [
    * disconnect, which is otherwise the one window a claim cannot be proven in.
    */
   'run-claim',
+  /**
+   * The client can run a held call with an edited input (`exec.resume.input`)
+   * where its `exec.paused` says `editable` (0.6.0+).
+   */
+  'edit-input',
 ] as const;
 
 export type KnownCapability = (typeof KNOWN_CAPABILITIES)[number];

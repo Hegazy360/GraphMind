@@ -95,6 +95,14 @@ const payloadArbs: { [K in MessageType]: fc.Arbitrary<MessagePayloadMap[K]> } = 
   'node.error': fc.record({ nodeId: idArb, error: errorInfoArb }),
   'exec.paused': fc.record({ pauseId: idArb, nodeId: idArb, point: pointArb }),
   'exec.resumed': fc.record({ pauseId: idArb, action: actionArb }),
+  'exec.refused': fc.record(
+    {
+      pauseId: idArb,
+      code: fc.constantFrom('schema', 'shape', 'placeholder', 'truncated', 'disabled', 'unsupported'),
+      message: fc.string({ maxLength: 200 }),
+    },
+    { requiredKeys: ['pauseId', 'code'] },
+  ),
   'exec.resume': fc.record(
     { pauseId: idArb, action: actionArb, output: jsonArb },
     { requiredKeys: ['pauseId', 'action'] },
