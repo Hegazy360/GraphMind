@@ -1,6 +1,6 @@
 """Shared machinery for the provider-SDK integrations.
 
-Three jobs:
+Four jobs:
 
 1. **Safe previews.** Agent prompts contain base64 images, giant documents and
    arbitrary objects. Everything that goes on the wire is depth-, width- and
@@ -13,10 +13,17 @@ Three jobs:
 3. **Method patching.** Provider clients expose their calls as bound methods on
    cached resource objects, so instrumentation is an instance attribute
    assignment — no monkey-patching of library classes, no import-time hooks.
+4. **Raw responses and typed inject.** ``.with_raw_response`` /
+   ``.with_streaming_response`` route through the same patched method but hand
+   the host the SDK's raw response object, and an injected reply has to come
+   back as the SDK type the caller reads attributes off, not as a dict.
 """
 
 from __future__ import annotations
 
+import importlib
+import inspect
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -343,6 +350,398 @@ class AsyncStreamTee:
         return getattr(self._inner, item)
 
 
+# -- raw responses ------------------------------------------------------------
+#
+# Both SDKs (Stainless-generated) implement `.with_raw_response.create(...)` and
+# `.with_streaming_response.create(...)` by calling the resource's own bound
+# method with one extra header, `X-Stainless-Raw-Response`: "true" returns a
+# `LegacyAPIResponse` (body read, `.parse()` sync), "stream" returns an
+# `APIResponse` whose body is still unread (`.parse()` async on async clients).
+# The wrappers capture `resource.create` when the cached property is first
+# touched, so once the method is patched they call the wrapper — which then
+# only has to treat the raw object differently from a parsed one.
+
+RAW_RESPONSE_HEADER = "x-stainless-raw-response"
+RAW_WRAPPERS = ("with_raw_response", "with_streaming_response")
+
+
+def raw_mode(kwargs: dict[str, Any]) -> str | None:
+    """The raw-response mode a call was made in (``"true"``/``"stream"``), or None."""
+    try:
+        headers = kwargs.get("extra_headers")
+        if not headers:
+            return None
+        for key, value in headers.items():
+            if isinstance(key, str) and key.lower() == RAW_RESPONSE_HEADER and value:
+                return str(value)
+    except Exception:
+        pass
+    return None
+
+
+def refresh_raw_wrappers(root: Any, path: tuple[str, ...], attrs: tuple[str, ...]) -> None:
+    """Drop cached raw-response wrappers built around a different method.
+
+    ``with_raw_response`` / ``with_streaming_response`` are ``cached_property``
+    values that capture ``resource.create`` the first time they are touched.
+    Touched *before* ``instrument_*``, they would keep calling the original
+    forever; dropping the cache makes the next access rebuild them around
+    whatever the resource holds now (the wrapper — or, after ``uninstrument_*``,
+    the original again). A no-op when the cache already matches, so
+    instrumenting twice changes nothing.
+    """
+    try:
+        resource = root
+        for part in path:
+            resource = getattr(resource, part, None)
+            if resource is None:
+                return
+        cache = vars(resource)
+        for name in RAW_WRAPPERS:
+            wrappers = cache.get(name)
+            if wrappers is None:
+                continue
+            for attr in attrs:
+                captured = getattr(wrappers, attr, None)
+                if captured is None:
+                    continue
+                if getattr(captured, "__wrapped__", None) != getattr(resource, attr, None):
+                    cache.pop(name, None)
+                    break
+    except Exception:
+        pass
+
+
+def looks_like_stream(value: Any) -> bool:
+    """A provider stream object, as opposed to a parsed model or plain data."""
+    if value is None or isinstance(value, (str, bytes, bytearray, dict, list, tuple)):
+        return False
+    if hasattr(value, "model_dump"):
+        return False
+    return hasattr(value, "__iter__") or hasattr(value, "__aiter__")
+
+
+def parse_raw(raw: Any) -> Any:
+    """Parse a non-streamed raw response exactly as the host's ``.parse()`` would.
+
+    The SDK caches the parsed object on the response, so the host's own
+    ``.parse()`` later returns this very object and nothing is read twice.
+    Returns None when the body does not parse — the host's ``.parse()`` will
+    raise that, not GraphMind.
+    """
+    try:
+        parsed = raw.parse()
+        if inspect.isawaitable(parsed):
+            # An async `.parse()` reached from a sync wrapper cannot be awaited
+            # here; leave the parsing to the host.
+            closer = getattr(parsed, "close", None)
+            if closer is not None:
+                closer()
+            return None
+        return parsed
+    except Exception:
+        return None
+
+
+async def parse_raw_async(raw: Any) -> Any:
+    """:func:`parse_raw` for async clients (``LegacyAPIResponse.parse`` stays sync)."""
+    try:
+        parsed = raw.parse()
+        if inspect.isawaitable(parsed):
+            parsed = await parsed
+        return parsed
+    except Exception:
+        return None
+
+
+def close_raw(raw: Any) -> None:
+    """Release a raw response we are discarding (retry, abort, inject)."""
+    try:
+        closer = getattr(raw, "close", None)
+        if closer is not None:
+            result = closer()
+            if inspect.iscoroutine(result):
+                result.close()
+    except Exception:
+        pass
+
+
+async def close_raw_async(raw: Any) -> None:
+    try:
+        closer = getattr(raw, "close", None)
+        if closer is not None:
+            result = closer()
+            if inspect.isawaitable(result):
+                await result
+    except Exception:
+        pass
+
+
+def observe_raw_stream(raw: Any, tee: Callable[[Any], Any], on_close: Callable[[], None]) -> bool:
+    """Tee the event stream the host gets from ``raw.parse()``. True if it stuck.
+
+    The raw response goes back to the host untouched except for two instance
+    attributes: ``parse`` hands back a tee of the SDK's stream (the same tee on
+    every call, as the SDK caches its stream), and ``close`` — which the SDK's
+    context manager calls on exit — first finishes the node, so a host that
+    stops early or reads raw bytes instead still gets a finished node. The
+    object keeps its type; nothing is read ahead of the host.
+    """
+    try:
+        original_parse = raw.parse
+        original_close = getattr(raw, "close", None)
+        teed: dict[Any, Any] = {}
+
+        def observed(parsed: Any, to: Any) -> Any:
+            try:
+                if to in teed:
+                    return teed[to]
+                if looks_like_stream(parsed):
+                    teed[to] = tee(parsed)
+                    return teed[to]
+            except Exception:
+                pass
+            return parsed
+
+        parse: Callable[..., Any]
+        if is_async_callable(original_parse):
+
+            async def parse_async(*args: Any, **kwargs: Any) -> Any:
+                return observed(await original_parse(*args, **kwargs), kwargs.get("to"))
+
+            parse = parse_async
+        else:
+
+            def parse_sync(*args: Any, **kwargs: Any) -> Any:
+                return observed(original_parse(*args, **kwargs), kwargs.get("to"))
+
+            parse = parse_sync
+        raw.parse = parse
+
+        def finish() -> None:
+            try:
+                on_close()
+            except Exception:
+                pass
+
+        if callable(original_close):
+            close: Callable[..., Any]
+            if is_async_callable(original_close):
+
+                async def close_async() -> Any:
+                    finish()
+                    return await original_close()
+
+                close = close_async
+            else:
+
+                def close_sync() -> Any:
+                    finish()
+                    return original_close()
+
+                close = close_sync
+            raw.close = close
+        return True
+    except Exception:
+        return False
+
+
+class _InjectedResponseBase:
+    """What a raw-response call hands back when the viewer injected the reply.
+
+    A minimal stand-in for the SDK's raw response: ``.parse()`` returns the
+    injected (rebuilt) object. No HTTP happened, so there are no headers and
+    the status is a nominal 200.
+    """
+
+    def __init__(self, value: Any) -> None:
+        self._value = value
+        self.headers: dict[str, str] = {}
+        self.status_code = 200
+        self.request_id: str | None = None
+        self.http_response: Any = None
+        self.retries_taken = 0
+        self.is_closed = True
+
+    def _json(self) -> Any:
+        dump = getattr(self._value, "model_dump", None)
+        if callable(dump):
+            try:
+                return dump(mode="json")
+            except Exception:
+                pass
+        return self._value
+
+    def __repr__(self) -> str:
+        return f"<graphmind injected response type={type(self._value).__name__}>"
+
+
+class InjectedResponse(_InjectedResponseBase):
+    """Stand-in for ``LegacyAPIResponse`` / sync ``APIResponse``."""
+
+    def parse(self, *args: Any, **kwargs: Any) -> Any:
+        return self._value
+
+    def json(self) -> Any:
+        return self._json()
+
+    def read(self) -> bytes:
+        return json.dumps(self._json(), default=str).encode()
+
+    def close(self) -> None:
+        return None
+
+
+class AsyncInjectedResponse(_InjectedResponseBase):
+    """Stand-in for ``AsyncAPIResponse`` (``with_streaming_response`` on async clients)."""
+
+    async def parse(self, *args: Any, **kwargs: Any) -> Any:
+        return self._value
+
+    async def json(self) -> Any:
+        return self._json()
+
+    async def read(self) -> bytes:
+        return json.dumps(self._json(), default=str).encode()
+
+    async def close(self) -> None:
+        return None
+
+
+def injected_response(value: Any, mode: str, async_api: bool) -> Any:
+    """The stand-in matching what the raw-response call would have returned."""
+    # `with_raw_response` returns a LegacyAPIResponse, whose `.parse()` is sync
+    # even on async clients; only `with_streaming_response` goes async.
+    if async_api and mode != "true":
+        return AsyncInjectedResponse(value)
+    return InjectedResponse(value)
+
+
+# -- typed inject -------------------------------------------------------------
+#
+# The viewer's inject payload arrives as JSON. Frameworks read attributes off
+# the SDK's own types (`response.output`, `.usage`, `.id`, `isinstance(r,
+# ChatCompletion)`), so a raw dict breaks them. Each integration supplies a
+# builder that turns what a human types — a bare string, or an object with
+# (some of) the type's fields — into a dict the type validates; this module
+# resolves the type and validates, and never raises.
+
+_reply_classes: dict[tuple[tuple[str, ...], str, str], Any] = {}
+
+
+def sdk_packages(client: Any) -> tuple[str, ...]:
+    """Top-level packages along the client's MRO (``openai`` for ``AzureOpenAI`` too)."""
+    try:
+        roots: list[str] = []
+        for klass in type(client).__mro__:
+            root = (getattr(klass, "__module__", "") or "").split(".")[0]
+            if root and root not in ("builtins", "typing", "abc") and root not in roots:
+                roots.append(root)
+        return tuple(roots)
+    except Exception:
+        return ()
+
+
+def reply_class(packages: tuple[str, ...], candidates: tuple[tuple[str, str], ...]) -> Any:
+    """Import the SDK reply type lazily: the first ``(module, name)`` that exists.
+
+    ``module`` is relative to the client's own package, so a duck-typed fake
+    client never gets coerced into a real SDK type. Cached; never raises.
+    """
+    for module, name in candidates:
+        key = (packages, module, name)
+        if key in _reply_classes:
+            if _reply_classes[key] is not None:
+                return _reply_classes[key]
+            continue
+        found: Any = None
+        for package in packages:
+            try:
+                candidate = getattr(importlib.import_module(f"{package}.{module}"), name, None)
+            except Exception:
+                continue
+            if candidate is not None and callable(getattr(candidate, "model_validate", None)):
+                found = candidate
+                break
+        _reply_classes[key] = found
+        if found is not None:
+            return found
+    return None
+
+
+class ReplyType:
+    """Where the SDK type a patched call returns lives; resolved only on inject."""
+
+    __slots__ = ("candidates", "packages")
+
+    def __init__(self, packages: tuple[str, ...], candidates: tuple[tuple[str, str], ...]) -> None:
+        self.packages = packages
+        self.candidates = candidates
+
+    def resolve(self, like: Any = None) -> Any:
+        """The class to rebuild into: ``type(like)`` when the call already
+        returned a model (so ``ParsedChatCompletion[MyModel]`` keeps its
+        parameter), else the lazily imported SDK type, else None."""
+        if like is not None and callable(getattr(type(like), "model_validate", None)):
+            return type(like)
+        return reply_class(self.packages, self.candidates)
+
+
+def rebuild_reply(
+    value: Any, cls: Any, build: Callable[[Any], dict[str, Any] | None], label: str
+) -> Any:
+    """Rebuild an injected payload as ``cls``, the type the SDK call returns.
+
+    Returns ``value`` itself when it already is one, the validated object when
+    ``build`` recognises the shape, and otherwise the payload unchanged plus a
+    single warning — never an exception into the host.
+    """
+    try:
+        if isinstance(value, cls):
+            return value
+        data = build(value)
+        if data is None:
+            raise TypeError(f"expected a string or an object, got {type(value).__name__}")
+        return cls.model_validate(data)
+    except Exception as exc:
+        reason = _first_error(exc)
+        warn_once(
+            f"inject-rebuild:{label}",
+            f"could not rebuild the injected value as {getattr(cls, '__name__', cls)} "
+            f"({reason}); handing it back unchanged. Inject a string, or an object "
+            "with that type's fields.",
+        )
+        return value
+
+
+def _first_error(exc: BaseException) -> str:
+    """One line naming what was wrong: the first pydantic error's field, if any."""
+    try:
+        errors = getattr(exc, "errors", None)
+        if callable(errors):
+            first = errors()[0]
+            where = ".".join(str(part) for part in first.get("loc", ()))
+            return f"{where}: {first.get('msg')}" if where else str(first.get("msg"))
+    except Exception:
+        pass
+    lines = str(exc).strip().splitlines()
+    return f"{type(exc).__name__}: {lines[0]}" if lines else type(exc).__name__
+
+
+def placeholder_id(prefix: str) -> str:
+    return f"{prefix}graphmind_injected"
+
+
+def json_arguments(value: Any) -> str:
+    """Tool-call arguments as the JSON string the SDK types carry."""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps({} if value is None else value, default=str)
+    except Exception:
+        return "{}"
+
+
 # -- async detection ----------------------------------------------------------
 
 
@@ -464,14 +863,31 @@ def unpatch_method(root: Any, path: tuple[str, ...], attr: str) -> bool:
 __all__ = [
     "LLM_NODE_ID",
     "LLM_NODE_NAME",
+    "AsyncInjectedResponse",
     "AsyncStreamTee",
     "GraphHinter",
+    "InjectedResponse",
+    "ReplyType",
     "SyncStreamTee",
+    "close_raw",
+    "close_raw_async",
+    "injected_response",
     "is_async_callable",
     "is_async_client",
+    "json_arguments",
+    "looks_like_stream",
     "merge_usage",
+    "observe_raw_stream",
+    "parse_raw",
+    "parse_raw_async",
     "patch_method",
+    "placeholder_id",
+    "raw_mode",
+    "rebuild_reply",
+    "refresh_raw_wrappers",
+    "reply_class",
     "safe_value",
+    "sdk_packages",
     "tool_names",
     "unpatch_method",
     "usage_of",

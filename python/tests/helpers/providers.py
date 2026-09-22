@@ -92,11 +92,114 @@ CHAT_STREAM_CHUNKS: list[dict[str, Any]] = [
 ]
 
 
+def _response(status: str, output: list[dict[str, Any]], usage: Any = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": "resp_test",
+        "object": "response",
+        "created_at": 0,
+        "model": "gpt-test",
+        "output": output,
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "status": status,
+    }
+    if usage is not None:
+        payload["usage"] = usage
+    return payload
+
+
+RESPONSES_USAGE: dict[str, Any] = {
+    "input_tokens": 5,
+    "output_tokens": 2,
+    "total_tokens": 7,
+    "input_tokens_details": {"cached_tokens": 0},
+    "output_tokens_details": {"reasoning_tokens": 0},
+}
+
+
+def _output_message(text: str) -> dict[str, Any]:
+    return {
+        "type": "message",
+        "id": "msg_1",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": text, "annotations": []}],
+    }
+
+
+#: A non-streamed Responses-API reply (what `responses.create` returns).
+RESPONSE: dict[str, Any] = _response(
+    "completed", [_output_message("Lisbon is sunny.")], RESPONSES_USAGE
+)
+
+
+def _text_delta(sequence: int, delta: str) -> dict[str, Any]:
+    return {
+        "type": "response.output_text.delta",
+        "sequence_number": sequence,
+        "item_id": "msg_1",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": delta,
+        "logprobs": [],
+    }
+
+
+#: A Responses-API event stream, as `Runner.run_streamed` receives it.
+RESPONSES_STREAM_EVENTS: list[dict[str, Any]] = [
+    {"type": "response.created", "sequence_number": 0, "response": _response("in_progress", [])},
+    _text_delta(1, "Lis"),
+    _text_delta(2, "bon"),
+    {
+        "type": "response.completed",
+        "sequence_number": 3,
+        "response": _response("completed", [_output_message("Lisbon")], RESPONSES_USAGE),
+    },
+]
+
+#: The same stream with no usage anywhere (some gateways drop it).
+RESPONSES_STREAM_NO_USAGE: list[dict[str, Any]] = [
+    *RESPONSES_STREAM_EVENTS[:3],
+    {
+        "type": "response.completed",
+        "sequence_number": 3,
+        "response": _response("completed", [_output_message("Lisbon")]),
+    },
+]
+
+
 def sse(chunks: list[dict[str, Any]], done: bool = True) -> bytes:
     body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
     if done:
         body += "data: [DONE]\n\n"
     return body.encode()
+
+
+def responses_sse(events: list[dict[str, Any]]) -> bytes:
+    """Responses-API SSE: named events, no `[DONE]` sentinel."""
+    return "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events).encode()
+
+
+class MidStreamError(Exception):
+    """Raised by the fake transport part-way through a response body."""
+
+
+def failing_body(head: bytes, is_async: bool = False) -> Any:
+    """A response body that yields ``head`` and then breaks, like a dropped connection."""
+    if is_async:
+
+        async def agen() -> Any:
+            yield head
+            raise MidStreamError("connection dropped mid-stream")
+
+        return agen()
+
+    def gen() -> Any:
+        yield head
+        raise MidStreamError("connection dropped mid-stream")
+
+    return gen()
 
 
 def anthropic_sse(events: list[dict[str, Any]]) -> bytes:
@@ -215,7 +318,6 @@ ANTHROPIC_STREAM_EVENTS: list[dict[str, Any]] = [
     },
     {"type": "message_stop"},
 ]
-
 
 
 def _provider_httpx(module_name: str) -> Any:

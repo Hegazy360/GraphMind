@@ -129,6 +129,8 @@ def test_the_before_gate_holds_until_the_debugger_resumes(attached: Any) -> None
 
 
 def test_inject_replaces_the_response_without_calling_the_provider(attached: Any) -> None:
+    from openai.types.chat import ChatCompletion
+
     instance, viewer = attached(breakpoints=[{"kind": "llm"}])
     client, recorder = make_openai(json_responder(CHAT_COMPLETION))
     instance.instrument_openai(client)
@@ -137,7 +139,9 @@ def test_inject_replaces_the_response_without_calling_the_provider(attached: Any
     with instance.run("agent"):
         response = client.chat.completions.create(model="gpt-test", messages=MESSAGES)
 
-    assert response == {"choices": [{"message": {"content": "injected"}}]}
+    # Rebuilt as the SDK's own type (see test_typed_inject.py for the shapes).
+    assert isinstance(response, ChatCompletion)
+    assert response.choices[0].message.content == "injected"
     assert len(recorder) == 0
 
 

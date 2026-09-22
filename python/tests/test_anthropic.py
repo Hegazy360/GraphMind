@@ -97,6 +97,8 @@ def test_the_before_gate_holds_the_request(attached: Any) -> None:
 
 
 def test_inject_substitutes_a_message(attached: Any) -> None:
+    from anthropic.types import Message
+
     instance, viewer = attached(breakpoints=[{"kind": "llm"}])
     client, recorder = make_anthropic(_responder())
     instance.instrument_anthropic(client)
@@ -104,7 +106,9 @@ def test_inject_substitutes_a_message(attached: Any) -> None:
     _resume_next(viewer, "inject", {"content": [{"type": "text", "text": "injected"}]})
     with instance.run("agent"):
         message = client.messages.create(model=MODEL, max_tokens=64, messages=MESSAGES)
-    assert message == {"content": [{"type": "text", "text": "injected"}]}
+    # Rebuilt as the SDK's own type (see test_typed_inject.py for the shapes).
+    assert isinstance(message, Message)
+    assert message.content[0].text == "injected"
     assert len(recorder) == 0
 
 

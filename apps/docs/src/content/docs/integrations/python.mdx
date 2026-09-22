@@ -119,6 +119,19 @@ responses are teed: your code receives exactly the provider's stream while Graph
 deltas. A `tools=[...]` argument is pre-announced as a `graph.hint`, so the viewer draws the tool
 roster grey before anything runs.
 
+`.with_raw_response.create(...)` and `.with_streaming_response.create(...)` are covered too,
+whether you touched them before or after instrumenting: one node per call, and your code still
+gets the SDK's own raw response object. With `stream=True`, the event stream `.parse()` returns is
+teed, so text and final usage land on the node. For `with_streaming_response` the request (and
+the `before` gate) happens in `__enter__`.
+
+An injected reply comes back as the type the call returns — `ChatCompletion`,
+`ParsedChatCompletion` or `Response` — not a dict. Type a bare string (it becomes a one-message
+assistant reply) or an object with that type's fields; missing ids, timestamps and the `model`
+are filled in, and for `chat.completions` a bare message such as `{"content": "..."}` or
+`{"tool_calls": [...]}` works too. A payload that cannot be rebuilt is handed back unchanged, with
+one warning.
+
 ## Anthropic
 
 Swap one line:
@@ -141,11 +154,51 @@ with gm.run("handle-ticket"):
 
 Everything else — `@gm.tool`, `gm.run`, `gm.ready` — is identical.
 
-`messages.stream` is instrumented too. There the HTTP request happens in `__enter__`, so that is
-where the gate holds, and the proxy observes both consumption styles (raw event iteration and
+`messages.parse` and `messages.stream` are instrumented too, and so are the same three methods on
+`client.beta.messages`. For `.stream` the HTTP request happens in `__enter__`, so that is where
+the gate holds, and the proxy observes both consumption styles (raw event iteration and
 `.text_stream`). It is the one *provider* attachment point where `inject` and `retry` are
 unavailable: GraphMind cannot fabricate a provider stream object, so it holds, warns, and
-continues rather than lying about having substituted one.
+continues rather than lying about having substituted one. Elsewhere an injected reply comes back
+as a `Message` (`BetaMessage` on `beta.messages`, the `Parsed*` type from `.parse`), built from a
+string or an object with the type's fields; its `usage` is zero unless you give one.
+
+## OpenAI Agents SDK and Pydantic AI
+
+Both build on the provider SDKs, so you instrument the client and hand it to the framework.
+
+```python
+import graphmind as gm
+from agents import set_default_openai_client
+from openai import AsyncOpenAI
+
+# OpenAI Agents SDK: it builds its own AsyncOpenAI unless you set a default.
+set_default_openai_client(gm.instrument_openai(AsyncOpenAI()))
+```
+
+```python
+from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
+from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.openai import OpenAIProvider
+
+# Pydantic AI: pass an instrumented client to the provider, and the provider to your model.
+openai_provider = OpenAIProvider(openai_client=gm.instrument_openai(AsyncOpenAI()))
+anthropic_provider = AnthropicProvider(anthropic_client=gm.instrument_anthropic(AsyncAnthropic()))
+```
+
+The package's tests prove the client side, not the frameworks, which they do not install: the
+calls these frameworks make are recorded and gated, and an injected reply is the type they read.
+
+| Framework path | Client call | Tested |
+| --- | --- | --- |
+| Agents SDK `Runner.run` | `responses.create` | node, gates, typed `Response` inject |
+| Agents SDK `Runner.run_streamed` | `responses.with_streaming_response.create(stream=True)`, read via `.parse()` | node with text + usage, `before` gate in `__enter__`, one node per call in either access order |
+| Pydantic AI, OpenAI models | `responses.create` / `chat.completions.create` | node, gates, typed `Response` / `ChatCompletion` inject |
+| Pydantic AI, Anthropic models | `beta.messages.create`, with and without `stream=True` | node, gates, typed `BetaMessage` inject |
+
+Inject into non-streamed runs (`Runner.run`, `agent.run`); streamed ones are in
+[Known limits](#known-limits). Tool calls these frameworks make are not nodes by themselves.
 
 ## LangChain / LangGraph
 
@@ -235,14 +288,18 @@ What each attachment point can actually do. Every ✅ is covered by a test in th
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `@gm.tool` / `gm.wrap_tools` (sync + async) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `gm.span` (sync + async) | ✅ | ✅ | — | — | as span output | — | ✅ |
-| OpenAI `chat.completions` / `responses` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Anthropic `messages.create` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Anthropic `messages.stream` | ✅ | ✅ (in `__enter__`) | ✅ | — | ❌ | ❌ | ✅ |
+| OpenAI `chat.completions` / `responses` | ✅ | ✅ | ✅ | ✅ | ✅ typed | ✅ | ✅ |
+| OpenAI `with_raw_response` / `with_streaming_response` | ✅ | ✅ | ✅ | ✅ | ✅ typed, via `.parse()` | ✅ | ✅ |
+| …the same with `stream=True` | ✅ | ✅ | ✅ | — | ❌ | ✅ | ✅ |
+| Anthropic `messages.create` / `beta.messages.create` | ✅ | ✅ | ✅ | ✅ | ✅ typed | ✅ | ✅ |
+| Anthropic `messages.stream` / `beta.messages.stream` | ✅ | ✅ (in `__enter__`) | ❌ | — | ❌ | ❌ | ✅ |
 | LangChain sync handler | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
 | LangChain async handler | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
 
 Same shape as the [LangGraph JS matrix](/integrations/langgraph/#capability-matrix), and for the
-same reason: a callback observes, a wrapper owns the call site.
+same reason: a callback observes, a wrapper owns the call site. **Typed** means the injected value
+comes back as the SDK type the call returns (`ChatCompletion`, `Response`, `Message`, ...), so a
+framework that reads `.output`, `.usage` or `.content`, or checks `isinstance`, keeps working.
 
 ## The surface
 
@@ -419,6 +476,13 @@ A disabled session never opens a socket, never allocates a buffer and never touc
 <Aside type="caution">
 - **`inject` / `retry` are unavailable at observer-only attachment points** — LangChain callbacks
   and Anthropic's `messages.stream`. Wrap the call site to get them.
+- **`inject` cannot produce a stream.** On a plain `stream=True` call your payload is handed back
+  as-is (code that iterates it gets no chunks); on a `with_raw_response` /
+  `with_streaming_response` call with `stream=True` — the OpenAI Agents SDK's `Runner.run_streamed`
+  — it is treated as `continue`. Both warn once. Inject on a non-streamed call.
+- **A raw-response stream is observed through `.parse()`.** Read the body as bytes or lines
+  instead (`iter_bytes()`, `iter_lines()`) and the node still starts, holds and finishes, but
+  carries no text or usage.
 - **No mid-stream gates.** A streamed response is observed, not pausable, once it has started.
   The gate is at the start of the call, matching the TypeScript adapters.
 - **No provider-side timeout neutralization yet.** The TypeScript adapters neutralize SDK
