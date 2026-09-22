@@ -74,11 +74,11 @@ export async function startMcpPeer(server: WireServer): Promise<McpPeer> {
     'echo',
     { description: 'returns whatever it is given', inputSchema: { payload: z.any() } },
     (args: { payload?: unknown }) => {
+      let value: unknown;
       try {
         handlerCalls.push(args?.payload);
         if (peer.behaviour.throws !== undefined) throw peer.behaviour.throws;
-        const value = 'result' in peer.behaviour ? peer.behaviour.result : args?.payload;
-        return { content: [{ type: 'text' as const, text: JSON.stringify(value) ?? 'null' }] };
+        value = 'result' in peer.behaviour ? peer.behaviour.result : args?.payload;
       } catch (error) {
         // A throw here is the host's own (peer.behaviour.throws). Anything
         // *else* that lands here came out of GraphMind, which would be a
@@ -87,6 +87,17 @@ export async function startMcpPeer(server: WireServer): Promise<McpPeer> {
         if (error !== peer.behaviour.throws) hostErrors.push(error);
         throw error;
       }
+      // The fixture's own serialisation, outside the watched region: V8's
+      // JSON.stringify is recursive, and the 4,000-level argument overflows
+      // it on Linux x64 with Node 22 (not on macOS arm64) — the host's own
+      // limit, not something GraphMind let escape.
+      let text: string;
+      try {
+        text = JSON.stringify(value) ?? 'null';
+      } catch {
+        text = '"[echo fixture: value too deep to stringify]"';
+      }
+      return { content: [{ type: 'text' as const, text }] };
     },
   );
 

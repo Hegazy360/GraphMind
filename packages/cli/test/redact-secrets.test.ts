@@ -414,12 +414,29 @@ describe('verifier: the walk has no depth at which secrets start leaking', () =>
     return value;
   }
 
+  /**
+   * Every string leaf, found without recursion. JSON.stringify is recursive in
+   * V8 and its depth limit depends on the platform's frame size: 5,000 levels
+   * stringify on macOS arm64 but overflow on Linux x64 — the assertion must not
+   * be shallower than the walk it checks.
+   */
+  function stringLeaves(root: unknown): string[] {
+    const found: string[] = [];
+    const stack: unknown[] = [root];
+    while (stack.length > 0) {
+      const value = stack.pop();
+      if (typeof value === 'string') found.push(value);
+      else if (value !== null && typeof value === 'object') stack.push(...Object.values(value));
+    }
+    return found;
+  }
+
   it.each([256, 257, 300, 5_000])('redacts a secret nested %i levels deep (objects)', (depth) => {
     const input = nested(depth, { api_key: 'DEEP-CANARY', keep: 'visible' }, 'object');
     const { value, count, keys } = redactSecrets(input);
-    const json = JSON.stringify(value);
-    expect(json).not.toContain('DEEP-CANARY');
-    expect(json).toContain('visible');
+    const leaves = stringLeaves(value);
+    expect(leaves.some((leaf) => leaf.includes('DEEP-CANARY'))).toBe(false);
+    expect(leaves).toContain('visible');
     expect(count).toBe(1);
     expect([...keys]).toEqual(['api_key']);
   });
@@ -427,9 +444,9 @@ describe('verifier: the walk has no depth at which secrets start leaking', () =>
   it.each([257, 5_000])('redacts a secret nested %i levels deep (arrays)', (depth) => {
     const input = nested(depth, [{ password: 'DEEP-ARRAY-CANARY' }, 'visible'], 'array');
     const { value, count } = redactSecrets(input);
-    const json = JSON.stringify(value);
-    expect(json).not.toContain('DEEP-ARRAY-CANARY');
-    expect(json).toContain('visible');
+    const leaves = stringLeaves(value);
+    expect(leaves.some((leaf) => leaf.includes('DEEP-ARRAY-CANARY'))).toBe(false);
+    expect(leaves).toContain('visible');
     expect(count).toBe(1);
   });
 

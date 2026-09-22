@@ -188,6 +188,38 @@ export class McpSessionFailedError extends Error {
   }
 }
 
+/**
+ * Stderr that arrived before the run opened, kept for the graph. Bounded: a
+ * server that logs megabytes while nobody attaches cannot pin them. Past the
+ * cap the OLDEST chunks go — the tail is what explains an early death, and
+ * the reporter's own ring keeps only the tail anyway. The client already has
+ * every byte; only the graph's copy is trimmed.
+ */
+export const EARLY_STDERR_MAX_BYTES = 256 * 1024;
+
+export class EarlyStderr {
+  private chunks: Buffer[] = [];
+  private bytes = 0;
+
+  constructor(private readonly maxBytes: number = EARLY_STDERR_MAX_BYTES) {}
+
+  push(chunk: Buffer): void {
+    this.chunks.push(chunk);
+    this.bytes += chunk.length;
+    while (this.bytes > this.maxBytes && this.chunks.length > 1) {
+      this.bytes -= (this.chunks.shift() as Buffer).length;
+    }
+  }
+
+  /** Everything kept, oldest first; empties the buffer. */
+  drain(): Buffer[] {
+    const out = this.chunks;
+    this.chunks = [];
+    this.bytes = 0;
+    return out;
+  }
+}
+
 export function exitCodeFor(info: ExitInfo): number {
   if (info.signal !== null) return signalExitCode(info.signal);
   return info.code ?? 0;
@@ -250,6 +282,24 @@ export function startMcpProxy(options: McpProxyOptions): McpProxyHandle {
   // inert streams so the pipeline still builds and still shuts down cleanly.
   const childStdin: Writable = child.stdin ?? new PassThrough();
   const childStdout: Readable = child.stdout ?? closedReadable();
+  // The relay that reads the server's stdout is built inside the run, which
+  // can open seconds later (--wait-for-attach). Node's child_process resumes
+  // every unread stdio stream when the child exits — its bytes are emitted to
+  // no one — and a relay attached after the stream's 'end'/'close' waits
+  // forever. So the stream is piped from spawn into a buffer the relay reads
+  // later: nothing is lost, and a server that died before the run opened
+  // still ends the session. The relay pausing this buffer still stops the
+  // direction while a gate is held (the pipe's backpressure reaches the
+  // child once the buffer fills).
+  const serverOut = new PassThrough();
+  childStdout.pipe(serverOut);
+  const endServerOut = (): void => {
+    if (!serverOut.writableEnded) serverOut.end();
+  };
+  // pipe() does not end its destination when the source errors or is
+  // destroyed without an 'end'; either is still the end of the server's output.
+  childStdout.on('error', endServerOut);
+  childStdout.on('close', endServerOut);
 
   let settleExit: (info: ExitInfo) => void = () => {};
   const exited = new Promise<ExitInfo>((resolve) => {
@@ -263,6 +313,29 @@ export function startMcpProxy(options: McpProxyOptions): McpProxyHandle {
   };
 
   child.on('close', (code, signal) => settleOnce({ code, signal }));
+
+  // The server's stderr is drained from the moment it exists — mirrored to
+  // the client byte-for-byte right away — and only the copy for the graph
+  // waits for the run to open. Leaving the pipe unread until a debugger
+  // attached (--wait-for-attach) was backpressure on the server: stdio is a
+  // socketpair, a few hundred small unread writes fill its buffer, and then
+  // a Node server's writes queue in-process (and die with it at
+  // `process.exit`: the crash reason — the LAST lines — never left it), while
+  // a Python server's blocking writes simply hang it until something reads.
+  const earlyStderr = new EarlyStderr();
+  let stderrToGraph: ((chunk: Buffer) => void) | undefined;
+  if (captureStderr && child.stderr !== null) {
+    child.stderr.on('data', (chunk: Buffer) => {
+      try {
+        options.clientErr.write(chunk);
+      } catch {
+        // a closed stderr must not take the session down
+      }
+      if (stderrToGraph === undefined) earlyStderr.push(chunk);
+      else stderrToGraph(chunk);
+    });
+    child.stderr.on('error', () => {});
+  }
 
   const failedToSpawn = (error: unknown): void => {
     const message = spawnFailureMessage(options.command, error);
@@ -338,22 +411,13 @@ export function startMcpProxy(options: McpProxyOptions): McpProxyHandle {
           AsyncResource.bind(fn);
 
         // The server's stderr is the one channel it can legitimately log to.
-        // Mirror it byte-for-byte first, then (only then) show it to the
-        // debugger. Nothing is lost while we were waiting to attach: the pipe
-        // stays paused until this listener exists.
+        // It has been mirrored to the client since spawn; from here on it is
+        // also shown to the debugger, starting with what arrived while we
+        // were waiting to attach (in order, bounded — see EarlyStderr).
         if (captureStderr && child.stderr !== null) {
-          child.stderr.on(
-            'data',
-            inRun((chunk: Buffer) => {
-              try {
-                options.clientErr.write(chunk);
-              } catch {
-                // a closed stderr must not take the session down
-              }
-              reporter.noteStderr(chunk);
-            }),
-          );
-          child.stderr.on('error', () => {});
+          const toGraph = inRun((chunk: Buffer) => reporter.noteStderr(chunk));
+          for (const chunk of earlyStderr.drain()) toGraph(chunk);
+          stderrToGraph = toGraph;
         }
 
         const clientRelay = new FrameRelay({
@@ -365,7 +429,7 @@ export function startMcpProxy(options: McpProxyOptions): McpProxyHandle {
           onInterceptError: interceptFailed('client'),
         });
         const serverRelay = new FrameRelay({
-          source: childStdout,
+          source: serverOut,
           sink: toClient,
           intercept: inRun((raw: Buffer) => reporter.handleFrame('server-to-client', raw)),
           maxFrameBytes,

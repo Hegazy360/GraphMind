@@ -6,6 +6,66 @@ this repo (`graphmind-ai`, `@graphmind-ai/sdk`, `@graphmind-ai/client`,
 `@graphmind-ai/langgraph`, `@graphmind-ai/mcp`, the Python `graphmind-ai`
 distribution, and the Ruby `graphmind` gem).
 
+## 0.5.1
+
+A patch release, and the first GitHub Release and PyPI upload of the 0.5 line:
+npm 0.5.0 shipped from the laptop, and CI on its tip then failed on Linux, so
+0.5.0 was never tagged. Everything in [0.5.0](#050) below is included; Python
+goes straight from 0.4.4 to 0.5.1.
+
+### Fixed — `mcp-proxy --wait-for-attach` and a server that dies on boot
+
+The case the early-death diagnostics exist for, and the one flag that broke it.
+With `--wait-for-attach` the proxy left the server's stdout and stderr unread
+until a debugger attached (or the 3 s wait ran out). Three things went wrong:
+
+- **The server's stderr was lost.** Node's `child_process` resumes every
+  unread stdio stream when the child exits and emits its bytes to no one. A
+  server that crashed before the wait was over had its whole stack trace
+  discarded — not mirrored to the MCP host, not quoted in the report.
+- **The proxy never exited.** The stdout relay was attached after the stream
+  had already ended, so it waited for an `end` that had already happened. With
+  stdin held open (as every MCP host holds it) the proxy hung; with stdin
+  closed it exited **0** instead of the server's code.
+- **The crash reason could be cut off even when a debugger was attached.**
+  stdio is a socketpair; a few hundred small unread writes fill its buffer,
+  after which a Node server's writes queue in-process and die with it at
+  `process.exit`. The lost lines are the last ones — the reason. On Linux this
+  failed every time; a Python server's blocking writes would instead hang.
+
+Both streams are now read from the moment the server is spawned. stderr is
+mirrored to the host immediately and buffered (bounded, 256 KB, oldest out)
+for the graph until the run opens; stdout is piped into a buffer the relay
+reads when it starts, so nothing is dropped and a server that is already gone
+still ends the session with its own exit code. A held gate still stops the
+server-to-client direction (backpressure reaches the child once the buffer
+fills). New test: a server logs 3,000 lines and exits while the attach wait
+runs its course — every line reaches the host and the report quotes the tail.
+
+### Fixed — ruby_llm 2.0
+
+ruby_llm 2.0 shipped during the 0.5.0 release and changed the signatures of
+the private hooks the Ruby gem patches
+(`provider_completion(usage_recorder:, stream_tracker:)`,
+`Tool#call(tool_call:, **arguments)`) and removed `Chat#with_tool`. The
+1.x-shaped patches raised `ArgumentError` inside the user's chat — even with
+no viewer attached. Every patch now forwards whatever arguments it gets; tool
+input is read from either calling convention (RubyLLM's own `tool_call:`
+object is left out of it); usage and model are read from either `Message`
+shape; only registration methods the chat really has are patched, so
+`respond_to?` never lies. CI runs the Ruby suite against the newest ruby_llm
+and, in its own cell, the last 1.x. Two new tests drive a tool through the
+gem's real chat loop instead of calling it directly. The docs' snippet uses
+`with_tools`, which both majors have.
+
+### Fixed — tests that only passed on macOS
+
+- A redaction test checked a 5,000-level value with `JSON.stringify`, which
+  is recursive in V8 and overflows on Linux x64 but not on macOS arm64. The
+  walk under test was already iterative; the assertion is now iterative too.
+- The stderr-tail test above failed on every Linux run for the reason above;
+  it was a real defect, not a flaky test.
+
 ## 0.5.0
 
 The release for the reviewer who has not decided yet: the platform engineer

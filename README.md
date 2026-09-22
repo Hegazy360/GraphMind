@@ -284,7 +284,7 @@ exact JSON record: [packages/cli/TELEMETRY.md](./packages/cli/TELEMETRY.md).
 
 ## How it is tested
 
-More than 2,700 tests — 2,754 on the 0.5.0 build, counted by [`apps/docs/scripts/count-tests.mjs`](./apps/docs/scripts/count-tests.mjs) (re-run it with `--run` rather than trusting this line). Beyond the unit suites, the ones worth knowing about:
+More than 2,700 tests — 2,760 on the 0.5.1 build, counted by [`apps/docs/scripts/count-tests.mjs`](./apps/docs/scripts/count-tests.mjs) (re-run it with `--run` rather than trusting this line). Beyond the unit suites, the ones worth knowing about:
 
 - a **security audit** ([`security/`](./security)) that plants fake API keys,
   auth headers and tokens everywhere a secret really lives, runs real

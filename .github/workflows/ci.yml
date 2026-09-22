@@ -11,6 +11,7 @@
 #   test                  6 cells (3 OS x 2 Node) — the platform matrix
 #   cold-package-smoke    2 cells — what `npm install graphmind-ai` gets
 #   python                4 cells — the PyPI SDK
+#   ruby                  3 cells — the Ruby SDK (floor, current, ruby_llm 1.x)
 #   ci-wiring             1 cell  — asserts the four below are still wired up
 #   viewer-e2e            1 cell  — Playwright, the built viewer in a browser
 #   security-audit        1 cell  — the secret-leak audit
@@ -312,14 +313,27 @@ jobs:
   # README's stale-benchmark drift is the cautionary tale for declaring a
   # version you never executed. The suite needs no network beyond loopback
   # and no API keys.
+  #
+  # ruby_llm is resolved fresh (Gemfile.lock is git-ignored, as for any gem),
+  # so the plain cells always test its newest release — which is how 2.0's
+  # signature changes to the private hooks were caught the day it shipped.
+  # The extra cell pins the last 1.x so both majors stay proven; the Gemfile
+  # reads GRAPHMIND_RUBY_LLM. Include-only matrix: every entry is its own
+  # job (an `include` next to a `ruby:` axis would merge into the 3.3 cell).
   ruby:
-    name: ruby (${{ matrix.ruby }})
+    name: ruby (${{ matrix.ruby }}${{ matrix.ruby_llm && format(', ruby_llm {0}', matrix.ruby_llm) || '' }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        ruby: ['3.1', '3.3']
+        include:
+          - ruby: '3.1'
+          - ruby: '3.3'
+          - ruby: '3.3'
+            ruby_llm: '< 2'
+    env:
+      GRAPHMIND_RUBY_LLM: ${{ matrix.ruby_llm }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
@@ -352,7 +366,7 @@ jobs:
           end
           EOF
         env:
-          MATRIX: ${{ matrix.ruby }}
+          MATRIX: ${{ matrix.ruby }}${{ matrix.ruby_llm && format(' ruby_llm {0}', matrix.ruby_llm) || '' }}
       - name: Build the gem
         working-directory: ruby
         run: |

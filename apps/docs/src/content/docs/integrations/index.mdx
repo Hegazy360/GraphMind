@@ -182,7 +182,8 @@ does not block a release.
 
 Python extras declare floors (`openai>=1.40`, `anthropic>=0.34`, `langchain-core>=0.3`), and the
 Ruby test group installs `ruby-openai` and `ruby_llm`. CI installs whatever currently resolves
-for those, so the floors are declared but **not run**. For how long each runtime stays
+for those, so the floors are declared but **not run** — except `ruby_llm`, whose last 1.x runs in
+its own cell next to the newest 2.x, because the two majors hook different private methods. For how long each runtime stays
 supported, see [stability](/reference/stability/#supported-runtimes).
 
 <Aside type="note" title="Adapter maturity">

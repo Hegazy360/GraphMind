@@ -25,7 +25,11 @@ group :development, :test do
   # Integration targets. All optional: their test files skip when the gem is
   # not installed, so the core suite runs on a bare checkout.
   gem "ruby-openai", "~> 8.0"
-  gem "ruby_llm", ">= 1.0"
+  # CI runs the suite against both majors (1.x and 2.x hook different private
+  # methods with different signatures); GRAPHMIND_RUBY_LLM picks one, e.g.
+  # "~> 1.16". Unset or blank: the newest release.
+  ruby_llm_requirement = ENV.fetch("GRAPHMIND_RUBY_LLM", "").strip
+  gem "ruby_llm", ruby_llm_requirement.empty? ? ">= 1.0" : ruby_llm_requirement
 
   # For the Railtie test, which boots a real (tiny) Rails application.
   gem "railties", ">= 7.0"

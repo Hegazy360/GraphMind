@@ -31,6 +31,14 @@ module Graphmind
     # version renames it this falls back to `complete_once` and then to the
     # public `complete` (coarser: one node for the whole turn). The hook that
     # was used is reported on the node as `hook`.
+    #
+    # Every patch forwards whatever arguments it is given. The hooks are
+    # private API and their signatures move between major versions (1.x:
+    # `provider_completion(&)` and `Tool#call(args)`; 2.0:
+    # `provider_completion(usage_recorder:, stream_tracker:, &)` and
+    # `Tool#call(tool_call:, **arguments)`). A patch that pinned one signature
+    # raised ArgumentError inside the user's chat on the other — even with no
+    # viewer attached — which is the one thing instrumentation must never do.
     module RubyLLM
       CHAT_MARKER = :@__graphmind_ruby_llm_chat
       TOOL_MARKER = :@__graphmind_ruby_llm_tool
@@ -50,13 +58,33 @@ module Graphmind
                      mutex: Mutex.new, run_context: nil }
           chat.instance_variable_set(CHAT_MARKER, config)
           chat.singleton_class.prepend(chat_patch(hook))
-          chat.singleton_class.prepend(ToolRegistrationPatch) if tools
+          prepend_registration_patches(chat) if tools
         end
         instrument_tools(chat, session, config) if tools
         chat
       end
 
       def instrumented?(chat) = !chat.instance_variable_get(CHAT_MARKER).nil?
+
+      # Gate tools registered after instrumentation — through whichever of the
+      # registration methods this version has (2.0 removed `with_tool`).
+      # Patching a missing one would make `respond_to?(:with_tool)` lie.
+      def prepend_registration_patches(chat)
+        chat.singleton_class.prepend(WithToolPatch) if chat.respond_to?(:with_tool)
+        chat.singleton_class.prepend(WithToolsPatch) if chat.respond_to?(:with_tools)
+      end
+
+      # What the tool node shows as its input. 1.x calls `tool.call(args)` with
+      # one positional Hash; 2.0 calls `tool.call(**args, tool_call:)`, where
+      # `tool_call` is RubyLLM's own ToolCall object, not a model argument.
+      def tool_input(args, kwargs)
+        return args.length == 1 ? args.first : args if kwargs.empty?
+
+        named = kwargs.each_with_object({}) do |(key, value), out|
+          out[key.to_s] = value unless key.to_s == "tool_call"
+        end
+        args.empty? ? named : { "args" => args, "kwargs" => named }
+      end
 
       # Wrap every tool the chat currently holds.
       def instrument_tools(chat, session, chat_config = nil)
@@ -124,7 +152,9 @@ module Graphmind
       # An injected reply arrives as JSON, but ruby_llm expects a
       # RubyLLM::Message. Accept the shapes a human would actually type in the
       # viewer: a bare string, or an object with role/content.
-      MESSAGE_KEYS = %i[role content model_id input_tokens output_tokens cached_tokens
+      # `model_id` is 1.x's name for the model, `model` is 2.0's; Message.new
+      # ignores the one it does not know in both.
+      MESSAGE_KEYS = %i[role content model_id model input_tokens output_tokens cached_tokens
                         tool_calls tool_call_id].freeze
 
       def coerce_message(value)
@@ -186,16 +216,38 @@ module Graphmind
           calls = message.tool_calls
           out["toolCalls"] = calls.respond_to?(:keys) ? calls.keys.map(&:to_s) : calls.to_s
         end
-        out["model"] = message.model_id.to_s if message.respond_to?(:model_id) && message.model_id
+        model = model_of(message)
+        out["model"] = model unless model.nil?
         out.empty? ? nil : out
       rescue StandardError
         nil
       end
 
-      def extra_for(message)
-        return nil unless message.respond_to?(:input_tokens) && message.respond_to?(:output_tokens)
+      # 1.x: Message#model_id. 2.0: Message#model (the ID string).
+      def model_of(message)
+        model = if message.respond_to?(:model_id)
+                  message.model_id
+                elsif message.respond_to?(:model)
+                  message.model
+                end
+        model = model.id if !model.nil? && !model.is_a?(String) && model.respond_to?(:id)
+        model.nil? || model.to_s.empty? ? nil : model.to_s
+      rescue StandardError
+        nil
+      end
 
-        usage = Support.usage(message.input_tokens, message.output_tokens)
+      # 1.x: Message#input_tokens / #output_tokens. 2.0: Message#tokens.input / .output.
+      def extra_for(message)
+        input, output =
+          if message.respond_to?(:input_tokens) && message.respond_to?(:output_tokens)
+            [message.input_tokens, message.output_tokens]
+          elsif message.respond_to?(:tokens) && message.tokens.respond_to?(:input) &&
+                message.tokens.respond_to?(:output)
+            [message.tokens.input, message.tokens.output]
+          end
+        return nil if input.nil? && output.nil?
+
+        usage = Support.usage(input, output)
         usage.nil? ? nil : { "usage" => usage }
       rescue StandardError
         nil
@@ -216,43 +268,45 @@ module Graphmind
       # -- patches -------------------------------------------------------------
 
       module ProviderCompletionPatch
-        def provider_completion(&block)
+        def provider_completion(*args, **kwargs, &block)
           config = instance_variable_get(CHAT_MARKER)
-          return super(&block) if config.nil?
+          return super if config.nil?
 
-          Graphmind::Integrations::RubyLLM.call_llm(config, self) { super(&block) }
+          Graphmind::Integrations::RubyLLM.call_llm(config, self) { super(*args, **kwargs, &block) }
         end
         private :provider_completion
       end
 
       module CompleteOncePatch
-        def complete_once(&block)
+        def complete_once(*args, **kwargs, &block)
           config = instance_variable_get(CHAT_MARKER)
-          return super(&block) if config.nil?
+          return super if config.nil?
 
-          Graphmind::Integrations::RubyLLM.call_llm(config, self) { super(&block) }
+          Graphmind::Integrations::RubyLLM.call_llm(config, self) { super(*args, **kwargs, &block) }
         end
         private :complete_once
       end
 
       module CompletePatch
-        def complete(&block)
+        def complete(*args, **kwargs, &block)
           config = instance_variable_get(CHAT_MARKER)
-          return super(&block) if config.nil?
+          return super if config.nil?
 
-          Graphmind::Integrations::RubyLLM.call_llm(config, self) { super(&block) }
+          Graphmind::Integrations::RubyLLM.call_llm(config, self) { super(*args, **kwargs, &block) }
         end
       end
 
       # Tools added after instrumentation are gated too.
-      module ToolRegistrationPatch
+      module WithToolPatch
         def with_tool(*, **)
           result = super
           config = instance_variable_get(CHAT_MARKER)
           Graphmind::Integrations::RubyLLM.instrument_tools(self, config[:session], config) if config
           result
         end
+      end
 
+      module WithToolsPatch
         def with_tools(*, **)
           result = super
           config = instance_variable_get(CHAT_MARKER)
@@ -264,12 +318,12 @@ module Graphmind
       # The sharp end: a gated RubyLLM::Tool#call, where `inject` replaces the
       # result the model sees next.
       module ToolPatch
-        def call(args)
+        def call(*args, **kwargs, &block)
           config = instance_variable_get(TOOL_MARKER)
-          return super(args) if config.nil?
+          return super if config.nil?
 
           session = config[:session]
-          return super(args) if session.nil? || !session.enabled? || session.disposed?
+          return super if session.nil? || !session.enabled? || session.disposed?
 
           gated = lambda do
             Graphmind::Wrap.invoke(
@@ -277,8 +331,8 @@ module Graphmind
               node_id: Graphmind::Ids.tool_node_id(config[:name]),
               kind: "tool",
               name: config[:name],
-              input: args
-            ) { super(args) }
+              input: Graphmind::Integrations::RubyLLM.tool_input(args, kwargs)
+            ) { super(*args, **kwargs, &block) }
           end
 
           ctx = Graphmind::Integrations::RubyLLM.run_context_for(session, config)

@@ -444,6 +444,56 @@ describe('mcp-proxy: a server that exits before its first response', () => {
     expect(Buffer.byteLength(message, 'utf8')).toBeLessThan(40 * 1024);
   });
 
+  // The case the early-death report exists for, under --wait-for-attach with
+  // nothing listening: the server crashes on boot while the proxy is still
+  // waiting. The proxy used to read neither of its pipes until the run
+  // opened — Node's child_process discards unread stdio when the child exits,
+  // so the stack trace went nowhere, and the stdout relay, attached after the
+  // stream had ended, waited for an end that had already happened: the
+  // proxy never exited (with stdin closed it exited 0).
+  it('a server that dies while the proxy waits to attach: stderr still reaches the client and the report, and the proxy exits with its code', async () => {
+    const r = new ProxyRig({ server: 'crash-server.mjs', waitForAttach: true });
+    rig = r;
+    r.request(1, 'ping');
+    const code = await r.handle.done;
+    rig = undefined;
+    expect(code).toBe(2);
+    const err = r.err.toString('utf8');
+    for (let i = 1; i <= 3; i += 1) expect(err).toContain(`crash-server: line ${i} of 3\n`);
+    expect(err).toContain('Error: FATAL: DATABASE_URL is not set');
+    const line = r.logs.find((l) => l.includes('before answering anything')) as string;
+    expect(line).toContain('exited with code 2');
+    expect(line).toContain('DATABASE_URL is not set');
+  }, 20_000);
+
+  // Volume while waiting: the server's stderr is drained from spawn (a paused
+  // pipe was backpressure on the server — a Python server's blocking writes
+  // hang it), mirrored to the client at once, and buffered for the graph until
+  // the run opens.
+  it('reads stderr while waiting to attach: 3,000 lines all reach the client and the report keeps the tail', async () => {
+    const r = new ProxyRig({
+      server: 'crash-server.mjs',
+      env: { ...process.env, CRASH_LINES: '3000' },
+      waitForAttach: true,
+    });
+    rig = r;
+    r.request(1, 'ping');
+    const code = await r.handle.done;
+    rig = undefined;
+    expect(code).toBe(2);
+    const err = r.err.toString('utf8');
+    const mirrored = err.split('\n').filter((l) => l.startsWith('crash-server: line '));
+    expect(mirrored.length).toBe(3000);
+    expect(mirrored.at(-1)).toBe('crash-server: line 3000 of 3000');
+    const line = r.logs.find((l) => l.includes('before answering anything')) as string;
+    expect(line).toContain('crash-server: line 3000 of 3000');
+    expect(line).toContain('DATABASE_URL is not set');
+    // 3,000 lines + 2 trace lines were seen; the terminal quotes the tail.
+    const omitted = Number(/\((\d+) earlier line\(s\) omitted here/.exec(line)?.[1]);
+    const quoted = line.split('\n').filter((l) => l.startsWith('    ')).length;
+    expect(omitted + quoted).toBe(3002);
+  }, 20_000);
+
   it('says where to look instead of quoting when stderr is inherited', async () => {
     const { rig: r } = await attach({ server: 'crash-server.mjs', captureStderr: false });
     r.request(1, 'ping');

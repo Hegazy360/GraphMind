@@ -138,7 +138,7 @@ monkey-patched, and another client in the same process is untouched.
 ### ruby_llm
 
 ```ruby
-chat = Graphmind.instrument_ruby_llm(RubyLLM.chat.with_tool(Weather))
+chat = Graphmind.instrument_ruby_llm(RubyLLM.chat.with_tools(Weather))
 chat.ask("what's the weather in Cairo?")
 ```
 
@@ -383,20 +383,21 @@ breakpoint, and fail-open when the server is killed.
 
 ## Verified on
 
-* **Ruby 3.3.12** (arm64-darwin) — the full suite (95 tests, 354 assertions,
-  green on four different seeds), the ruby-openai and ruby_llm integrations, the
-  Rails 8.1 Railtie, and the live cross-check against the real `graphmind serve`.
+* **Ruby 3.3.12** (arm64-darwin) — the full suite (290 tests), the ruby-openai
+  and ruby_llm integrations, the Rails 8.1 Railtie, and the live cross-check
+  against the real `graphmind serve`.
 * **The built gem**, installed into a clean `GEM_HOME` containing nothing but
   Ruby's default gems, driven against the real server.
 * **One real `gpt-4o-mini` call** through the instrumented `ruby-openai` client:
   the `llm:step` node recorded the reply and the provider's own token usage.
-* **ruby-openai 8.3.0** and **ruby_llm 1.16.0**.
+* **ruby-openai 8.3.0**, and **ruby_llm 1.16.0 and 2.0.0** — CI runs the suite
+  against the newest ruby_llm and, in its own cell, the last 1.x.
 * **railties 8.1.3.1**.
 
 The gemspec allows **Ruby >= 3.1** because that is the oldest release whose
 syntax and stdlib this gem uses (endless methods, argument forwarding,
-`io/wait`). **3.1 and 3.2 were not executed** — no other interpreter was
-available on the build machine. If you run it there and something breaks, that
+`io/wait`). CI runs the full suite on **3.1** (the floor) and **3.3** on every
+push; **3.2 is not executed**. If you run it there and something breaks, that
 is a bug worth filing.
 
 ---
@@ -411,7 +412,9 @@ is a bug worth filing.
 * **ruby_llm's LLM gate hooks a private method** (`provider_completion`) to get
   one node per HTTP round-trip. If a future ruby_llm renames it, the gem falls
   back to `complete_once` and then to the public `complete` (one coarser node
-  per turn). The hook actually used is shown on the node as `hook`.
+  per turn). The hook actually used is shown on the node as `hook`. Every patch
+  forwards whatever arguments it is given — 2.0 changed these signatures, and a
+  patch that pinned the 1.x one raised inside the user's chat.
 * **No `run.gap` marker.** Events dropped while the debugger was unreachable are
   counted and warned about, but the viewer is not told where the hole was (the
   TypeScript client does send a marker; this gem does not yet).

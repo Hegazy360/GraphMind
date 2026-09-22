@@ -96,7 +96,7 @@ class TestRubyLLM < Minitest::Test
     chat = instrumented_chat(session, tool: weather_tool_class)
     tool = chat.tools.values.first
 
-    assert_equal "sunny in Cairo", tool.call({ "city" => "Cairo" })
+    assert_equal "sunny in Cairo", call_tool(tool, { "city" => "Cairo" })
 
     started = viewer.wait_for_frame("node.started").first
     finished = viewer.wait_for_frame("node.finished").first
@@ -114,7 +114,7 @@ class TestRubyLLM < Minitest::Test
     chat = instrumented_chat(session, tool: weather_tool_class)
     tool = chat.tools.values.first
 
-    worker = Thread.new { tool.call({ "city" => "Cairo" }) }
+    worker = Thread.new { call_tool(tool, { "city" => "Cairo" }) }
     paused = viewer.wait_for_frame("exec.paused").first
     viewer.resume(paused["payload"]["pauseId"], "inject", "a blizzard, actually")
 
@@ -125,11 +125,73 @@ class TestRubyLLM < Minitest::Test
     session, viewer = attached_session
     chat = instrumented_chat(session)
 
-    chat.with_tool(weather_tool_class)
-    chat.tools.values.first.call({ "city" => "Oslo" })
+    chat.with_tools(weather_tool_class)
+    call_tool(chat.tools.values.first, { "city" => "Oslo" })
 
     started = viewer.wait_for_frame("node.started").first
     assert_equal "tool:weather", started["payload"]["nodeId"]
+  end
+
+  # 1.x only: 2.0 removed `with_tool`.
+  def test_a_tool_added_with_with_tool_is_gated_too
+    plain = ::RubyLLM.chat(model: "gpt-4o-mini", provider: :openai, assume_model_exists: true)
+    skip("this ruby_llm has no Chat#with_tool") unless plain.respond_to?(:with_tool)
+
+    session, viewer = attached_session
+    chat = instrumented_chat(session)
+    chat.with_tool(weather_tool_class)
+    call_tool(chat.tools.values.first, { "city" => "Oslo" })
+
+    assert_equal "tool:weather", viewer.wait_for_frame("node.started").first["payload"]["nodeId"]
+  end
+
+  # A registration method this version lacks must stay missing: patching it in
+  # would make `respond_to?` lie to duck-typing callers, and calling it would
+  # fail inside GraphMind instead of with the gem's own NoMethodError.
+  def test_instrumenting_adds_no_methods_the_chat_did_not_have
+    plain = ::RubyLLM.chat(model: "gpt-4o-mini", provider: :openai, assume_model_exists: true)
+    had = %i[with_tool with_tools].to_h { |name| [name, plain.respond_to?(name)] }
+
+    session, = attached_session
+    chat = instrumented_chat(session)
+
+    had.each { |name, before| assert_equal before, chat.respond_to?(name), "respond_to?(:#{name})" }
+  end
+
+  # The real loop, not a direct `tool.call`: the provider asks for a tool, the
+  # gem executes it the way this version does (1.x: `call(args)`; 2.0:
+  # `call(**args, tool_call:)`), and the model answers with its result.
+  def test_the_chat_loop_runs_a_gated_tool_and_carries_on
+    session, viewer = attached_session
+    chat = instrumented_chat(session, tool: weather_tool_class, tool_round: { "city" => "Cairo" })
+
+    reply = chat.ask("weather in Cairo?")
+
+    assert_equal "four", reply.content
+    assert_equal 2, @completions
+    tool_started = viewer.wait_for_frame("node.started", count: 3).find do |frame|
+      frame["payload"]["nodeId"] == "tool:weather"
+    end
+    refute_nil tool_started
+    assert_equal({ "city" => "Cairo" }, tool_started["payload"]["input"],
+                 "the tool input is the model's arguments, without RubyLLM's ToolCall")
+    tool_finished = viewer.frames_of("node.finished").find { |f| f["payload"]["nodeId"] == "tool:weather" }
+    assert_equal "sunny in Cairo", tool_finished["payload"]["output"]
+    assert_equal "sunny in Cairo", chat.messages.find { |m| m.role == :tool }.content
+  end
+
+  def test_inject_through_the_chat_loop_reaches_the_model
+    session, viewer = attached_session(
+      viewer_options: { breakpoints: [{ "kind" => "tool", "name" => "weather", "point" => "before" }] }
+    )
+    chat = instrumented_chat(session, tool: weather_tool_class, tool_round: { "city" => "Cairo" })
+
+    worker = Thread.new { chat.ask("weather in Cairo?") }
+    paused = viewer.wait_for_frame("exec.paused").first
+    viewer.resume(paused["payload"]["pauseId"], "inject", "a blizzard, actually")
+
+    assert_equal "four", value_of(worker).content
+    assert_equal "a blizzard, actually", chat.messages.find { |m| m.role == :tool }.content
   end
 
   def test_a_tool_error_is_recorded_and_re_raised
@@ -137,7 +199,7 @@ class TestRubyLLM < Minitest::Test
     chat = instrumented_chat(session, tool: exploding_tool_class)
     tool = chat.tools.values.first
 
-    assert_raises(RuntimeError) { tool.call({}) }
+    assert_raises(RuntimeError) { call_tool(tool, {}) }
 
     error = viewer.wait_for_frame("node.error").first
     assert_equal "tool:exploding", error["payload"]["nodeId"]
@@ -173,7 +235,7 @@ class TestRubyLLM < Minitest::Test
       # Prime the chat's run context the way a real completion does, then run
       # the tool on a pool thread as ruby_llm's tool_concurrency would.
       chat.ask("hi")
-      Thread.new { tool.call({ "city" => "Cairo" }) }.join
+      Thread.new { call_tool(tool, { "city" => "Cairo" }) }.join
       ctx.run_id
     end
 
@@ -186,37 +248,56 @@ class TestRubyLLM < Minitest::Test
 
   private
 
-  def instrumented_chat(session, tool: nil, fail_first: false)
+  def instrumented_chat(session, tool: nil, fail_first: false, tool_round: nil)
     chat = ::RubyLLM.chat(model: "gpt-4o-mini", provider: :openai, assume_model_exists: true)
-    chat.with_tool(tool) if tool
-    stub_provider(chat, fail_first: fail_first)
+    chat.with_tools(tool) if tool
+    stub_provider(chat, fail_first: fail_first, tool_round: tool_round)
     Graphmind::Integrations::RubyLLM.instrument(chat, session)
   end
 
   # Replace the one method that would perform HTTP. GraphMind's hook is
   # prepended *above* this, so the gates and every layer of ruby_llm in
-  # between are real.
-  def stub_provider(chat, fail_first: false)
+  # between are real. It takes any arguments: 1.x passes none, 2.0 passes
+  # `usage_recorder:` and `stream_tracker:`. With `tool_round`, the first reply
+  # asks for the weather tool with those arguments.
+  def stub_provider(chat, fail_first: false, tool_round: nil)
     counter = -> { @completions += 1 }
     failed = [false]
-    chat.define_singleton_method(:provider_completion) do |&_block|
+    chat.define_singleton_method(:provider_completion) do |*_args, **_kwargs, &_block|
       counter.call
       if fail_first && !failed[0]
         failed[0] = true
         raise "provider exploded"
       end
-      ::RubyLLM::Message.new(role: :assistant, content: "four", model_id: "gpt-4o-mini",
+      unless tool_round.nil? || messages.any? { |message| message.role == :tool }
+        call = ::RubyLLM::ToolCall.new(id: "call_1", name: "weather", arguments: tool_round)
+        next ::RubyLLM::Message.new(role: :assistant, content: "", tool_calls: { "call_1" => call },
+                                    model_id: "gpt-4o-mini", model: "gpt-4o-mini")
+      end
+      ::RubyLLM::Message.new(role: :assistant, content: "four", model_id: "gpt-4o-mini", model: "gpt-4o-mini",
                              input_tokens: 7, output_tokens: 2)
     end
     chat.singleton_class.send(:private, :provider_completion)
     chat
   end
 
+  # Call a tool directly the way this ruby_llm's chat loop does: 1.x passes
+  # one positional Hash, 2.0 passes keywords.
+  def call_tool(tool, args)
+    keywords = ::RubyLLM::Tool.instance_method(:call).parameters.any? { |type, _| type == :keyrest }
+    keywords ? tool.call(**args) : tool.call(args)
+  end
+
   def weather_tool_class
     @weather_tool_class ||= Class.new(::RubyLLM::Tool) do
       def self.name = "WeatherTool"
       description "Looks up the weather"
-      param :city, desc: "City name"
+      # 2.0 renamed `param` to `parameter`; both accept `description:`.
+      if respond_to?(:parameter)
+        parameter :city, description: "City name"
+      else
+        param :city, description: "City name"
+      end
 
       def execute(city:) = "sunny in #{city}"
     end

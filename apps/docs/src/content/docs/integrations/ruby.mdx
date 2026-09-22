@@ -130,7 +130,7 @@ Tool *execution* is your code, not the gem's — gate it with `gm.tool` / `gm.wr
 ### RubyLLM
 
 ```ruby
-chat = gm.instrument_ruby_llm(RubyLLM.chat.with_tool(Weather))
+chat = gm.instrument_ruby_llm(RubyLLM.chat.with_tools(Weather))
 chat.ask("what's the weather in Cairo?")
 ```
 
@@ -143,6 +143,11 @@ The LLM hook is `provider_completion`, which is one HTTP round-trip. It is priva
 future version renames it the adapter falls back to `complete_once` and then to the public
 `complete` (coarser: one node for the whole turn). Whichever hook was used is reported on the
 node as `hook`, so you are never guessing which one you got.
+
+Both RubyLLM majors are supported, and CI runs the suite against each: the newest release (2.x)
+and the last 1.x. The hooks are private API whose signatures changed in 2.0, so every patch
+forwards whatever arguments it receives. A signature change in a future release cannot turn
+into an `ArgumentError` inside your chat, attached or not.
 
 ## Rails
 
