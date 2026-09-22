@@ -340,7 +340,9 @@ _RESUME_ACTIONS = frozenset({"continue", "retry", "inject", "abort"})
 _PAUSE_REASONS = frozenset({"breakpoint", "error", "step", "loop"})
 _LOOP_KINDS = frozenset({"repeat", "cycle", "error-repeat"})
 _SMART_RULES = frozenset({"error-result", "truncated-tool-call"})
-_REFUSAL_CODES = frozenset({"schema", "shape", "placeholder", "truncated", "disabled", "unsupported"})
+_REFUSAL_CODES = frozenset(
+    {"schema", "shape", "placeholder", "truncated", "disabled", "unsupported"}
+)
 _TOKEN_CHANNELS = frozenset({"text", "reasoning", "tool-args"})
 
 _ABSENT = object()
