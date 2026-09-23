@@ -6,6 +6,61 @@ this repo (`graphmind-ai`, `@graphmind-ai/sdk`, `@graphmind-ai/client`,
 `@graphmind-ai/langgraph`, `@graphmind-ai/mcp`, the Python `graphmind-ai`
 distribution, and the Ruby `graphmind` gem).
 
+## 0.6.0 (unreleased)
+
+<!-- PHASE7-PENDING: headline + the sections for detectors, argument editing,
+control plane, usage truth and the context view are written when each lands. -->
+
+### Fixed — a privacy switch no longer fails open on spelling
+
+`GRAPHMIND_HIDE_INPUTS=yes` recorded everything: only `1` and `true` counted,
+and `GRAPHMIND_DISABLED` counted only the exact string `1`, so
+`GRAPHMIND_DISABLED=true` left instrumentation on. Every kill switch and
+privacy switch — `GRAPHMIND_HIDE_INPUTS/OUTPUTS/TOOL_ARGS/TOOL_RESULTS`,
+`GRAPHMIND_DISABLED`, and `DO_NOT_TRACK` in the CLI — is now **on for any value
+except unset, empty, `0`, `false`, `off` and `no`** (any case, surrounding
+spaces ignored), identically in TypeScript, Python and Ruby. A typo hides
+rather than records. If you set one of these to an unusual value meaning
+"off", change it to `0`.
+
+### Fixed — Python SDK: framework calls that were invisible or broke on inject
+
+- **Streamed and raw-response calls are recorded.** The OpenAI Agents SDK's
+  `Runner.run_streamed` goes through `with_streaming_response`, which reached
+  the instrumented method with a raw-response header; the node was created
+  but its output was empty. The wrapper now recognises raw responses, tees
+  streamed bodies without changing what the caller reads, and records text
+  and usage. It no longer matters whether `with_streaming_response` was
+  touched before or after `instrument_openai`, and each call is one node.
+- **`client.beta.messages.create` / `.parse` / `.stream`** (and
+  `messages.parse`) are gated like `messages.create` — Pydantic AI's
+  Anthropic model and Anthropic's own tool runner use them.
+- **Injected replies come back as the SDK's own types** (`ChatCompletion`,
+  `Response`, `Message`, `BetaMessage` and their `Parsed*` variants) instead
+  of a raw dict, so frameworks that read `.output`, `.usage` or `.id` keep
+  working. A bare string becomes a minimal assistant reply; a value that does
+  not validate is passed through unchanged with one warning naming the field.
+  A streaming call cannot be injected into: it continues, with a warning.
+- The docs show `set_default_openai_client(gm.instrument_openai(AsyncOpenAI()))`
+  for the OpenAI Agents SDK and passing an instrumented client to Pydantic AI
+  providers. The frameworks themselves are not in the test suite; the client
+  calls they make are.
+
+### Wire protocol (additive — every 0.5 peer accepts or ignores these)
+
+- `exec.paused.editable`, `exec.paused.smart {rule, detail?}`,
+  `exec.paused.loop.kind / period / laps`
+- new event `exec.refused {pauseId, code, message?, requestId?}` — an edited
+  input was refused and the gate is still held
+- `exec.resume.input / requestId`; `exec.resumed.edited {after} / requestId /
+  principal`
+- `hello.ack.hubCapabilities`; client capability `edit-input`
+- `TokenUsage.inclusive / cacheReadTokens / cacheWriteTokens / reasoningTokens`
+
+New loop kinds keep `reason: "loop"` and still fill the four 0.5 loop fields;
+smart holds travel as `reason: "breakpoint"` so a 0.5 debugger, whose reason
+list is closed, still shows the pause.
+
 ## 0.5.1
 
 A patch release, and the first GitHub Release and PyPI upload of the 0.5 line:
