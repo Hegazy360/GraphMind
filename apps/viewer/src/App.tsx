@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
   embeddedRun,
+  isExportedRun,
   parseFixtureParam,
   useFixtureConnection,
   type FixtureName,
@@ -11,9 +12,11 @@ import { resolveServerUrl } from './connection/ServerConnection.js';
 import { parseStressParams, useStressRun } from './connection/StressConnection.js';
 import { formatHash, parseHash } from './router.js';
 import { canvasActions, copyText, deepLink } from './lib/commands.js';
+import { canEditArgs } from './lib/editArgs.js';
 import { heldGate, resumeGate, stepGate } from './lib/gate.js';
 import { applyTheme, nextTheme, saveTheme } from './lib/theme.js';
 import { collapsibleRoots } from './store/collapse.js';
+import { useEditStore } from './store/editStore.js';
 import { useRunStore } from './store/runStore.js';
 import { MIN_TIMELINE_HEIGHT, collapsedFor, useUiStore } from './store/uiStore.js';
 import { CommandPalette } from './components/CommandPalette.js';
@@ -203,9 +206,10 @@ export default function App() {
       if (typing || meta || e.altKey) return;
 
       // ── while a gate is held, the decision owns the keyboard ─────────────
-      // c/s/r/i are unbound the rest of the time, and a held run is a full
-      // stop: nothing else is more urgent than what happens next. Abort is
-      // deliberately not bound — an irreversible action should cost a click.
+      // c/s/r/i (and e, on an editable pause) are unbound the rest of the
+      // time, and a held run is a full stop: nothing else is more urgent than
+      // what happens next. Abort is deliberately not bound — an irreversible
+      // action should cost a click.
       if (!e.shiftKey && ui.selectedRunId !== undefined) {
         const pause = heldGate(ui.selectedRunId);
         if (pause !== undefined) {
@@ -224,6 +228,18 @@ export default function App() {
               ui.requestInject(pause.pauseId, 'panel');
             }
             return;
+          }
+          // `e` edits the held call's arguments (0.6.0) — only where the app
+          // said it can (`exec.paused.editable`), never on an LLM step.
+          // Like `i`, it opens the panel's copy, beside the evidence.
+          if (key1 === 'e') {
+            const node = useRunStore.getState().runs[runId]?.nodes[pause.nodeId];
+            if (node !== undefined && canEditArgs(node, pause, isExportedRun())) {
+              e.preventDefault();
+              ui.selectNode(runId, pause.nodeId);
+              useEditStore.getState().requestEditor(pause.pauseId);
+              return;
+            }
           }
         }
       }

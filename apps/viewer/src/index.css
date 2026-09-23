@@ -2041,6 +2041,172 @@ button {
   margin-top: 6px;
 }
 
+/* 0.6.0 holds and argument edits.
+   A named hold's sentence can run long ("Loop: search → fetch, 3 identical
+   rounds …"); on the card it is clamped to two lines — the full sentence is
+   in the inspector's footer and evidence block, and in the tooltip. */
+.gm-pause-label--clamp .gm-pause-label-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  min-width: 0;
+}
+.gm-pause-label-text {
+  min-width: 0;
+}
+.gm-pause-label--loop .gm-dot {
+  flex-shrink: 0;
+}
+/* A hold's evidence block leads with a full sentence, not a caps label. */
+.gm-why-head--sentence {
+  text-transform: none;
+  letter-spacing: 0;
+  align-items: flex-start;
+  line-height: 1.45;
+}
+.gm-why-head--sentence svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+/* The calls a cycle goes round: outlined on the canvas while it holds. */
+.gm-node--lap:not(.gm-node--paused) {
+  border-style: dashed;
+  border-color: var(--amber);
+  box-shadow: 0 0 0 1px var(--amber-soft), var(--shadow);
+}
+
+/* The editor opens inside the inspector's pinned footer. The footer never
+   shrinks, so without a ceiling a tall draft pushed Run below the window;
+   capped, the footer scrolls and the evidence above keeps some room. */
+.gm-inspect-held:has(.gm-edit) {
+  max-height: 72%;
+  overflow-y: auto;
+}
+.gm-edit textarea {
+  min-height: 96px;
+  max-height: 36vh;
+}
+.gm-edit-scope {
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--amber-text);
+  margin-bottom: 6px;
+}
+.gm-edit-note {
+  margin-bottom: 6px;
+}
+.gm-edit-diff {
+  margin-top: 8px;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.gm-edit-diff-head {
+  font-weight: 650;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.gm-edit-changes,
+.gm-edit-problems {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.gm-edit-change {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 0;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+}
+.gm-edit-key {
+  color: var(--text);
+  font-weight: 650;
+}
+.gm-edit-before {
+  color: var(--err-strong);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--err) 60%, transparent);
+  overflow-wrap: anywhere;
+}
+.gm-edit-arrow {
+  color: var(--text-faint);
+}
+.gm-edit-after {
+  color: var(--accent-strong);
+  overflow-wrap: anywhere;
+}
+.gm-edit-added {
+  font-family: var(--font-sans);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.gm-edit-problems li {
+  margin-top: 5px;
+  padding: 4px 7px;
+  color: var(--amber-text);
+  background: var(--amber-tint);
+  border-radius: var(--radius-sm);
+}
+.gm-edit-parse {
+  color: var(--err);
+}
+.gm-edit-empty {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+.gm-edit-waiting {
+  margin-top: 6px;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+.gm-edit .gm-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+.gm-edited-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+  margin-top: 6px;
+}
+.gm-edited-table th,
+.gm-edited-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 3px 6px 3px 0;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.gm-edited-table thead th {
+  border-top: 0;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.gm-edited-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.gm-edit-hidden {
+  color: var(--text-faint);
+  font-style: italic;
+}
+.gm-edit-value {
+  color: var(--text);
+}
+
 .gm-why {
   padding: var(--sp-4);
   border-bottom: 1px solid var(--border);

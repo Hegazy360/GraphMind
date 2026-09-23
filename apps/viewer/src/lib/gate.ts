@@ -10,6 +10,7 @@
  */
 import type { ResumeAction } from '@graphmind-ai/schema';
 import { sendControl } from '../connection/ServerConnection.js';
+import { editAction, markerIn } from './editArgs.js';
 import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';
 import type { Pause, RunSource, RunState } from '../store/types.js';
@@ -78,6 +79,45 @@ export function injectAndResume(runId: string, pauseId: string, output: unknown)
   const reason = injectRefusal(output);
   if (reason !== undefined) return { ok: false, reason };
   sendControl(sourceOf(runId), 'exec.resume', { pauseId, action: 'inject', output }, runId);
+  return { ok: true };
+}
+
+/**
+ * Run the held call with edited arguments (0.6.0, contract C2) — the one new
+ * outbound shape the editor needs, sent next to the other resumes through the
+ * same `sendControl` path: `exec.resume {pauseId, action, input, requestId}`,
+ * where `action` is `continue` at a `before` gate and `retry` after or on
+ * error, and `input` holds ONLY the top-level keys the user changed (the app
+ * keeps every other key at its live value). The app answers with
+ * `exec.resumed {edited, requestId}` or `exec.refused {code, requestId}`.
+ *
+ * Sends nothing — and says why — when an argument still carries the
+ * redaction placeholder or a truncation marker, or when there is nothing to
+ * change: the editor already blocks both, this is the last line.
+ */
+export function editAndResume(
+  runId: string,
+  pause: Pick<Pause, 'pauseId' | 'point'>,
+  input: Record<string, unknown>,
+  requestId: string,
+): InjectResult {
+  if (Object.keys(input).length === 0) return { ok: false, reason: 'nothing was changed' };
+  const marker = markerIn(input);
+  if (marker !== undefined) {
+    return {
+      ok: false,
+      reason:
+        marker === 'placeholder'
+          ? 'an argument still contains redacted content; replace it before running'
+          : 'an argument still contains a truncated preview; replace it before running',
+    };
+  }
+  sendControl(
+    sourceOf(runId),
+    'exec.resume',
+    { pauseId: pause.pauseId, action: editAction(pause.point), input, requestId },
+    runId,
+  );
   return { ok: true };
 }
 

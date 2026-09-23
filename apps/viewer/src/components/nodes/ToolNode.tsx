@@ -12,6 +12,8 @@ import { broadcastControl } from '../../connection/ServerConnection.js';
 import { fmtRanHeld, ranMs } from '../../lib/duration.js';
 import { fmtDuration } from '../../lib/format.js';
 import { kindLabel } from '../../lib/kinds.js';
+import { heldLapNodeIds } from '../../store/holds.js';
+import { useRunStore } from '../../store/runStore.js';
 import { latestExecution, nodeStatus as statusOf } from '../../store/types.js';
 import { matcherKey, useUiStore } from '../../store/uiStore.js';
 import { KindMark } from '../KindMark.js';
@@ -78,6 +80,12 @@ function ToolNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
   const selected = useIsSelected(runId, nodeId);
   const status = node === undefined ? 'ghost' : statusOf(node);
   const flash = useStatusFlash(status);
+  // A cycle hold (0.6.0) outlines every call of the lap it goes round, so the
+  // loop is visible on the canvas and not only in the banner.
+  const inLap = useRunStore((s) => {
+    const run = s.runs[runId];
+    return run !== undefined && heldLapNodeIds(run).has(nodeId);
+  });
 
   if (node === undefined) return null;
   const exec = latestExecution(node);
@@ -85,7 +93,10 @@ function ToolNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
 
   return (
     <>
-    <div className={`${statusClass(status, selected, flash)} gm-kind--${node.kind}`}>
+    <div
+      className={`${statusClass(status, selected, flash)} gm-kind--${node.kind}${inLap ? ' gm-node--lap' : ''}`}
+      {...(inLap ? { 'data-lap': 'true' } : {})}
+    >
       <div className="gm-node-head">
         <CollapseToggle runId={runId} nodeId={nodeId} />
         {ungated ? (
@@ -115,6 +126,14 @@ function ToolNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
         {exec?.injected === true && (
           <span className="gm-pill gm-pill--injected" title="Result substituted from the debugger">
             injected
+          </span>
+        )}
+        {exec?.edited !== undefined && (
+          <span
+            className="gm-pill gm-pill--injected gm-pill--edited"
+            title="Ran with arguments edited from the debugger — the model still sees the ones it asked for"
+          >
+            edited
           </span>
         )}
         {exec !== undefined && ranMs(exec) !== undefined && (

@@ -29,6 +29,8 @@ import { useRunStore } from '../store/runStore.js';
 import { failureContext, nodeStats } from '../store/stats.js';
 import { useUiStore } from '../store/uiStore.js';
 import { nodeStatus, resumerLabel, type NodeExecution, type NodeState, type Pause } from '../store/types.js';
+import { EditedArgs } from './EditedArgs.js';
+import { HoldEvidence, isRepeatLoop } from './HoldEvidence.js';
 import { IconAlert, IconClose, IconLink } from './Icons.js';
 import { JsonTree } from './JsonTree.js';
 import { KindGlyph } from './KindMark.js';
@@ -348,6 +350,12 @@ function ExecutionDetails({
               <span className="gm-pill gm-pill--injected">injected from the debugger</span>
             </>
           )}
+          {exec.edited !== undefined && (
+            <>
+              <span>arguments</span>
+              <span className="gm-pill gm-pill--injected gm-pill--edited">edited from the debugger</span>
+            </>
+          )}
           {exec.streaming === true && (
             <>
               <span>execute</span>
@@ -383,6 +391,9 @@ function ExecutionDetails({
           </div>
         </Section>
       )}
+
+      {/* 0.6.0: what the model asked for beside what actually ran. */}
+      <EditedArgs node={node} exec={exec} />
 
       <Section label="Input" copy={() => toJson(exec.input)}>
         {exec.input === REDACTED_PLACEHOLDER ? (
@@ -673,10 +684,12 @@ function InspectorInner({ runId, nodeId }: { runId: string; nodeId: string }) {
       </div>
 
       <div className="gm-inspect-body">
-        {held && pause !== undefined && pause.reason === 'loop' && (
+        {held && pause !== undefined && isRepeatLoop(pause) && (
           <LoopEvidence node={node} pause={pause} />
         )}
         <ResumeHistory runId={runId} nodeId={nodeId} />
+        {/* 0.6.0 holds: cycle, error-repeat, smart breakpoints. */}
+        {held && pause !== undefined && <HoldEvidence runId={runId} node={node} pause={pause} />}
         {node.executions.length > 1 && (
           <div className="gm-inspect-execs">
             <span className="gm-section-label">Execution</span>

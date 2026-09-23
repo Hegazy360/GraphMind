@@ -49,14 +49,31 @@ export interface NodeExecution {
    * identical calls.
    */
   seq?: number;
+  /**
+   * The debugger ran this call with edited arguments (`exec.resumed.edited`,
+   * 0.6.0). `after` is the input it actually ran with — redacted like the
+   * node's own input; `input` above stays what the model asked for.
+   */
+  edited?: EditedInput;
+}
+
+/** `exec.resumed.edited`: the effective input of an edited call. */
+export interface EditedInput {
+  after: unknown;
 }
 
 /** Why a gate held (0.5.0+ senders; older streams omit it). */
 export type PauseReason = 'breakpoint' | 'error' | 'step' | 'loop';
 
-/** `exec.paused.loop`: the streak of identical calls that tripped the loop hold. */
+/** Which loop detector held (0.6.0; absent = `repeat`, the only 0.5 kind). */
+export type LoopKind = 'repeat' | 'cycle' | 'error-repeat';
+
+/** `exec.paused.loop`: the streak of calls that tripped the loop hold. */
 export interface LoopInfo {
-  /** Consecutive identical calls so far, the held one included. */
+  /**
+   * `repeat`: consecutive identical calls so far, the held one included.
+   * `error-repeat`: consecutive failures with the same error.
+   */
   repeats: number;
   /** Envelope seq of the first `node.started` in the streak. */
   firstSeq: number;
@@ -64,6 +81,30 @@ export interface LoopInfo {
   lastSeq: number;
   /** Fingerprint of (nodeId, canonical input) they all share. */
   fingerprint: string;
+  /** Which detector held; absent on 0.5 streams (= `repeat`). */
+  kind?: LoopKind;
+  /** `cycle`: calls per lap. */
+  period?: number;
+  /** `cycle`: identical laps seen before this hold. */
+  laps?: number;
+}
+
+/** `exec.paused.smart`: a smart breakpoint raised the hold (with reason `breakpoint`). */
+export interface SmartInfo {
+  rule: 'error-result' | 'truncated-tool-call';
+  /** Short, value-free explanation from the app. Rendered as text only. */
+  detail?: string;
+}
+
+/** One `exec.refused`: an input edit the app turned down; the gate is still held. */
+export interface RefusalRecord {
+  /** `schema` | `shape` | `placeholder` | `truncated` | `disabled` | `unsupported` (open for newer codes). */
+  code: string;
+  message?: string;
+  /** Echo of the `exec.resume.requestId` it answers. */
+  requestId?: string;
+  ts: number;
+  seq: number;
 }
 
 /**
@@ -120,6 +161,16 @@ export interface Pause {
   reason?: PauseReason;
   /** Present when `reason` is `loop`. */
   loop?: LoopInfo;
+  /** Present when a smart breakpoint raised the hold (0.6.0). */
+  smart?: SmartInfo;
+  /** The app can run this call with edited arguments (`exec.paused.editable`, 0.6.0). */
+  editable?: boolean;
+  /** Edits the app refused while this gate stayed held, oldest first (bounded). */
+  refusals?: RefusalRecord[];
+  /** The gate was released with edited arguments (`exec.resumed.edited`). */
+  edited?: EditedInput;
+  /** `exec.resumed.requestId`: which resume request released it. */
+  resolvedRequestId?: string;
 }
 
 export interface RunMeta {

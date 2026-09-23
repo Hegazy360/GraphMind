@@ -8,10 +8,15 @@
  * and waits for a real `exec.resume` control, then emits the matching
  * `exec.resumed` and continues — `abort` short-circuits to an aborted run,
  * `inject` rewrites the failed call's `node.finished` to the injected
- * output and skips the recorded retry.
+ * output and skips the recorded retry. A resume carrying edited arguments
+ * (`input`, 0.6.0) is answered the way the app would: the `edit` fixture
+ * checks it (store/editFixture.ts) and releases the gate with `edited` or
+ * refuses it with `exec.refused`, the gate still held; every other fixture's
+ * pauses are not editable, so it is refused as `unsupported`.
  */
 import { useEffect, useMemo, useRef } from 'react';
 import type { ControlType, MessagePayloadMap } from '@graphmind-ai/schema';
+import { generateEditRun, simulateEditResume } from '../store/editFixture.js';
 import { generateLoopRun } from '../store/loop.js';
 import { generateMcpRun } from '../store/mcpFixture.js';
 import { useRunStore } from '../store/runStore.js';
@@ -68,15 +73,18 @@ const SYNTHETIC_SEQ_BASE = 100000;
  * Which bundled run to replay. `demo` is the recorded trip-planner session
  * every screenshot and e2e test uses; `mcp` is a generated MCP server session
  * (see store/mcpFixture.ts) — there is no recorded MCP run to ship yet, and
- * an MCP-shaped canvas has to be designable and testable regardless.
+ * an MCP-shaped canvas has to be designable and testable regardless. `loop`
+ * ends held on a loop (store/loop.ts); `edit` holds at an editable error gate
+ * and answers argument edits like the app (store/editFixture.ts).
  */
-export type FixtureName = 'demo' | 'mcp' | 'loop';
+export type FixtureName = 'demo' | 'mcp' | 'loop' | 'edit';
 
 export function parseFixtureParam(search: string): FixtureName | null {
   const value = new URLSearchParams(search).get('fixture');
   if (value === null || value === '') return null;
   if (value === 'mcp') return 'mcp';
   if (value === 'loop') return 'loop';
+  if (value === 'edit') return 'edit';
   return 'demo';
 }
 
@@ -102,7 +110,9 @@ export class FixtureConnection implements ServerConnection {
         ? (generateMcpRun() as unknown as RawFixtureEnvelope[])
         : this.fixture === 'loop'
           ? (generateLoopRun() as unknown as RawFixtureEnvelope[])
-          : (demoRun as unknown as RawFixtureEnvelope[]);
+          : this.fixture === 'edit'
+            ? (generateEditRun() as unknown as RawFixtureEnvelope[])
+            : (demoRun as unknown as RawFixtureEnvelope[]);
     const recorded = (embedded ?? bundled).map((e) => ({
       ...e,
     }));
@@ -144,11 +154,34 @@ export class FixtureConnection implements ServerConnection {
     const resume = payload as MessagePayloadMap['exec.resume'];
     if (this.waitingPauseId === undefined || resume.pauseId !== this.waitingPauseId) return;
     const pausedNodeId = this.pausedNodeId(resume.pauseId);
+    const requestId = typeof resume.requestId === 'string' ? { requestId: resume.requestId } : {};
+
+    let edited: { after: unknown } | undefined;
+    if (resume.input !== undefined) {
+      const verdict =
+        this.fixture === 'edit'
+          ? simulateEditResume(this.pausedPoint(resume.pauseId), resume.action, resume.input)
+          : ({ ok: false, code: 'unsupported', message: 'this pause cannot run with an edited input' } as const);
+      if (!verdict.ok) {
+        // Refused: the gate stays held and waits for another resume.
+        this.emit({
+          type: 'exec.refused',
+          payload: { pauseId: resume.pauseId, code: verdict.code, message: verdict.message, ...requestId },
+        });
+        return;
+      }
+      edited = { after: verdict.after };
+    }
     this.waitingPauseId = undefined;
 
     this.emit({
       type: 'exec.resumed',
-      payload: { pauseId: resume.pauseId, action: resume.action },
+      payload: {
+        pauseId: resume.pauseId,
+        action: resume.action,
+        ...(edited !== undefined ? { edited } : {}),
+        ...requestId,
+      },
     });
 
     if (resume.action === 'abort') {
@@ -168,6 +201,17 @@ export class FixtureConnection implements ServerConnection {
     }
 
     this.scheduleNext(260);
+  }
+
+  private pausedPoint(pauseId: string): 'before' | 'after' | 'error' {
+    for (let i = this.index - 1; i >= 0; i--) {
+      const event = this.events[i];
+      if (event !== undefined && event.type === 'exec.paused' && event.payload['pauseId'] === pauseId) {
+        const point = event.payload['point'];
+        return point === 'after' || point === 'error' ? point : 'before';
+      }
+    }
+    return 'before';
   }
 
   private pausedNodeId(pauseId: string): string | undefined {

@@ -16,13 +16,25 @@
  *
  * Every button carries its single-key shortcut as an `aria-hidden` hint, so
  * the accessible name stays exactly the verb.
+ *
+ * 0.6.0: an editable pause (`exec.paused.editable`, never an LLM step) adds
+ * "Edit arguments…" (e). The editor needs room, so it opens in the panel
+ * copy only — the card's button selects the node and asks the panel to open
+ * it. A refusal the app sent for this gate (`exec.refused`) is said in plain
+ * words under the panel's row whenever the editor is not already showing it. The
+ * label names every kind of hold the SDK reports: loop (repeat, cycle,
+ * error-repeat) and smart (error-result, truncated-tool-call).
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { isExportedRun } from '../../connection/FixtureConnection.js';
+import { canEditArgs, latestRefusal, refusalText } from '../../lib/editArgs.js';
 import { injectAndResume, pausePointLabel, resumeGate, stepGate } from '../../lib/gate.js';
-import { loopBannerText } from '../../store/loop.js';
+import { useEditStore } from '../../store/editStore.js';
+import { holdBannerText, holdHint } from '../../store/holds.js';
+import { useRunStore } from '../../store/runStore.js';
 import { useUiStore } from '../../store/uiStore.js';
 import { latestExecution, type NodeState, type Pause } from '../../store/types.js';
+import { EditArgsEditor } from './EditArgsEditor.js';
 
 export type PauseVariant = 'card' | 'panel';
 
@@ -50,14 +62,6 @@ const LIVE_HINT =
   'Held by the debugger. Note: user-configured totalMs/stepMs/chunkMs timeouts can still abort a ' +
   'run during a long hold (per-tool toolMs is neutralized).';
 
-/** The loop hold: why this gate opened on its own, and what each verb does here. */
-const LOOP_HINT =
-  'GraphMind held this call because the model asked for the same tool with the same arguments ' +
-  'again and again (GRAPHMIND_LOOP_THRESHOLD, default 3). Continue runs it anyway; Inject ' +
-  'substitutes a result; Abort stops the run. Polling on purpose? Add the tool to ' +
-  'loopGuard.allowNodes (or GRAPHMIND_LOOP_ALLOW=<tool>, which also works for mcp-proxy), ' +
-  'or set GRAPHMIND_ON_LOOP=warn.';
-
 function Key({ children }: { children: string }) {
   return (
     <span className="gm-kbd gm-kbd--inline" aria-hidden>
@@ -75,17 +79,22 @@ export function PauseActions({
   hideError,
 }: PauseActionsProps) {
   const [injecting, setInjecting] = useState(false);
+  /** The argument editor (panel copy only). */
+  const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [invalid, setInvalid] = useState(false);
   /** Why the last inject was refused (e.g. it still contained the redaction placeholder). */
-  const [refusal, setRefusal] = useState<string | undefined>(undefined);
+  const [injectRefused, setRefusal] = useState<string | undefined>(undefined);
   const continueRef = useRef<HTMLButtonElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const injectRequest = useUiStore((s) => s.injectRequest);
+  const editorRequest = useEditStore((s) => s.editorRequest);
 
   const exec = latestExecution(node);
   const error = exec?.error ?? node.lastError;
   const replayed = isExportedRun();
+  const editable = canEditArgs(node, pause, replayed);
+  const refusal = latestRefusal(pause);
 
   const prefill = useMemo(() => {
     const shape = exec?.output !== undefined && exec.output !== null ? exec.output : exec?.input;
@@ -100,8 +109,42 @@ export function PauseActions({
     setDraft(prefill);
     setInvalid(false);
     setRefusal(undefined);
+    setEditing(false);
     setInjecting(true);
   };
+
+  // The card has no room for the editor: its button opens the panel's copy,
+  // exactly like `e` from the keyboard does.
+  const openEditor = () => {
+    if (variant === 'card') {
+      useUiStore.getState().selectNode(runId, node.nodeId);
+      useEditStore.getState().requestEditor(pause.pauseId);
+      return;
+    }
+    setInjecting(false);
+    setEditing((open) => !open);
+  };
+
+  // A released gate's draft and pending request are history: drop them when
+  // the row goes away with the pause (a pauseId is never reused).
+  useEffect(() => {
+    const pauseId = pause.pauseId;
+    return () => {
+      const current = useRunStore.getState().runs[runId]?.pauses[pauseId];
+      if (current === undefined || !current.active) useEditStore.getState().forgetPause(pauseId);
+    };
+  }, [runId, pause.pauseId]);
+
+  // `e` / the card's button: the panel for this pause opens its editor and
+  // consumes the request, so a later remount of the panel does not reopen it.
+  useEffect(() => {
+    if (variant !== 'panel' || editorRequest === undefined) return;
+    if (editorRequest.pauseId !== pause.pauseId) return;
+    useEditStore.getState().consumeEditorRequest(editorRequest.nonce);
+    if (!editable) return;
+    setInjecting(false);
+    setEditing(true);
+  }, [editorRequest, pause.pauseId, variant, editable]);
 
   // `i` from anywhere opens the editor on whichever copy of the row is the
   // one the user is looking at: the panel when the inspector is open, the
@@ -113,6 +156,7 @@ export function PauseActions({
     setDraft(prefill);
     setInvalid(false);
     setRefusal(undefined);
+    setEditing(false);
     setInjecting(true);
   }, [injectRequest, pause.pauseId, variant, prefill]);
 
@@ -156,19 +200,28 @@ export function PauseActions({
 
   const where = pausePointLabel(pause.point);
   const pointLabel = replayed ? `Was held ${where}` : `Paused ${where}`;
-  // Loop hold (W5): the SDK's built-in breakpoint names itself — the label
+  // A named hold (loop, smart breakpoint) says why it held — the label
   // becomes the reason, in normal case because it carries the tool's name.
-  const loopLabel = loopBannerText(node, pause, replayed);
+  // A cycle names its lap, read off the run once per hold: the calls of a
+  // lap all started before the gate opened.
+  const holdLabel = useMemo(
+    () => holdBannerText(node, pause, replayed, useRunStore.getState().runs[runId]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- node identity changes per event; the lap does not
+    [pause, node.name, node.executions.length, replayed, runId],
+  );
 
   return (
     <>
-      {loopLabel !== undefined ? (
+      {holdLabel !== undefined ? (
         <div
-          className="gm-pause-label gm-pause-label--loop"
-          title={replayed ? RECORDED_HINT : LOOP_HINT}
+          className={`gm-pause-label gm-pause-label--loop${
+            variant === 'card' ? ' gm-pause-label--clamp' : ''
+          }`}
+          title={replayed ? RECORDED_HINT : holdHint(pause) ?? LIVE_HINT}
+          data-testid="hold-label"
         >
           <span className="gm-dot gm-dot--paused" />
-          {loopLabel}
+          <span className="gm-pause-label-text">{holdLabel}</span>
         </div>
       ) : (
         <div
@@ -222,6 +275,22 @@ export function PauseActions({
             Inject…
             <Key>i</Key>
           </button>
+          {editable && (
+            <button
+              className="gm-action"
+              onClick={openEditor}
+              title={
+                variant === 'card'
+                  ? 'Run this call with changed arguments — opens the editor in the inspector (e)'
+                  : 'Run this call with changed arguments (e)'
+              }
+              {...(variant === 'panel' ? { 'aria-expanded': editing } : {})}
+            >
+              {/* The card's row has room for two lines of verbs, not three. */}
+              {variant === 'card' ? 'Edit args…' : 'Edit arguments…'}
+              <Key>e</Key>
+            </button>
+          )}
           <button
             className="gm-action gm-action--danger"
             onClick={() => resumeGate(runId, pause.pauseId, 'abort')}
@@ -230,6 +299,21 @@ export function PauseActions({
             Abort
           </button>
         </div>
+      )}
+
+      {!replayed && variant === 'panel' && refusal !== undefined && !editing && (
+        <div className="gm-pause-note gm-inject-refusal" role="status" data-testid="pause-refusal">
+          Refused — the gate is still held.{' '}
+          {refusalText(
+            refusal.code,
+            refusal.message,
+            refusal.requestId?.startsWith('edit-') === true ? 'arguments' : 'value',
+          )}
+        </div>
+      )}
+
+      {editing && editable && variant === 'panel' && (
+        <EditArgsEditor runId={runId} node={node} pause={pause} onClose={() => setEditing(false)} />
       )}
 
       {injecting && (
@@ -268,9 +352,9 @@ export function PauseActions({
               }
             }}
           />
-          {refusal !== undefined && (
+          {injectRefused !== undefined && (
             <div className="gm-pause-note gm-inject-refusal" role="alert">
-              {refusal}
+              {injectRefused}
             </div>
           )}
           <div className="gm-actions gm-inject-actions">

@@ -13,12 +13,15 @@ import type { EventEnvelope, EventPayloadMap, GraphNodeHint } from '@graphmind-a
 import { derivedHeldMs } from '../lib/duration.js';
 import type {
   LoopInfo,
+  LoopKind,
   NodeExecution,
   NodeState,
   Pause,
   PauseReason,
+  RefusalRecord,
   RunSource,
   RunState,
+  SmartInfo,
 } from './types.js';
 
 export type RunsMap = Record<string, RunState>;
@@ -114,8 +117,63 @@ function loopField(payload: Record<string, unknown>): LoopInfo | undefined {
     return undefined;
   }
   if (lastSeq < firstSeq) return undefined;
-  return { repeats, firstSeq, lastSeq, fingerprint };
+  // 0.6.0 kinds. An unknown or malformed extra is dropped, not the loop: the
+  // four legacy fields still read as a repeat hold, which is what a 0.5
+  // viewer would show for it too.
+  const kind: LoopKind | undefined =
+    loop['kind'] === 'repeat' || loop['kind'] === 'cycle' || loop['kind'] === 'error-repeat'
+      ? loop['kind']
+      : undefined;
+  const positive = (value: unknown): number | undefined => {
+    const n = int(value);
+    return n !== undefined && n > 0 ? n : undefined;
+  };
+  const period = positive(loop['period']);
+  const laps = positive(loop['laps']);
+  return {
+    repeats,
+    firstSeq,
+    lastSeq,
+    fingerprint,
+    ...(kind !== undefined ? { kind } : {}),
+    ...(period !== undefined ? { period } : {}),
+    ...(laps !== undefined ? { laps } : {}),
+  };
 }
+
+/** `exec.paused.smart`, only with a documented rule; `detail` kept as short plain text. */
+function smartField(payload: Record<string, unknown>): SmartInfo | undefined {
+  const raw = payload['smart'];
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const smart = raw as Record<string, unknown>;
+  const rule = smart['rule'];
+  if (rule !== 'error-result' && rule !== 'truncated-tool-call') return undefined;
+  const detail = shortText(smart['detail']);
+  return detail === undefined ? { rule } : { rule, detail };
+}
+
+/** C0/C1 controls and the bidi marks/overrides/isolates: never rendered. */
+const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]+/g;
+const MAX_SHORT_TEXT = 200;
+
+/**
+ * App-supplied free text (a smart hold's detail, a refusal message): senders
+ * keep it value-free and short, and the viewer holds them to it anyway — a
+ * string, unprintable characters turned into spaces, at most 200 characters.
+ */
+function shortText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.replace(UNPRINTABLE, ' ').replace(/\s+/g, ' ').trim();
+  if (text === '') return undefined;
+  if (text.length <= MAX_SHORT_TEXT) return text;
+  let cut = MAX_SHORT_TEXT - 1;
+  const last = text.charCodeAt(cut - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut -= 1; // never split a surrogate pair
+  return `${text.slice(0, cut)}…`;
+}
+
+/** Refusals kept per pause — enough for any real fix-and-retry session. */
+export const MAX_REFUSALS_PER_PAUSE = 16;
 
 const MAX_ANCESTOR_HOPS = 64;
 
@@ -346,6 +404,7 @@ function applyExecPaused(
 ): RunState {
   const reason = pauseReasonField(payload);
   const loop = loopField(payload);
+  const smart = smartField(payload);
   let next: RunState = {
     ...run,
     pauses: {
@@ -360,6 +419,9 @@ function applyExecPaused(
         // Loop hold (W5): why the SDK's built-in breakpoint fired.
         ...(reason !== undefined ? { reason } : {}),
         ...(loop !== undefined ? { loop } : {}),
+        // 0.6.0: a smart breakpoint's rule, and whether the arguments may be edited.
+        ...(smart !== undefined ? { smart } : {}),
+        ...(payload.editable === true ? { editable: true } : {}),
       },
     },
     // A pause changes the paused node's rendered height → structural.
@@ -376,6 +438,45 @@ function applyExecPaused(
   return next;
 }
 
+/**
+ * `exec.refused` (0.6.0): the app turned an input edit down and the gate is
+ * STILL held. Recorded on the pause so the editor can match it to the request
+ * it sent (`requestId`) and say why; nothing about the hold changes.
+ */
+function applyExecRefused(
+  run: RunState,
+  payload: EventPayloadMap['exec.refused'],
+  ts: number,
+  seq: number,
+): RunState {
+  const pause = run.pauses[payload.pauseId];
+  if (pause === undefined) return run;
+  const message = shortText(payload.message);
+  const record: RefusalRecord = {
+    code: typeof payload.code === 'string' ? payload.code : 'shape',
+    ...(message !== undefined ? { message } : {}),
+    ...(typeof payload.requestId === 'string' ? { requestId: payload.requestId } : {}),
+    ts,
+    seq,
+  };
+  const refusals = [...(pause.refusals ?? []), record].slice(-MAX_REFUSALS_PER_PAUSE);
+  return {
+    ...run,
+    pauses: { ...run.pauses, [payload.pauseId]: { ...pause, refusals } },
+    statusVersion: run.statusVersion + 1,
+  };
+}
+
+/** The execution a pause was holding: its heldBy entry for the node, else the latest. */
+function heldExecutionIndex(node: NodeState, pause: Pause): number {
+  const held = pause.heldBy?.find((h) => h.nodeId === node.nodeId);
+  if (held !== undefined) {
+    const index = node.executions.findIndex((e) => e.instanceId === held.instanceId);
+    if (index >= 0) return index;
+  }
+  return node.executions.length - 1;
+}
+
 function applyExecResumed(
   run: RunState,
   payload: EventPayloadMap['exec.resumed'],
@@ -387,7 +488,14 @@ function applyExecResumed(
   const record = payload as Record<string, unknown>;
   const by = typeof record['principal'] === 'string' ? record['principal'] : undefined;
   const operator = typeof record['operator'] === 'string' ? record['operator'].slice(0, 64) : undefined;
-  const edited = typeof record['edited'] === 'object' && record['edited'] !== null;
+  // 0.6.0: the call runs with edited arguments. `after` is only ever read as
+  // a value to display; an `edited` without the field is not an edit.
+  const editedRaw = record['edited'];
+  const edited =
+    editedRaw !== null && typeof editedRaw === 'object' && 'after' in editedRaw
+      ? { after: (editedRaw as { after: unknown }).after }
+      : undefined;
+  const requestId = typeof payload.requestId === 'string' ? payload.requestId : undefined;
   let next: RunState = {
     ...run,
     pauses: {
@@ -399,16 +507,31 @@ function applyExecResumed(
         resolvedTs: ts,
         ...(by === undefined ? {} : { resolvedBy: by }),
         ...(operator === undefined ? {} : { resolvedOperator: operator }),
-        ...(edited ? { resolvedEdited: true } : {}),
+        ...(edited !== undefined ? { edited, resolvedEdited: true } : {}),
+        ...(requestId !== undefined ? { resolvedRequestId: requestId } : {}),
       },
     },
     structureVersion: run.structureVersion + 1,
     statusVersion: run.statusVersion + 1,
   };
   const node = next.nodes[pause.nodeId];
-  if (node !== undefined && node.activePauseId === payload.pauseId) {
+  if (node !== undefined) {
     const { activePauseId: _drop, ...rest } = node;
-    next = { ...next, nodes: setNode(next, pause.nodeId, { ...rest }) };
+    const released: NodeState = node.activePauseId === payload.pauseId ? { ...rest } : node;
+    let executions = released.executions;
+    if (edited !== undefined) {
+      // The edited pill belongs to the instance that ran with the edit: the
+      // one this gate held (a retry re-runs the same instance).
+      const index = heldExecutionIndex(node, pause);
+      const exec = executions[index];
+      if (exec !== undefined) {
+        executions = executions.slice();
+        executions[index] = { ...exec, edited };
+      }
+    }
+    if (released !== node || executions !== node.executions) {
+      next = { ...next, nodes: setNode(next, pause.nodeId, { ...released, executions }) };
+    }
   }
   // The hold is over: every execution it sat inside now knows how long.
   return refreshDerivedHeld(next, pause.heldBy, ts);
@@ -470,6 +593,8 @@ export function applyEvent(runs: RunsMap, envelope: EventEnvelope, source: RunSo
       return putRun(ensured.runs, applyExecPaused(run, envelope.payload, envelope.ts));
     case 'exec.resumed':
       return putRun(ensured.runs, applyExecResumed(run, envelope.payload, envelope.ts));
+    case 'exec.refused':
+      return putRun(ensured.runs, applyExecRefused(run, envelope.payload, envelope.ts, envelope.seq));
     case 'node.token':
       // Deltas live in the token buffer registry (see ingest.ts); seq was
       // recorded above so a replayed batch is still deduped consistently.
