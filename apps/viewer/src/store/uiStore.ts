@@ -15,6 +15,27 @@ import { loadTheme, type ThemeChoice } from '../lib/theme.js';
 export type ConnectionStatus = 'connecting' | 'live' | 'detached' | 'replaying' | 'off';
 
 /**
+ * What this viewer may do on the server it is attached to (0.6 `welcome.control`).
+ * Absent: a 0.5 server, or no live socket.
+ */
+export interface ControlInfo {
+  /** `viewer` = full control (the #token= credential); `anonymous` = no token (no input edits). */
+  principal: 'viewer' | 'agent' | 'anonymous';
+  /** What `graphmind resume` (the agent token) may do: serve --allow-control. */
+  agentLevel: 'off' | 'resume' | 'inject' | 'edit';
+  /** False under `serve --no-edit-input`. */
+  editInput: boolean;
+  hubCapabilities: string[];
+}
+
+/** A short-lived message about a control the server refused or answered (pause taken, edit refused). */
+export interface ControlNotice {
+  code: string;
+  message: string;
+  nonce: number;
+}
+
+/**
  * What the connection indicator should say.
  *
  * A local replay is what you are actually looking at whenever the live
@@ -133,6 +154,10 @@ interface UiState {
   mode: RunMode;
   breakpoints: BreakpointMatcher[];
   connection: ConnectionStatus;
+  /** What this viewer may do on the attached server (0.6), if it said. */
+  control: ControlInfo | undefined;
+  /** The latest refused/answered control, for the run bar. */
+  controlNotice: ControlNotice | undefined;
   /** Whether the live socket is tailing, catching up, or behind. */
   stream: StreamHealth;
   fixtureActive: boolean;
@@ -172,6 +197,9 @@ interface UiState {
   addBreakpoint: (matcher: BreakpointMatcher) => void;
   removeBreakpoint: (matcher: BreakpointMatcher) => void;
   setConnection: (status: ConnectionStatus) => void;
+  setControl: (control: ControlInfo | undefined) => void;
+  noteControl: (code: string, message: string) => void;
+  clearControlNotice: () => void;
   setStream: (stream: StreamHealth) => void;
   setFixtureActive: (active: boolean) => void;
   requestDemo: () => void;
@@ -224,6 +252,8 @@ export const useUiStore = create<UiState>((set) => ({
   mode: 'run',
   breakpoints: [],
   connection: 'off',
+  control: undefined,
+  controlNotice: undefined,
   stream: IDLE_STREAM,
   fixtureActive: false,
   demoRequested: false,
@@ -261,6 +291,9 @@ export const useUiStore = create<UiState>((set) => ({
       breakpoints: s.breakpoints.filter((m) => matcherKey(m) !== matcherKey(matcher)),
     })),
   setConnection: (status) => set({ connection: status }),
+  setControl: (control) => set({ control }),
+  noteControl: (code, message) => set({ controlNotice: { code, message, nonce: ++focusNonce } }),
+  clearControlNotice: () => set({ controlNotice: undefined }),
   setStream: (stream) => set({ stream }),
   setFixtureActive: (active) => set({ fixtureActive: active }),
   requestDemo: () => set({ demoRequested: true }),

@@ -8,9 +8,14 @@
  *   GET /api/runs            all runs (with counts + live flag)
  *   GET /api/runs/:id/events paginated events of one run
  *   POST /api/demo/start     replay the bundled demo run (in-process client)
+ *   GET/POST /api/session, /api/pauses, /api/runs/:id/pauses/...
+ *                            the control plane (control-http.ts)
  *   GET /*                   built viewer (or placeholder page)
  *
- * Local-first: binds 127.0.0.1 only, no auth. Never expose this port.
+ * Local-first: binds 127.0.0.1 only. Never expose this port. Reading is
+ * unauthenticated (any local process could already read the database);
+ * CONTROL carries a credential from 0.6 (control-auth.ts): every non-GET
+ * `/api` route, and any input edit on `/ws/ui`.
  *
  * "Bound to loopback" is not by itself access control in a browser: a
  * WebSocket upgrade is exempt from the same-origin policy, and DNS rebinding
@@ -23,13 +28,27 @@ import type { Duplex } from 'node:stream';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { WebSocketServer } from 'ws';
+import {
+  CredentialVerifier,
+  DEFAULT_CONTROL_LEVEL,
+  UI_SUBPROTOCOL,
+  bearerToken,
+  generateTokens,
+  resolveCredential,
+  subprotocolTokens,
+  type ControlLevel,
+  type ControlPolicy,
+  type ControlTokens,
+} from './control-auth.js';
+import { registerControlRoutes, securityHeaderLines, securityHeaders } from './control-http.js';
 import { parsePauseOnError } from './debug-state.js';
 import { startBundledDemoReplay, type DemoReplay } from './demo/replayer.js';
 import { Hub, type LogFn } from './hub.js';
 import { openBrowser } from './open-browser.js';
-import { checkRequestHeaders, parseOriginPolicy, type Rejection } from './origin-guard.js';
+import { checkRequestHeaders, parseOriginPolicy } from './origin-guard.js';
 import { DEFAULT_PORT, resolveDbPath, resolveViewerDist, type EnvLike } from './paths.js';
 import { SqliteStorage } from './sqlite-storage.js';
+import { writeRunFiles, type RunFiles } from './run-files.js';
 import { serveViewer } from './static-site.js';
 import { DEFAULT_RETENTION, MAX_FRAME_BYTES, type Storage, type StoredEvent } from './storage.js';
 import type { WireEnvelope } from './ui-protocol.js';
@@ -64,6 +83,23 @@ export interface ServerOptions {
    * the next tick.
    */
   abandonGraceMs?: number;
+  /**
+   * What the agent token may do: `off` (default), `resume`
+   * (continue/retry/abort, breakpoints, step), `inject` (+ output injection)
+   * or `edit` (+ input edits). The viewer token always has full control.
+   */
+  allowControl?: ControlLevel;
+  /** `false` = `serve --no-edit-input`: refuse every input edit. Default true. */
+  editInput?: boolean;
+  /**
+   * Write `$GRAPHMIND_HOME/run/serve-<port>.json` (the agent token, for the
+   * CLI) and the `open-<port>.html` redirect (the viewer token, for the
+   * browser), removed again on close. The CLI turns it on; tests leave it off
+   * unless they point `env.GRAPHMIND_HOME` at a temp dir. Default false.
+   */
+  runFile?: boolean;
+  /** See RESOLVING_TIMEOUT_MS in pause-registry.ts (tests shorten it). */
+  resolvingTimeoutMs?: number;
 }
 
 export interface GraphMindServer {
@@ -79,6 +115,19 @@ export interface GraphMindServer {
    * tests (and embedders) can still await it.
    */
   retentionDone: Promise<void>;
+  /**
+   * This process's control credentials. In-process only: never printed by
+   * `serve --json`, never logged. The viewer token reaches a browser through
+   * the `#token=` fragment; the agent token through the run file.
+   */
+  tokens: ControlTokens;
+  control: ControlPolicy;
+  /** `serve-<port>.json`, when `runFile` wrote it. */
+  runFilePath: string | undefined;
+  /** `open-<port>.html` (the token redirect), when `runFile` wrote it. */
+  openerPath: string | undefined;
+  /** Open the viewer in a browser — through the redirect file when there is one. */
+  openViewer(): void;
   close(): Promise<void>;
 }
 
@@ -103,17 +152,19 @@ function intQuery(value: string | undefined, fallback: number): number | undefin
 }
 
 /**
- * Answer a refused WebSocket handshake with a real 403 rather than dropping
- * the socket: `ws` surfaces "Unexpected server response: 403" to the caller,
- * and a developer who hit this by accident gets told how to allow their setup.
+ * Answer a refused WebSocket handshake with a real status rather than
+ * dropping the socket: `ws` surfaces "Unexpected server response: 403" to the
+ * caller, and a developer who hit this by accident gets told how to allow
+ * their setup.
  */
-function rejectUpgrade(socket: Duplex, rejection: Rejection): void {
-  const body = `${rejection.message}\n`;
+function rejectUpgrade(socket: Duplex, status: 401 | 403, message: string): void {
+  const body = `${message}\n`;
   try {
     socket.write(
-      'HTTP/1.1 403 Forbidden\r\n' +
+      `HTTP/1.1 ${status} ${status === 401 ? 'Unauthorized' : 'Forbidden'}\r\n` +
         'Content-Type: text/plain; charset=utf-8\r\n' +
         `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+        securityHeaderLines() +
         'Connection: close\r\n' +
         '\r\n' +
         body,
@@ -181,15 +232,37 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
   const abandonGraceMs =
     options.abandonGraceMs ?? (Number.isFinite(envGrace) && envGrace >= 0 ? envGrace : undefined);
 
+  const control: ControlPolicy = {
+    agentLevel: options.allowControl ?? DEFAULT_CONTROL_LEVEL,
+    editInput: options.editInput ?? true,
+  };
   const hub = new Hub(storage, log, {
     ...(breakpoints === undefined ? {} : { breakpoints }),
     ...(abandonGraceMs === undefined ? {} : { abandonGraceMs }),
+    control,
+    ...(options.resolvingTimeoutMs === undefined
+      ? {}
+      : { resolvingTimeoutMs: options.resolvingTimeoutMs }),
   });
   const originPolicy = parseOriginPolicy(env);
+  const tokens = generateTokens();
+  const verifier = new CredentialVerifier(tokens);
+
+  // One line per kind per second at most: a peer hammering the upgrade with
+  // guessed tokens must not turn the operator's terminal into its log.
+  const lastRefusalLog = new Map<string, number>();
+  const logRefusal = (key: string, message: string): void => {
+    const now = Date.now();
+    if (now - (lastRefusalLog.get(key) ?? 0) < 1_000) return;
+    lastRefusalLog.set(key, now);
+    log(message);
+  };
 
   let boundPort = requestedPort; // reassigned once the listener is up
 
   const app = new Hono();
+  /** Framing/sniffing/referrer headers on EVERY response, refusals included. */
+  app.use('*', securityHeaders);
   /**
    * Access control, ahead of every route. A loopback bind is not a boundary
    * once a browser is involved (see origin-guard.ts) — this is.
@@ -206,6 +279,9 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
     }
     return next();
   });
+  // Control plane + the credential check on every non-GET /api route. Must
+  // come before any other /api route (see registerControlRoutes).
+  const controlRoutes = registerControlRoutes(app, { hub, storage, verifier });
   app.get('/health', (c) => c.json({ ok: true, name: 'graphmind-ai', version: VERSION }));
   app.get('/api/runs', (c) => c.json({ runs: hub.listRunInfos() }));
   app.get('/api/runs/:id/events', (c) => {
@@ -287,9 +363,14 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
   // assembly (close 1009) and the client reconnects and replays.
   const maxPayload = MAX_FRAME_BYTES;
   const ingestWss = new WebSocketServer({ noServer: true, maxPayload });
-  const uiWss = new WebSocketServer({ noServer: true, maxPayload });
+  // A browser presents its token as a subprotocol (`gm.auth.<token>`); the
+  // server answers with `graphmind.v1` and never echoes the token entry.
+  const uiWss = new WebSocketServer({
+    noServer: true,
+    maxPayload,
+    handleProtocols: (protocols) => (protocols.has(UI_SUBPROTOCOL) ? UI_SUBPROTOCOL : false),
+  });
   ingestWss.on('connection', (ws) => hub.addIngestSocket(ws));
-  uiWss.on('connection', (ws) => hub.addUiSocket(ws));
 
   httpServer.on('upgrade', (request: IncomingMessage, socket: Duplex, head) => {
     const pathname = new URL(request.url ?? '/', url).pathname;
@@ -306,22 +387,65 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
     );
     if (rejection !== undefined) {
       log(`refused ${rejection.kind} "${rejection.value}" on ${pathname} (websocket upgrade)`);
-      rejectUpgrade(socket, rejection);
+      rejectUpgrade(socket, 403, rejection.message);
       return;
     }
     if (pathname === '/ingest') {
       ingestWss.handleUpgrade(request, socket, head, (ws) =>
         ingestWss.emit('connection', ws, request),
       );
-    } else {
-      uiWss.handleUpgrade(request, socket, head, (ws) => uiWss.emit('connection', ws, request));
+      return;
     }
+    // The viewer socket: a credential is optional (none = anonymous, the
+    // deprecated 0.5 behaviour), but one that is presented must be valid —
+    // checked here, before the upgrade, never after. `?token=` and cookies
+    // are not read.
+    const presented: (string | null)[] = [
+      ...subprotocolTokens(request.headers['sec-websocket-protocol']),
+    ];
+    const bearer = bearerToken(request.headers.authorization);
+    if (bearer !== undefined) presented.push(bearer);
+    const credential = resolveCredential(presented, verifier);
+    if (credential.kind === 'invalid') {
+      logRefusal('ui-credential', `refused a viewer socket: ${credential.message}`);
+      rejectUpgrade(
+        socket,
+        401,
+        `Refused: ${credential.message}. The viewer token changes every time graphmind serve ` +
+          'starts; reopen the viewer from the link it printed (or its redirect file).',
+      );
+      return;
+    }
+    const principal = credential.kind === 'ok' ? credential.principal : 'anonymous';
+    uiWss.handleUpgrade(request, socket, head, (ws) => hub.addUiSocket(ws, principal));
   });
 
   const pingTimer = setInterval(() => hub.pingAll(), options.pingIntervalMs ?? 30_000);
   pingTimer.unref();
 
-  if (options.openBrowser === true) openBrowser(url);
+  let runFiles: RunFiles | undefined;
+  if (options.runFile === true) {
+    try {
+      runFiles = writeRunFiles({ env, port, url, tokens, version: VERSION });
+    } catch (error) {
+      // Fail-open: the server still serves and records; only CLI control and
+      // the token link are unavailable.
+      log(
+        `graphmind: could not write the control credential files (${
+          error instanceof Error ? error.message : String(error)
+        }); \`graphmind resume\` and the viewer token link are unavailable`,
+      );
+    }
+  }
+  // A crash between here and close() would leave the credential on disk; the
+  // exit hook covers everything short of SIGKILL (`unlinkSync` is sync).
+  const removeRunFiles = (): void => runFiles?.remove();
+  if (runFiles !== undefined) process.once('exit', removeRunFiles);
+
+  const openViewer = (): void => {
+    openBrowser(runFiles === undefined ? url : runFiles.openerPath);
+  };
+  if (options.openBrowser === true) openViewer();
 
   let closed = false;
 
@@ -366,6 +490,9 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
       settleRetention(); // a closed server never prunes, but the handle settles
     }
     clearInterval(pingTimer);
+    removeRunFiles();
+    if (runFiles !== undefined) process.removeListener('exit', removeRunFiles);
+    controlRoutes.closeWaits();
     activeDemo?.stop();
     await hub.closeAll(500);
     // After closeAll: closing the ingest sockets arms one reconciliation
@@ -382,5 +509,18 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
     storage.close(); // WAL checkpoint happens here
   };
 
-  return { port, url, dbPath, storage, hub, retentionDone, close };
+  return {
+    port,
+    url,
+    dbPath,
+    storage,
+    hub,
+    retentionDone,
+    tokens,
+    control,
+    runFilePath: runFiles?.credentialPath,
+    openerPath: runFiles?.openerPath,
+    openViewer,
+    close,
+  };
 }

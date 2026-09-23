@@ -135,8 +135,9 @@ Two things stand in the way, and both are deliberate:
 Running the server inside the container, as above, avoids both.
 
 <Aside type="caution" title="Loopback is the security boundary">
-There is no authentication on the ingest or viewer sockets. Anyone who can reach them can read
-your prompts and resume, inject into or abort your agent. Every flow on this page keeps the
+There is no authentication on the ingest socket or for reading, and a viewer socket without the
+viewer token can still resume, inject into or abort your agent (only input edits need the token).
+Anyone who can reach the port can read your prompts and do all of that. Every flow on this page keeps the
 server on a loopback interface and moves only your browser's view of it. Do not put the port
 behind a public tunnel. See [security](/reference/security/#threat-model).
 </Aside>

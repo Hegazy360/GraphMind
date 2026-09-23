@@ -22,8 +22,8 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ParsedCli } from '../args.js';
 import { startBundledDemoReplay } from '../demo/replayer.js';
-import { openBrowser } from '../open-browser.js';
 import { DEFAULT_PORT, packageRoot } from '../paths.js';
+import { openViewerFor } from '../run-files.js';
 import { startServer, type GraphMindServer } from '../server.js';
 import { recordTelemetry } from '../telemetry.js';
 import { VERSION } from '../version.js';
@@ -63,6 +63,9 @@ async function ensureServer(parsed: ParsedCli): Promise<EnsuredServer> {
   const started = await startServer({
     port,
     ...(parsed.flags.db === undefined ? {} : { dbPath: parsed.flags.db }),
+    // Same credential files as `graphmind serve`, so the browser opens with
+    // the viewer token and `graphmind resume` works against the demo too.
+    runFile: true,
   });
   console.log(`GraphMind v${VERSION} listening on ${started.url} (started for the demo)`);
   return {
@@ -145,7 +148,11 @@ export async function runDemo(parsed: ParsedCli): Promise<number> {
     return 1;
   }
 
-  if (parsed.flags.open) openBrowser(server.httpUrl);
+  if (parsed.flags.open) {
+    // Through the server's token redirect file when this user has one.
+    if (server.started !== undefined) server.started.openViewer();
+    else openViewerFor(process.env as Record<string, string | undefined>, server.port, server.httpUrl);
+  }
 
   if (parsed.flags.live) {
     const code = await runLive(parsed, server);

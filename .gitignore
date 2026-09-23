@@ -19,6 +19,9 @@ internal/
 
 # viewer build artifact copied into cli for serving
 packages/cli/viewer-dist/
+# private CLI build made (and removed) by packages/cli/test/control-cli.test.ts
+packages/cli/.control-test-dist/
+packages/cli/tsconfig.control-test.json
 
 # astro/docs build caches
 apps/docs/.astro/

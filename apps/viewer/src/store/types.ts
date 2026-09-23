@@ -100,6 +100,17 @@ export interface Pause {
   /** Envelope ts of the `exec.resumed` that released it. */
   resolvedTs?: number;
   /**
+   * Who released it, as the debugger stamped it on `exec.resumed.principal`
+   * (0.6): `viewer`, `agent` (a coding agent via `graphmind resume`) or
+   * `anonymous` (a tokenless viewer socket). Absent: the app released it on
+   * its own (timeout, detach), or an older server.
+   */
+  resolvedBy?: string;
+  /** The resumer's display-only label (`exec.resumed.operator`), already sanitized by the server. */
+  resolvedOperator?: string;
+  /** The call ran with an edited input (`exec.resumed.edited`). */
+  resolvedEdited?: boolean;
+  /**
    * The executions this hold sat inside: the held node's instance, every
    * open ancestor's, and the run's root node — the same attribution the SDK
    * ledgers use for `heldMs`. Drives derived held time and the timeline hatch.
@@ -177,4 +188,15 @@ export type RunBadgeStatus = 'pending' | 'running' | 'paused' | RunStatus;
 export function runBadgeStatus(run: RunState): RunBadgeStatus {
   if (run.meta.status === 'running' && runHasActivePause(run)) return 'paused';
   return run.meta.status;
+}
+
+/**
+ * How the audit line names who released a pause (`Pause.resolvedBy`):
+ * "resumed by agent" is the line a human watching a coding agent needs.
+ */
+export function resumerLabel(principal: string): string {
+  if (principal === 'agent') return 'agent';
+  if (principal === 'viewer') return 'viewer';
+  if (principal === 'anonymous') return 'tokenless viewer';
+  return 'unknown';
 }

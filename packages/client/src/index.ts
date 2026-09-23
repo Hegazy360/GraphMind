@@ -32,6 +32,11 @@ export {
 export {
   MAX_REFUSAL_MESSAGE,
   mergeToolInput,
+  // The one placeholder/truncation-marker guard, shared with the debugger's
+  // hub (graphmind-ai refuses the same values server side), and the
+  // short-text sanitizer it applies to refusal messages it relays.
+  proposedValueRefusal,
+  sanitizeShortText,
   type InputValidation,
   type RefusalCode,
   type ValidateInput,

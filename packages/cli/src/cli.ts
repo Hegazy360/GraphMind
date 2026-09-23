@@ -5,6 +5,7 @@
  * the command table below.
  */
 import { OPTION_HELP, parseCliArgs, type ParsedCli } from './args.js';
+import { EXIT_CODE_HELP, runPauses, runResume, runWait } from './commands/control.js';
 import { runDemo } from './commands/demo.js';
 import { runImport } from './commands/import.js';
 import { runInit } from './commands/init.js';
@@ -12,8 +13,8 @@ import { runMcp } from './commands/mcp.js';
 import { printMcpProxyHelp, runMcpProxy } from './commands/mcp-proxy.js';
 import { runRecord } from './commands/record.js';
 import { runRuns } from './commands/runs.js';
+import { runSkill } from './commands/skill.js';
 import { MCP_PROXY_SUMMARY } from './mcp-proxy/help.js';
-import { openBrowser } from './open-browser.js';
 import { DEFAULT_PORT } from './paths.js';
 import { startServer } from './server.js';
 import { recordTelemetry } from './telemetry.js';
@@ -69,6 +70,22 @@ const commands: Record<string, CommandDef> = {
     summary: 'Export a run: NDJSON fixture, or --html to share it',
     run: runRecord,
   },
+  pauses: {
+    summary: 'List the pauses held right now (--run <id>, --json)',
+    run: runPauses,
+  },
+  wait: {
+    summary: 'Block until a pause appears; print it and what to run next',
+    run: runWait,
+  },
+  resume: {
+    summary: 'Release a pause: resume <pauseId> --run <id> --action <a>',
+    run: runResume,
+  },
+  skill: {
+    summary: 'Print the GraphMind Agent Skill, or --install it here',
+    run: runSkill,
+  },
 };
 
 function printHelp(): void {
@@ -82,6 +99,9 @@ function printHelp(): void {
     '',
     'Options:',
     ...OPTION_HELP,
+    '',
+    'Exit codes (pauses, wait, resume):',
+    ...EXIT_CODE_HELP,
   ];
   console.log(lines.join('\n'));
 }
@@ -91,6 +111,13 @@ async function runServe(parsed: ParsedCli): Promise<number> {
     console.error(`unexpected argument "${parsed.positionals[0]}"`);
     return 1;
   }
+  const json = parsed.flags.json;
+  // `--json`: stdout carries exactly one JSON line; everything else (server
+  // log lines included) goes to stderr, so a script can read stdout.
+  const say = (message: string): void => {
+    if (json) console.error(message);
+    else console.log(message);
+  };
   let server;
   try {
     server = await startServer({
@@ -99,6 +126,10 @@ async function runServe(parsed: ParsedCli): Promise<number> {
       ...(parsed.flags.pauseOnError === undefined
         ? {}
         : { pauseOnError: parsed.flags.pauseOnError }),
+      ...(parsed.flags.allowControl === undefined ? {} : { allowControl: parsed.flags.allowControl }),
+      editInput: parsed.flags.editInput,
+      runFile: true,
+      ...(json ? { log: (message: string) => console.error(message) } : {}),
     });
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
@@ -107,30 +138,49 @@ async function runServe(parsed: ParsedCli): Promise<number> {
   }
 
   recordTelemetry('serve');
-  console.log(`GraphMind v${VERSION} listening on ${server.url}`);
-  console.log(`  viewer   ${server.url}`);
-  console.log(`  ingest   ws://127.0.0.1:${server.port}/ingest`);
-  console.log(`  ui ws    ws://127.0.0.1:${server.port}/ws/ui`);
-  console.log(`  db       ${server.dbPath}`);
-  // Pause-on-error is default-on and the single most surprising thing the
-  // server does to a run, so say what is armed and how to change it.
-  const errorScopes = server.hub.state.breakpoints
-    .filter((matcher) => matcher.point === 'error')
-    .map((matcher) => (matcher.kind === undefined ? 'every node' : `${matcher.kind} nodes`));
-  console.log(
-    `  pause    on error: ${errorScopes.length === 0 ? 'off' : errorScopes.join(', ')}` +
-      ' (--pause-on-error <on|off|kind>)',
-  );
-  console.log('Press Ctrl+C to stop.');
+  if (json) {
+    // Never a token: this line lands in CI logs and agent transcripts.
+    console.log(JSON.stringify({ port: server.port, url: server.url, pid: process.pid, version: VERSION }));
+  } else {
+    console.log(`GraphMind v${VERSION} listening on ${server.url}`);
+    // The viewer token only ever travels in a URL fragment, and that URL is
+    // printed only to a terminal — never into a pipe, a log file or CI output.
+    if (process.stdout.isTTY === true) {
+      console.log(`  viewer   ${server.url}/#token=${server.tokens.viewer}`);
+    } else {
+      console.log(`  viewer   ${server.url}`);
+    }
+    if (server.openerPath !== undefined) {
+      console.log(`           (full control: open ${server.openerPath})`);
+    }
+    console.log(`  ingest   ws://127.0.0.1:${server.port}/ingest`);
+    console.log(`  ui ws    ws://127.0.0.1:${server.port}/ws/ui`);
+    console.log(`  db       ${server.dbPath}`);
+    // Pause-on-error is default-on and the single most surprising thing the
+    // server does to a run, so say what is armed and how to change it.
+    const errorScopes = server.hub.state.breakpoints
+      .filter((matcher) => matcher.point === 'error')
+      .map((matcher) => (matcher.kind === undefined ? 'every node' : `${matcher.kind} nodes`));
+    console.log(
+      `  pause    on error: ${errorScopes.length === 0 ? 'off' : errorScopes.join(', ')}` +
+        ' (--pause-on-error <on|off|kind>)',
+    );
+    console.log(
+      `  control  agent (graphmind resume): ${server.control.agentLevel}` +
+        ' (--allow-control=off|resume|inject|edit); input edits: ' +
+        `${server.control.editInput ? 'allowed with a credential' : 'off'} (--no-edit-input)`,
+    );
+    console.log('Press Ctrl+C to stop.');
+  }
 
-  if (parsed.flags.open) openBrowser(server.url);
+  if (parsed.flags.open) server.openViewer();
 
   await new Promise<void>((resolve) => {
     let shuttingDown = false;
     const shutdown = (signal: string) => {
       if (shuttingDown) return;
       shuttingDown = true;
-      console.log(`\nReceived ${signal}, shutting down...`);
+      say(`\nReceived ${signal}, shutting down...`);
       void server.close().then(resolve, resolve);
     };
     process.on('SIGINT', () => shutdown('SIGINT'));

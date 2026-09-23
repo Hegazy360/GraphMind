@@ -43,6 +43,8 @@ describe('hub: exec.resume inject guard', () => {
     expect(err).toEqual({
       type: 'error',
       runId: RUN,
+      pauseId: 'p1',
+      code: 'placeholder',
       message: 'inject refused: this value contains redacted content ("__REDACTED__"); edit it before injecting',
     });
     expect(await appGotNothing(app)).toBe(true);
@@ -74,15 +76,27 @@ describe('hub: exec.resume inject guard', () => {
       output: { result: 'REDACTED is not the placeholder', note: '__redacted__' },
     });
     const relayed = await app.nextControl((e) => e.type === 'exec.resume');
+    // 0.6: the hub adds the requestId it correlates the app's answer by.
     expect(relayed.payload).toEqual({
       pauseId: 'p1',
       action: 'inject',
       output: { result: 'REDACTED is not the placeholder', note: '__redacted__' },
+      requestId: expect.any(String),
     });
-    // `continue` ignores `output` entirely, so a stray placeholder there is not an inject.
-    ui.control('exec.resume', RUN, { pauseId: 'p1', action: 'continue', output: REDACTED });
+    // The app answers; the next gate holds (0.6: a pause is released once —
+    // first writer wins — so the second resume needs a gate of its own).
+    app.send('exec.resumed', RUN, { pauseId: 'p1', action: 'inject' });
+    app.send('exec.paused', RUN, { pauseId: 'p2', nodeId: 'tool:x', point: 'before' });
+    await ui.next(
+      (m) => m.type === 'event' && m.envelope.type === 'exec.paused' && (m.envelope.payload as { pauseId?: string }).pauseId === 'p2',
+      'second pause',
+    );
+    // `continue` ignores `output` entirely, so a stray placeholder there is not an
+    // inject — and since 0.6 the hub does not even forward it.
+    ui.control('exec.resume', RUN, { pauseId: 'p2', action: 'continue', output: REDACTED });
     const cont = await app.nextControl((e) => e.type === 'exec.resume');
-    expect(cont.payload).toMatchObject({ pauseId: 'p1', action: 'continue' });
+    expect(cont.payload).toMatchObject({ pauseId: 'p2', action: 'continue' });
+    expect(cont.payload).not.toHaveProperty('output');
     expect(ui.received.peekAll().filter((m) => m.type === 'error')).toEqual([]);
     await app.close();
   });

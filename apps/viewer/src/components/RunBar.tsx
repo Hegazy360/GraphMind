@@ -24,6 +24,7 @@ import {
   streamStatus,
   useUiStore,
   type ConnectionStatus,
+  type ControlInfo,
   type StreamStatus,
 } from '../store/uiStore.js';
 import { IconPause, IconReplay, IconStack } from './Icons.js';
@@ -79,6 +80,43 @@ function tailLabel(status: StreamStatus): { label: string; hint: string; modifie
   return { label: CONNECTION_LABEL.live, hint: CONNECTION_HINT.live, modifier: 'live' };
 }
 
+/** How long a refused-control notice stays in the run bar. */
+const NOTICE_MS = 6_000;
+
+const AGENT_LEVEL_HINT: Record<ControlInfo['agentLevel'], string> = {
+  off: 'A coding agent (graphmind resume) cannot release pauses. Start the server with --allow-control=resume|inject|edit to allow it.',
+  resume: 'A coding agent may continue, retry and abort pauses (serve --allow-control=resume).',
+  inject: 'A coding agent may continue, retry, abort and inject results (serve --allow-control=inject).',
+  edit: 'A coding agent may also run held calls with edited arguments (serve --allow-control=edit).',
+};
+
+/**
+ * Who this viewer is to the server, and what a coding agent is allowed to do
+ * — the two facts a human needs before trusting what happens to a pause.
+ */
+function ControlChip({ control }: { control: ControlInfo }) {
+  const you =
+    control.principal === 'viewer'
+      ? { label: 'full control', hint: 'This tab holds the viewer token: it can resume, inject and edit held calls.' }
+      : {
+          label: 'no token',
+          hint:
+            'This tab connected without the viewer token: it can continue, retry, inject and abort, but not edit a ' +
+            'held call. Open the viewer from the link `graphmind serve` printed (or its redirect file) for full control.',
+        };
+  const edits = control.editInput ? '' : ' Input edits are off on this server (--no-edit-input).';
+  return (
+    <span
+      className={`gm-chip gm-chip--tiny gm-chip--control${control.principal === 'viewer' ? '' : ' gm-chip--warn'}`}
+      title={`${you.hint} ${AGENT_LEVEL_HINT[control.agentLevel]}${edits}`}
+      data-principal={control.principal}
+      data-agent-level={control.agentLevel}
+    >
+      {you.label} · agent: {control.agentLevel}
+    </span>
+  );
+}
+
 export function RunBar({
   onToggleRail,
   railOpen,
@@ -91,7 +129,19 @@ export function RunBar({
   const stream = useUiStore((s) => s.stream);
   const mode = useUiStore((s) => s.mode);
   const breakpoints = useUiStore((s) => s.breakpoints);
+  const control = useUiStore((s) => s.control);
+  const notice = useUiStore((s) => s.controlNotice);
   const recorded = isExportedRun();
+
+  // A refused or superseded resume ("pause taken", "edit refused") is shown
+  // for a few seconds: the click did not do what its label said.
+  useEffect(() => {
+    if (notice === undefined) return;
+    const timer = setTimeout(() => {
+      if (useUiStore.getState().controlNotice?.nonce === notice.nonce) useUiStore.getState().clearControlNotice();
+    }, NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   // A stalled stream produces no store updates, so "behind" has to be able
   // to expire on its own — otherwise a run that simply finished would sit
@@ -213,6 +263,13 @@ export function RunBar({
           );
         })}
       </div>
+
+      {notice !== undefined && (
+        <span className="gm-chip gm-chip--tiny gm-chip--notice" role="status" title={notice.message}>
+          {notice.code === 'pause-taken' ? 'pause taken by another resume' : notice.message}
+        </span>
+      )}
+      {!recorded && control !== undefined && <ControlChip control={control} />}
 
       <span className="gm-runbar-endpoint" title={recorded ? RECORDED_HINT : undefined}>
         {recorded ? 'recorded · no server' : 'ws · /ws/ui'}

@@ -48,6 +48,7 @@
   "files": [
     "dist",
     "viewer-dist",
+    "skills",
     "README.md",
     "TELEMETRY.md",
     "LICENSE"

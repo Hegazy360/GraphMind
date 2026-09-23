@@ -180,21 +180,33 @@ describe('a browser page cannot resume a held gate', () => {
     await app.close();
   });
 
-  it('HTTP: there is no resume endpoint to reach, and a browser-originated request to a guessed one is 403 (guard), never 404 (router)', async () => {
+  it('HTTP: a browser-originated request to the resume endpoint (or a guessed one) is 403 (guard), never 401/404', async () => {
     const { port } = await boot();
     for (const [method, path] of [
+      // The real control endpoint since 0.6 (contract C3) ...
+      ['POST', '/api/runs/run_held/pauses/p1/resume'],
+      // ... and guesses at others.
       ['POST', '/api/runs/run_held/resume'],
       ['PUT', '/api/runs/run_held'],
       ['DELETE', '/api/runs/run_held'],
       ['POST', '/ingest'],
       ['GET', '/api/runs/run_held/events'],
     ] as const) {
-      const response = await rawRequest(port, method, path, { Host: `127.0.0.1:${port}`, Origin: EVIL });
+      const response = await rawRequest(port, method, path, {
+        Host: `127.0.0.1:${port}`,
+        Origin: EVIL,
+        'Content-Type': 'application/json',
+      }, '{"action":"continue"}');
       expect(response.status, `${method} ${path}`).toBe(403);
     }
-    // And without a browser Origin the router answers honestly: no such route
-    // (the viewer's own origin gets the same 404 — resume is WebSocket-only).
+    // Without a browser Origin, a non-GET /api route still needs a credential
+    // (0.6): 401 before any router decides whether the route exists.
     const direct = await rawRequest(port, 'POST', '/api/runs/run_held/resume', { Host: `127.0.0.1:${port}` });
-    expect(direct.status).toBe(404);
+    expect(direct.status).toBe(401);
+    const real = await rawRequest(port, 'POST', '/api/runs/run_held/pauses/p1/resume', {
+      Host: `127.0.0.1:${port}`,
+      'Content-Type': 'application/json',
+    }, '{"action":"continue"}');
+    expect(real.status).toBe(401);
   });
 });

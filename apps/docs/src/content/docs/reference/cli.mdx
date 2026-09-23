@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: Every graphmind command and flag — serve, demo, init, import, mcp-proxy, mcp, runs, record — plus the HTTP and WebSocket endpoints the server exposes.
+description: Every graphmind command and flag — serve, demo, init, import, mcp-proxy, mcp, runs, record, pauses, wait, resume, skill — plus the HTTP and WebSocket endpoints the server exposes and the control credentials.
 sidebar:
   order: 1
 ---
@@ -32,8 +32,11 @@ graphmind
 **Requires Node ≥ 22.13.** SQLite is built into Node, so there are no native dependencies.
 
 <Aside type="caution" title="Local only">
-The server binds `127.0.0.1` and has no authentication. It is a devtool, not a service — never
-expose the port.
+The server binds `127.0.0.1`. Reading runs needs no credential: any process on this machine —
+any OS user, a container on the host network — can read what is recorded over loopback. Since
+0.6.0, **controlling** a paused agent carries a credential for input edits and every non-GET
+API route (see [control credentials](#control-credentials)). It is a devtool, not a service —
+never expose the port.
 </Aside>
 
 ## `graphmind serve` (default)
@@ -47,7 +50,45 @@ graphmind --db ./x.db              # database file (default ~/.graphmind/graphmi
 graphmind --no-open                # do not open a browser
 graphmind --pause-on-error tool    # arm the default error breakpoint on tools only
 graphmind --pause-on-error off     # start with no breakpoints at all
+graphmind --allow-control=resume   # let `graphmind resume` (a coding agent) continue/retry/abort
+graphmind --no-edit-input          # refuse every input edit, from anyone
+graphmind serve --json --no-open   # headless: one JSON line on stdout, never a token
 ```
+
+`serve --json` prints exactly one line to stdout, `{"port":4747,"url":"http://127.0.0.1:4747","pid":12345,"version":"0.6.0"}`,
+and sends everything else (the server log) to stderr. It never prints a token.
+
+### Control credentials
+
+At start the server mints two random 128-bit tokens. They change on every start.
+
+| Token | Who holds it | How it travels | What it may do |
+| --- | --- | --- | --- |
+| **viewer** | The browser the CLI opens | Only in the URL fragment `#token=…`. The CLI opens the browser through a private redirect file (`$GRAPHMIND_HOME/run/open-<port>.html`, mode 0600), not through a URL on a command line, and prints the `#token=` URL only when stdout is a terminal. The viewer removes the fragment from the address bar at once (`history.replaceState`) and keeps the token in `localStorage` for this origin. | Everything: continue, retry, inject, abort, edit inputs, breakpoints, step |
+| **agent** | `graphmind pauses / wait / resume` | Written to `$GRAPHMIND_HOME/run/serve-<port>.json` (default `~/.graphmind/run/`, directory 0700, file 0600) as `{port, pid, url, agentToken, version}`; removed on a clean exit. | Limited by `--allow-control` (below). Default **off**: nothing. |
+
+`--allow-control` levels for the agent token: `off` (default) · `resume` (continue, retry,
+abort, breakpoints, step mode) · `inject` (adds injecting a result) · `edit` (adds running a held
+call with edited arguments). The level is enforced by the server, so a coding agent allowed to
+run `graphmind resume` cannot do more than you started the server with. `--no-edit-input`
+refuses every input edit from any credential and drops `edit-input` from the capabilities the
+server announces to apps.
+
+On the wire: the browser presents the viewer token as the WebSocket subprotocol
+`gm.auth.<token>` next to `graphmind.v1` (the server selects `graphmind.v1`); HTTP clients send
+`Authorization: Bearer <token>`. Tokens are compared in constant time (SHA-256 digests).
+`?token=` query parameters and cookies are never read. A presented token the server does not
+know is refused (401), never downgraded.
+
+What needs a credential: any `exec.resume` that carries an edited `input`; every non-GET `/api`
+route (including `POST /api/demo/start`); every CLI control command. A viewer socket **without**
+a token keeps the 0.5 behaviour — it can still continue, retry, inject and abort and change
+breakpoints — and can never edit an input. That tokenless mode is **deprecated**: the server
+logs a one-time note when one connects, and it will need the token in a later minor.
+
+Every response carries `Content-Security-Policy: frame-ancestors 'none'`, `X-Frame-Options:
+DENY`, `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`; `/api` responses add
+`Cache-Control: no-store`. No response ever carries a CORS header.
 
 ### Who is allowed to connect
 
@@ -177,7 +218,8 @@ Full detail: [MCP proxy](/integrations/mcp-proxy/) and
 ## `graphmind mcp`
 
 The other direction: serve **your recorded runs** to MCP clients (Claude Code, Cursor, …) over
-stdio. Read-only tools:
+stdio. It has no control tools — releasing a pause from a coding agent goes through
+`graphmind resume`, bounded by `serve --allow-control`. Read-only tools:
 `list_runs`, `get_run`, `get_node`, `find_errors` — each result carries a deep link into the
 viewer. Reads the SQLite database directly, so it works while the server and viewer are closed.
 
@@ -187,6 +229,81 @@ claude mcp add graphmind -- npx graphmind-ai mcp
 
 `--db` selects the database; `--port` sets the port used in generated deep links (default 4747 —
 pass it if you run `graphmind` on a different port). Full detail: [MCP tools](/reference/mcp/).
+
+## `graphmind pauses`
+
+List the pauses held right now on the server at `--port`.
+
+```sh
+graphmind pauses                 # table: run, pause, node, point, reason, state, since
+graphmind pauses --run <id>      # one run
+graphmind pauses --json          # {"pauses":[{runId, pauseId, nodeId, point, reason, smart?, loop?, editable?, since, state, app?}]}
+```
+
+`state` is `open`, or `resolving` while a resume is being answered. Reading needs no token.
+
+## `graphmind wait`
+
+Block until a pause is open, then print it and exit — the building block for a coding agent's
+debug loop.
+
+```sh
+graphmind wait                           # any run, up to 90 s (the default)
+graphmind wait --run <id> --timeout 60   # one run; --timeout 0 waits forever
+graphmind wait --json                    # one JSON line
+```
+
+The summary names the run, pause, node, gate point, reason (breakpoint, error, loop, smart
+hold) and whether the pause is `editable`, shows the held call's recorded input (and error, if
+any), and lists the `graphmind resume` commands that apply. Values over 2 KB are written to a
+private temp file (mode 0600) and only the path is printed (`inputFile` / `outputFile` /
+`errorFile` in `--json`).
+
+## `graphmind resume`
+
+Release a pause. Reads the agent token from `$GRAPHMIND_HOME/run/serve-<port>.json`; what it may
+do is set by `serve --allow-control`.
+
+```sh
+graphmind resume <pauseId> --run <id> --action continue
+graphmind resume <pauseId> --run <id> --action retry
+graphmind resume <pauseId> --run <id> --action inject --output '{"rows":[]}'
+graphmind resume <pauseId> --run <id> --action continue --input @fixed-args.json   # needs --allow-control=edit
+graphmind resume <pauseId> --run <id> --action abort --operator "claude code" --json
+```
+
+`--output` / `--input` take JSON or `@file`. `--input` replaces the named top-level argument keys
+of **this call only**; the tool really runs with them. `--operator` is a display-only label
+(sanitized, at most 64 characters) shown next to "resumed by agent". `--timeout <s>` sets how
+long to wait for the app's answer (default 30, at most 120). The first resume for a pause wins
+— from the viewer, another agent or this command — and any other gets `taken`.
+
+### Exit codes (`pauses`, `wait`, `resume`)
+
+| Code | Meaning |
+| --- | --- |
+| 0 | ok (resumed; a pause was found; listed) |
+| 1 | usage error, or something unexpected |
+| 2 | timeout (`wait`: no pause in time; `resume`: no answer from the app yet) |
+| 3 | no GraphMind server on that port |
+| 4 | nothing to act on (no such pause; `wait --run`: the run ended) |
+| 5 | not authorized (no or stale token file, `--allow-control` too low, edit refused by the server) |
+| 6 | refused (the app would not run the edit, or the value holds a placeholder / truncated preview) — the call is still held |
+| 7 | taken (another resume won the pause) |
+
+## `graphmind skill`
+
+Print the GraphMind [Agent Skill](https://docs.claude.com/en/docs/claude-code/skills) — setup
+for each framework, running the server headless, and the pause/wait/resume loop — or install it
+for Claude Code in the current project.
+
+```sh
+graphmind skill                     # print SKILL.md
+graphmind skill --install           # write .claude/skills/graphmind/SKILL.md here
+graphmind skill --install --force   # overwrite an existing one
+```
+
+The file ships in the npm package (`skills/graphmind/SKILL.md`).
 
 ## `graphmind runs`
 
@@ -282,6 +399,16 @@ recording in the first place, use the [`GRAPHMIND_HIDE_*` switches](/reference/e
 | `--wait-for-attach` | (`mcp-proxy`) hold the first frame until the debugger attaches |
 | `--inherit-stderr` | (`mcp-proxy`) do not pipe the server's stderr |
 | `--max-frame-bytes <n>` | (`mcp-proxy`) frame-assembly ceiling (default 64 MiB) |
+| `--allow-control <off\|resume\|inject\|edit>` | (`serve`) what the agent token (`graphmind resume`) may do; default `off` |
+| `--no-edit-input` | (`serve`) refuse every input edit |
+| `--json` | (`serve`, `pauses`, `wait`, `resume`) machine-readable output |
+| `--run <id>` | (`pauses`, `wait`, `resume`) the run |
+| `--timeout <s>` | (`wait`) give up after s seconds (default 90, 0 = never); (`resume`) wait for the app's answer (default 30, max 120) |
+| `--action <continue\|retry\|inject\|abort>` | (`resume`) how to release the pause |
+| `--output <json\|@file>` | (`resume --action inject`) the result to substitute |
+| `--input <json\|@file>` | (`resume`) run the held call with these arguments |
+| `--operator <label>` | (`resume`) display-only label for the audit line |
+| `--force` | (`skill --install`) overwrite an existing file |
 | `--prune` | (`runs`) apply the retention policy now |
 | `--keep <n>` | (`runs`) keep / show the n newest runs |
 | `--days <n>` | (`runs`) keep runs from the last n days |
@@ -304,6 +431,11 @@ Environment variables live on their own page: [environment](/reference/environme
 | `GET /health` | `{ ok, name, version }` |
 | `GET /api/runs` | `{ runs: RunInfo[] }`, most recent first |
 | `GET /api/runs/:id/events` | Paginated events (`?afterSeq=&limit=`) |
+| `GET /api/session` | Who a Bearer token is: `{principal, agentLevel, editInput, hubCapabilities, version}` (401 for an unknown token) |
+| `GET /api/pauses[?runId=][&wait=<s>]` | Open pauses; `wait` long-polls until one opens (or the run ends), at most 120 s |
+| `GET /api/runs/:runId/pauses/:pauseId` | One pause with the held node's recorded input (and error) |
+| `POST /api/runs/:runId/pauses/:pauseId/resume` | Release a pause (below). Bearer + `application/json` only |
+| `POST /api/demo/start` | Replay the bundled demo (Bearer since 0.6) |
 | `GET /*` | The built viewer (a placeholder page when the bundle is absent) |
 
 ### `GET /api/runs`
@@ -320,6 +452,30 @@ Returns `{ runId, total, events, nextAfterSeq }`. `events` are full wire envelop
 5000). `nextAfterSeq` is the cursor for the next page, or `null` on the last one. Unknown run:
 404 `{ error }`.
 
+### `POST /api/runs/:runId/pauses/:pauseId/resume`
+
+Body: `{action, output?, input?, requestId?, operator?, timeoutMs?}`. Requires
+`Authorization: Bearer <token>` (401 otherwise) and `Content-Type: application/json` (415
+otherwise: a form cannot send it). `GET`, `PUT`, `DELETE` and `OPTIONS` on the path answer 405;
+no response carries CORS headers. The request waits for the app's answer — `timeoutMs`,
+default 30 000, at most 120 000 — and at most 16 long-polls (this and `GET /api/pauses?wait=`)
+run at once (429 beyond). Answer:
+
+```json
+{ "outcome": "resumed", "runId": "…", "pauseId": "p3", "requestId": "…", "principal": "agent" }
+```
+
+| `outcome` | HTTP | Meaning |
+| --- | --- | --- |
+| `resumed` | 200 | The app released the gate (`exec.resumed`). |
+| `refused` | 422 / 403 | 422: the app refused the edit (`code`: `schema`, `shape`, `placeholder`, `truncated`, `disabled`, `unsupported`) or the server refused a placeholder/truncated value — the gate is **still held**. 403: `forbidden` (level too low) or `edit-refused` (no edit rights, `--no-edit-input`, an app without `edit-input`, a pause that is not `editable`). |
+| `taken` | 409 | Another resume is being answered (`pause-taken`) or won, or the app released the gate on its own before answering this one (`superseded`). |
+| `timeout` | 202 | No answer in time (`no-answer`), or the app disconnected (`app-disconnected`) — a detached app releases its gates on its own. |
+| `no-such-pause` | 404 | The server knows the pause is closed, the run finished, or no app owns the run. |
+
+A pause the server never saw (its `exec.paused` was refused or not tracked) is forwarded
+best-effort rather than refused.
+
 ### UI subprotocol (`WS /ws/ui`)
 
 JSON text frames, each an object with a `type` discriminant. Wire envelopes are never sent bare
@@ -330,14 +486,15 @@ JSON text frames, each an object with a `type` discriminant. Wire envelopes are 
 
 | Message | When |
 | --- | --- |
-| `{ type: 'welcome', versions, breakpoints, mode }` | Immediately on connect |
+| `{ type: 'welcome', versions, breakpoints, mode, control? }` | Immediately on connect. `control` (0.6): `{principal, agentLevel, editInput, hubCapabilities}` — `principal` is `viewer`, `agent` or `anonymous` |
 | `{ type: 'state', breakpoints, mode }` | Whenever debug state changes (from any viewer) |
 | `{ type: 'runs', runs }` | Reply to `subscribe` `'*'` |
 | `{ type: 'run.update', run }` | Pushed to `'*'` subscribers on run lifecycle changes |
 | `{ type: 'replay.start', runId, count }` | Reply to `subscribe` of a run |
 | `{ type: 'event', runId, envelope }` | One envelope — replayed history first, then live tail |
 | `{ type: 'replay.end', runId }` | History done; everything after is live |
-| `{ type: 'error', message, runId? }` | Bad request / unroutable control |
+| `{ type: 'error', message, runId?, code?, pauseId? }` | Bad request / refused control. `code` (0.6): `pause-taken`, `no-such-pause`, `no-owner`, `edit-refused`, `forbidden`, `placeholder`, `truncated` |
+| `{ type: 'resume.result', runId, pauseId, requestId, outcome, code?, message? }` | 0.6: the app's answer to an `exec.resume` this socket sent (outcomes as in the HTTP table) |
 
 **Viewer → server**
 
@@ -349,9 +506,19 @@ JSON text frames, each an object with a `type` discriminant. Wire envelopes are 
 
 Replayed envelopes keep their original `seq`; dedupe on `(runId, seq)`. Control envelopes can be
 built with `createEnvelope` from `@graphmind-ai/schema` with any `seq` — the server re-mints
-sequence numbers when relaying to apps. The server refuses an `exec.resume` with action
-`inject` whose output still contains `"__REDACTED__"`. It answers `{ type: 'error', runId,
-message: 'inject refused: …' }` and does not relay it.
+sequence numbers when relaying to apps.
+
+Since 0.6 the server keeps a **pause registry** (keyed by run and pause id, fed only by frames
+that passed the run claim) and referees `exec.resume`: the first resume for an open pause is
+forwarded with a `requestId` (the server mints one if you gave none) and the pause becomes
+`resolving`; any other gets `error {code: 'pause-taken'}`. An `exec.refused` from the app, or no
+answer within 5 s, reopens it. A pause the server knows is closed gets `no-such-pause`. The
+stored `exec.resumed` carries `principal` — who won, from the credential — and the resumer's
+sanitized `operator` label; an app cannot set either. The server refuses an `exec.resume` whose
+edited `input`, or whose `inject` output, still contains `"__REDACTED__"`, a
+`__graphmindTruncated` marker or the truncation suffix (`code: placeholder / truncated`), and
+does not relay it. Only `pauseId`, `action`, `requestId`, `output` (with `inject`) and `input`
+are relayed.
 
 ## Storage
 

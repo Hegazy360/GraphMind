@@ -383,11 +383,24 @@ function applyExecResumed(
 ): RunState {
   const pause = run.pauses[payload.pauseId];
   if (pause === undefined || !pause.active) return run;
+  // Audit (0.6): who released it — stamped by the server, never by the app.
+  const record = payload as Record<string, unknown>;
+  const by = typeof record['principal'] === 'string' ? record['principal'] : undefined;
+  const operator = typeof record['operator'] === 'string' ? record['operator'].slice(0, 64) : undefined;
+  const edited = typeof record['edited'] === 'object' && record['edited'] !== null;
   let next: RunState = {
     ...run,
     pauses: {
       ...run.pauses,
-      [payload.pauseId]: { ...pause, active: false, resolvedAction: payload.action, resolvedTs: ts },
+      [payload.pauseId]: {
+        ...pause,
+        active: false,
+        resolvedAction: payload.action,
+        resolvedTs: ts,
+        ...(by === undefined ? {} : { resolvedBy: by }),
+        ...(operator === undefined ? {} : { resolvedOperator: operator }),
+        ...(edited ? { resolvedEdited: true } : {}),
+      },
     },
     structureVersion: run.structureVersion + 1,
     statusVersion: run.statusVersion + 1,

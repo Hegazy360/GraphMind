@@ -133,6 +133,18 @@ history.
 Control envelopes use `runId: '*'` except `exec.resume`, which the server routes to the app
 socket owning that run.
 
+What the `graphmind-ai` server adds from 0.6.0 (all optional fields; a 0.5 peer ignores them):
+
+- `hello.ack.hubCapabilities` lists what **this server** implements — `pause-registry`, and
+  `edit-input` unless it was started with `--no-edit-input`. Unlike `hello.ack.capabilities`
+  (an echo of the app's own list), a client can rely on it.
+- Every `exec.resume` it relays carries a `requestId` (the resumer's, or one the server mints),
+  and only `pauseId`, `action`, `requestId`, `output` (with `inject`) and `input`. A client that
+  echoes `requestId` on `exec.resumed` / `exec.refused` lets the server attribute the answer.
+- The stored `exec.resumed` carries `principal` (`viewer`, `agent` or `anonymous`: the credential
+  of the resume that won the pause) and, when given, the resumer's sanitized `operator` label.
+  The server removes `principal` and `operator` from any `exec.*` event an app sends.
+
 ## Primitives
 
 ```ts

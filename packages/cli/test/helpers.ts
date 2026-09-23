@@ -162,8 +162,21 @@ export class FakeUI {
     });
   }
 
-  static async connect(port: number): Promise<FakeUI> {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/ui`);
+  /**
+   * `token` is presented the way the browser viewer does it (0.6): as the
+   * subprotocol `gm.auth.<token>` next to `graphmind.v1`.
+   */
+  static async connect(
+    port: number,
+    opts: { token?: string; protocols?: string[]; headers?: Record<string, string> } = {},
+  ): Promise<FakeUI> {
+    const protocols =
+      opts.protocols ?? (opts.token === undefined ? undefined : ['graphmind.v1', `gm.auth.${opts.token}`]);
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws/ui`,
+      protocols,
+      opts.headers === undefined ? {} : { headers: opts.headers },
+    );
     const ui = new FakeUI(ws);
     await opened(ws);
     ui.welcome = (await ui.received.next(

@@ -4,6 +4,7 @@
  * positional selects a command (default `serve`), so `import` / `mcp` /
  * `record` can be added to the command table without redesign.
  */
+import { CONTROL_LEVELS, parseControlLevel, type ControlLevel } from './control-auth.js';
 import { parsePauseOnError } from './debug-state.js';
 import { DEFAULT_PORT } from './paths.js';
 
@@ -55,6 +56,26 @@ export interface CliFlags {
   inheritStderr: boolean;
   /** `graphmind mcp-proxy --max-frame-bytes <n>`: frame-assembly ceiling. */
   maxFrameBytes: number | undefined;
+  /** `--json`: machine output (serve, pauses, wait, resume). */
+  json: boolean;
+  /** `--run <id>`: which run (wait, resume, pauses). */
+  run: string | undefined;
+  /** `--timeout <s>`: how long wait/resume may block, in seconds. */
+  timeout: number | undefined;
+  /** `graphmind resume --action <continue|retry|inject|abort>`. */
+  action: string | undefined;
+  /** `graphmind resume --output <json|@file>`: the value to inject. */
+  output: string | undefined;
+  /** `graphmind resume --input <json|@file>`: an edited input. */
+  input: string | undefined;
+  /** `graphmind resume --operator <label>`: a display-only label for the audit line. */
+  operator: string | undefined;
+  /** `graphmind serve --allow-control <level>`: what the agent token may do. */
+  allowControl: ControlLevel | undefined;
+  /** `graphmind serve --no-edit-input` clears it: refuse every input edit. */
+  editInput: boolean;
+  /** `graphmind skill --install --force`: overwrite an existing file. */
+  force: boolean;
 }
 
 /**
@@ -96,6 +117,28 @@ export const OPTION_HELP: readonly string[] = [
   '                 (mcp-proxy) give the server the real stderr fd (not piped)',
   '  --max-frame-bytes <n>',
   '                 (mcp-proxy) frame-assembly ceiling (default 64 MiB)',
+  `  --allow-control <${CONTROL_LEVELS.join('|')}>`,
+  '                 (serve) what the agent token (`graphmind resume`) may do.',
+  '                 Default off. resume = continue/retry/abort; inject adds',
+  '                 injecting a result; edit adds editing a held call\'s input',
+  '  --no-edit-input',
+  '                 (serve) refuse every input edit, from any credential',
+  '  --json         (serve, pauses, wait, resume) machine-readable output;',
+  '                 serve --json prints {port, url, pid, version}, never a token',
+  '  --run <id>     (pauses, wait, resume) the run',
+  '  --timeout <s>  (wait) give up after s seconds (default 90, 0 = never);',
+  '                 (resume) wait s seconds for the app\'s answer (default 30, max 120)',
+  '  --action <continue|retry|inject|abort>',
+  '                 (resume) how to release the pause',
+  '  --output <json|@file>',
+  '                 (resume --action inject) the result to substitute',
+  '  --input <json|@file>',
+  '                 (resume) run the held call with these arguments (top-level',
+  '                 keys replace the live ones); needs --allow-control=edit',
+  '  --operator <label>',
+  '                 (resume) a display-only label for the audit line',
+  '  --install      (skill) write .claude/skills/graphmind/SKILL.md here',
+  '  --force        (skill --install) overwrite an existing SKILL.md',
   '  -v, --version  Print the version and exit',
   '  -h, --help     Show this help',
 ];
@@ -145,6 +188,16 @@ export function defaultFlags(): CliFlags {
     waitForAttach: false,
     inheritStderr: false,
     maxFrameBytes: undefined,
+    json: false,
+    run: undefined,
+    timeout: undefined,
+    action: undefined,
+    output: undefined,
+    input: undefined,
+    operator: undefined,
+    allowControl: undefined,
+    editInput: true,
+    force: false,
   };
 }
 
@@ -292,6 +345,62 @@ export function parseCliArgs(argv: string[]): ParsedCli {
           errors.push(`--max-frame-bytes must be an integer >= 1024 (got "${raw}")`);
         } else {
           flags.maxFrameBytes = n;
+        }
+        break;
+      }
+      case '--json':
+        flags.json = true;
+        break;
+      case '--force':
+        flags.force = true;
+        break;
+      case '--no-edit-input':
+        flags.editInput = false;
+        break;
+      case '--run': {
+        const raw = takeValue('--run', inline, next);
+        if (raw !== undefined) flags.run = raw;
+        break;
+      }
+      case '--action': {
+        const raw = takeValue('--action', inline, next);
+        if (raw !== undefined) flags.action = raw;
+        break;
+      }
+      case '--output': {
+        const raw = takeValue('--output', inline, next);
+        if (raw !== undefined) flags.output = raw;
+        break;
+      }
+      case '--input': {
+        const raw = takeValue('--input', inline, next);
+        if (raw !== undefined) flags.input = raw;
+        break;
+      }
+      case '--operator': {
+        const raw = takeValue('--operator', inline, next);
+        if (raw !== undefined) flags.operator = raw;
+        break;
+      }
+      case '--timeout': {
+        const raw = takeValue('--timeout', inline, next);
+        if (raw === undefined) break;
+        const n = Number(raw);
+        if (raw.trim() === '' || !Number.isFinite(n) || n < 0) {
+          errors.push(`--timeout must be a number of seconds >= 0 (got "${raw}")`);
+        } else {
+          flags.timeout = n;
+        }
+        break;
+      }
+      case '--allow-control': {
+        const raw = takeValue('--allow-control', inline, next);
+        if (raw === undefined) break;
+        const level = parseControlLevel(raw);
+        if (level === undefined) {
+          errors.push(`--allow-control must be one of ${CONTROL_LEVELS.join(', ')} (got "${raw}")`);
+        } else {
+          flags.allowControl = level;
         }
         break;
       }

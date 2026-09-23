@@ -14,7 +14,11 @@
  *  - `replay.start {runId, count}` → `event {runId, envelope}` per event
  *    (original seq preserved; the viewer dedupes on `(runId, seq)`) →
  *    `replay.end {runId}` → live `event` frames continue (tail)
- *  - `error {message, runId?}`
+ *  - `error {message, runId?, code?, pauseId?}` — `code` (0.6): `pause-taken`,
+ *    `no-such-pause`, `edit-refused`, `forbidden`, `placeholder`, `truncated`…
+ *  - `resume.result {runId, pauseId, requestId, outcome, code?, message?}` (0.6):
+ *    the app's answer to an `exec.resume` this socket sent
+ *  - `welcome.control {principal, agentLevel, editInput, hubCapabilities}` (0.6)
  *
  * Viewer → server:
  *  - `subscribe {runId}` — a run id for replay-then-tail, `'*'` for the run
@@ -25,6 +29,7 @@
  *    `exec.resume` must carry the owning run's `runId`.
  */
 import type { BreakpointMatcher, RunMode } from '@graphmind-ai/schema';
+import type { ControlInfo } from '../store/uiStore.js';
 
 export interface RunInfo {
   id: string;
@@ -44,6 +49,8 @@ export interface WelcomeFrame {
   versions: { protocol: number; server: string };
   breakpoints: BreakpointMatcher[];
   mode: RunMode;
+  /** 0.6: how this socket authenticated and what the server allows. */
+  control?: ControlInfo;
 }
 
 export interface StateFrame {
@@ -83,6 +90,18 @@ export interface ErrorFrame {
   type: 'error';
   message: string;
   runId?: string;
+  code?: string;
+  pauseId?: string;
+}
+
+export interface ResumeResultFrame {
+  type: 'resume.result';
+  runId: string;
+  pauseId: string;
+  requestId: string;
+  outcome: 'resumed' | 'refused' | 'taken' | 'timeout' | 'no-such-pause';
+  code?: string;
+  message?: string;
 }
 
 export type UiServerFrame =
@@ -93,4 +112,5 @@ export type UiServerFrame =
   | ReplayStartFrame
   | EventFrame
   | ReplayEndFrame
-  | ErrorFrame;
+  | ErrorFrame
+  | ResumeResultFrame;

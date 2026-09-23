@@ -18,8 +18,9 @@ reports go there.
 GraphMind is a **local-only** developer tool. `npx graphmind-ai` starts a server bound to
 `127.0.0.1:4747` that serves a viewer and accepts execution events from an instrumented agent over a
 local WebSocket. It records those events in a SQLite database under `~/.graphmind` and can hold the
-agent at a gate (before an LLM step, before/after a tool call, on error) until the developer resumes
-it. There is no cloud component, no account, and no data path off the machine other than a
+agent at a gate (before an LLM step, before/after a tool call, on error) until the developer — or a
+coding agent the developer allowed, through `graphmind resume` — resumes it. From 0.6.0 a resume can
+run a held tool call with **edited arguments**, which is why control carries a credential. There is no cloud component, no account, and no data path off the machine other than a
 four-field CLI telemetry record that is off with one environment variable. The whole product is MIT
 licensed and built in the open.
 
@@ -32,9 +33,10 @@ Summary:
 | Boundary | Position | Evidence |
 | --- | --- | --- |
 | Network | The server binds `127.0.0.1` only, no other interface, ever. | `packages/cli/src/server.ts` — `const host = '127.0.0.1'` |
-| Browser | A web page in your browser cannot talk to it: WebSocket upgrades and HTTP requests need a loopback `Host` (defeats DNS rebinding) and either no `Origin` or the served viewer's own. Everything else is `403`. | `packages/cli/src/origin-guard.ts`; `packages/cli/test/origin-guard.test.ts`; `packages/cli/test/origin-guard-control.test.ts` (a held gate cannot be resumed by a browser-originated request) |
-| Command execution | Nothing spawns a process in response to network input. The MCP proxy has no listening socket. | `packages/cli/src/hub.ts`, `server.ts` (no `spawn`); `packages/cli/src/mcp-proxy/proxy.ts` (no `listen`) |
-| Local peers | Any process running as your OS user can connect — the trust boundary is the OS account, as for a local database. A peer cannot take over another's run. | `security/tests/run-isolation.test.ts`; `internal/decisions.md` "runs are claimed, not squatted" |
+| Browser | A web page in your browser cannot talk to it: WebSocket upgrades and HTTP requests need a loopback `Host` (defeats DNS rebinding) and either no `Origin` or the served viewer's own. Everything else is `403`. Every response forbids framing (`frame-ancestors 'none'`, `X-Frame-Options: DENY`), sends `Referrer-Policy: no-referrer` and `nosniff`, `/api` adds `no-store`, and no response carries a CORS header. The resume endpoint is POST + `application/json` + Bearer only; no GET mutates. | `packages/cli/src/origin-guard.ts`, `control-http.ts`; `packages/cli/test/origin-guard*.test.ts`, `control-http.test.ts`; `security/tests/control-http-exposure.test.ts` |
+| Control | Input edits and every non-GET `/api` route need a per-start 128-bit token: the **viewer** token (delivered only in the `#token=` URL fragment via a 0600 redirect file) or the **agent** token (`~/.graphmind/run/serve-<port>.json`, 0600), which `serve --allow-control=off\|resume\|inject\|edit` limits in the server (default `off`). Constant-time comparison; no `?token=`, no cookies; `serve --json` never prints a token. `--no-edit-input` refuses all edits. The stored `exec.resumed` records `principal` from the credential. | `packages/cli/src/control-auth.ts`, `run-files.ts`, `pause-registry.ts`; `security/tests/control-auth.test.ts`, `control-registry-isolation.test.ts` |
+| Command execution | The server never spawns a process in response to network input. But an authorized input edit chooses the **arguments** of a tool call the app is holding — a `shell` tool then runs what the editor chose, as your app. Hence the credential and level above. The MCP proxy has no listening socket. | `packages/cli/src/hub.ts`, `server.ts` (no `spawn`); `packages/cli/src/mcp-proxy/proxy.ts` (no `listen`) |
+| Local peers | **Any local process, as any OS user, can read runs over loopback** (the read API needs no credential, although the database file is 0600), and a **tokenless** viewer socket can still continue, retry, inject and abort a held run (0.5 behaviour, deprecated). It cannot edit inputs, and a peer cannot take over another's run or pause. | `security/tests/run-isolation.test.ts`, `control-auth.test.ts`, `control-registry-isolation.test.ts`; `internal/decisions.md` "runs are claimed, not squatted" |
 | Host application | Instrumentation is fail-open: detached = synchronous no-op; a debugger that disconnects releases every gate; adapters never throw into the host. | `packages/client/src`; `examples/soak` (fail-open checks in CI) |
 | Untrusted input | Envelopes are zod-validated at ingest; oversized payloads are truncated type-preservingly; the JSON-RPC boundary of the MCP proxy is fuzzed. | `security/tests/ingest-fuzz.test.ts`, `protocol-fuzz.test.ts`, `mcp-proxy-fuzz.test.ts`, `mcp-boundary-fuzz.test.ts` |
 
@@ -55,8 +57,10 @@ vulnerabilities. Stored runs are **not encrypted at rest**; disk encryption is y
 2. **The server** (`graphmind-ai`, the CLI) receives versioned JSON envelopes
    (`{gm, seq, ts, runId, type, payload}`), validates them against
    `@graphmind-ai/schema`, stores them, and fans them out to viewers on `ws://127.0.0.1:4747/ws/ui`.
-   Gate holds are decided in the *client*: the server only relays `exec.resume` from a viewer back to
-   the connection that owns the run.
+   Gate holds are decided in the *client*: the server referees `exec.resume` (first writer wins per
+   pause, credential and level checks, no placeholder or truncated values) and relays it to the
+   connection that owns the run. Coding agents release pauses with `graphmind resume`, an HTTP
+   client of the same server bounded by `--allow-control`; `graphmind mcp` stays read-only.
 3. **The viewer** is a static bundle served by the same process (`packages/cli/viewer-dist`). It
    makes no requests to anything but its own origin.
 4. **`graphmind mcp-proxy -- <command>`** is a stdio man-in-the-middle for MCP servers. It spawns the
@@ -73,6 +77,7 @@ website are separate static deployments.
 | --- | --- | --- | --- | --- |
 | Run database | `~/.graphmind/graphmind.db` (+ `-wal`, `-shm`); `GRAPHMIND_DB` / `--db` override | Directory `0700`, files `0600`, re-applied to the WAL pair; only a directory GraphMind created is chmod'ed (`--db /tmp/x.db` never tightens `/tmp`). Windows: NTFS ACL of the profile directory. | Every event you streamed: prompts, tool arguments and results, errors, timings. Payloads over 512 KB are truncated to a typed preview. | Retention prunes to 200 runs / 30 days on startup (`GRAPHMIND_KEEP_RUNS`, `GRAPHMIND_KEEP_DAYS`, `GRAPHMIND_RETENTION=off`). Delete the file to delete everything. |
 | Telemetry install id | `~/.graphmind/telemetry-id`; `GRAPHMIND_HOME` override | `0600` | One random UUID. Not created when telemetry is off. | `rm` it for a new id. |
+| Control credential files (0.6.0) | `~/.graphmind/run/serve-<port>.json` and `open-<port>.html`; `GRAPHMIND_HOME` override | Directory `0700`, files `0600`; a looser directory is tightened, a readable credential file is refused by the CLI | The agent token (+ port, pid, url, version); the redirect page holding the viewer token in a `#token=` fragment | Removed on a clean exit; a crash leaves them until the next server on that port overwrites them (the old tokens are dead by then). |
 | Exports | Wherever you point `graphmind record` (NDJSON, or `--html`) | Your umask | A whole run. From 0.5.0, values under secret-looking keys are redacted by default (`--no-redact-secrets` to opt out); see [the key rule](/reference/cli/#secret-looking-keys-are-redacted-by-default). | Yours. |
 
 Evidence: `packages/cli/src/sqlite-storage.ts` (`DIR_MODE`, `FILE_MODE`, `hardenDatabaseFiles`),
@@ -108,6 +113,8 @@ Read by the **CLI / server**:
 | `CI` set | Telemetry off. |
 | `--pause-on-error off` / `GRAPHMIND_PAUSE_ON_ERROR=off` | Start with no breakpoint at all (the default arms pause-on-error; it can also be narrowed to one node kind). |
 | `GRAPHMIND_ALLOWED_ORIGINS` | The *opposite* of a kill switch: it widens which browser origins may connect. Unset by default; `*` disables the check and is for setups you fully control. |
+| `serve --allow-control off` (the default) | The agent token (`graphmind resume`) can do nothing. `resume` / `inject` / `edit` widen it step by step. |
+| `serve --no-edit-input` **(0.6.0)** | Refuse every input edit from every credential; apps are not told the server supports edits. |
 | `GRAPHMIND_RETENTION=off` | Never prune stored runs. |
 | `graphmind record --no-redact-secrets` **(0.5.0)** | Opt out of the default secret-key redaction in exports (`authorization`, `cookie`, `api_key`, `password`, `token`, … matched as a whole key or as parts split on `_`, `-` or camelCase, so `max_tokens` is never touched). |
 
@@ -214,7 +221,13 @@ off with `DO_NOT_TRACK=1`.
 
 **Can a website reach the local server?** No. `Origin`/`Host` enforcement on every request and
 upgrade; tested including DNS rebinding, `Origin: null`, other local ports, and a browser-originated
-attempt to resume a held gate.
+attempt to resume a held gate. The HTTP resume endpoint is POST + JSON + Bearer with no CORS
+headers, and the viewer cannot be framed.
+
+**Can our coding agent drive it?** Only as far as you started the server with:
+`graphmind serve --allow-control=off|resume|inject|edit` (default `off`), enforced in the server,
+not in the CLI. The viewer shows the level and marks every pause a coding agent released
+("resumed by agent"). `graphmind mcp` has no control tools.
 
 **Does it execute anything?** The server never spawns a process from network input. The MCP proxy
 spawns exactly the command you pass it, and nothing else.
@@ -248,6 +261,7 @@ Release; every action in the build pinned by SHA; CodeQL and Scorecard public.
 Vulnerability Reporting or `hello@graphmind.ai`; acknowledgement within 3 business days, fix
 targets by severity in `SECURITY.md`.
 
-**What are the known gaps?** No encryption at rest; any local process under the same OS user can
-connect (by design — it is a local debugger); releases up to 0.4.4 are not provenance-attested; the
-Ruby gem is not yet on RubyGems; Scorecard items that need repository settings are open.
+**What are the known gaps?** No encryption at rest; any local process — under any OS user — can
+read runs over loopback, and a tokenless viewer socket can still continue or inject (deprecated,
+never edit); releases up to 0.4.4 are not provenance-attested; the Ruby gem is not yet on
+RubyGems; Scorecard items that need repository settings are open.

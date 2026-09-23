@@ -22,7 +22,7 @@ import { Aside } from '@astrojs/starlight/components';
 | `DO_NOT_TRACK` | Any value except empty, `0`, `false`, `off` and `no` (any case, surrounding spaces ignored) disables telemetry — `1`, `true` and `yes` all count. It beats every `GRAPHMIND_TELEMETRY` value, including `1` and `log`. |
 | `CI` | Set to anything, telemetry is off (unless `GRAPHMIND_TELEMETRY=log`) |
 | `GRAPHMIND_TELEMETRY_URL` | Override the telemetry endpoint (used by tests) |
-| `GRAPHMIND_HOME` | Directory for the telemetry install id (default `~/.graphmind`) |
+| `GRAPHMIND_HOME` | Directory for the telemetry install id and, since 0.6.0, the `run/` directory holding a running server's control credential files (`serve-<port>.json`, `open-<port>.html`; directory 0700, files 0600). Default `~/.graphmind` |
 | `GRAPHMIND_DEMO_AGENT_DIR` | Where `demo --live` finds the demo agent outside a monorepo checkout |
 | `GRAPHMIND_VIEWER_DIST` | Serve a different viewer build directory (development) |
 

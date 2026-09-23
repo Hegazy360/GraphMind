@@ -186,8 +186,13 @@ describe('POST /api/demo/start', () => {
   it('kicks off the in-process replayer and registers a demo run', async () => {
     const ts = await startTestServer();
     try {
+      // A non-GET /api route needs a credential since 0.6 (the viewer's).
+      const auth = { authorization: `Bearer ${ts.server.tokens.viewer}` };
+      const anonymous = await fetch(`http://127.0.0.1:${ts.port}/api/demo/start`, { method: 'POST' });
+      expect(anonymous.status).toBe(401);
       const response = await fetch(`http://127.0.0.1:${ts.port}/api/demo/start`, {
         method: 'POST',
+        headers: auth,
       });
       expect(response.status).toBe(200);
       const body = (await response.json()) as { ok: boolean; runId: string };
@@ -201,7 +206,10 @@ describe('POST /api/demo/start', () => {
         );
       }, 'demo run registered');
 
-      const again = await fetch(`http://127.0.0.1:${ts.port}/api/demo/start`, { method: 'POST' });
+      const again = await fetch(`http://127.0.0.1:${ts.port}/api/demo/start`, {
+        method: 'POST',
+        headers: auth,
+      });
       const secondBody = (await again.json()) as { runId: string; alreadyRunning?: boolean };
       expect(secondBody.alreadyRunning).toBe(true);
       expect(secondBody.runId).toBe(body.runId);

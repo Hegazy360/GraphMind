@@ -28,7 +28,7 @@ import { tokenBuffers } from '../store/tokenBuffers.js';
 import { useRunStore } from '../store/runStore.js';
 import { failureContext, nodeStats } from '../store/stats.js';
 import { useUiStore } from '../store/uiStore.js';
-import { nodeStatus, type NodeExecution, type NodeState, type Pause } from '../store/types.js';
+import { nodeStatus, resumerLabel, type NodeExecution, type NodeState, type Pause } from '../store/types.js';
 import { IconAlert, IconClose, IconLink } from './Icons.js';
 import { JsonTree } from './JsonTree.js';
 import { KindGlyph } from './KindMark.js';
@@ -424,6 +424,41 @@ function ExecutionDetails({
  * and getting the same answer — the evidence that nothing new is being
  * learned — right above the decision row.
  */
+/** Most recent releases listed per node. */
+const MAX_RESUMES_SHOWN = 3;
+
+/**
+ * The audit line (0.6): who released each of this node's pauses — the
+ * viewer, a coding agent (`graphmind resume`), or a tokenless socket — as the
+ * server stamped it. Nothing here comes from the app.
+ */
+function ResumeHistory({ runId, nodeId }: { runId: string; nodeId: string }) {
+  const pauses = useRunStore((s) => s.runs[runId]?.pauses);
+  const resolved = useMemo(() => {
+    if (pauses === undefined) return [];
+    return Object.values(pauses)
+      .filter((p): p is Pause => p !== undefined && p.nodeId === nodeId && !p.active && p.resolvedBy !== undefined)
+      .sort((a, b) => (b.resolvedTs ?? 0) - (a.resolvedTs ?? 0))
+      .slice(0, MAX_RESUMES_SHOWN);
+  }, [pauses, nodeId]);
+  if (resolved.length === 0) return null;
+  return (
+    <div className="gm-inspect-resumes">
+      <span className="gm-section-label">Released</span>
+      <div className="gm-resumed-list">
+        {resolved.map((pause) => (
+          <div key={pause.pauseId} data-testid="resumed-by">
+            {pause.point} → {pause.resolvedAction ?? 'resumed'}
+            {pause.resolvedEdited === true ? ' (edited input)' : ''} · resumed by{' '}
+            <span className="gm-resumed-by">{resumerLabel(pause.resolvedBy ?? '')}</span>
+            {pause.resolvedOperator !== undefined && <> ({pause.resolvedOperator})</>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function LoopEvidence({ node, pause }: { node: NodeState; pause: Pause }) {
   const loop = pause.loop;
   const calls = useMemo(() => identicalCalls(node, loop), [node, loop]);
@@ -641,6 +676,7 @@ function InspectorInner({ runId, nodeId }: { runId: string; nodeId: string }) {
         {held && pause !== undefined && pause.reason === 'loop' && (
           <LoopEvidence node={node} pause={pause} />
         )}
+        <ResumeHistory runId={runId} nodeId={nodeId} />
         {node.executions.length > 1 && (
           <div className="gm-inspect-execs">
             <span className="gm-section-label">Execution</span>

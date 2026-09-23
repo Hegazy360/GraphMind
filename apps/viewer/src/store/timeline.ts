@@ -16,7 +16,7 @@ import {
   unionMs,
   type HeldInterval,
 } from '../lib/duration.js';
-import type { RunState } from './types.js';
+import { resumerLabel, type RunState } from './types.js';
 
 export interface TimelineBar {
   /** Stable per (node, execution) — React key and selection identity. */
@@ -210,7 +210,9 @@ export function buildTimeline(
       nodeId: pause.nodeId,
       label: pause.active
         ? `held at ${pause.point}`
-        : `${pause.point} → ${pause.resolvedAction ?? 'resumed'}`,
+        : `${pause.point} → ${pause.resolvedAction ?? 'resumed'}${pause.resolvedEdited === true ? ' (edited)' : ''}${
+            pause.resolvedBy === undefined ? '' : ` · by ${resumerLabel(pause.resolvedBy)}`
+          }`,
     });
   }
   markers.sort((a, b) => a.ts - b.ts);

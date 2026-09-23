@@ -2326,6 +2326,32 @@ button {
   background: var(--accent-soft);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
+.gm-chip--control {
+  font-family: var(--font-mono);
+}
+.gm-chip--warn {
+  color: var(--amber-text);
+  border-color: color-mix(in srgb, var(--amber) 35%, var(--border));
+}
+.gm-chip--notice {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 35%, var(--border));
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gm-resumed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 4px 0 10px;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+.gm-resumed-by {
+  color: var(--text);
+  font-weight: 600;
+}
 .gm-chip--bp {
   border-color: color-mix(in srgb, var(--err) 30%, var(--border));
 }

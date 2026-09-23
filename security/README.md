@@ -311,6 +311,15 @@ that reported them now assert the fix instead:
    refusals.
 3. **World-readable database** — `SqliteStorage` now creates `~/.graphmind`
    0700 and `graphmind.db` 0600.
+4. **Frameable viewer** (0.6) — every response now sends
+   `frame-ancestors 'none'` and `X-Frame-Options: DENY`
+   (`tests/control-http-exposure.test.ts`).
+
+Still open, by design for now: the read API needs no credential, so any local
+process — as any OS user — can read runs over loopback even though the
+database file is 0600; and a viewer socket without the 0.6 token can still
+continue, retry, inject and abort (never edit an input). Both are stated in
+`SECURITY.md`.
 
 ### Residual risks (not GraphMind defects, worth knowing)
 
@@ -477,6 +486,10 @@ security/
     ui-protocol-fuzz.test.ts        the viewer socket under bad frames
     mcp-boundary-fuzz.test.ts       hostile MCP requests, results and injects
     mcp-proxy-fuzz.test.ts          byte-faithfulness of the JSON-RPC relay
+    control-auth.test.ts            who may resume/inject/edit a held call (0.6 S1, S8, S9)
+    control-http-exposure.test.ts   framing, CSRF shape, token delivery (S2, S11, S15)
+    control-registry-isolation.test.ts  pause registry per run, cap (S10)
+    mcp-control-boundary.test.ts    `graphmind mcp` stays read-only (S7, S12)
 ```
 
 

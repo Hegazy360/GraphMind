@@ -164,8 +164,10 @@ get the graph from the beginning.
 
 ## Local-first storage
 
-The server binds `127.0.0.1` and has no auth — it is a devtool, not a service; never expose the
-port. Runs are persisted to SQLite via `node:sqlite` (built into Node ≥ 22.13, zero native
+The server binds `127.0.0.1`. Reading runs needs no credential; since 0.6.0 controlling a paused
+agent carries one for input edits and every non-GET API route (see
+[control credentials](/reference/cli/#control-credentials)). It is a devtool, not a service; never
+expose the port. Runs are persisted to SQLite via `node:sqlite` (built into Node ≥ 22.13, zero native
 dependencies) at `~/.graphmind/graphmind.db`, in WAL mode, keyed `(run_id, seq)`.
 
 Your prompts, tool arguments and outputs stay on your machine. The only thing that leaves is an

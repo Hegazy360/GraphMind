@@ -4,11 +4,12 @@
  * (POST /api/demo/start, keyless) — plus the three-line integration snippet.
  */
 import { useMemo, useRef, useState } from 'react';
+import { authHeaders } from '../connection/auth.js';
 import { resolveHttpBase } from '../connection/ServerConnection.js';
 import { INTEGRATION_SNIPPET } from '../lib/firstRun.js';
 import { GraphMindMark } from './Mark.js';
 
-type DemoState = 'idle' | 'starting' | 'error';
+type DemoState = 'idle' | 'starting' | 'error' | 'unauthorized';
 
 export function WelcomeCard() {
   const httpBase = useMemo(() => resolveHttpBase(location.search), []);
@@ -20,7 +21,14 @@ export function WelcomeCard() {
     if (demoState === 'starting') return;
     setDemoState('starting');
     try {
-      const response = await fetch(`${httpBase}/api/demo/start`, { method: 'POST' });
+      // A POST is control: since 0.6 it carries the viewer token (the page
+      // got it from the #token= link `graphmind serve` opened).
+      const url = `${httpBase}/api/demo/start`;
+      const response = await fetch(url, { method: 'POST', headers: authHeaders(url) });
+      if (response.status === 401) {
+        setDemoState('unauthorized');
+        return;
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       // The run arrives over the live socket and replaces this card.
     } catch {
@@ -91,6 +99,13 @@ export function WelcomeCard() {
           ? 'Starting the demo…'
           : '▶ Watch a demo debug session — no API key needed'}
       </button>
+      {demoState === 'unauthorized' && (
+        <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>
+          This tab has no control token. Open the viewer from the link{' '}
+          <code style={{ fontFamily: 'var(--font-mono)' }}>graphmind serve</code> printed, or run{' '}
+          <code style={{ fontFamily: 'var(--font-mono)' }}>graphmind demo</code> in a terminal.
+        </div>
+      )}
       {demoState === 'error' && (
         <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>
           Couldn&rsquo;t start the demo — is this server the graphmind CLI? Try{' '}

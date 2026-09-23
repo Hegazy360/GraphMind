@@ -6,7 +6,7 @@
  * the server announces — each subscription replays history (deduped on
  * `(runId, seq)`) and then tails live events.
  */
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   PROTOCOL_VERSION,
   WILDCARD_RUN_ID,
@@ -16,6 +16,12 @@ import {
 import useWebSocketWithRetry from '../hooks/useWebSocketWithRetry.js';
 import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';
+import {
+  checkTokenAfterFailedConnect,
+  onViewerTokenChange,
+  socketProtocols,
+  viewerToken,
+} from './auth.js';
 import { ingestValue } from './ingest.js';
 import {
   beginReplay,
@@ -29,6 +35,7 @@ import {
   buildControlFrame,
   buildSubscribeFrame,
   registerConnection,
+  resolveHttpBase,
   type ServerConnection,
 } from './ServerConnection.js';
 
@@ -41,13 +48,34 @@ function applyDebugState(frame: { breakpoints?: unknown; mode?: unknown }): void
   }
 }
 
+/** Words for a control the server refused or could not complete (the run bar shows them). */
+function noticeFor(code: string | undefined, message: string): { code: string; message: string } | undefined {
+  if (code === undefined) return undefined;
+  return { code, message };
+}
+
 export function useLiveConnection(url: string | null): ServerConnection {
+  // The control token (connection/auth.ts): presented as a subprotocol when
+  // the socket goes to the server that served this page. A change (a stale
+  // token dropped) reconnects without it.
+  const [token, setToken] = useState<string | undefined>(() => viewerToken());
+  useEffect(() => onViewerTokenChange(setToken), []);
+  const protocols = useMemo(
+    () => (url === null ? undefined : socketProtocols(url)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `token` is what changes the result
+    [url, token],
+  );
   const ws = useWebSocketWithRetry(url, {
+    ...(protocols === undefined ? {} : { protocols }),
+    onFailedOpen: () => {
+      if (protocols !== undefined) void checkTokenAfterFailedConnect(resolveHttpBase(location.search));
+    },
     onStatus: (status) => {
       if (url === null) return;
       // A socket that went away owes no catch-up progress and its last lag
       // sample describes a stream that no longer exists.
       if (status !== 'open') resetStreamHealth();
+      if (status !== 'open') useUiStore.getState().setControl(undefined);
       useUiStore
         .getState()
         .setConnection(status === 'open' ? 'live' : status === 'connecting' ? 'connecting' : 'detached');
@@ -87,6 +115,7 @@ export function useLiveConnection(url: string | null): ServerConnection {
             );
           }
           applyDebugState(frame);
+          useUiStore.getState().setControl(frame.control);
           break;
         case 'state':
           applyDebugState(frame);
@@ -116,8 +145,20 @@ export function useLiveConnection(url: string | null): ServerConnection {
         case 'replay.end':
           endReplay(frame.runId);
           break;
-        case 'error':
+        case 'error': {
           console.warn('[graphmind] server error:', frame.message);
+          const notice = noticeFor(frame.code, frame.message);
+          if (notice !== undefined) useUiStore.getState().noteControl(notice.code, notice.message);
+          break;
+        }
+        case 'resume.result':
+          // `resumed` shows up on the canvas by itself (the exec.resumed event);
+          // everything else means the click did not do what it said.
+          if (frame.outcome !== 'resumed') {
+            useUiStore
+              .getState()
+              .noteControl(frame.code ?? frame.outcome, frame.message ?? `resume ${frame.outcome}`);
+          }
           break;
         default:
           break; // unknown frame types are ignored gracefully

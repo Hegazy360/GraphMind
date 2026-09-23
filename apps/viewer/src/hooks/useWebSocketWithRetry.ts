@@ -10,11 +10,18 @@ export interface UseWebSocketWithRetryOptions {
   maxRetries?: number;
   /** Called on state transitions so the UI can show a connection dot. */
   onStatus?: (status: 'connecting' | 'open' | 'closed') => void;
+  /**
+   * WebSocket subprotocols to offer (0.6: `graphmind.v1` + `gm.auth.<token>`
+   * when the viewer holds a control token). A change reconnects.
+   */
+  protocols?: readonly string[];
+  /** A connection closed before it ever opened (refused handshake, or no server). */
+  onFailedOpen?: () => void;
 }
 
 const useWebSocketWithRetry = (
   url: string | null,
-  { retryInterval = 1000, maxRetries = 10, onStatus }: UseWebSocketWithRetryOptions = {},
+  { retryInterval = 1000, maxRetries = 10, onStatus, protocols, onFailedOpen }: UseWebSocketWithRetryOptions = {},
 ): WebSocket | null => {
   const [webSocket, setWebSocket] = useState<WebSocket | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -24,6 +31,10 @@ const useWebSocketWithRetry = (
   const activeConnectionIdRef = useRef(0);
   const onStatusRef = useRef(onStatus);
   onStatusRef.current = onStatus;
+  const onFailedOpenRef = useRef(onFailedOpen);
+  onFailedOpenRef.current = onFailedOpen;
+  // A stable key, so a new array with the same entries does not reconnect.
+  const protocolKey = protocols === undefined ? '' : protocols.join(',');
 
   useEffect(() => {
     if (!url) {
@@ -66,11 +77,13 @@ const useWebSocketWithRetry = (
       const connectionUrl = currentUrlRef.current;
       if (connectionUrl === null) return;
       onStatusRef.current?.('connecting');
-      ws = new WebSocket(connectionUrl);
+      ws = protocolKey === '' ? new WebSocket(connectionUrl) : new WebSocket(connectionUrl, protocolKey.split(','));
       wsRef.current = ws;
       const connectionId = ++activeConnectionIdRef.current;
+      let opened = false;
 
       ws.onopen = () => {
+        opened = true;
         setWebSocket(ws);
         onStatusRef.current?.('open');
         retries = 0; // Reset retry counter upon successful connection
@@ -83,6 +96,7 @@ const useWebSocketWithRetry = (
         }
         setWebSocket(null);
         onStatusRef.current?.('closed');
+        if (!opened) onFailedOpenRef.current?.();
         // Only attempt to reconnect if the URL hasn't changed and we haven't reached max retries
         if (
           shouldReconnectRef.current &&
@@ -126,7 +140,7 @@ const useWebSocketWithRetry = (
       }
       wsRef.current = null;
     };
-  }, [url, maxRetries, retryInterval]);
+  }, [url, maxRetries, retryInterval, protocolKey]);
 
   return webSocket;
 };

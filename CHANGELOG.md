@@ -11,6 +11,58 @@ distribution, and the Ruby `graphmind` gem).
 <!-- PHASE7-PENDING: headline + the sections for detectors, argument editing,
 control plane, usage truth and the context view are written when each lands. -->
 
+### Added — drive a paused agent from your coding agent (control plane)
+
+- **`graphmind pauses`, `graphmind wait`, `graphmind resume`.** `wait` blocks
+  until a pause opens and prints it compactly — the held call's input (large
+  values go to a private temp file), whether it is editable, and the exact
+  `resume` commands that apply. `resume <pauseId> --run <id> --action
+  continue|retry|inject|abort [--output …] [--input …]` waits for the app's
+  answer. `--json` everywhere; documented exit codes (0 ok, 2 timeout, 3 no
+  server, 4 nothing to act on, 5 not authorized, 6 refused, 7 taken).
+- **`graphmind serve --json`** prints `{port, url, pid, version}` — never a
+  token — for running the debugger headless.
+- **`graphmind skill [--install]`**: a Claude Code Agent Skill
+  (`skills/graphmind/SKILL.md`, shipped in the package) covering setup per
+  framework, headless serve and the pause/wait/resume loop.
+- **HTTP**: `GET /api/pauses[?runId=][&wait=]`, `GET
+  /api/runs/:runId/pauses/:pauseId`, `GET /api/session`, `POST
+  /api/runs/:runId/pauses/:pauseId/resume` (Bearer + JSON only, no CORS,
+  long-poll ≤ 120 s, ≤ 16 at once).
+- **First writer wins.** The server keeps a registry of held pauses (per run)
+  and referees every resume — from any viewer tab, the CLI or HTTP: the first
+  is forwarded with a `requestId`, others get `pause-taken`, a pause known to be
+  closed gets `no-such-pause`. An app's refusal, or 5 s without an answer,
+  reopens it.
+- **Audit.** The stored `exec.resumed` records who released it (`principal`:
+  `viewer`, `agent` or `anonymous`, from the credential — never from the app)
+  and an optional sanitized `operator` label. The viewer shows "resumed by
+  agent" and, in the run bar, its own control level and the agent's.
+
+### Changed — control needs a credential (security)
+
+- At start the server mints a **viewer** token (full control; reaches the
+  browser only in the `#token=` URL fragment, through a private redirect file
+  the CLI opens — never a command-line URL; printed only to a terminal) and an
+  **agent** token (`~/.graphmind/run/serve-<port>.json`, 0600) that
+  **`serve --allow-control=off|resume|inject|edit`** limits in the server.
+  Default `off`: a coding agent can do nothing until you allow it.
+- **Input edits** and **every non-GET `/api` route** (including `POST
+  /api/demo/start`) need a token. `?token=` and cookies are never accepted.
+  `serve --no-edit-input` refuses all edits. The server also refuses edited
+  inputs and injected values that still contain `__REDACTED__` or a truncation
+  marker, using the client's own marker list.
+- **Deprecated:** a viewer socket without a token still continues, retries,
+  injects and aborts as in 0.5 (never edits); the server logs a one-time note.
+  Reading runs still needs no credential — any local process can read them over
+  loopback.
+- Every response now carries `Content-Security-Policy: frame-ancestors
+  'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and
+  `X-Content-Type-Options: nosniff` (`/api` adds `Cache-Control: no-store`): the
+  viewer can no longer be framed.
+- `graphmind mcp` is unchanged and still read-only; its instructions now say
+  where control lives and that recorded payloads are untrusted data.
+
 ### Fixed — a privacy switch no longer fails open on spelling
 
 `GRAPHMIND_HIDE_INPUTS=yes` recorded everything: only `1` and `true` counted,
