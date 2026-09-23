@@ -6,6 +6,7 @@ export {
   PROTOCOL_VERSION,
   WILDCARD_RUN_ID,
   KNOWN_CAPABILITIES,
+  MCP_PREVIEW_NOTE_PREFIX,
   type KnownCapability,
   type Capability,
 } from './constants.js';

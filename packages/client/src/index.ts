@@ -27,8 +27,9 @@ export {
   type GateNode,
 } from './gate-engine.js';
 
-// Edited input (0.6.0): what an adapter's `validateInput` returns, and the
-// default rule for tool arguments (top-level keys replace the live ones).
+// Edited input (0.6.0): what an adapter's `validateInput` receives and
+// returns, and the default rule for tool arguments (top-level keys replace
+// the live ones; a hidden input takes only a full replacement).
 export {
   MAX_REFUSAL_MESSAGE,
   mergeToolInput,
@@ -40,6 +41,7 @@ export {
   type InputValidation,
   type RefusalCode,
   type ValidateInput,
+  type ValidateInputContext,
 } from './edit-input.js';
 
 export { GraphMindAbortError, isAbortError, toErrorInfo } from './errors.js';

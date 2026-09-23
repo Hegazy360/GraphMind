@@ -6,8 +6,18 @@
  * the client-side inject guard. Proven against a real WebSocket viewer double
  * that plays a 0.6 debugger (hello.ack.hubCapabilities) or a 0.5 one (none).
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { parseEnvelope } from '@graphmind-ai/schema';
+import {
+  ControlPayloadSchemas,
+  EventPayloadSchemas,
+  MAX_PAYLOAD_BYTES,
+  MCP_PREVIEW_NOTE_PREFIX,
+  TRUNCATION_SUFFIX,
+  parseEnvelope,
+} from '@graphmind-ai/schema';
 import {
   REDACTED,
   VALIDATION_TIMEOUT_MS,
@@ -99,6 +109,41 @@ function deferred<T>() {
     resolve = r;
   });
   return { promise, resolve };
+}
+
+/** Block the event loop, as a CPU-bound validator (or a first-call schema compile) does. */
+function busyWait(ms: number): void {
+  const until = performance.now() + ms;
+  while (performance.now() < until) {
+    // spin: nothing can interrupt synchronous validator work
+  }
+}
+
+/** The first answer to a resume: exec.refused (gate still held) or exec.resumed (released). */
+async function firstAnswer(viewer: FakeViewer, timeoutMs: number): Promise<{ type: string; payload: unknown }> {
+  const frame = await viewer.waitFor((f) => f.type === 'exec.refused' || f.type === 'exec.resumed', timeoutMs);
+  return { type: frame.type, payload: frame.payload };
+}
+
+/** Did the edit run (the gate released with it) or was it refused (gate still held)? */
+async function outcomeOf(
+  viewer: FakeViewer,
+  gate: Promise<GateDecision>,
+): Promise<{ kind: 'ran'; decision: GateDecision } | { kind: 'refused'; payload: Record<string, unknown> }> {
+  return await Promise.race([
+    gate.then((decision) => ({ kind: 'ran' as const, decision })),
+    viewer.waitForType('exec.refused', 3000).then((frame) => ({ kind: 'refused' as const, payload: frame.payload })),
+  ]);
+}
+
+/** Byte-for-byte what the read-only MCP server's `compactPayload(value, 4000)` returns for a big value. */
+function mcpPreview(value: unknown, maxChars = 4000): { truncated: true; note: string; preview: string } {
+  const json = JSON.stringify(value);
+  return {
+    truncated: true,
+    note: `payload truncated: showing first ${maxChars} of ${json.length} JSON characters — open the deep link in the GraphMind viewer for the full payload`,
+    preview: json.slice(0, maxChars),
+  };
 }
 
 describe('announcement: hello.capabilities', () => {
@@ -324,6 +369,74 @@ describe('an accepted edit', () => {
     });
     expect(seenRun).toBe(runId);
   });
+
+  // A validator may return any PromiseLike. A lazy thenable (knex / drizzle /
+  // mongoose / Prisma query builders start their work inside then()) must be
+  // adopted in the gated call's async context too, not in the WebSocket
+  // message handler's: host AsyncLocalStorage stores (OTel context, tenant or
+  // transaction scope) and session.currentRun() are the host's.
+  interface SeenContext {
+    host: string | undefined;
+    run: string | undefined;
+  }
+
+  it("a lazy thenable's then() runs in the gated call's async context (host stores, currentRun)", async () => {
+    const { viewer, session } = await setup();
+    const hostAls = new AsyncLocalStorage<string>();
+    let inBody: SeenContext | undefined;
+    let inThen: SeenContext | undefined;
+    const runId = await hostAls.run('host-request-42', () =>
+      session.run('host-run', async (ctx) => {
+        const gate = session.gate('before', TOOL, {
+          editable: true,
+          validateInput: (proposed) => {
+            inBody = { host: hostAls.getStore(), run: session.currentRun()?.runId };
+            const lazy: PromiseLike<InputValidation> = {
+              then(onFulfilled, onRejected) {
+                inThen = { host: hostAls.getStore(), run: session.currentRun()?.runId };
+                return Promise.resolve<InputValidation>({ ok: true, value: proposed }).then(onFulfilled, onRejected);
+              },
+            };
+            return lazy;
+          },
+        });
+        const paused = await viewer.waitForType('exec.paused');
+        viewer.resumeWith({ pauseId: pauseIdOf(paused), action: 'continue', input: { q: 1 } });
+        expect(await gate).toEqual({ action: 'continue', input: { q: 1 } });
+        return ctx.runId;
+      }),
+    );
+    expect(inBody).toEqual({ host: 'host-request-42', run: runId });
+    expect(inThen).toEqual({ host: 'host-request-42', run: runId });
+  });
+
+  it("a thenable's `then` getter is read in the gated call's async context", async () => {
+    const { viewer, session } = await setup();
+    const hostAls = new AsyncLocalStorage<string>();
+    let inGetter: SeenContext | undefined;
+    const runId = await hostAls.run('host-request-42', () =>
+      session.run('host-run', async (ctx) => {
+        const gate = session.gate('before', TOOL, {
+          editable: true,
+          validateInput: (proposed) => {
+            const verdict: InputValidation = { ok: true, value: proposed };
+            return {
+              get then() {
+                inGetter ??= { host: hostAls.getStore(), run: session.currentRun()?.runId };
+                const p = Promise.resolve(verdict);
+                return p.then.bind(p);
+              },
+            } as PromiseLike<InputValidation>;
+          },
+        });
+        const paused = await viewer.waitForType('exec.paused');
+        viewer.resumeWith({ pauseId: pauseIdOf(paused), action: 'continue', input: { q: 2 } });
+        expect(await gate).toEqual({ action: 'continue', input: { q: 2 } });
+        return ctx.runId;
+      }),
+    );
+    expect(inGetter).toEqual({ host: 'host-request-42', run: runId });
+  });
 });
 
 describe('a refused edit keeps the gate held under the same pauseId', () => {
@@ -446,6 +559,51 @@ describe('a refused edit keeps the gate held under the same pauseId', () => {
     expect(await gate).toEqual({ action: 'continue' });
   });
 
+  // A misconfigured safety hook fails CLOSED: a `validateInput` that is present
+  // but is not a function (a JS adapter, or a cast) is not "no validator" —
+  // otherwise the raw edit would run unmerged (live keys dropped) and unchecked.
+  it.each<[string, unknown]>([
+    ['a zod-like schema object', { safeParse: () => ({ success: false, error: new Error('invalid') }) }],
+    ['an object with a refusing validate method', { validate: () => ({ ok: false, code: 'schema' }) }],
+    ['a string', 'mergeToolInput'],
+    ['true', true],
+    ['null', null],
+  ])(
+    'validateInput as %s: not editable, an edit is refused (unsupported), the live input still runs',
+    async (_label, validateInput) => {
+      const warnings: string[] = [];
+      const { viewer, session } = await setup({}, { logger: (message) => warnings.push(message) });
+      const live = { query: 'AMS', limit: 5 };
+      const options = { editable: true, validateInput } as unknown as GateOptions;
+      let decision: unknown = 'pending';
+      const gate = session.gate('before', TOOL, options).then((d) => {
+        decision = d;
+        return d;
+      });
+      const paused = await viewer.waitForType('exec.paused');
+      const pauseId = pauseIdOf(paused);
+      expect(paused.payload['editable']).toBeUndefined();
+      // The edit drops `query` and `limit` and adds a key the tool schema forbids.
+      viewer.resumeWith({ pauseId, action: 'continue', input: { anything: 'goes' }, requestId: 'req-4' });
+      await waitUntil(
+        () => decision !== 'pending' || viewer.ofType('exec.refused').length > 0,
+        3000,
+        'a verdict on the edit',
+      );
+      expect(decision).toBe('pending');
+      expect(viewer.ofType('exec.resumed')).toHaveLength(0);
+      const refused = viewer.ofType('exec.refused');
+      expect(refused).toHaveLength(1);
+      expect(refused[0]?.payload).toMatchObject({ pauseId, code: 'unsupported', requestId: 'req-4' });
+      expect(session.stats().heldGates).toBe(1);
+      expect(warnings.filter((w) => w.includes('validateInput is not a function'))).toHaveLength(1);
+      expect(await settledWithin(gate, 50)).toBe('pending');
+      viewer.resume(pauseId, 'continue');
+      expect(await gate).toEqual({ action: 'continue' });
+      expect(live).toEqual({ query: 'AMS', limit: 5 });
+    },
+  );
+
   it.each<[string, unknown, string]>([
     ['the placeholder as a value', { query: REDACTED }, 'placeholder'],
     ['the placeholder in a nested value', { filter: { tags: ['a', `x${REDACTED}`] } }, 'placeholder'],
@@ -453,6 +611,8 @@ describe('a refused edit keeps the gate held under the same pauseId', () => {
     ['a shrink marker', { filter: { __graphmindTruncated: true, bytes: 900000, preview: '{' } }, 'truncated'],
     ['a truncated string', { query: 'AMS…[graphmind: truncated]' }, 'truncated'],
     ['a LangGraph preview', { state: { __graphmind: 'truncated', preview: '{', chars: 30000 } }, 'truncated'],
+    ['an MCP get_node preview', mcpPreview({ query: 'AMS', content: 'y'.repeat(10_000) }), 'truncated'],
+    ['an MCP get_node preview in a nested value', { query: 'AMS', doc: mcpPreview({ body: 'z'.repeat(5000) }) }, 'truncated'],
   ])('refused when the input holds %s; the validator is never consulted', async (_label, input, code) => {
     const { viewer, session } = await setup();
     const { options, seen } = toolEdit();
@@ -566,6 +726,178 @@ describe('a refused edit keeps the gate held under the same pauseId', () => {
   });
 });
 
+// The session guards every edit against the two standard deep-merge
+// pollution payloads, whatever the adapter validates: an own "__proto__" key
+// and a "constructor": {"prototype": ...} path, at any depth (lodash
+// defaultsDeep CVE-2019-10744, the minimist CVE-2020-7598 bypass). A JSON
+// `__proto__` arrives off the wire as an own key.
+describe('prototype-pollution keys are refused on every edit (shape)', () => {
+  const PROTO_NESTED = '{"opts":{"__proto__":{"isAdmin":true}}}';
+  const PROTO_TOP = '{"query":"LIS","__proto__":{"isAdmin":true}}';
+  const CONSTRUCTOR_PROTOTYPE = '{"query":"LIS","constructor":{"prototype":{"gmPolluted":true}}}';
+  const CONSTRUCTOR_PROTOTYPE_NESTED = '{"filter":{"and":[{"constructor":{"prototype":{"isAdmin":true}}}]}}';
+  const passthrough: GateOptions['validateInput'] = (proposed) =>
+    typeof proposed === 'object' && proposed !== null && !Array.isArray(proposed)
+      ? { ok: true, value: proposed }
+      : { ok: false, code: 'schema', message: 'expected an object' };
+
+  it.each<[string, string, GateOptions]>([
+    ['a nested own "__proto__" key, no validateInput', PROTO_NESTED, { editable: true }],
+    ['a nested constructor.prototype path, no validateInput', CONSTRUCTOR_PROTOTYPE_NESTED, { editable: true }],
+    ['a top-level "__proto__" key, a pass-through validator (zod passthrough / record)', PROTO_TOP, { editable: true, validateInput: passthrough }],
+    ['a constructor.prototype path, the W2 recipe (mergeToolInput)', CONSTRUCTOR_PROTOTYPE, toolEdit().options],
+  ])('%s: refused, nothing runs, nothing is recorded', async (_label, json, options) => {
+    const { viewer, session } = await setup();
+    const gate = session.gate('before', TOOL, options);
+    const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
+    const input = JSON.parse(json) as unknown;
+    viewer.resumeWith({ pauseId, action: 'continue', input, requestId: 'proto' });
+    const outcome = await outcomeOf(viewer, gate);
+    expect(outcome).toMatchObject({ kind: 'refused', payload: { pauseId, code: 'shape', requestId: 'proto' } });
+    expect(viewer.ofType('exec.resumed')).toHaveLength(0);
+    viewer.resume(pauseId, 'continue');
+    expect(await gate).toEqual({ action: 'continue' });
+    await waitUntil(() => viewer.ofType('exec.resumed').length === 1, 2000, 'exec.resumed');
+    expect(viewer.ofType('exec.resumed')[0]?.payload).toEqual({ pauseId, action: 'continue' });
+  });
+
+  it('precondition: a JSON "__proto__" survives the wire as an own key', () => {
+    const input = JSON.parse(PROTO_NESTED) as { opts: object };
+    expect(Object.prototype.hasOwnProperty.call(input.opts, '__proto__')).toBe(true);
+  });
+
+  it('a key merely named "constructor" or "prototype" is fine', async () => {
+    const { viewer, session } = await setup();
+    const gate = session.gate('before', TOOL, { editable: true });
+    const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
+    const input = { constructor: 'Point', prototype: { x: 1 }, nested: { constructor: { name: 'Point' } } };
+    viewer.resumeWith({ pauseId, action: 'continue', input });
+    expect(await gate).toEqual({ action: 'continue', input });
+  });
+});
+
+// refute-security S4 / binding C2.5: when a GRAPHMIND_HIDE_* switch hides the
+// paused call's input, a PARTIAL edit is never merged onto the hidden live
+// arguments ("a full input replacement is still allowed"). Otherwise the
+// answer (exec.refused vs exec.resumed) to a guess, repeated without limit on
+// a held gate, would reveal a value the redactor promises never leaves the
+// process. The validator follows the documented recipe, forwarding the
+// session's context to mergeToolInput; its schema has a cross-field rule.
+describe('a hidden input only takes a full replacement (C2.5 / S4)', () => {
+  const TRANSFER: GateNode = { nodeId: 'tool:transfer', kind: 'tool', name: 'transfer' };
+  /** The live arguments; hidden from the record under the switches below. */
+  const LIVE = { account: 'ACC-7731', confirm: 'ACC-7731', amount: 10 };
+
+  function transferOptions(live: Record<string, unknown>, seenContexts: unknown[] = []): GateOptions {
+    return {
+      editable: true,
+      validateInput: (proposed, context) => {
+        seenContexts.push(context);
+        const merged = mergeToolInput(live, proposed, context);
+        if (!merged.ok) return merged;
+        const v = merged.value as Record<string, unknown>;
+        if (typeof v['account'] !== 'string' || v['confirm'] !== v['account']) {
+          return { ok: false, code: 'schema', message: 'confirm must equal account' };
+        }
+        if (typeof v['amount'] !== 'number') return { ok: false, code: 'schema', message: 'amount must be a number' };
+        return merged;
+      },
+    };
+  }
+
+  interface Answer {
+    type: string;
+    payload: Record<string, unknown>;
+  }
+
+  /** The debugger's view of the answer to one edit: frame type and payload, ids removed. */
+  async function answerTo(viewer: FakeViewer, pauseId: string, input: unknown, requestId: string): Promise<Answer> {
+    viewer.resumeWith({ pauseId, action: 'continue', input, requestId });
+    const frame = await viewer.waitFor(
+      (f) => (f.type === 'exec.refused' || f.type === 'exec.resumed') && f.payload['requestId'] === requestId,
+    );
+    const payload: Record<string, unknown> = { ...frame.payload };
+    delete payload['pauseId'];
+    delete payload['requestId'];
+    return { type: frame.type, payload };
+  }
+
+  /** One fresh session + held pause; the answer to a single partial edit. */
+  async function answerToPartialEdit(sessionOptions: SessionOptions, confirm: string): Promise<Answer> {
+    const { viewer, session } = await setup({ breakpoints: [{ kind: 'tool' }] }, sessionOptions);
+    const gate = session.gate('before', TRANSFER, transferOptions({ ...LIVE }));
+    const paused = await viewer.waitForType('exec.paused');
+    const pauseId = pauseIdOf(paused);
+    expect(paused.payload['editable']).toBe(true);
+    const answer = await answerTo(viewer, pauseId, { confirm }, 'r1');
+    if (answer.type === 'exec.refused') viewer.resume(pauseId, 'continue');
+    await gate;
+    return answer;
+  }
+
+  const covering: [string, SessionOptions][] = [
+    ['GRAPHMIND_HIDE_TOOL_ARGS=1', { env: { GRAPHMIND_HIDE_TOOL_ARGS: '1' } }],
+    ['the hideToolArgs option', { hideToolArgs: true }],
+    ['GRAPHMIND_HIDE_INPUTS=1', { env: { GRAPHMIND_HIDE_INPUTS: '1' } }],
+  ];
+
+  it.each(covering)('%s: the answer to a partial edit does not depend on the hidden value', async (_label, options) => {
+    const wrong = await answerToPartialEdit(options, 'ACC-0001');
+    const right = await answerToPartialEdit(options, LIVE.account);
+    expect(right).toEqual(wrong);
+    expect(right.type).toBe('exec.refused');
+  });
+
+  it('GRAPHMIND_HIDE_TOOL_ARGS=1: repeated partial edits on one held pause never single out the hidden value', async () => {
+    const { viewer, session } = await setup({ breakpoints: [{ kind: 'tool' }] }, { env: { GRAPHMIND_HIDE_TOOL_ARGS: '1' } });
+    const gate = session.gate('before', TRANSFER, transferOptions({ ...LIVE }));
+    const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
+    const answers: Answer[] = [];
+    for (const [i, confirm] of ['ACC-0001', 'ACC-7730', LIVE.account].entries()) {
+      const answer = await answerTo(viewer, pauseId, { confirm }, `g${i}`);
+      answers.push(answer);
+      if (answer.type === 'exec.resumed') break;
+    }
+    if (answers.every((a) => a.type === 'exec.refused')) viewer.resume(pauseId, 'continue');
+    await gate;
+    expect(answers.map((a) => a.type)).not.toContain('exec.resumed');
+    expect(new Set(answers.map((a) => JSON.stringify(a.payload))).size).toBe(1);
+  });
+
+  it('under a covering switch a full input replacement is still allowed', async () => {
+    const { viewer, session } = await setup({ breakpoints: [{ kind: 'tool' }] }, { env: { GRAPHMIND_HIDE_TOOL_ARGS: '1' } });
+    const gate = session.gate('before', TRANSFER, transferOptions({ ...LIVE }));
+    const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
+    const full = { account: 'ACC-1000', confirm: 'ACC-1000', amount: 5 };
+    const answer = await answerTo(viewer, pauseId, full, 'f1');
+    expect(answer).toEqual({ type: 'exec.resumed', payload: { action: 'continue', edited: { after: REDACTED }, redaction: { count: 1, keys: ['edited'] } } });
+    expect(await gate).toEqual({ action: 'continue', input: full });
+  });
+
+  it.each<[string, SessionOptions, GateNode, boolean]>([
+    ['no switch', { env: {} }, TRANSFER, false],
+    ['GRAPHMIND_HIDE_TOOL_ARGS on a tool', { env: { GRAPHMIND_HIDE_TOOL_ARGS: '1' } }, TRANSFER, true],
+    ['GRAPHMIND_HIDE_TOOL_ARGS on an LLM step', { env: { GRAPHMIND_HIDE_TOOL_ARGS: '1' } }, LLM, false],
+    ['GRAPHMIND_HIDE_INPUTS on an LLM step', { env: { GRAPHMIND_HIDE_INPUTS: '1' } }, LLM, true],
+    ['GRAPHMIND_HIDE_OUTPUTS (does not cover the input)', { env: { GRAPHMIND_HIDE_OUTPUTS: '1' } }, TRANSFER, false],
+  ])('the validator is told whether the input is hidden: %s', async (_label, sessionOptions, node, hidden) => {
+    const { viewer, session } = await setup({ breakpoints: [{ kind: node.kind }] }, sessionOptions);
+    const contexts: unknown[] = [];
+    const gate = session.gate('before', node, transferOptions({ ...LIVE }, contexts));
+    const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
+    viewer.resumeWith({ pauseId, action: 'continue', input: { amount: 20 } });
+    await firstAnswer(viewer, 3000);
+    expect(contexts).toEqual([{ inputHidden: hidden }]);
+    if (hidden) {
+      viewer.resume(pauseId, 'continue');
+      expect(await gate).toEqual({ action: 'continue' });
+    } else {
+      // Not hidden: the partial edit merges onto the live arguments.
+      expect(await gate).toEqual({ action: 'continue', input: { ...LIVE, amount: 20 } });
+    }
+  });
+});
+
 describe('fail-open while validating: the ORIGINAL input runs', () => {
   it('a disconnect during validation continues the gate; the late verdict changes nothing', async () => {
     const { viewer, session } = await setup();
@@ -627,6 +959,75 @@ describe('fail-open while validating: the ORIGINAL input runs', () => {
     expect(session.stats().heldGates).toBe(0);
   });
 
+  // Synchronous validator work blocks the event loop, so the pause-timeout
+  // timer cannot fire while it runs; a verdict that lands after the pause
+  // deadline must not be applied as if it were on time (C2: "A disconnect or
+  // pause timeout during validation continues with the ORIGINAL input").
+  const PAUSE_TIMEOUT_MS = 300;
+  const SYNC_WORK_MS = 700;
+  it.each<[string, (proposed: unknown) => InputValidation | Promise<InputValidation>]>([
+    [
+      'an async validator whose synchronous prefix',
+      async (proposed) => {
+        busyWait(SYNC_WORK_MS); // e.g. a first-call schema compile
+        return { ok: true, value: proposed };
+      },
+    ],
+    [
+      'a synchronous validator that',
+      (proposed) => {
+        busyWait(SYNC_WORK_MS);
+        return { ok: true, value: proposed };
+      },
+    ],
+  ])('%s crosses the pause deadline: the ORIGINAL input runs, no refusal', async (_label, work) => {
+    const { viewer, session } = await setup({}, { pauseTimeoutMs: PAUSE_TIMEOUT_MS });
+    const gateOpenedAt = performance.now();
+    let validatorStartedAfterMs: number | undefined;
+    const gate = session.gate('before', TOOL, {
+      editable: true,
+      validateInput: (proposed) => {
+        validatorStartedAfterMs = performance.now() - gateOpenedAt;
+        return work(proposed);
+      },
+    });
+    const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
+    viewer.resumeWith({ pauseId, action: 'continue', input: { q: 'edited' }, requestId: 'late' });
+    const decision = await gate;
+    const releasedAfterMs = performance.now() - gateOpenedAt;
+    // Preconditions: the resume was handled well inside the pause window, and
+    // the release came after the pause deadline had passed.
+    expect(validatorStartedAfterMs).toBeDefined();
+    expect(validatorStartedAfterMs as number).toBeLessThan(PAUSE_TIMEOUT_MS);
+    expect(releasedAfterMs).toBeGreaterThan(PAUSE_TIMEOUT_MS);
+    expect(decision).toEqual({ action: 'continue' });
+    expect('input' in decision).toBe(false);
+    const resumed = await viewer.waitForType('exec.resumed');
+    expect(resumed.payload).toEqual({ pauseId, action: 'continue' });
+    await tick(50);
+    expect(viewer.ofType('exec.resumed')).toHaveLength(1);
+    expect(viewer.ofType('exec.refused')).toHaveLength(0);
+    expect(session.stats().heldGates).toBe(0);
+  });
+
+  it('a synchronous validator that refuses after the pause deadline: continues, no exec.refused', async () => {
+    const { viewer, session } = await setup({}, { pauseTimeoutMs: PAUSE_TIMEOUT_MS });
+    const gate = session.gate('before', TOOL, {
+      editable: true,
+      validateInput: (): InputValidation => {
+        busyWait(SYNC_WORK_MS);
+        return { ok: false, code: 'schema', message: 'late refusal' };
+      },
+    });
+    const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
+    viewer.resumeWith({ pauseId, action: 'continue', input: { q: 'edited' }, requestId: 'late' });
+    expect(await gate).toEqual({ action: 'continue' });
+    expect((await viewer.waitForType('exec.resumed')).payload).toEqual({ pauseId, action: 'continue' });
+    await tick(50);
+    expect(viewer.ofType('exec.refused')).toHaveLength(0);
+    expect(session.stats().heldGates).toBe(0);
+  });
+
   it('the pause timeout is not restarted by a refusal', async () => {
     const { viewer, session } = await setup({}, { pauseTimeoutMs: 400 });
     const startedAt = Date.now();
@@ -640,6 +1041,52 @@ describe('fail-open while validating: the ORIGINAL input runs', () => {
     expect(elapsed).toBeGreaterThanOrEqual(380);
     expect(elapsed).toBeLessThan(580 + 400);
   });
+});
+
+// VALIDATION_TIMEOUT_MS is measured from the moment the resume is handled, so
+// it holds for synchronous validator work too (a synchronous validator, or
+// the synchronous prefix of an async one): the work cannot be interrupted,
+// but a verdict that arrives after the limit is refused, never applied — the
+// debugger stopped waiting for the answer by then.
+describe(`validation slower than VALIDATION_TIMEOUT_MS (${VALIDATION_TIMEOUT_MS} ms) is refused, even when synchronous`, () => {
+  it.each<[string, (proposed: unknown) => InputValidation | Promise<InputValidation>, string]>([
+    [
+      'a synchronous validator that busy-waits past the limit',
+      (proposed) => {
+        busyWait(VALIDATION_TIMEOUT_MS + 300);
+        return { ok: true, value: proposed };
+      },
+      'r1',
+    ],
+    [
+      'an async validator whose synchronous prefix outlasts the limit (resolves in the next microtask)',
+      async (proposed) => {
+        busyWait(VALIDATION_TIMEOUT_MS + 300); // e.g. a first-call schema compile
+        return { ok: true, value: proposed };
+      },
+      'r2',
+    ],
+  ])(
+    '%s: exec.refused, the gate stays held, the edit never runs',
+    async (_label, validateInput, requestId) => {
+      const { viewer, session } = await setup();
+      const gate = session.gate('before', TOOL, { editable: true, validateInput });
+      const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
+      viewer.resumeWith({ pauseId, action: 'continue', input: { q: 1 }, requestId });
+      const answer = await firstAnswer(viewer, VALIDATION_TIMEOUT_MS + 5000);
+      expect(answer).toEqual({
+        type: 'exec.refused',
+        payload: { pauseId, code: 'shape', message: expect.any(String), requestId },
+      });
+      expect(await settledWithin(gate, 50)).toBe('pending');
+      expect(session.stats().heldGates).toBe(1);
+      viewer.resume(pauseId, 'continue');
+      const decision = await gate;
+      expect(decision).toEqual({ action: 'continue' });
+      expect('input' in decision).toBe(false);
+    },
+    VALIDATION_TIMEOUT_MS + 10_000,
+  );
 });
 
 describe('edits compose with every kind of pause', () => {
@@ -769,50 +1216,155 @@ describe('requestId', () => {
     expect(Object.keys((await viewer.waitForType('exec.resumed')).payload)).toEqual(['pauseId', 'action']);
   });
 
-  it('an implausibly long requestId is not echoed', async () => {
+  // The wire contract sets no length on requestId (schema: `z.string()`), and
+  // the debugger forwards a resumer's own id: whatever arrives is echoed, or
+  // the debugger could not correlate an answer the app really gave.
+  const LONG_ID = `req-${'x'.repeat(296)}`; // 300 chars
+
+  it('the wire contract accepts a 300-char requestId on exec.resume, exec.resumed and exec.refused', () => {
+    expect(LONG_ID).toHaveLength(300);
+    expect(ControlPayloadSchemas['exec.resume'].safeParse({ pauseId: 'p', action: 'continue', requestId: LONG_ID }).success).toBe(true);
+    expect(EventPayloadSchemas['exec.resumed'].safeParse({ pauseId: 'p', action: 'continue', requestId: LONG_ID }).success).toBe(true);
+    expect(EventPayloadSchemas['exec.refused'].safeParse({ pauseId: 'p', code: 'shape', requestId: LONG_ID }).success).toBe(true);
+  });
+
+  it('a long requestId is echoed on a plain resume', async () => {
+    const { viewer, session } = await setup();
+    const gate = session.gate('before', TOOL);
+    const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
+    viewer.resumeWith({ pauseId, action: 'continue', requestId: LONG_ID });
+    expect(await gate).toEqual({ action: 'continue' });
+    const resumed = await viewer.waitForType('exec.resumed');
+    expect(parseEnvelope(resumed).kind).toBe('ok');
+    expect(resumed.payload['requestId']).toBe(LONG_ID);
+  });
+
+  it('a long requestId is echoed on a refused edit, then on the accepted one', async () => {
     const { viewer, session } = await setup();
     const gate = session.gate('before', TOOL, toolEdit().options);
     const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
-    viewer.resumeWith({ pauseId, action: 'continue', input: { query: 3 }, requestId: 'x'.repeat(257) });
-    expect((await viewer.waitForType('exec.refused')).payload['requestId']).toBeUndefined();
-    viewer.resumeWith({ pauseId, action: 'continue', requestId: 'y'.repeat(256) });
-    await gate;
-    expect((await viewer.waitForType('exec.resumed')).payload['requestId']).toBe('y'.repeat(256));
+    viewer.resumeWith({ pauseId, action: 'continue', input: { query: 42 }, requestId: LONG_ID });
+    const refused = await viewer.waitForType('exec.refused');
+    expect(refused.payload).toMatchObject({ pauseId, code: 'schema', requestId: LONG_ID });
+    const accepted = `${LONG_ID}-2`;
+    viewer.resumeWith({ pauseId, action: 'continue', input: { query: 'LIS' }, requestId: accepted });
+    expect(await gate).toEqual({ action: 'continue', input: { query: 'LIS', limit: 5 } });
+    const resumed = await viewer.waitForType('exec.resumed');
+    expect(resumed.payload).toMatchObject({ pauseId, edited: { after: { query: 'LIS', limit: 5 } }, requestId: accepted });
   });
 });
 
-describe('inject guard (client side, 0.6 debuggers)', () => {
-  it.each([
+// C2 / refute-security C2.3 and S5: the client refuses a placeholder or a
+// truncated preview as an inject output whatever the debugger's version. A
+// 0.5 hub (or a hub with no W3 yet) guards only "__REDACTED__", so under one
+// the client is the ONLY place a truncated preview can be stopped — and the
+// viewer pre-fills its inject editor with the recorded output, which over
+// 512 KB is a shrink preview. Refusing is fail-safe: the gate stays held and
+// continue / retry / abort, the pause timeout and a disconnect still release it.
+describe('inject guard (client side, every debugger)', () => {
+  const BIG_OUTPUT = { content: 'x'.repeat(10_000), path: 'src/big.ts' };
+  const DEBUGGERS: [string, string[] | undefined][] = [
+    ['a 0.6 debugger', EDIT_HUB],
+    ['a 0.5 debugger (no hubCapabilities)', undefined],
+  ];
+  const MARKED: [string, unknown, string][] = [
     ['the placeholder', { hits: [REDACTED] }, 'placeholder'],
-    ['a shrink marker', { __graphmindTruncated: true, bytes: 1, preview: '' }, 'truncated'],
-    ['a truncated string', 'long…[graphmind: truncated]', 'truncated'],
-  ])('an inject output holding %s is refused and the gate stays held', async (_label, output, code) => {
-    const { viewer, session } = await setup();
+    ['a shrink marker', { __graphmindTruncated: true, bytes: 600_000, preview: '{"rows":[' }, 'truncated'],
+    ['a truncated string', `long${TRUNCATION_SUFFIX}`, 'truncated'],
+    ['a nested truncated string', { hits: [`long${TRUNCATION_SUFFIX}`] }, 'truncated'],
+    ['a LangGraph preview', { __graphmind: 'truncated', preview: 'partial' }, 'truncated'],
+    ['an MCP get_node preview', mcpPreview(BIG_OUTPUT), 'truncated'],
+  ];
+  const CASES = DEBUGGERS.flatMap(([debugger_, hub]) =>
+    MARKED.map(([label, output, code]) => [debugger_, label, hub, output, code] as const),
+  );
+
+  it.each(CASES)('under %s, an inject output holding %s is refused and the gate stays held', async (_d, _label, hub, output, code) => {
+    const { viewer, session } = await setup({ hubCapabilities: hub }, { logger: () => {} });
     const gate = session.gate('after', TOOL);
     const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
     viewer.resumeWith({ pauseId, action: 'inject', output, requestId: 'inj' });
     const refused = await viewer.waitForType('exec.refused');
     expect(refused.payload).toMatchObject({ pauseId, code, requestId: 'inj' });
     expect(await settledWithin(gate, 30)).toBe('pending');
+    expect(viewer.ofType('exec.resumed')).toHaveLength(0);
     viewer.resume(pauseId, 'inject', { hits: ['real'] });
     expect(await gate).toEqual({ action: 'inject', output: { hits: ['real'] } });
   });
 
-  it('under a 0.5 debugger inject keeps its 0.5 behaviour', async () => {
-    const { viewer, session } = await setup({ hubCapabilities: undefined });
-    const gate = session.gate('after', TOOL);
-    const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
-    viewer.resume(pauseId, 'inject', 'long…[graphmind: truncated]');
-    expect(await gate).toEqual({ action: 'inject', output: 'long…[graphmind: truncated]' });
-    expect(viewer.ofType('exec.refused')).toHaveLength(0);
+  it('the MCP marker in these tests is the wording the MCP server uses (shared constant)', () => {
+    expect(mcpPreview(BIG_OUTPUT).note.startsWith(MCP_PREVIEW_NOTE_PREFIX)).toBe(true);
   });
 
-  it('a clean inject passes', async () => {
-    const { viewer, session } = await setup();
+  it('under a 0.5 debugger, which does not show exec.refused, the refusal is also in the app log', async () => {
+    const warnings: string[] = [];
+    const { viewer, session } = await setup({ hubCapabilities: undefined }, { logger: (m) => warnings.push(m) });
+    const gate = session.gate('after', TOOL);
+    const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
+    viewer.resume(pauseId, 'inject', `long${TRUNCATION_SUFFIX}`);
+    await viewer.waitForType('exec.refused');
+    const lines = warnings.filter((w) => w.includes('inject'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toContain('long');
+    viewer.resume(pauseId, 'continue');
+    expect(await gate).toEqual({ action: 'continue' });
+  });
+
+  it('under a 0.6 debugger the refusal is left to the debugger to show (no log line)', async () => {
+    const warnings: string[] = [];
+    const { viewer, session } = await setup({}, { logger: (m) => warnings.push(m) });
+    const gate = session.gate('after', TOOL);
+    const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
+    viewer.resume(pauseId, 'inject', `long${TRUNCATION_SUFFIX}`);
+    await viewer.waitForType('exec.refused');
+    expect(warnings.filter((w) => w.includes('inject'))).toEqual([]);
+    viewer.resume(pauseId, 'continue');
+    await gate;
+  });
+
+  it('end to end under a 0.5 debugger: a recorded > 512 KB tool result, injected back verbatim, never becomes the result', async () => {
+    const { viewer, session } = await setup({ hubCapabilities: undefined }, { logger: () => {} });
+    let decision: Promise<GateDecision> | undefined;
+    await session.run('r', async () => {
+      session.emit('node.started', { nodeId: TOOL.nodeId, kind: 'tool', name: TOOL.name, instanceId: 'c1', input: {} });
+      // A tool result over the 512 KB payload budget: what the debugger records
+      // (and the viewer pre-fills its inject editor with) is a shrink preview.
+      const big = { body: 'x'.repeat(MAX_PAYLOAD_BYTES + 1024) };
+      session.emit('node.finished', { nodeId: TOOL.nodeId, instanceId: 'c1', output: big, durationMs: 5, status: 'ok' });
+      decision = session.gate('after', TOOL, { result: big });
+    });
+    const finished = await viewer.waitForType('node.finished');
+    const recorded = finished.payload['output'];
+    expect(JSON.stringify(recorded)).toContain('__graphmindTruncated');
+    const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
+    // The user presses "Inject & resume" unedited; a 0.5 hub relays it.
+    viewer.resume(pauseId, 'inject', recorded);
+    const outcome = await settledWithin(decision as Promise<GateDecision>, 100);
+    // Compared by action only: the preview itself is ~512 KB of diff noise.
+    expect(outcome === 'pending' ? 'pending' : outcome.action).toBe('pending');
+    expect((await viewer.waitForType('exec.refused', 1000)).payload).toMatchObject({ pauseId, code: 'truncated' });
+    expect(viewer.ofType('exec.resumed')).toHaveLength(0);
+    viewer.resume(pauseId, 'continue');
+    expect(await decision).toEqual({ action: 'continue' });
+  });
+
+  it.each(DEBUGGERS)('under %s a clean inject passes', async (_label, hub) => {
+    const { viewer, session } = await setup({ hubCapabilities: hub });
     const gate = session.gate('after', TOOL);
     const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
     viewer.resume(pauseId, 'inject', { ok: 1 });
     expect(await gate).toEqual({ action: 'inject', output: { ok: 1 } });
+    expect(viewer.ofType('exec.refused')).toHaveLength(0);
+  });
+
+  it('a legitimate `truncated: true` field (no GraphMind note) is not refused', async () => {
+    const { viewer, session } = await setup();
+    const gate = session.gate('after', TOOL);
+    const pauseId = pauseIdOf(await viewer.waitForType('exec.paused'));
+    const output = { tree: [{ path: 'a.ts' }], truncated: true, note: 'GitHub API capped the listing' };
+    viewer.resumeWith({ pauseId, action: 'inject', output });
+    expect(await gate).toEqual({ action: 'inject', output });
+    expect(viewer.ofType('exec.refused')).toHaveLength(0);
   });
 });
 
@@ -836,5 +1388,29 @@ describe('re-attach', () => {
     expect((await viewer.waitForType('exec.refused')).payload).toMatchObject({ code: 'disabled' });
     viewer.resume(pauseIdOf(again), 'continue');
     expect(await second).toEqual({ action: 'continue' });
+  });
+});
+
+// The README is what an adapter author (and a debugger author) reads; it
+// drifted from the code once (the inject guard shipped undocumented).
+describe('README: the documented edit and inject behaviour', () => {
+  const readme = readFileSync(fileURLToPath(new URL('../README.md', import.meta.url)), 'utf8');
+  const lines = readme.split('\n');
+  const editSection = readme.slice(readme.indexOf('### Edited input'));
+
+  it('the gating table says an inject holding a placeholder or truncated preview is refused and the gate stays held', () => {
+    const row = lines.find((line) => line.includes("`{action:'inject', output}`") && line.includes('skip execution'));
+    expect(row).toBeDefined();
+    expect(row).toMatch(/exec\.refused/);
+    expect(row).toMatch(/stays held/);
+  });
+
+  it('the validator time limit is documented as covering synchronous work too', () => {
+    expect(editSection).toMatch(/4 s/);
+    expect(editSection).toMatch(/synchronous/);
+  });
+
+  it('the recipe forwards the validator context to mergeToolInput (a hidden input takes only a full replacement)', () => {
+    expect(editSection).toContain('mergeToolInput(liveArgs, proposed, context)');
   });
 });

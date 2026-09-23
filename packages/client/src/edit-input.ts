@@ -10,11 +10,15 @@
  * `error`). This module holds what it checks the edit itself with:
  *
  *   - `proposedValueRefusal`: an input carrying the redaction placeholder or a
- *     truncation marker is the viewer's pre-filled copy of a value it never
+ *     truncation marker (the shrink's, LangGraph's, or the MCP server's
+ *     `get_node` preview) is a pre-filled copy of a value its sender never
  *     saw in full, not an argument anyone meant to run with. Refused
  *     (`placeholder` / `truncated`) wherever it appears — a value, a key, or
  *     inside a string — by the same blunt JSON-substring test the debugger's
  *     inject guard uses.
+ *   - `prototypeKeyRefusal`: the two standard deep-merge pollution payloads
+ *     (an own `__proto__` key, a `constructor.prototype` path), refused
+ *     (`shape`) at any depth on every edit, whatever the adapter validates.
  *   - `normalizeValidation`: the adapter's validator is host code. It may
  *     throw, return garbage, or quote a value in a long message; what reaches
  *     the wire is always one of the two documented shapes, with a message of
@@ -22,11 +26,12 @@
  *   - `mergeToolInput`: the default rule for tool arguments, for adapters to
  *     call from their validator — the edit's top-level keys replace the live
  *     ones and every key it does not mention keeps its LIVE value (the
- *     recorded copy may be truncated or a repr, the live one is exact).
+ *     recorded copy may be truncated or a repr, the live one is exact) —
+ *     unless a switch hides the input, when only a full replacement counts.
  *
  * Nothing here throws.
  */
-import { TRUNCATION_SUFFIX, type EventPayloadMap } from '@graphmind-ai/schema';
+import { MCP_PREVIEW_NOTE_PREFIX, TRUNCATION_SUFFIX, type EventPayloadMap } from '@graphmind-ai/schema';
 import { REDACTED } from './redaction.js';
 
 /** Why an edit was refused (`exec.refused.code`). */
@@ -40,13 +45,32 @@ export type InputValidation =
   | { ok: true; value: unknown }
   | { ok: false; code: RefusalCode; message?: string };
 
+/** What the session tells a validator about the edit it is checking. */
+export interface ValidateInputContext {
+  /**
+   * A GRAPHMIND_HIDE_* switch hides this call's input from the record
+   * (`HIDE_INPUTS`, or `HIDE_TOOL_ARGS` on a tool). The debugger never saw
+   * the live input, so the edit is judged on its own, as a FULL replacement:
+   * never merged onto, completed from or compared with the hidden live
+   * values — otherwise the answer to a guess (refused, or run), repeatable
+   * while the gate stays held, would reveal them. `mergeToolInput` does this
+   * when passed the context.
+   */
+  readonly inputHidden: boolean;
+}
+
 /**
  * Supplied by an adapter that can apply an edit at a gate: checks (and
- * completes) the proposed input. May return a promise; runs in the host's
- * async context (the gated call's), never in the transport's. A throw, a
- * rejection or a malformed result is a refusal with code `shape`.
+ * completes) the proposed input. May return a promise (any thenable); the
+ * validator and its promise run in the host's async context (the gated
+ * call's), never in the transport's. A throw, a rejection or a malformed
+ * result is a refusal with code `shape`. Pass `context` on to
+ * `mergeToolInput`.
  */
-export type ValidateInput = (proposed: unknown) => InputValidation | PromiseLike<InputValidation>;
+export type ValidateInput = (
+  proposed: unknown,
+  context: ValidateInputContext,
+) => InputValidation | PromiseLike<InputValidation>;
 
 /** `exec.refused.message` is cut to this many characters. */
 export const MAX_REFUSAL_MESSAGE = 200;
@@ -68,16 +92,20 @@ const REFUSAL_CODES: ReadonlySet<string> = new Set<RefusalCode>([
 
 /**
  * Truncation markers, as they appear in JSON text: the shrink's own marker
- * key and string suffix, and LangGraph's payload previews
- * (`{__graphmind: 'truncated' | 'unserializable', preview}`). The last two are
- * written with their quotes, so they match a real key/value pair and never
- * the escaped text of a string that merely mentions them.
+ * key and string suffix, LangGraph's payload previews
+ * (`{__graphmind: 'truncated' | 'unserializable', preview}`) and the read-only
+ * MCP server's `get_node` preview (`{truncated: true, note: "payload
+ * truncated: showing first …", preview}`). The last three are written with
+ * their quotes, so they match a real key/value pair and never the escaped
+ * text of a string that merely mentions them; a plain `truncated: true` field
+ * with a note of its own is not a marker.
  */
 const TRUNCATION_MARKERS: readonly string[] = [
   '__graphmindTruncated',
   TRUNCATION_SUFFIX,
   '"__graphmind":"truncated"',
   '"__graphmind":"unserializable"',
+  `"note":"${MCP_PREVIEW_NOTE_PREFIX}`,
 ];
 
 /**
@@ -185,21 +213,57 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Does any object in this tree have an own `__proto__` key? Iterative, cycle-safe. */
-function hasProtoKey(root: object): boolean {
+/**
+ * The first deep-merge pollution path in this tree, if any: an own
+ * `__proto__` key (JSON makes it an own key), or a `constructor` key holding
+ * an object with a `prototype` key — the two payloads that let tool code
+ * which deep-merges its arguments rewrite `Object.prototype` (lodash
+ * defaultsDeep CVE-2019-10744; the minimist CVE-2020-7598 bypass of
+ * `__proto__`-only fixes). Iterative, cycle-safe; throws only when the value
+ * cannot be read.
+ */
+function pollutionPath(root: object): '__proto__' | 'constructor.prototype' | undefined {
+  const hasOwn = (node: object, key: string): boolean => Object.prototype.hasOwnProperty.call(node, key);
   const seen = new Set<object>();
   const stack: object[] = [root];
   while (stack.length > 0) {
     const node = stack.pop() as object;
     if (seen.has(node)) continue;
     seen.add(node);
-    if (Object.prototype.hasOwnProperty.call(node, '__proto__')) return true;
+    if (hasOwn(node, '__proto__')) return '__proto__';
+    if (hasOwn(node, 'constructor')) {
+      const ctor = (node as Record<string, unknown>)['constructor'];
+      if (typeof ctor === 'object' && ctor !== null && hasOwn(ctor, 'prototype')) return 'constructor.prototype';
+    }
     for (const key of Object.keys(node)) {
       const child = (node as Record<string, unknown>)[key];
       if (typeof child === 'object' && child !== null) stack.push(child);
     }
   }
-  return false;
+  return undefined;
+}
+
+function pollutionMessage(subject: string, path: '__proto__' | 'constructor.prototype'): string {
+  return path === '__proto__'
+    ? `${subject} may not contain a "__proto__" key`
+    : `${subject} may not contain a "constructor.prototype" path`;
+}
+
+/**
+ * Refusal (`shape`) for an edited input holding a deep-merge pollution path
+ * at any depth (see `pollutionPath`). The session applies it to EVERY edit,
+ * with or without an adapter validator — one that accepts values as they
+ * are (a pass-through or record schema) would otherwise hand them to the
+ * tool. Undefined when clean or not an object.
+ */
+export function prototypeKeyRefusal(value: unknown): Refusal | undefined {
+  try {
+    if (typeof value !== 'object' || value === null) return undefined;
+    const path = pollutionPath(value);
+    return path === undefined ? undefined : { code: 'shape', message: pollutionMessage('the edited input', path) };
+  } catch {
+    return { code: 'shape', message: 'the edited input could not be read' };
+  }
 }
 
 /**
@@ -210,15 +274,24 @@ function hasProtoKey(root: object): boolean {
  * input that is not an object (an array, a string, nothing) contributes no
  * keys.
  *
- * Refused with code `shape`: a proposed value that is not a plain object
- * (arrays, strings, null…), or one with a `__proto__` key at any depth — a
- * JSON `__proto__` is an own key, harmless here, but tool code that
- * deep-merges its arguments would let it rewrite `Object.prototype`.
+ * With the validator's `context` and `context.inputHidden` (a switch hides
+ * this input from the record), the live input contributes no keys either:
+ * the edit must be a full replacement, so what the tool's schema says about
+ * it never depends on the hidden values (refute-security S4 / C2.5).
  *
- * Adapters call it from their `validateInput`, then check the result with the
- * tool's own schema.
+ * Refused with code `shape`: a proposed value that is not a plain object
+ * (arrays, strings, null…), or one with a `__proto__` key or a
+ * `constructor.prototype` path at any depth — harmless here, but tool code
+ * that deep-merges its arguments would let it rewrite `Object.prototype`.
+ *
+ * Adapters call it from their `validateInput`, passing the context on, then
+ * check the result with the tool's own schema.
  */
-export function mergeToolInput(live: unknown, proposed: unknown): InputValidation {
+export function mergeToolInput(
+  live: unknown,
+  proposed: unknown,
+  context?: Partial<ValidateInputContext>,
+): InputValidation {
   try {
     if (!isRecord(proposed)) {
       return { ok: false, code: 'shape', message: 'the edited arguments must be a JSON object' };
@@ -227,12 +300,13 @@ export function mergeToolInput(live: unknown, proposed: unknown): InputValidatio
     if (proto !== Object.prototype && proto !== null) {
       return { ok: false, code: 'shape', message: 'the edited arguments must be a plain JSON object' };
     }
-    if (hasProtoKey(proposed)) {
-      return { ok: false, code: 'shape', message: 'the edited arguments may not contain a "__proto__" key' };
+    const path = pollutionPath(proposed);
+    if (path !== undefined) {
+      return { ok: false, code: 'shape', message: pollutionMessage('the edited arguments', path) };
     }
     // Spread defines own data properties (it never invokes a `__proto__`
     // setter), so even a live object with an own `__proto__` key stays inert.
-    const base = isRecord(live) ? live : {};
+    const base = context?.inputHidden !== true && isRecord(live) ? live : {};
     return { ok: true, value: { ...base, ...proposed } };
   } catch {
     return { ok: false, code: 'shape', message: 'the edited arguments could not be read' };

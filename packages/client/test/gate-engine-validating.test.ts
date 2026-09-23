@@ -144,6 +144,58 @@ describe('GateEngine — validating / reopen', () => {
   });
 });
 
+// Synchronous validator work blocks the event loop, so the pause-timeout
+// timer cannot fire while it runs. A verdict presented after the deadline
+// has the outcome the timer would have had: continue with the ORIGINAL input.
+describe('GateEngine — a verdict presented after the pause deadline', () => {
+  it('completeValidation: continue with the original input; the edit and its info are dropped', async () => {
+    const { engine, paused, resumed, advance } = rig(100);
+    const gate = engine.hold('before', NODE, 'run_1');
+    const pauseId = paused[0] as string;
+    const ticket = engine.beginValidation(pauseId)!;
+    advance(150); // the clock moved; the (real) timer has not had a turn
+    const info: ResumeInfo = { edited: { after: { q: 1 } }, requestId: 'r' };
+    expect(engine.completeValidation(ticket, { action: 'continue', input: { q: 1 } }, info)).toBe(false);
+    expect(await gate).toEqual(CONTINUE_DECISION);
+    expect(resumed).toEqual([{ pauseId, action: 'continue', heldMs: 150, info: undefined }]);
+    expect(engine.heldCount).toBe(0);
+  });
+
+  it('reopen: continue with the original input instead of holding again', async () => {
+    const { engine, paused, resumed, advance } = rig(100);
+    const gate = engine.hold('before', NODE, 'run_1');
+    const ticket = engine.beginValidation(paused[0] as string)!;
+    advance(100);
+    expect(engine.reopen(ticket)).toBe(false);
+    expect(await gate).toEqual(CONTINUE_DECISION);
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0]).toMatchObject({ action: 'continue', info: undefined });
+  });
+
+  it('just inside the deadline the verdict is applied', async () => {
+    const { engine, paused, resumed, advance } = rig(100);
+    const gate = engine.hold('before', NODE, 'run_1');
+    const ticket = engine.beginValidation(paused[0] as string)!;
+    advance(99);
+    const decision: GateDecision = { action: 'continue', input: { q: 1 } };
+    expect(engine.completeValidation(ticket, decision)).toBe(true);
+    expect(await gate).toBe(decision);
+    expect(resumed).toHaveLength(1);
+  });
+
+  it('with no pause timeout there is no deadline', async () => {
+    const { engine, paused, advance } = rig();
+    const gate = engine.hold('before', NODE, 'run_1');
+    const pauseId = paused[0] as string;
+    advance(60_000);
+    expect(engine.reopen(engine.beginValidation(pauseId)!)).toBe(true);
+    advance(60_000);
+    const decision: GateDecision = { action: 'continue', input: { q: 1 } };
+    expect(engine.completeValidation(engine.beginValidation(pauseId)!, decision)).toBe(true);
+    expect(await gate).toBe(decision);
+  });
+});
+
 describe('GateEngine — the pause timeout across validation', () => {
   beforeEach(() => {
     // setImmediate stays real: `state()` uses it to let microtasks drain.

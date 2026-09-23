@@ -22,7 +22,9 @@
  * refused in between. While validating, plain resumes are ignored (the
  * debugger answers a second resumer itself), and a pause timeout or
  * `releaseAll()` still releases the gate with a plain `continue` — the
- * ORIGINAL input — and the late verdict lands nowhere (fail-open).
+ * ORIGINAL input — and the late verdict lands nowhere (fail-open). A verdict
+ * presented after the pause deadline gets the same outcome even when the
+ * timer has not fired yet (synchronous validator work blocks it).
  */
 import type { BreakpointMatcher, NodeKind, PausePoint, ResumeAction, RunMode } from '@graphmind-ai/schema';
 import { monotonicNow, normalizeDurationMs, type Clock } from './clock.js';
@@ -236,11 +238,18 @@ export class GateEngine {
   /**
    * `validating` -> `held`: the edit was refused and the gate waits for the
    * next resume, under the same pauseId, timer and held interval. False when
-   * the ticket is stale (the gate was released meanwhile).
+   * the ticket is stale (the gate was released meanwhile), or when the pause
+   * deadline passed during validation — the gate is then continued with its
+   * original input, as the pause-timeout timer would have done had
+   * synchronous validator work not kept it from firing.
    */
   reopen(ticket: ValidationTicket): boolean {
     const gate = this.held.get(ticket.pauseId);
     if (gate === undefined || gate.ticket !== ticket) return false;
+    if (this.overdue(gate)) {
+      this.settle(ticket.pauseId, CONTINUE_DECISION, 'continue');
+      return false;
+    }
     gate.state = 'held';
     gate.ticket = undefined;
     return true;
@@ -249,23 +258,48 @@ export class GateEngine {
   /**
    * `validating` -> released with the accepted edit. False when the ticket is
    * stale: a pause timeout or a detach already continued the gate with its
-   * original input.
+   * original input. Also false when the pause deadline passed during
+   * validation: the gate is continued with its original input (see `reopen`).
    */
   completeValidation(ticket: ValidationTicket, decision: GateDecision, info?: ResumeInfo): boolean {
     const gate = this.held.get(ticket.pauseId);
     if (gate === undefined || gate.ticket !== ticket) return false;
+    if (this.overdue(gate)) {
+      this.settle(ticket.pauseId, CONTINUE_DECISION, 'continue');
+      return false;
+    }
     return this.settle(ticket.pauseId, decision, decision.action, info);
   }
 
   /** FAIL-OPEN: release every held gate with `continue`. Returns count. */
   releaseAll(): number {
     const ids = [...this.held.keys()];
-    for (const pauseId of ids) this.settle(pauseId, CONTINUE_DECISION, 'continue');
+    for (const pauseId of ids) {
+      try {
+        this.settle(pauseId, CONTINUE_DECISION, 'continue');
+      } catch {
+        // One gate's bookkeeping must never keep the others held.
+      }
+    }
     return ids.length;
   }
 
   get heldCount(): number {
     return this.held.size;
+  }
+
+  /**
+   * Has this gate's pause timeout elapsed? The timer normally settles the
+   * gate first; a synchronous validator can keep it from firing. An
+   * unreadable clock leaves the decision to the timer.
+   */
+  private overdue(gate: HeldGate): boolean {
+    if (this.pauseTimeoutMs === undefined) return false;
+    try {
+      return this.now() - gate.openedAt >= this.pauseTimeoutMs;
+    } catch {
+      return false;
+    }
   }
 
   private settle(
@@ -279,7 +313,13 @@ export class GateEngine {
     this.held.delete(pauseId);
     gate.ticket = undefined;
     if (gate.timer !== undefined) clearTimeout(gate.timer);
-    const heldMs = normalizeDurationMs(this.now() - gate.openedAt);
+    let heldMs = 0;
+    try {
+      heldMs = normalizeDurationMs(this.now() - gate.openedAt);
+    } catch {
+      // The gate is already unregistered: an injected clock that throws
+      // costs the release its duration, never its resolution.
+    }
     try {
       this.callbacks.onResumed(pauseId, gate.node, action, gate.runId, heldMs, info);
     } catch {

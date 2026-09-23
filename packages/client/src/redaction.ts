@@ -283,6 +283,18 @@ export class Redactor {
   }
 
   /**
+   * Does a switch hide the input of a paused node of this kind? `HIDE_INPUTS`,
+   * or `HIDE_TOOL_ARGS` on a tool — an unknown kind counts as a tool. It
+   * decides what an edit's answer may show (exec.resumed.edited,
+   * exec.refused.message) and that a hidden input takes only a full
+   * replacement (ValidateInputContext.inputHidden).
+   */
+  coversPauseInput(nodeKind: NodeKind | undefined): boolean {
+    const s = this.switches;
+    return s.hideInputs || (s.hideToolArgs && (nodeKind === undefined || nodeKind === 'tool'));
+  }
+
+  /**
    * Redact one event. Every switch off, or a type other than node.started /
    * node.finished / node.token / exec.resumed / exec.refused: the very same
    * object. Otherwise a plain copy (see the module comment) — redacted,
@@ -327,9 +339,7 @@ export class Redactor {
     payload: EventPayloadMap[T],
     nodeKind: NodeKind | undefined,
   ): EventPayloadMap[T] | undefined {
-    const s = this.switches;
-    const covered = s.hideInputs || (s.hideToolArgs && (nodeKind === undefined || nodeKind === 'tool'));
-    if (!covered) return payload;
+    if (!this.coversPauseInput(nodeKind)) return payload;
     try {
       if (!isRecord(payload)) throw new Uninspectable('payload is not an object');
       const p = snapshot(payload);

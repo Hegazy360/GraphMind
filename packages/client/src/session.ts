@@ -38,12 +38,14 @@ import { type Clock, monotonicNow, normalizeDurationMs } from './clock.js';
 import {
   VALIDATOR_FAILED,
   normalizeValidation,
+  prototypeKeyRefusal,
   proposedValueRefusal,
   sanitizeShortText,
   wireCopy,
   type InputValidation,
   type Refusal,
   type ValidateInput,
+  type ValidateInputContext,
 } from './edit-input.js';
 import { killSwitchOn, resolveEnabled, resolveUrl, type EnvLike } from './env.js';
 import { GraphMindAbortError, isAbortError, toErrorInfo } from './errors.js';
@@ -73,15 +75,22 @@ import { CLIENT_VERSION } from './version.js';
 
 /**
  * How long an adapter's `validateInput` may take before the edit is refused
- * (code `shape`) and the gate reopened. Below the debugger's 5 s wait for an
- * answer to a resume, so a slow validator never outlives the request it
- * answers — and a validator that never settles cannot wedge a gate that no
- * resume could then release.
+ * (code `shape`) and the gate reopened, measured from the moment the resume
+ * is handled. Below the debugger's 5 s wait for an answer to a resume, so a
+ * slow validator's verdict is never applied after the request it answers
+ * has timed out — and a validator that never settles cannot wedge a gate
+ * that no resume could then release. Synchronous work (a synchronous
+ * validator, or the synchronous prefix of an async one) cannot be
+ * interrupted and blocks the app while it runs, but a verdict it reaches
+ * after the limit is refused just the same.
  */
 export const VALIDATION_TIMEOUT_MS = 4000;
 
-/** Longest `exec.resume.requestId` echoed back (the debugger's are ~36 chars). */
-const MAX_REQUEST_ID_LENGTH = 256;
+const VALIDATION_TIMED_OUT: InputValidation = Object.freeze({
+  ok: false,
+  code: 'shape',
+  message: `the input was not validated within ${VALIDATION_TIMEOUT_MS / 1000} s`,
+});
 
 /** Smart-hold details (`exec.paused.smart`, with `reason: 'breakpoint'`). */
 export type SmartInfo = NonNullable<EventPayloadMap['exec.paused']['smart']>;
@@ -123,11 +132,14 @@ export interface GateOptions {
   editable?: boolean;
   /**
    * Checks and completes a proposed input before the call runs with it — for
-   * tool arguments, `mergeToolInput(liveArgs, proposed)` followed by the
-   * tool's own schema. Omitted: the proposed input is used as it is. Runs in
-   * the gated call's async context; may be async. A throw, a rejection, a
-   * malformed verdict or no verdict within VALIDATION_TIMEOUT_MS refuses the
-   * edit (`exec.refused`) and the gate stays held.
+   * tool arguments, `mergeToolInput(liveArgs, proposed, context)` followed by
+   * the tool's own schema (`context.inputHidden`: a switch hides this input,
+   * so only a full replacement may pass). Omitted: the proposed input is used
+   * as it is. Runs in the gated call's async context, and so does the
+   * promise (any thenable) it may return. A throw, a rejection, a malformed
+   * verdict or no verdict within VALIDATION_TIMEOUT_MS refuses the edit
+   * (`exec.refused`) and the gate stays held. Present but not a function: the
+   * pause is not offered as editable (fails closed).
    */
   validateInput?: ValidateInput;
 }
@@ -342,6 +354,29 @@ function defaultWebSocket(): WebSocketConstructor | undefined {
   return (globalThis as { WebSocket?: WebSocketConstructor }).WebSocket;
 }
 
+/**
+ * `validate`, with a thenable it returns adopted into a native promise on the
+ * spot — so, once bound (`AsyncResource.bind`), inside the gated call's async
+ * context. Binding `validate` alone covers only its synchronous body: a lazy
+ * thenable (query builders start their work inside `then()`) read and
+ * adopted later, in the WebSocket message handler, would run with the host's
+ * AsyncLocalStorage stores empty. `then` is read once; a throw reading or
+ * calling it is the validator's own (a refusal).
+ */
+function adoptingThenables(validate: ValidateInput): ValidateInput {
+  return (proposed, context) => {
+    const outcome: unknown = validate(proposed, context);
+    if ((typeof outcome !== 'object' || outcome === null) && typeof outcome !== 'function') {
+      return outcome as InputValidation;
+    }
+    const then: unknown = (outcome as { then?: unknown }).then;
+    if (typeof then !== 'function') return outcome as InputValidation;
+    return new Promise<InputValidation>((resolve, reject) => {
+      (then as PromiseLike<InputValidation>['then']).call(outcome, resolve, reject);
+    });
+  };
+}
+
 class SessionImpl implements Session {
   readonly enabled: boolean;
 
@@ -349,6 +384,8 @@ class SessionImpl implements Session {
   private readonly transport: Transport;
   private readonly engine: GateEngine;
   private readonly buffer: RingBuffer<BufferedEnvelope>;
+  /** Monotonic clock (SessionOptions.clock): held time, validation time. */
+  private readonly clock: Clock;
   /** Pins gate holds to node instances so `node.finished` can carry `heldMs`. */
   private readonly ledger: HeldLedger;
   /** Coarse redaction (W7): the kill switches, applied in emitInternal before the buffer. */
@@ -413,7 +450,8 @@ class SessionImpl implements Session {
       rejectOversize: true,
     });
 
-    this.ledger = new HeldLedger(options.clock ?? monotonicNow);
+    this.clock = options.clock ?? monotonicNow;
+    this.ledger = new HeldLedger(this.clock);
     this.redactor = new Redactor(
       resolveRedaction(
         {
@@ -447,7 +485,9 @@ class SessionImpl implements Session {
         },
         onResumed: (pauseId, node, action, runId, _heldMs, info) => {
           this.editablePauses.delete(pauseId);
-          this.ledger.holdClosed(pauseId);
+          // Its own guard: held-time bookkeeping (an injected clock) never
+          // keeps the release from being recorded.
+          this.guard('held-time', () => this.ledger.holdClosed(pauseId));
           this.guard('resumed', () => {
             this.emitInternal(
               'exec.resumed',
@@ -464,7 +504,7 @@ class SessionImpl implements Session {
         },
       },
       options.pauseTimeoutMs,
-      options.clock ?? monotonicNow,
+      this.clock,
     );
 
     this.transport = new Transport(
@@ -825,7 +865,10 @@ class SessionImpl implements Session {
    * Whether the pause about to open is offered as editable, and the validator
    * that will check an edit — bound HERE, in the gated call's async context,
    * so it later runs there and not in the transport's (AsyncLocalStorage
-   * state, including `session.currentRun()`, is the host's).
+   * state, including `session.currentRun()`, is the host's). A thenable it
+   * returns is adopted inside that binding too (see `adoptingThenables`).
+   * A `validateInput` that is present but not a function is a misconfigured
+   * safety check, not "no validator": the pause is not editable.
    */
   private editabilityOf(options: GateOptions | undefined): Pick<PendingPause, 'editable' | 'validate'> {
     if (options === undefined || !this.editsHonoured()) return { editable: false, validate: undefined };
@@ -838,10 +881,16 @@ class SessionImpl implements Session {
       return { editable: false, validate: undefined };
     }
     if (editable !== true) return { editable: false, validate: undefined };
-    return {
-      editable: true,
-      validate: typeof validate === 'function' ? AsyncResource.bind(validate as ValidateInput) : undefined,
-    };
+    if (validate === undefined) return { editable: true, validate: undefined };
+    if (typeof validate !== 'function') {
+      this.warner.warn(
+        'edit-input-validator',
+        'gate(): validateInput is not a function, so the pause is not offered as editable ' +
+          '(pass a function returning {ok, value} or {ok: false, code}, e.g. one calling mergeToolInput)',
+      );
+      return { editable: false, validate: undefined };
+    }
+    return { editable: true, validate: AsyncResource.bind(adoptingThenables(validate as ValidateInput)) };
   }
 
   /**
@@ -853,35 +902,45 @@ class SessionImpl implements Session {
    *   3. the pause was offered as `editable`       else `unsupported`
    *   4. `continue` at `before`, or `retry` at `after` / `error`   else `shape`
    *   5. the input holds no placeholder / truncation marker  else `placeholder` / `truncated`
+   *      and no `__proto__` key / `constructor.prototype` path  else `shape`
    *   6. the adapter's validator accepts it        else its code, or `shape`
    * An accepted edit releases the gate with `decision.input`, and
    * `exec.resumed.edited.after` records it. Unknown pauses, and a gate that
-   * is validating an edit, ignore the resume.
+   * is validating an edit, ignore the resume. `requestId` is echoed as it
+   * came (the wire sets no length; an answer must stay correlatable).
    */
   private handleResume(payload: MessagePayloadMap['exec.resume']): void {
     const { pauseId, action, output, input } = payload;
     const gate = this.engine.peek(pauseId);
     if (gate === undefined || gate.state !== 'held') return;
-    const requestId =
-      typeof payload.requestId === 'string' && payload.requestId.length <= MAX_REQUEST_ID_LENGTH
-        ? payload.requestId
-        : undefined;
+    const requestId = typeof payload.requestId === 'string' ? payload.requestId : undefined;
     if (input === undefined) {
-      // Inject guard, client side (C2): the placeholder or a truncated preview
-      // is never substituted for a result. Only under a 0.6 debugger — one
-      // that sends hubCapabilities also understands `exec.refused`; a 0.5
-      // debugger keeps 0.5 behaviour (and guards the placeholder itself).
-      if (action === 'inject' && this.hubCapabilities !== undefined) {
+      // Inject guard, client side (C2, refute-security C2.3 / S5): the
+      // placeholder or a truncated preview is never substituted for a result,
+      // whatever the debugger's version — a 0.5 hub guards only the
+      // placeholder, so under one this is the only guard there is. Refusing
+      // is fail-safe: the gate stays held, continue / retry / abort still work.
+      if (action === 'inject') {
         const refusal = proposedValueRefusal(output);
         if (refusal !== undefined) {
           this.emitRefused(gate, refusal, requestId);
+          if (this.hubCapabilities === undefined) {
+            // A 0.5 viewer does not show exec.refused: say why in the app's log.
+            this.warner.warn(
+              'inject-refused',
+              `refused an injected value: ${refusal.message ?? refusal.code}. The call is still paused ` +
+                '(inject the full value, or continue, retry or abort); this debugger does not show ' +
+                'refusals — upgrade it to see them there',
+            );
+          }
           return;
         }
       }
       this.engine.resume(pauseId, action as ResumeAction, output, requestId === undefined ? undefined : { requestId });
       return;
     }
-    const refusal = this.editRefusal(gate, action as ResumeAction) ?? proposedValueRefusal(input);
+    const refusal =
+      this.editRefusal(gate, action as ResumeAction) ?? proposedValueRefusal(input) ?? prototypeKeyRefusal(input);
     if (refusal !== undefined) {
       this.emitRefused(gate, refusal, requestId);
       return;
@@ -917,9 +976,13 @@ class SessionImpl implements Session {
   /**
    * Run the adapter's validator on a proposed input (the gate is
    * `validating`). A synchronous verdict is applied at once; a promise is
-   * awaited up to VALIDATION_TIMEOUT_MS. Whatever the validator does, exactly
-   * one verdict is applied — and none at all once a pause timeout or a detach
-   * has released the gate with its original input (the ticket is stale).
+   * awaited. Either way the verdict must come within VALIDATION_TIMEOUT_MS of
+   * this call — a timer covers a promise that is slow to settle, a clock
+   * check covers synchronous work the timer could not interrupt — or the
+   * edit is refused. Whatever the validator does, exactly one verdict is
+   * applied — and none at all once a pause timeout or a detach has released
+   * the gate with its original input (the ticket is stale, or the engine
+   * finds the pause deadline passed).
    */
   private validateEdit(
     ticket: ValidationTicket,
@@ -928,21 +991,39 @@ class SessionImpl implements Session {
     input: unknown,
     requestId: string | undefined,
   ): void {
+    let startedAt: number | undefined;
+    try {
+      startedAt = this.clock();
+    } catch {
+      startedAt = undefined; // an unreadable clock leaves the limit to the timer
+    }
+    const outlived = (): boolean => {
+      if (startedAt === undefined) return false;
+      try {
+        return this.clock() - startedAt >= VALIDATION_TIMEOUT_MS;
+      } catch {
+        return false;
+      }
+    };
     let timer: ReturnType<typeof setTimeout> | undefined;
     let settled = false;
     const finish = (result: unknown): void => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
-      this.guard('edit-input', () =>
-        this.applyVerdict(ticket, gate, action, normalizeValidation(result), requestId),
-      );
+      const verdict = outlived() ? VALIDATION_TIMED_OUT : normalizeValidation(result);
+      this.guard('edit-input', () => this.applyVerdict(ticket, gate, action, verdict, requestId));
     };
     const validate = this.editablePauses.get(gate.pauseId)?.validate;
+    // Under a switch that hides this input, the edit may only be a full
+    // replacement (refute-security S4 / C2.5; see ValidateInputContext).
+    const context: ValidateInputContext = Object.freeze({
+      inputHidden: this.redactor.coversPauseInput(gate.node.kind),
+    });
     let outcome: unknown;
     let then: unknown;
     try {
-      outcome = validate === undefined ? { ok: true, value: input } : validate(input);
+      outcome = validate === undefined ? { ok: true, value: input } : validate(input, context);
       then =
         (typeof outcome === 'object' && outcome !== null) || typeof outcome === 'function'
           ? (outcome as { then?: unknown }).then
@@ -955,13 +1036,7 @@ class SessionImpl implements Session {
       finish(outcome);
       return;
     }
-    timer = setTimeout(() => {
-      finish({
-        ok: false,
-        code: 'shape',
-        message: `the input was not validated within ${VALIDATION_TIMEOUT_MS / 1000} s`,
-      } satisfies InputValidation);
-    }, VALIDATION_TIMEOUT_MS);
+    timer = setTimeout(() => finish(VALIDATION_TIMED_OUT), VALIDATION_TIMEOUT_MS);
     timer.unref?.();
     Promise.resolve(outcome as PromiseLike<unknown>).then(finish, () => finish(VALIDATOR_FAILED));
   }

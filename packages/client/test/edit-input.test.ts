@@ -5,17 +5,28 @@
  * The session-level state machine is in edit-input-session.test.ts.
  */
 import { describe, expect, it } from 'vitest';
-import { TRUNCATION_SUFFIX, serializePayload } from '@graphmind-ai/schema';
+import { MCP_PREVIEW_NOTE_PREFIX, TRUNCATION_SUFFIX, serializePayload } from '@graphmind-ai/schema';
 import {
   MAX_REFUSAL_MESSAGE,
   VALIDATOR_FAILED,
   mergeToolInput,
   normalizeValidation,
+  prototypeKeyRefusal,
   proposedValueRefusal,
   sanitizeShortText,
   wireCopy,
 } from '../src/edit-input.js';
 import { REDACTED, mergeToolInput as exported } from '../src/index.js';
+
+/** The read-only MCP server's preview of a big value (packages/cli/src/mcp/run-model.ts `compactPayload`). */
+function mcpPreview(value: unknown, maxChars = 4000): { truncated: true; note: string; preview: string } {
+  const json = JSON.stringify(value);
+  return {
+    truncated: true,
+    note: `${MCP_PREVIEW_NOTE_PREFIX}${maxChars} of ${json.length} JSON characters — open the deep link in the GraphMind viewer for the full payload`,
+    preview: json.slice(0, maxChars),
+  };
+}
 
 describe('mergeToolInput — the default edit rule for tool arguments', () => {
   it('is exported from the package entry point', () => {
@@ -115,6 +126,75 @@ describe('mergeToolInput — the default edit rule for tool arguments', () => {
     expect(({} as Record<string, unknown>)['isAdmin']).toBeUndefined();
   });
 
+  // The other standard deep-merge pollution payload (lodash defaultsDeep
+  // CVE-2019-10744, the minimist CVE-2020-7598 bypass of "__proto__"-only fixes).
+  const CONSTRUCTOR_PROTOTYPE = '{"query":"LIS","constructor":{"prototype":{"gmPolluted8":true}}}';
+
+  it('a {"constructor":{"prototype":{...}}} path is refused at the top level, like "__proto__"', () => {
+    const result = mergeToolInput({ query: 'AMS' }, JSON.parse(CONSTRUCTOR_PROTOTYPE) as unknown);
+    expect(result).toMatchObject({ ok: false, code: 'shape' });
+    if (!result.ok) expect(result.message).toContain('constructor.prototype');
+  });
+
+  it('a constructor.prototype path at any depth is refused', () => {
+    const proposed = JSON.parse('{"filter":{"and":[{"constructor":{"prototype":{"isAdmin":true}}}]}}') as unknown;
+    expect(mergeToolInput({}, proposed)).toMatchObject({ ok: false, code: 'shape' });
+  });
+
+  it('whatever it accepts cannot rewrite Object.prototype through a naive deep merge (its stated threat)', () => {
+    /** Recursive, copies own enumerable keys, creates missing branches: tool code the doc warns about. */
+    function naiveDeepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+      for (const key of Object.keys(source)) {
+        const value = source[key];
+        if (typeof value === 'object' && value !== null) {
+          if (target[key] === undefined || target[key] === null) target[key] = {};
+          naiveDeepMerge(target[key] as Record<string, unknown>, value as Record<string, unknown>);
+        } else {
+          target[key] = value;
+        }
+      }
+      return target;
+    }
+    const proto = Object.prototype as unknown as Record<string, unknown>;
+    try {
+      for (const json of [CONSTRUCTOR_PROTOTYPE, '{"__proto__":{"gmPolluted8":true}}']) {
+        const merged = mergeToolInput({ query: 'AMS' }, JSON.parse(json) as unknown);
+        if (merged.ok) naiveDeepMerge({}, merged.value as Record<string, unknown>);
+      }
+      expect(proto['gmPolluted8']).toBeUndefined();
+    } finally {
+      delete proto['gmPolluted8'];
+    }
+  });
+
+  it.each([
+    ['a string', { constructor: 'Point' }],
+    ['an object without prototype', { constructor: { name: 'Point' } }],
+    ['a sibling "prototype" key', { prototype: { x: 1 }, constructor: 'Point' }],
+  ])('a key merely named "constructor" (%s) is an ordinary argument', (_label, proposed) => {
+    expect(mergeToolInput({ limit: 1 }, proposed)).toEqual({ ok: true, value: { limit: 1, ...proposed } });
+  });
+
+  it('context.inputHidden: the live input contributes no keys (a hidden input takes only a full replacement)', () => {
+    const live = { account: 'ACC-7731', confirm: 'ACC-7731', amount: 10 };
+    expect(mergeToolInput(live, { confirm: 'ACC-7731' }, { inputHidden: true })).toEqual({
+      ok: true,
+      value: { confirm: 'ACC-7731' },
+    });
+    const full = { account: 'ACC-1', confirm: 'ACC-1', amount: 5 };
+    expect(mergeToolInput(live, full, { inputHidden: true })).toEqual({ ok: true, value: full });
+  });
+
+  it.each([
+    ['no context', undefined],
+    ['inputHidden false', { inputHidden: false }],
+  ])('%s: the default merge onto the live input', (_label, context) => {
+    expect(mergeToolInput({ query: 'AMS', limit: 5 }, { limit: 1 }, context)).toEqual({
+      ok: true,
+      value: { query: 'AMS', limit: 1 },
+    });
+  });
+
   it('a live object carrying an own "__proto__" key (model JSON) stays inert in the merge', () => {
     const live = JSON.parse('{"__proto__": {"polluted": true}, "query": "AMS"}') as Record<string, unknown>;
     const result = mergeToolInput(live, { query: 'LIS' });
@@ -169,6 +249,8 @@ describe('proposedValueRefusal — placeholders and truncation markers never run
     ['LangGraph truncated preview', { state: { __graphmind: 'truncated', preview: 'x', chars: 9 } }, 'truncated'],
     ['LangGraph unserializable marker', { state: { __graphmind: 'unserializable', preview: 'x' } }, 'truncated'],
     ['a real shrunk input', shrunkString.input, 'truncated'],
+    ['the MCP get_node preview marker', mcpPreview({ content: 'x'.repeat(10_000) }), 'truncated'],
+    ['the MCP marker nested in a value', { hits: [mcpPreview({ body: 'y'.repeat(5000) })] }, 'truncated'],
   ])('refuses %s', (_label, value, code) => {
     expect(proposedValueRefusal(value)).toMatchObject({ code });
   });
@@ -186,6 +268,8 @@ describe('proposedValueRefusal — placeholders and truncation markers never run
     ['a string that merely mentions the LangGraph marker', { q: '"__graphmind":"truncated"' }],
     ['a __graphmind key with another value', { __graphmind: 'note' }],
     ['undefined (no JSON form, nothing to check)', undefined],
+    ['a legitimate truncated flag with its own note', { tree: [], truncated: true, note: 'GitHub API capped the listing' }],
+    ['a string that merely quotes the MCP note', { q: `"note":"${MCP_PREVIEW_NOTE_PREFIX}4000 of 9000"` }],
   ])('accepts %s', (_label, value) => {
     expect(proposedValueRefusal(value)).toBeUndefined();
   });
@@ -202,6 +286,49 @@ describe('proposedValueRefusal — placeholders and truncation markers never run
     for (const value of [{ q: `${secret} ${REDACTED}` }, { q: `${secret}${TRUNCATION_SUFFIX}` }]) {
       expect(proposedValueRefusal(value)?.message).not.toContain(secret);
     }
+  });
+});
+
+describe('prototypeKeyRefusal — the key guard the session applies to every edit', () => {
+  it.each([
+    ['a top-level own "__proto__" key', '{"__proto__":{"isAdmin":true},"q":1}'],
+    ['a nested own "__proto__" key', '{"opts":{"__proto__":{"isAdmin":true}}}'],
+    ['a "__proto__" key inside an array', '[{"__proto__":{}}]'],
+    ['a top-level constructor.prototype path', '{"constructor":{"prototype":{"polluted":true}}}'],
+    ['a nested constructor.prototype path', '{"filter":{"and":[{"constructor":{"prototype":{}}}]}}'],
+  ])('refuses %s (shape)', (_label, json) => {
+    const refusal = prototypeKeyRefusal(JSON.parse(json) as unknown);
+    expect(refusal).toMatchObject({ code: 'shape' });
+    expect(refusal?.message).not.toContain('isAdmin');
+  });
+
+  it.each([
+    ['a plain object', { query: 'LIS' }],
+    ['a key named constructor holding a string', { constructor: 'Point' }],
+    ['a key named prototype', { prototype: { x: 1 } }],
+    ['a constructor object without prototype', { constructor: { name: 'Point' } }],
+    ['a string mentioning __proto__', { q: '__proto__' }],
+    ['a primitive', 'text'],
+    ['null', null],
+    ['undefined', undefined],
+  ])('accepts %s', (_label, value) => {
+    expect(prototypeKeyRefusal(value)).toBeUndefined();
+  });
+
+  it('is cycle-safe and never throws on an unreadable value', () => {
+    const cyclic: Record<string, unknown> = { q: 1 };
+    cyclic['self'] = cyclic;
+    expect(prototypeKeyRefusal(cyclic)).toBeUndefined();
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error('boom');
+        },
+      },
+    );
+    expect(() => prototypeKeyRefusal(hostile)).not.toThrow();
+    expect(prototypeKeyRefusal(hostile)).toMatchObject({ code: 'shape' });
   });
 });
 

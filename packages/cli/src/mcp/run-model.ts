@@ -9,6 +9,7 @@
  */
 import {
   EventPayloadSchemas,
+  MCP_PREVIEW_NOTE_PREFIX,
   type ErrorInfo,
   type NodeKind,
   type RunStatus,
@@ -163,7 +164,9 @@ export interface TruncatedPayload {
 /**
  * Cap huge payloads: values whose JSON form exceeds `maxChars` are replaced
  * by a `{ truncated, note, preview }` marker (the full payload stays in the
- * DB and in the viewer — the note says so).
+ * DB and in the viewer — the note says so). The note starts with
+ * MCP_PREVIEW_NOTE_PREFIX, which the edit / inject guards refuse: a preview
+ * is never run as a value.
  */
 export function compactPayload(value: unknown, maxChars: number): unknown {
   if (value === undefined) return undefined;
@@ -171,7 +174,7 @@ export function compactPayload(value: unknown, maxChars: number): unknown {
   if (json === undefined || json.length <= maxChars) return value;
   return {
     truncated: true,
-    note: `payload truncated: showing first ${maxChars} of ${json.length} JSON characters — open the deep link in the GraphMind viewer for the full payload`,
+    note: `${MCP_PREVIEW_NOTE_PREFIX}${maxChars} of ${json.length} JSON characters — open the deep link in the GraphMind viewer for the full payload`,
     preview: json.slice(0, maxChars),
   } satisfies TruncatedPayload;
 }

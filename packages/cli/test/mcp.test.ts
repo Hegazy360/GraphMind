@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { MCP_PREVIEW_NOTE_PREFIX } from '@graphmind-ai/schema';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SqliteStorage } from '../src/sqlite-storage.js';
 
@@ -265,6 +266,8 @@ describe('graphmind mcp over stdio', () => {
     // The 20k-char blob must come back truncated, with a note.
     expect(instance.output.truncated).toBe(true);
     expect(instance.output.note).toMatch(/truncated: showing first 4000 of \d+ JSON characters/);
+    // The shared prefix the edit / inject guards refuse (a preview never runs as a value).
+    expect(instance.output.note.startsWith(MCP_PREVIEW_NOTE_PREFIX)).toBe(true);
     expect(instance.output.preview.length).toBe(4000);
 
     const llm = await call(seeded.client, 'get_node', { runId: 'run-ok-1', nodeId: 'llm:step' });

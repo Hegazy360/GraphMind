@@ -150,7 +150,7 @@ guarantee against error text. The Python SDK and the Ruby gem implement the same
 | decision | adapter's obligation |
 |---|---|
 | `{action:'continue'}` | proceed normally |
-| `{action:'inject', output}` | skip execution (or replace the failed result) and use `output` |
+| `{action:'inject', output}` | skip execution (or replace the failed result) and use `output` (an `output` holding `"__REDACTED__"` or a truncated preview is never handed over: the session answers `exec.refused` and the gate stays held) |
 | `{action:'retry'}` | re-run the node's execution (typically after an `error` gate) |
 | `{action:'abort'}` | stop the run — see below |
 
@@ -171,8 +171,8 @@ An adapter that can run a call with different arguments says so per gate:
 const decision = await session.gate('before', node, {
   editable: true,
   // for tools: merge the edit onto the LIVE arguments, then check your schema
-  validateInput: (proposed) => {
-    const merged = mergeToolInput(liveArgs, proposed);
+  validateInput: (proposed, context) => {
+    const merged = mergeToolInput(liveArgs, proposed, context);
     return merged.ok ? mySchemaCheck(merged.value) : merged;
   },
 });
@@ -181,14 +181,25 @@ if (decision.action === 'continue' && 'input' in decision) liveArgs = decision.i
 
 The pause is offered as `editable` only when the app announced `edit-input`
 (`GRAPHMIND_DISABLE_EDIT_INPUT` turns it off, same spellings as the other
-switches) and the debugger lists it in `hello.ack.hubCapabilities`. An edit is
-valid as `continue` at `before` or `retry` at `after`/`error`; anything else,
-an input holding `"__REDACTED__"` or a truncation marker, or a validator that
-refuses, throws or takes longer than 4 s is answered with `exec.refused` and
-the gate **stays held** under the same pause id. A disconnect or pause
-timeout while validating continues with the original input.
-`exec.resumed.edited.after` records the input that ran, redacted like the
-node's input (`HIDE_INPUTS`, or `HIDE_TOOL_ARGS` on a tool).
+switches) and the debugger lists it in `hello.ack.hubCapabilities` (and never
+when `validateInput` is given but is not a function). An edit is valid as
+`continue` at `before` or `retry` at `after`/`error`; anything else, an input
+holding `"__REDACTED__"`, a truncation marker, a `__proto__` key or a
+`constructor.prototype` path, or a validator that refuses, throws or takes
+longer than 4 s is answered with `exec.refused` and the gate **stays held**
+under the same pause id. The 4 s run from the moment the resume arrives and
+cover synchronous work too: a synchronous validator (or the synchronous start
+of an async one) cannot be interrupted and blocks your app while it runs, but
+a verdict it reaches after 4 s is refused, so keep validators quick. A
+disconnect or pause timeout while validating continues with the original
+input. `exec.resumed.edited.after` records the input that ran, redacted like
+the node's input (`HIDE_INPUTS`, or `HIDE_TOOL_ARGS` on a tool). Under those
+switches the debugger never saw the live input, so `context.inputHidden` is
+true and `mergeToolInput` takes the edit as a **full replacement** — a partial
+edit merged onto hidden values would make the answer to a guess reveal them.
+The validator, and a promise (any thenable) it returns, run in the gated
+call's async context. `exec.resume.requestId` is echoed on `exec.resumed` /
+`exec.refused` as it came.
 
 `gate('after', node, { result })` hands the call's result to the session's
 after-gate detectors (smart holds); it is never sent through this option.

@@ -48,5 +48,17 @@ export const KNOWN_CAPABILITIES = [
 
 export type KnownCapability = (typeof KNOWN_CAPABILITIES)[number];
 
+/**
+ * How the `note` begins on a payload the read-only MCP server (`graphmind
+ * mcp`, `get_node`) cut to a preview: `{truncated: true, note: "payload
+ * truncated: showing first N of M JSON characters — …", preview}`. Like the
+ * shrink's marker and TRUNCATION_SUFFIX, it marks a preview of a value, never
+ * the value: a coding agent that read a held node through `get_node` and
+ * resumes with it is sending something it never saw in full, so it is
+ * refused as an edited input or inject output (`exec.refused`, code
+ * `truncated`). Shared so the producer and the guards cannot drift apart.
+ */
+export const MCP_PREVIEW_NOTE_PREFIX = 'payload truncated: showing first ';
+
 /** A capability string: one of the known ones, or a future/unknown one. */
 export type Capability = KnownCapability | (string & {});
