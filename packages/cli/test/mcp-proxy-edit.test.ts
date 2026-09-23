@@ -156,6 +156,36 @@ describe('continue + input at the before gate', () => {
     );
   });
 
+  // Integration defect (tool gates x W0 fixes): under a HIDE switch the proxy
+  // merged the edit onto the hidden live arguments and compared `_meta` with
+  // the hidden live value — both answers leak a hidden value per edit.
+  it('under GRAPHMIND_HIDE_TOOL_ARGS an edit replaces the arguments wholesale and may not name any other key', async () => {
+    const { viewer: v, rig: r } = await attach({
+      breakpoints: [{ kind: 'tool', name: 'echoArgs' }],
+      sessionOptions: { env: { GRAPHMIND_HIDE_TOOL_ARGS: '1' } },
+    });
+    r.request(1, 'tools/call', { name: 'echoArgs', arguments: { text: 'a', times: 3 }, _meta: { progressToken: 7 } });
+    const paused = await pausedAt(v, 'tool:echoArgs', 'before');
+    expect(paused.payload['editable']).toBe(true);
+    const pauseId = pauseIdOf(paused);
+
+    // Naming `_meta` (equal or not to the hidden live value) is refused without a comparison.
+    v.resumeWith({ pauseId, action: 'continue', input: { arguments: { text: 'b' }, _meta: { progressToken: 7 } } });
+    const refused = await refusal(v, pauseId, 1);
+    expect(refused.payload['code']).toBe('shape');
+    expect(refused.payload['message']).toBeUndefined(); // a covering HIDE switch drops the message
+    v.resumeWith({ pauseId, action: 'continue', input: { name: 'echoArgs', arguments: { text: 'b' } } });
+    expect((await refusal(v, pauseId, 2)).payload['code']).toBe('shape');
+
+    // Only arguments: a full replacement — `times` is NOT carried over from the hidden live call.
+    v.resumeWith({ pauseId, action: 'continue', input: { arguments: { text: 'b' } } });
+    const line = JSON.parse(receivedLine(await r.response(1))) as { params: Record<string, unknown> };
+    expect(line.params['arguments']).toEqual({ text: 'b' });
+    expect(line.params['_meta']).toEqual({ progressToken: 7 });
+    const resumed = v.received.find((f) => f.type === 'exec.resumed' && f.payload['pauseId'] === pauseId);
+    expect((resumed?.payload['edited'] as { after: unknown }).after).toBe('__REDACTED__');
+  });
+
   it('every other frame stays byte-for-byte, before and after an edited one', async () => {
     const { viewer: v, rig: r } = await attach({ breakpoints: [{ kind: 'tool', name: 'echoArgs' }] });
     const odd = (id: number, text: string): string =>

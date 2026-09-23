@@ -298,6 +298,9 @@ describe('toolSchemaCheck', () => {
   });
 });
 
+/** The session's context for an input the debugger can see. */
+const VISIBLE = { inputHidden: false } as const;
+
 describe('toolArgsValidator', () => {
   it('merges (top-level keys replace) and then checks', async () => {
     const seen: unknown[] = [];
@@ -305,7 +308,7 @@ describe('toolArgsValidator', () => {
       seen.push(value);
       return { ok: true, value: { ...(value as object), checked: true } };
     });
-    expect(await validate({ b: 3 })).toEqual({ ok: true, value: { a: 1, b: 3, checked: true } });
+    expect(await validate({ b: 3 }, VISIBLE)).toEqual({ ok: true, value: { a: 1, b: 3, checked: true } });
     expect(seen).toEqual([{ a: 1, b: 3 }]);
   });
 
@@ -315,13 +318,34 @@ describe('toolArgsValidator', () => {
       ran = true;
       return { ok: true, value: 1 };
     });
-    expect(await validate([1])).toMatchObject({ ok: false, code: 'shape' });
-    expect(await validate(JSON.parse('{"__proto__":{"x":1}}'))).toMatchObject({ ok: false, code: 'shape' });
+    expect(await validate([1], VISIBLE)).toMatchObject({ ok: false, code: 'shape' });
+    expect(await validate(JSON.parse('{"__proto__":{"x":1}}'), VISIBLE)).toMatchObject({ ok: false, code: 'shape' });
     expect(ran).toBe(false);
   });
 
   it('without a check the merged object is the verdict', async () => {
-    expect(await toolArgsValidator(undefined)({ q: 'x' })).toEqual({ ok: true, value: { q: 'x' } });
+    expect(await toolArgsValidator(undefined)({ q: 'x' }, VISIBLE)).toEqual({ ok: true, value: { q: 'x' } });
+  });
+
+  // Integration defect found when the tool gates met the W0 fixes: the
+  // validator dropped the session's context, so under a HIDE switch an edit
+  // was completed from the hidden live arguments and the refuse-or-run answer
+  // (repeatable while the gate stays held) revealed them.
+  it('under a hidden input the edit is a FULL replacement: never completed from, or checked against, live values', async () => {
+    const seen: Array<{ value: unknown; hidden: unknown }> = [];
+    const validate = toolArgsValidator({ secret: 'hunter2', keep: 1 }, (value, context) => {
+      seen.push({ value, hidden: context?.inputHidden });
+      return { ok: true, value };
+    });
+    expect(await validate({ keep: 2 }, { inputHidden: true })).toEqual({ ok: true, value: { keep: 2 } });
+    expect(await validate({ keep: 2 }, { inputHidden: false })).toEqual({
+      ok: true,
+      value: { secret: 'hunter2', keep: 2 },
+    });
+    expect(seen).toEqual([
+      { value: { keep: 2 }, hidden: true },
+      { value: { secret: 'hunter2', keep: 2 }, hidden: false },
+    ]);
   });
 });
 

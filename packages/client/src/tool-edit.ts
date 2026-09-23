@@ -29,12 +29,26 @@
  * surfaces as a rejected verdict, which the session turns into a `shape`
  * refusal with the gate still held.
  */
-import { mergeToolInput, sanitizeShortText, type InputValidation, type ValidateInput } from './edit-input.js';
+import {
+  mergeToolInput,
+  sanitizeShortText,
+  type InputValidation,
+  type ValidateInput,
+  type ValidateInputContext,
+} from './edit-input.js';
 import type { GateDecision } from './gate-engine.js';
 import type { GateOptions } from './session.js';
 
 /** Checks (and parses) merged tool arguments. `value` on success is what runs. */
-export type SchemaCheck = (value: unknown) => InputValidation | PromiseLike<InputValidation>;
+/**
+ * Checks merged tool arguments. `context` is the session's (see
+ * ValidateInputContext): a check that merges or compares against live values
+ * itself must honour `inputHidden` the same way mergeToolInput does.
+ */
+export type SchemaCheck = (
+  value: unknown,
+  context?: ValidateInputContext,
+) => InputValidation | PromiseLike<InputValidation>;
 
 /** Said when a schema rejects an edit but gave nothing readable about why. */
 const GENERIC_SCHEMA_MESSAGE = "the edited arguments do not match the tool's input schema";
@@ -65,10 +79,13 @@ export function isEditableToolInput(value: unknown): boolean {
  * ones (`mergeToolInput`), then run `check` on the result when there is one.
  */
 export function toolArgsValidator(live: unknown, check?: SchemaCheck): ValidateInput {
-  return (proposed) => {
-    const merged = mergeToolInput(live, proposed);
+  // `context` MUST reach mergeToolInput: when a HIDE switch covers the input,
+  // the edit is judged as a full replacement, never completed from the hidden
+  // live values (otherwise refuse-or-run answers leak them, one guess per edit).
+  return (proposed, context) => {
+    const merged = mergeToolInput(live, proposed, context);
     if (!merged.ok || check === undefined) return merged;
-    return check(merged.value);
+    return check(merged.value, context);
   };
 }
 

@@ -1047,10 +1047,22 @@ export class ProxyReporter {
     return {
       args: params,
       // `merged` is `{...params, ...proposed}` (see toolArgsValidator).
-      check: (merged) => {
+      check: (merged, context) => {
         const proposed = merged as Record<string, unknown>;
+        const hidden = context?.inputHidden === true;
         for (const key of Object.keys(proposed)) {
           if (key === 'arguments') continue;
+          // Under a HIDE switch the recorded params are hidden too: comparing
+          // an edit's `_meta` (or any key) with the live value would answer
+          // "equal or not" for a hidden value, one guess per edit. Refuse any
+          // key but `arguments` without looking at the live one.
+          if (hidden) {
+            return {
+              ok: false,
+              code: 'shape',
+              message: "the input is hidden: send only the tool's arguments, as a full replacement",
+            };
+          }
           if (canonicalize(proposed[key]) !== canonicalize(params[key])) {
             return {
               ok: false,
@@ -1059,7 +1071,7 @@ export class ProxyReporter {
             };
           }
         }
-        const args = mergeToolInput(params['arguments'], proposed['arguments']);
+        const args = mergeToolInput(params['arguments'], proposed['arguments'], context);
         if (!args.ok) return args;
         const effective = (value: unknown): InputValidation => ({ ok: true, value: { ...params, arguments: value } });
         const schema = typeof name === 'string' ? this.toolSchemas.get(name) : undefined;
