@@ -20,13 +20,43 @@
  *                actually receives it
  *    abort    -> the session aborts the run's AbortController; this throws an
  *                AbortError-named reason
+ *
+ * Tool calls only (0.6.0, contract C2): with `edit`, every gate is offered as
+ * `editable`, and `continue` + input at `before` / `retry` + input at `after`
+ * or `error` invokes the handler with the edited arguments (merged into the
+ * live ones, checked by the tool's schema when it has one; a refusal keeps
+ * the gate held). The latest accepted edit stays the call's arguments for
+ * later attempts. With `reportResult`, the `after` gate hands the handler's
+ * result to the session's after-gate detectors.
  */
-import { isAbortError, type GateNode, type RunContext, type RunStatus } from '@graphmind-ai/client';
+import {
+  editedArgs,
+  isAbortError,
+  isEditableToolInput,
+  toolGateOptions,
+  type GateDecision,
+  type GateNode,
+  type GateOptions,
+  type RunContext,
+  type RunStatus,
+  type SchemaCheck,
+  type ToolEdit,
+} from '@graphmind-ai/client';
 import { elapsedMs, now } from './clock.js';
 import type { AdapterCore } from './core.js';
 
 /** A gate that outlasts this is a real hold; warn about client timeouts once. */
 const HOLD_WARN_MS = 1000;
+
+/** How a tool call can take edited arguments. */
+export interface GateFlowEdit {
+  /** The arguments the handler received (the SDK's parsed copy of the model's). */
+  live: unknown;
+  /** The tool's schema check; undefined: the merged edit runs as it is. */
+  check: SchemaCheck | undefined;
+  /** Invoke the handler with other arguments (called again on `retry`). */
+  invokeWith: (args: unknown) => unknown | Promise<unknown>;
+}
 
 export interface GateFlowOptions {
   core: AdapterCore;
@@ -41,18 +71,23 @@ export interface GateFlowOptions {
   invoke: () => unknown | Promise<unknown>;
   /** Lift a debugger-supplied `inject` value into a valid result. */
   coerce: (value: unknown) => unknown;
+  /** Tool calls: how the call can run with edited arguments. */
+  edit?: GateFlowEdit | undefined;
+  /** Tool calls: hand the handler's result to the after-gate detectors. */
+  reportResult?: boolean | undefined;
 }
 
 async function gateAt(
   core: AdapterCore,
   point: 'before' | 'after' | 'error',
   node: GateNode,
+  options?: GateOptions,
 ): ReturnType<AdapterCore['session']['gate']> {
   // Fast path: detached gates resolve from a shared promise; do not even
   // spend two clock reads on them.
   if (!core.session.attached) return core.session.gate(point, node);
   const startedAt = now();
-  const decision = await core.session.gate(point, node);
+  const decision = await core.session.gate(point, node, options);
   if (now() - startedAt > HOLD_WARN_MS) core.warnHoldTimeout();
   return decision;
 }
@@ -87,8 +122,21 @@ export async function gateFlow(options: GateFlowOptions): Promise<unknown> {
     });
   };
 
+  // What runs: the handler as the SDK called it, until an edit is accepted.
+  const editSite = options.edit;
+  let invoke = options.invoke;
+  let live = editSite?.live;
+  const edit = (): ToolEdit | undefined =>
+    editSite !== undefined && isEditableToolInput(live) ? { args: live, check: editSite.check } : undefined;
+  const applyEdit = (decision: GateDecision): void => {
+    const edited = editSite === undefined ? undefined : editedArgs(decision);
+    if (editSite === undefined || edited === undefined) return;
+    live = edited.args;
+    invoke = () => editSite.invokeWith(edited.args);
+  };
+
   for (;;) {
-    const pre = await gateAt(core, 'before', node);
+    const pre = await gateAt(core, 'before', node, toolGateOptions(core.session, edit));
     if (pre.action === 'abort') {
       settle(undefined, 'aborted');
       throw core.abortError(ctx);
@@ -99,10 +147,11 @@ export async function gateFlow(options: GateFlowOptions): Promise<unknown> {
       return injected;
     }
     // 'retry' before execution is equivalent to continue.
+    applyEdit(pre);
 
     let result: unknown;
     try {
-      result = await options.invoke();
+      result = await invoke();
     } catch (error) {
       // A debugger-driven abort surfacing from the handler body is terminal.
       if (ctx?.signal.aborted === true && isAbortError(error)) {
@@ -110,13 +159,16 @@ export async function gateFlow(options: GateFlowOptions): Promise<unknown> {
         throw error;
       }
       core.errorNode(node.nodeId, instanceId, error);
-      const decision = await gateAt(core, 'error', node);
+      const decision = await gateAt(core, 'error', node, toolGateOptions(core.session, edit));
       if (decision.action === 'inject') {
         const injected = options.coerce(decision.output);
         settle(injected, 'ok', { injected: true, injectedAt: 'error' });
         return injected;
       }
-      if (decision.action === 'retry') continue;
+      if (decision.action === 'retry') {
+        applyEdit(decision);
+        continue;
+      }
       if (decision.action === 'abort') {
         settle(undefined, 'aborted');
         throw core.abortError(ctx);
@@ -125,13 +177,21 @@ export async function gateFlow(options: GateFlowOptions): Promise<unknown> {
       throw error; // 'continue': the SDK sees the handler's original error
     }
 
-    const post = await gateAt(core, 'after', node);
+    const post = await gateAt(
+      core,
+      'after',
+      node,
+      toolGateOptions(core.session, edit, options.reportResult === true ? { result } : undefined),
+    );
     if (post.action === 'inject') {
       const injected = options.coerce(post.output);
       settle(injected, 'ok', { injected: true, injectedAt: 'after' });
       return injected;
     }
-    if (post.action === 'retry') continue;
+    if (post.action === 'retry') {
+      applyEdit(post);
+      continue;
+    }
     if (post.action === 'abort') {
       settle(result, 'aborted');
       throw core.abortError(ctx);

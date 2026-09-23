@@ -137,6 +137,17 @@ is its own async frame, so `await Promise.all([...])` holds each separately):
   - `abort` — abort the run's `AbortController` and throw an `AbortError`-named
     reason (terminal; the next `messages.create` in the run refuses to start).
 
+**Editing a tool's arguments (0.6.0).** With a 0.6 debugger, a wrapped call
+made with one object argument (the usual `tool_use.input`) is editable at every
+gate: `continue` with new arguments at `before`, or `retry` with new arguments
+at `after` / `error`, calls your real function with the edit merged into the
+live argument (top-level keys replace, the rest keep their values). A plain
+function has no schema, so the merged object is passed as it is — your function
+is the validator, and a throw lands on the error gate. Calls with a string or
+several arguments are not editable. This call only: the model still sees the
+`tool_use` it produced. Model requests are not editable. The `after` gate also
+hands the result to the debugger's smart holds.
+
 **Server-executed tools** (`server_tool_use`: web search, web fetch, code
 execution, ...) run on Anthropic's side and cannot be held. They are observed
 from the response and emitted as tool nodes carrying `serverExecuted: true` and

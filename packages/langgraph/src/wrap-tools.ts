@@ -18,6 +18,22 @@
  *     throws an AbortError-named error
  *   `after` gate post-call, pre-return -> inject substitutes the result
  *
+ * EDITED ARGUMENTS (0.6.0, contract C2). A call whose input is an object is
+ * offered as `editable` at every gate (the session shows it only when the app
+ * and the debugger both enabled edits). `continue` + input at `before`, or
+ * `retry` + input at `after` / `error`, runs the REAL function with the edit
+ * merged into the live input (top-level keys replace). A LangChain tool's own
+ * `schema` (zod `safeParseAsync`, a Standard Schema, or JSON Schema) checks
+ * the merged input first — LangChain parsed the MODEL's arguments before
+ * `func` ran, and an edit arrives after that — and its parsed value is what
+ * runs; a refusal keeps the gate held. A plain `gm.tool` function carries no
+ * schema, so its merged input is not checked further. A `ToolCall` handed to
+ * a class-based tool's `invoke` has its `args` edited and keeps its id. The
+ * latest accepted edit stays the call's input for later attempts; the node's
+ * recorded input (and so the loop fingerprint) keeps what the model asked
+ * for, and `exec.resumed.edited` records what ran. The `after` gate also
+ * hands the result to the session's after-gate detectors.
+ *
  * EVENTS. When the callback handler is attached it has already announced this
  * tool run (with LangChain's own run id, parentage and toolCallId), so the
  * wrapper stays quiet and only leaves annotations (`injected`, `attempts`) for
@@ -27,10 +43,17 @@
 import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
 import {
   CONTINUE_DECISION,
+  editedArgs,
   isAbortError,
+  isEditableToolInput,
+  toolGateOptions,
+  toolSchemaCheck,
   type GateDecision,
   type GateNode,
+  type GateOptions,
   type RunStatus,
+  type SchemaCheck,
+  type ToolEdit,
 } from '@graphmind-ai/client';
 import type { AdapterCore, ToolRunLink } from './core.js';
 import { nextId, toolNodeId } from './ids.js';
@@ -54,6 +77,83 @@ interface CallSite {
 }
 
 /**
+ * How one call can take edited arguments: the live input an edit merges into,
+ * the tool's schema check, and how to make the call with other arguments.
+ * Absent when the call's input cannot take an edit (not an object).
+ */
+interface EditSite {
+  live: unknown;
+  check: SchemaCheck | undefined;
+  callWith: (args: unknown) => unknown;
+}
+
+/**
+ * The edit site for a call whose input is its first argument: editable when
+ * that argument is an object (or nothing), re-invoked with the edit in its
+ * place and every other argument unchanged.
+ */
+function firstArgumentSite(
+  args: readonly unknown[],
+  check: SchemaCheck | undefined,
+  invoke: (args: unknown[]) => unknown,
+): EditSite | undefined {
+  if (args.length === 0 || !isEditableToolInput(args[0])) return undefined;
+  return { live: args[0], check, callWith: (edited) => invoke([edited, ...args.slice(1)]) };
+}
+
+/**
+ * A LangChain `ToolCall` (`{name, args, id, type: 'tool_call'}`), as ToolNode
+ * hands it to `invoke`. Never throws (a hostile input reads as "not one").
+ */
+function isToolCall(value: unknown): value is Record<string, unknown> & { args: unknown } {
+  try {
+    return (
+      typeof value === 'object' &&
+      value !== null &&
+      (value as { type?: unknown }).type === 'tool_call' &&
+      'args' in value
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The edit site for a class-based tool's `invoke(input, ...rest)`: a
+ * `ToolCall` has its `args` edited (its id and name kept); plain arguments
+ * are edited in place. Never throws: an input that cannot be read is simply
+ * not editable.
+ */
+function invokeSite(
+  args: readonly unknown[],
+  check: SchemaCheck | undefined,
+  invoke: (args: unknown[]) => unknown,
+): EditSite | undefined {
+  try {
+    const first = args[0];
+    if (!isToolCall(first)) return firstArgumentSite(args, check, invoke);
+    const live = first.args;
+    if (!isEditableToolInput(live)) return undefined;
+    return {
+      live,
+      check,
+      callWith: (edited) => invoke([{ ...first, args: edited }, ...args.slice(1)]),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** The schema a LangChain tool carries (`tool.schema`), as a check for edits. */
+function schemaCheckOf(tool: object): SchemaCheck | undefined {
+  try {
+    return toolSchemaCheck((tool as { schema?: unknown }).schema);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Wrap a plain function with the full gate set. `name` is the logical node
  * name; the node id is `tool:<name>`.
  */
@@ -65,8 +165,13 @@ export function gateFunction<A extends unknown[], R>(
   return async (...args: A): Promise<R> => {
     const attachWait = core.maybeWaitForAttach();
     if (attachWait !== undefined) await attachWait;
-    return runGated(core, name, { runId: undefined, link: undefined }, args[0], () =>
-      original(...args),
+    return runGated(
+      core,
+      name,
+      { runId: undefined, link: undefined },
+      args[0],
+      () => original(...args),
+      firstArgumentSite(args, undefined, (next) => original(...(next as A))),
     ) as Promise<R>;
   };
 }
@@ -81,19 +186,25 @@ export function wrapStructuredTool<T extends StructuredToolLike>(core: AdapterCo
   core.wrapperGatedTools.add(name);
 
   const clone = cloneTool(tool);
+  const check = schemaCheckOf(tool);
 
   if (typeof tool.func === 'function') {
     // DynamicTool / DynamicStructuredTool (everything `tool()` builds).
     // `func(input, runManager, config)` — runManager.runId is the SAME run id
     // the callback handler saw in handleToolStart, which is how the two sides
-    // find each other.
+    // find each other. `input` is what LangChain parsed with `schema`.
     const original = tool.func as (...args: unknown[]) => unknown;
     (clone as { func: unknown }).func = async (...args: unknown[]): Promise<unknown> => {
       const attachWait = core.maybeWaitForAttach();
       if (attachWait !== undefined) await attachWait;
       const runId = readRunId(args[1]);
-      return runGated(core, name, { runId, link: core.toolLink(runId) }, args[0], () =>
-        original.apply(clone, args),
+      return runGated(
+        core,
+        name,
+        { runId, link: core.toolLink(runId) },
+        args[0],
+        () => original.apply(clone, args),
+        firstArgumentSite(args, check, (next) => original.apply(clone, next)),
       );
     };
     return clone;
@@ -107,8 +218,13 @@ export function wrapStructuredTool<T extends StructuredToolLike>(core: AdapterCo
     (clone as { invoke: unknown }).invoke = async (...args: unknown[]): Promise<unknown> => {
       const attachWait = core.maybeWaitForAttach();
       if (attachWait !== undefined) await attachWait;
-      return runGated(core, name, { runId: undefined, link: undefined }, args[0], () =>
-        original.apply(clone, args),
+      return runGated(
+        core,
+        name,
+        { runId: undefined, link: undefined },
+        args[0],
+        () => original.apply(clone, args),
+        invokeSite(args, check, (next) => original.apply(clone, next)),
       );
     };
     return clone;
@@ -144,7 +260,8 @@ async function runGated(
   name: string,
   site: CallSite,
   input: unknown,
-  call: () => unknown,
+  originalCall: () => unknown,
+  editSite?: EditSite,
 ): Promise<unknown> {
   const nodeId = site.link?.nodeId ?? toolNodeId(name);
   const node: GateNode = { nodeId, kind: 'tool', name };
@@ -156,6 +273,18 @@ async function runGated(
   // Resolved inside the run context so it picks up that run's abort reason.
   const abortError = (): Promise<Error> =>
     runIn(() => core.abortError(core.session.currentRun()));
+
+  // What runs: the call as it came, until an edit is accepted.
+  let call = originalCall;
+  let live = editSite?.live;
+  const edit = (): ToolEdit | undefined =>
+    editSite !== undefined && isEditableToolInput(live) ? { args: live, check: editSite.check } : undefined;
+  const applyEdit = (decision: GateDecision): void => {
+    const edited = editSite === undefined ? undefined : editedArgs(decision);
+    if (editSite === undefined || edited === undefined) return;
+    live = edited.args;
+    call = () => editSite.callWith(edited.args);
+  };
 
   if (ownsEvents) {
     await runIn(() =>
@@ -187,7 +316,7 @@ async function runGated(
   };
 
   for (;;) {
-    const pre = await gate(core, site, 'before', node);
+    const pre = await gate(core, site, 'before', node, toolGateOptions(core.session, edit));
     if (pre.action === 'abort') {
       note({ aborted: true, attempts });
       await runIn(() => finish(undefined, 'aborted'));
@@ -199,6 +328,7 @@ async function runGated(
       return pre.output;
     }
     // 'retry' before execution is equivalent to continue.
+    applyEdit(pre);
 
     attempts += 1;
     let result: unknown;
@@ -223,7 +353,7 @@ async function runGated(
       // ones it swallows (inject / retry), which would otherwise be invisible.
       const decision = await runIn(async () => {
         if (ownsEvents) core.errorNode(nodeId, instanceId, error);
-        return owned ? core.session.gate('error', node) : CONTINUE_DECISION;
+        return owned ? core.session.gate('error', node, toolGateOptions(core.session, edit)) : CONTINUE_DECISION;
       });
       const swallowed = decision.action === 'inject' || decision.action === 'retry';
       if (swallowed && !ownsEvents) await runIn(() => core.errorNode(nodeId, instanceId, error));
@@ -236,6 +366,7 @@ async function runGated(
         // The re-run may throw this very object again; that is a new failure
         // and deserves its own pause.
         core.releaseError(error);
+        applyEdit(decision);
         continue;
       }
       if (decision.action === 'abort') {
@@ -248,13 +379,16 @@ async function runGated(
       throw error; // 'continue': LangChain sees the original error
     }
 
-    const post = await gate(core, site, 'after', node);
+    const post = await gate(core, site, 'after', node, toolGateOptions(core.session, edit, { result }));
     if (post.action === 'inject') {
       note({ injected: true, attempts });
       await runIn(() => finish(post.output, 'ok', { injected: true }));
       return post.output;
     }
-    if (post.action === 'retry') continue;
+    if (post.action === 'retry') {
+      applyEdit(post);
+      continue;
+    }
     if (post.action === 'abort') {
       note({ aborted: true, attempts });
       await runIn(() => finish(result, 'aborted'));
@@ -271,6 +405,7 @@ function gate(
   site: CallSite,
   point: 'before' | 'after' | 'error',
   node: GateNode,
+  options: GateOptions | undefined,
 ): Promise<GateDecision> {
-  return core.runIn(site.runId, () => core.session.gate(point, node));
+  return core.runIn(site.runId, () => core.session.gate(point, node, options));
 }

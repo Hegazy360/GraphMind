@@ -13,18 +13,42 @@
  *      abort    -> the session aborts the run's AbortController; the wrapper
  *                  throws an AbortError-named reason (never a bare Error).
  *
+ * Edited arguments (0.6.0, contract C2): every gate of a call whose arguments
+ * are an object is offered as `editable` (the session shows it only when the
+ * app and the debugger both enabled edits). `continue` + input at `before`,
+ * or `retry` + input at `after` / `error`, runs the REAL execute with the
+ * edited arguments — merged into the live ones (top-level keys replace), then
+ * re-validated with `asSchema(tool.inputSchema).validate`, because the SDK
+ * validated the MODEL's arguments before `execute` ran and an edit bypasses
+ * that. The schema's parsed value is what runs; a refusal keeps the gate
+ * held. The latest accepted edit stays the call's arguments for later
+ * attempts. `node.started` (and so the loop fingerprint) keeps what the model
+ * asked for; `exec.resumed.edited` records what ran. The `after` gate also
+ * hands the result to the session's after-gate detectors.
+ *
  * Streaming `execute` (declared `async function*`) gets a NON-async delegate
  * (decisions.md #4): the SDK type-sniffs execute's direct return value, so
  * the wrapper synchronously returns an async generator that gates at
- * before-start only, observes chunks, and never pauses mid-stream (errors
- * are observed, not gated).
+ * before-start only (editable too: nothing has run yet), observes chunks, and
+ * never pauses mid-stream (errors are observed, not gated).
  *
  * Provider-executed tools have no local `execute`; they pass through
  * untouched and are observed from the stream tee instead.
  */
 import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
-import { isAbortError, type GateNode, type RunStatus } from '@graphmind-ai/client';
-import type { ToolSet } from 'ai';
+import {
+  describeValidationError,
+  editedArgs,
+  isAbortError,
+  isEditableToolInput,
+  toolGateOptions,
+  type GateNode,
+  type InputValidation,
+  type RunStatus,
+  type SchemaCheck,
+  type ToolEdit,
+} from '@graphmind-ai/client';
+import { asSchema, type ToolSet } from 'ai';
 import type { AdapterCore } from './core.js';
 import { LLM_NODE_ID, nextId, toolNodeId } from './ids.js';
 import {
@@ -45,14 +69,47 @@ export function wrapToolSet<TOOLS extends ToolSet>(tools: TOOLS, core: AdapterCo
       continue;
     }
     const exec = original as ExecuteFn;
+    const check = schemaCheckFor(core, toolName, t);
     wrapped[toolName] = {
       ...t,
       execute: isAsyncGeneratorFunction(exec)
-        ? makeStreamingExecute(core, toolName, exec)
-        : makeExecute(core, toolName, exec),
+        ? makeStreamingExecute(core, toolName, exec, check)
+        : makeExecute(core, toolName, exec, check),
     };
   }
   return wrapped as TOOLS;
+}
+
+/**
+ * The tool's own schema, applied to an edit: `asSchema(tool.inputSchema)
+ * .validate` — the check the SDK ran on the model's arguments
+ * (`doParseToolCall`), which an edit arrives too late for. Its parsed value
+ * (defaults, transforms) is what the call runs with. Resolved lazily, only
+ * when an edit arrives. A tool with no input schema, or whose schema has no
+ * validator (`jsonSchema()` without `validate`), accepts the merged edit as
+ * it is — said once per tool, since nothing checked it.
+ */
+function schemaCheckFor(core: AdapterCore, toolName: string, tool: unknown): SchemaCheck {
+  const unchecked = (value: unknown, why: string): InputValidation => {
+    core.warner.warn(
+      `edit-unvalidated:${toolName}`,
+      `edited arguments for tool "${toolName}" run without a schema check (${why}); ` +
+        'the tool receives them as merged.',
+    );
+    return { ok: true, value };
+  };
+  return async (value) => {
+    const inputSchema = (tool as { inputSchema?: unknown }).inputSchema;
+    if (inputSchema === undefined || inputSchema === null) return unchecked(value, 'it has no inputSchema');
+    const schema = asSchema(inputSchema as Parameters<typeof asSchema>[0]);
+    const validate = (schema as { validate?: unknown }).validate;
+    if (typeof validate !== 'function') return unchecked(value, 'its schema has no validate function');
+    const result = (await (validate as (input: unknown) => unknown).call(schema, value)) as
+      | { success: true; value: unknown }
+      | { success: false; error: unknown };
+    if (result.success) return { ok: true, value: result.value };
+    return { ok: false, code: 'schema', message: describeValidationError(result.error, value) };
+  };
 }
 
 function instanceIdOf(options: unknown): string {
@@ -69,7 +126,12 @@ function safeChunkPreview(chunk: unknown): string {
   }
 }
 
-function makeExecute(core: AdapterCore, toolName: string, original: ExecuteFn): ExecuteFn {
+function makeExecute(
+  core: AdapterCore,
+  toolName: string,
+  original: ExecuteFn,
+  check: SchemaCheck,
+): ExecuteFn {
   return async (input: unknown, options: unknown): Promise<unknown> => {
     const attachWait = core.maybeWaitForAttach(); // waitForAttach: first-call gate
     if (attachWait !== undefined) await attachWait;
@@ -96,8 +158,12 @@ function makeExecute(core: AdapterCore, toolName: string, original: ExecuteFn): 
         extra: { instanceId, ...extra },
       });
 
+    // What the call runs with: the model's arguments until an edit is accepted.
+    let args = input;
+    const edit = (): ToolEdit | undefined => (isEditableToolInput(args) ? { args, check } : undefined);
+
     for (;;) {
-      const pre = await core.session.gate('before', node);
+      const pre = await core.session.gate('before', node, toolGateOptions(core.session, edit));
       if (pre.action === 'abort') {
         finish(undefined, 'aborted');
         throw core.abortError(ctx);
@@ -107,10 +173,12 @@ function makeExecute(core: AdapterCore, toolName: string, original: ExecuteFn): 
         return pre.output;
       }
       // 'retry' before execution is equivalent to continue.
+      const preEdit = editedArgs(pre);
+      if (preEdit !== undefined) args = preEdit.args;
 
       let result: unknown;
       try {
-        result = await original(input, execOptions);
+        result = await original(args, execOptions);
         if (isAsyncIterable(result)) {
           core.warner.warn(
             `streaming-fallback:${toolName}`,
@@ -127,12 +195,16 @@ function makeExecute(core: AdapterCore, toolName: string, original: ExecuteFn): 
           throw error;
         }
         core.errorNode(node.nodeId, error);
-        const dec = await core.session.gate('error', node);
+        const dec = await core.session.gate('error', node, toolGateOptions(core.session, edit));
         if (dec.action === 'inject') {
           finish(dec.output, 'ok', { injected: true });
           return dec.output;
         }
-        if (dec.action === 'retry') continue;
+        if (dec.action === 'retry') {
+          const retryEdit = editedArgs(dec);
+          if (retryEdit !== undefined) args = retryEdit.args;
+          continue;
+        }
         if (dec.action === 'abort') {
           finish(undefined, 'aborted');
           throw core.abortError(ctx);
@@ -141,12 +213,16 @@ function makeExecute(core: AdapterCore, toolName: string, original: ExecuteFn): 
         throw error; // 'continue': the SDK sees the original error
       }
 
-      const post = await core.session.gate('after', node);
+      const post = await core.session.gate('after', node, toolGateOptions(core.session, edit, { result }));
       if (post.action === 'inject') {
         finish(post.output, 'ok', { injected: true });
         return post.output;
       }
-      if (post.action === 'retry') continue;
+      if (post.action === 'retry') {
+        const retryEdit = editedArgs(post);
+        if (retryEdit !== undefined) args = retryEdit.args;
+        continue;
+      }
       if (post.action === 'abort') {
         finish(result, 'aborted');
         throw core.abortError(ctx);
@@ -163,7 +239,12 @@ async function drainToLast(iterable: AsyncIterable<unknown>): Promise<unknown> {
   return last;
 }
 
-function makeStreamingExecute(core: AdapterCore, toolName: string, original: ExecuteFn): ExecuteFn {
+function makeStreamingExecute(
+  core: AdapterCore,
+  toolName: string,
+  original: ExecuteFn,
+  check: SchemaCheck,
+): ExecuteFn {
   // NON-async: returns the async generator synchronously so the SDK's
   // AsyncIterable sniffing sees it on the direct return value.
   return (input: unknown, options: unknown): AsyncGenerator<unknown> => {
@@ -194,7 +275,11 @@ function makeStreamingExecute(core: AdapterCore, toolName: string, original: Exe
           extra: { instanceId, streaming: true, ...extra },
         });
 
-      const pre = await core.session.gate('before', node);
+      const pre = await core.session.gate(
+        'before',
+        node,
+        toolGateOptions(core.session, () => (isEditableToolInput(input) ? { args: input, check } : undefined)),
+      );
       if (pre.action === 'abort') {
         finish(undefined, 'aborted');
         throw core.abortError(ctx);
@@ -204,11 +289,13 @@ function makeStreamingExecute(core: AdapterCore, toolName: string, original: Exe
         yield pre.output;
         return;
       }
+      const preEdit = editedArgs(pre);
+      const args = preEdit === undefined ? input : preEdit.args;
 
       let last: unknown;
       let chunks = 0;
       try {
-        for await (const chunk of original(input, execOptions) as AsyncIterable<unknown>) {
+        for await (const chunk of original(args, execOptions) as AsyncIterable<unknown>) {
           last = chunk;
           chunks += 1;
           core.pushToken(node.nodeId, 'text', safeChunkPreview(chunk));

@@ -15,6 +15,19 @@
  *      abort    -> the session aborts the run's AbortController; the wrapper
  *                  throws an AbortError-named reason (never a bare Error).
  *
+ * Edited arguments (0.6.0, contract C2): a call made with ONE object argument
+ * (the usual `tool_use.input`) is offered as `editable` at every gate (the
+ * session shows it only when the app and the debugger both enabled edits).
+ * `continue` + input at `before`, or `retry` + input at `after` / `error`,
+ * calls the REAL function with the edit merged into the live arguments
+ * (top-level keys replace, the rest keep their live values). A plain function
+ * carries no schema, so the merged object is not checked further — the
+ * function itself is the validator, and a throw lands on the error gate. The
+ * latest accepted edit stays the call's argument for later attempts.
+ * `node.started` (and so the loop fingerprint) keeps what the model asked
+ * for; `exec.resumed.edited` records what ran. The `after` gate also hands
+ * the result to the session's after-gate detectors.
+ *
  * Parallel tool calls gate INDEPENDENTLY: each invocation is its own async
  * frame with its own gate, so `await Promise.all([...])` over several wrapped
  * tools holds each one separately.
@@ -24,7 +37,15 @@
  * a synthetic id is used.
  */
 import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
-import { isAbortError, type GateNode, type RunStatus } from '@graphmind-ai/client';
+import {
+  editedArgs,
+  isAbortError,
+  isEditableToolInput,
+  toolGateOptions,
+  type GateNode,
+  type RunStatus,
+  type ToolEdit,
+} from '@graphmind-ai/client';
 import type { AdapterCore } from './core.js';
 import { LLM_NODE_ID, nextId, toolNodeId } from './ids.js';
 
@@ -89,8 +110,18 @@ export function wrapToolFn<F extends AnyToolFn>(
         ...(extra !== undefined ? { extra } : {}),
       });
 
+    // What the function is called with: the host's arguments until an edit
+    // is accepted. Only a single object argument can take an edit.
+    let callArgs: unknown[] = args;
+    const edit = (): ToolEdit | undefined =>
+      callArgs.length === 1 && isEditableToolInput(callArgs[0]) ? { args: callArgs[0] } : undefined;
+    const applyEdit = (decision: Parameters<typeof editedArgs>[0]): void => {
+      const edited = editedArgs(decision);
+      if (edited !== undefined) callArgs = [edited.args];
+    };
+
     for (;;) {
-      const pre = await core.session.gate('before', node);
+      const pre = await core.session.gate('before', node, toolGateOptions(core.session, edit));
       if (pre.action === 'abort') {
         finish(undefined, 'aborted');
         throw core.abortError(ctx);
@@ -100,10 +131,11 @@ export function wrapToolFn<F extends AnyToolFn>(
         return pre.output as Awaited<ReturnType<F>>;
       }
       // 'retry' before execution is equivalent to continue.
+      applyEdit(pre);
 
       let result: Awaited<ReturnType<F>>;
       try {
-        result = (await fn(...args)) as Awaited<ReturnType<F>>;
+        result = (await fn(...callArgs)) as Awaited<ReturnType<F>>;
       } catch (error) {
         // A debugger-driven abort surfacing from the tool body is terminal.
         if (ctx?.signal.aborted === true && isAbortError(error)) {
@@ -111,12 +143,15 @@ export function wrapToolFn<F extends AnyToolFn>(
           throw error;
         }
         core.errorNode(node.nodeId, instanceId, error);
-        const dec = await core.session.gate('error', node);
+        const dec = await core.session.gate('error', node, toolGateOptions(core.session, edit));
         if (dec.action === 'inject') {
           finish(dec.output, 'ok', { injected: true });
           return dec.output as Awaited<ReturnType<F>>;
         }
-        if (dec.action === 'retry') continue;
+        if (dec.action === 'retry') {
+          applyEdit(dec);
+          continue;
+        }
         if (dec.action === 'abort') {
           finish(undefined, 'aborted');
           throw core.abortError(ctx);
@@ -125,12 +160,15 @@ export function wrapToolFn<F extends AnyToolFn>(
         throw error; // 'continue': the host sees the original error
       }
 
-      const post = await core.session.gate('after', node);
+      const post = await core.session.gate('after', node, toolGateOptions(core.session, edit, { result }));
       if (post.action === 'inject') {
         finish(post.output, 'ok', { injected: true });
         return post.output as Awaited<ReturnType<F>>;
       }
-      if (post.action === 'retry') continue;
+      if (post.action === 'retry') {
+        applyEdit(post);
+        continue;
+      }
       if (post.action === 'abort') {
         finish(result, 'aborted');
         throw core.abortError(ctx);

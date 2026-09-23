@@ -204,6 +204,15 @@ call's async context. `exec.resume.requestId` is echoed on `exec.resumed` /
 `gate('after', node, { result })` hands the call's result to the session's
 after-gate detectors (smart holds); it is never sent through this option.
 
+Tool wrappers build these options with `toolGateOptions(session, edit, {result})`
+(undefined while detached, so the detached path is untouched), read an accepted
+edit with `editedArgs(decision)`, and check the merged arguments with
+`toolSchemaCheck(schema)` — zod `safeParseAsync`/`safeParse`, any Standard
+Schema, or a plain JSON Schema through `checkJsonSchemaLite`, a conservative
+checker that refuses only what the schema clearly forbids and never evaluates
+`pattern`. Refusal messages come from `describeIssues`: the field and the
+problem, never the value (a validator's own message is never used).
+
 ## Abort (why there is an AbortController)
 
 Spike RESULTS.md, risk #4: throwing a plain `Error` out of SDK middleware

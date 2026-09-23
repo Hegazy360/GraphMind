@@ -17,6 +17,22 @@
  *      abort    -> the session aborts the run's AbortController and the
  *                  wrapper throws an AbortError-named reason (terminal).
  *
+ * Edited arguments (0.6.0, contract C2): a call whose first argument is an
+ * object — or the JSON text of one, as `tool_call.function.arguments` arrives
+ * — is offered as `editable` at every gate (the session shows it only when
+ * the app and the debugger both enabled edits). `continue` + input at
+ * `before`, or `retry` + input at `after` / `error`, calls the REAL function
+ * with the edit merged into the live arguments (top-level keys replace),
+ * handed over in the form it came in (an object, or JSON text again); the
+ * second argument is forwarded unchanged. A tool object that carries its own
+ * schema (`parameters`, `inputSchema`, `input_schema` or `schema`: zod, a
+ * Standard Schema, or JSON Schema) has the merged arguments checked against
+ * it first, and a failure keeps the gate held; without one they are accepted
+ * as merged. The latest accepted edit stays the call's arguments for later
+ * attempts. `node.started` (and so the loop fingerprint) keeps what the model
+ * asked for; `exec.resumed.edited` records what ran. The `after` gate also
+ * hands the result to the session's after-gate detectors.
+ *
  * Parallel tool calls gate INDEPENDENTLY: each invocation awaits its own gate,
  * so `Promise.all(toolCalls.map(...))` holds one call while another runs.
  *
@@ -26,7 +42,18 @@
  * forwarded to your function unchanged.
  */
 import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
-import { isAbortError, type GateNode, type RunStatus } from '@graphmind-ai/client';
+import {
+  editedArgs,
+  isAbortError,
+  isEditableToolInput,
+  toolGateOptions,
+  toolSchemaCheck,
+  type GateDecision,
+  type GateNode,
+  type RunStatus,
+  type SchemaCheck,
+  type ToolEdit,
+} from '@graphmind-ai/client';
 import type { AdapterCore } from './core.js';
 import { LLM_NODE_ID, nextId, toolNodeId } from './ids.js';
 import { isObject, parseToolInput } from './sdk-types.js';
@@ -52,6 +79,34 @@ function instanceIdOf(options: unknown): string {
 }
 
 /**
+ * The schema a tool object carries, as a check for edited arguments:
+ * `parameters` (OpenAI function tools, the Agents SDK's zod parameters),
+ * `inputSchema`, `input_schema` or `schema`, or `function.parameters` (a Chat
+ * Completions tool definition). Undefined for a bare function or a tool with
+ * none of these.
+ */
+function schemaCheckOf(tool: unknown): SchemaCheck | undefined {
+  try {
+    if (!isObject(tool)) return undefined;
+    const fn = tool['function'];
+    const candidates = [
+      tool['parameters'],
+      tool['inputSchema'],
+      tool['input_schema'],
+      tool['schema'],
+      isObject(fn) ? fn['parameters'] : undefined,
+    ];
+    for (const candidate of candidates) {
+      const check = toolSchemaCheck(candidate);
+      if (check !== undefined) return check;
+    }
+  } catch {
+    // an unreadable tool object carries no schema
+  }
+  return undefined;
+}
+
+/**
  * Wrap every function in `tools` with before/after/error gates. Values that
  * are not functions (and not objects with a function `execute`) pass through
  * untouched. Identity when GraphMind is disabled.
@@ -61,14 +116,14 @@ export function wrapToolMap<T extends Record<string, unknown>>(tools: T, core: A
   for (const [toolName, value] of Object.entries(tools)) {
     if (typeof value === 'function') {
       core.gatedToolNames.add(toolName);
-      wrapped[toolName] = makeGatedTool(core, toolName, value as AnyFn, undefined);
+      wrapped[toolName] = makeGatedTool(core, toolName, value as AnyFn, undefined, undefined);
       continue;
     }
     if (isObject(value) && typeof value['execute'] === 'function') {
       core.gatedToolNames.add(toolName);
       wrapped[toolName] = {
         ...value,
-        execute: makeGatedTool(core, toolName, value['execute'] as AnyFn, value),
+        execute: makeGatedTool(core, toolName, value['execute'] as AnyFn, value, schemaCheckOf(value)),
       };
       continue;
     }
@@ -82,6 +137,7 @@ function makeGatedTool(
   toolName: string,
   original: AnyFn,
   thisArg: unknown,
+  check: SchemaCheck | undefined,
 ): AnyFn {
   return async function gatedTool(...args: unknown[]): Promise<unknown> {
     const attachWait = core.maybeWaitForAttach(); // waitForAttach: first-call gate
@@ -91,13 +147,14 @@ function makeGatedTool(
     const ctx = core.session.currentRun();
     const instanceId = instanceIdOf(args[1]);
     const startedAt = monotonicNow();
+    const input = parseToolInput(args[0]);
     core.startNode({
       nodeId: node.nodeId,
       kind: 'tool',
       name: toolName,
       instanceId,
       parentId: LLM_NODE_ID,
-      input: parseToolInput(args[0]),
+      input,
     });
 
     const finish = (output: unknown, status: RunStatus, extra?: Record<string, unknown>): void =>
@@ -110,8 +167,23 @@ function makeGatedTool(
         ...(extra !== undefined ? { extra } : {}),
       });
 
+    // What the function is called with: your arguments until an edit is
+    // accepted. `live` is the first argument as an object (parsed from JSON
+    // text when it came as text); an edit is handed back in the same form.
+    let callArgs: unknown[] = args;
+    let live = input;
+    const asText = typeof args[0] === 'string';
+    const edit = (): ToolEdit | undefined =>
+      args.length >= 1 && isEditableToolInput(live) ? { args: live, check } : undefined;
+    const applyEdit = (decision: GateDecision): void => {
+      const edited = editedArgs(decision);
+      if (edited === undefined) return;
+      live = edited.args;
+      callArgs = [asText ? JSON.stringify(edited.args) : edited.args, ...args.slice(1)];
+    };
+
     for (;;) {
-      const pre = await core.session.gate('before', node);
+      const pre = await core.session.gate('before', node, toolGateOptions(core.session, edit));
       if (pre.action === 'abort') {
         finish(undefined, 'aborted');
         throw core.abortError(core.session.currentRun());
@@ -121,10 +193,11 @@ function makeGatedTool(
         return pre.output;
       }
       // 'retry' before execution is equivalent to continue.
+      applyEdit(pre);
 
       let result: unknown;
       try {
-        result = await original.apply(thisArg, args);
+        result = await original.apply(thisArg, callArgs);
       } catch (error) {
         // A debugger-driven abort surfacing from the tool body is terminal.
         if (ctx?.signal.aborted === true && isAbortError(error)) {
@@ -132,12 +205,15 @@ function makeGatedTool(
           throw error;
         }
         core.errorNode(node.nodeId, instanceId, error);
-        const dec = await core.session.gate('error', node);
+        const dec = await core.session.gate('error', node, toolGateOptions(core.session, edit));
         if (dec.action === 'inject') {
           finish(dec.output, 'ok', { injected: true });
           return dec.output;
         }
-        if (dec.action === 'retry') continue;
+        if (dec.action === 'retry') {
+          applyEdit(dec);
+          continue;
+        }
         if (dec.action === 'abort') {
           finish(undefined, 'aborted');
           throw core.abortError(core.session.currentRun());
@@ -146,12 +222,15 @@ function makeGatedTool(
         throw error; // 'continue': your loop sees the original error
       }
 
-      const post = await core.session.gate('after', node);
+      const post = await core.session.gate('after', node, toolGateOptions(core.session, edit, { result }));
       if (post.action === 'inject') {
         finish(post.output, 'ok', { injected: true });
         return post.output;
       }
-      if (post.action === 'retry') continue;
+      if (post.action === 'retry') {
+        applyEdit(post);
+        continue;
+      }
       if (post.action === 'abort') {
         finish(result, 'aborted');
         throw core.abortError(core.session.currentRun());

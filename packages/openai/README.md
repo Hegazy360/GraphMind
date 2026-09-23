@@ -132,6 +132,19 @@ that's the API, not the adapter.
   `abort` aborts the run's `AbortController` and surfaces an `AbortError`
   (terminal — SDK retry logic never retries abort errors).
 
+**Editing a tool's arguments (0.6.0).** With a 0.6 debugger, a wrapped call
+whose first argument is an object — or the JSON text of one, as
+`function.arguments` arrives — is editable at every gate: `continue` with new
+arguments at `before`, or `retry` with new arguments at `after` / `error`, calls
+your real function with the edit merged into the live arguments (top-level keys
+replace), in the form it came in (object or JSON text); the second argument is
+passed through unchanged. A tool object carrying its own schema (`parameters`,
+`inputSchema`, `input_schema` or `schema`: zod, a Standard Schema, or JSON
+Schema) checks the merged arguments first, and a refused edit keeps the gate
+held; a bare function runs them as merged. This call only: the model still sees
+the arguments it asked for. Model requests are not editable. The `after` gate
+also hands the result to the debugger's smart holds.
+
 **Gating a model request on error.** When a request fails (a 500, a rate limit,
 a connection error), the `error` gate fires before the SDK's error reaches your
 code: `retry` re-issues the request, `inject` substitutes a completion object as

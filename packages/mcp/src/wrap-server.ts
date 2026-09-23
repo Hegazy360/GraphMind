@@ -27,9 +27,12 @@
  */
 import {
   isAbortError,
+  isEditableToolInput,
+  toolSchemaCheck,
   type NodeKind,
   type RunContext,
   type RunStatus,
+  type SchemaCheck,
 } from '@graphmind-ai/client';
 import { elapsedMs, now } from './clock.js';
 import { coerceInjected } from './coerce.js';
@@ -72,6 +75,33 @@ const REGISTRARS = new Map<string, RequestShape>([
 interface NameRef {
   name: string;
   nodeId: string;
+  /**
+   * The SDK's registration record (`RegisteredTool` & co.), once registered.
+   * Its `inputSchema` — the SDK's normalized zod / Standard Schema, updated in
+   * place by `update({ paramsSchema })` — checks edited tool arguments.
+   */
+  registration?: object | undefined;
+}
+
+/**
+ * How one tools/call can run with edited arguments (0.6.0, contract C2): the
+ * arguments the handler received, where the tool's schema lives, and how to
+ * call the handler with other arguments.
+ */
+interface RequestEdit {
+  live: unknown;
+  /** Read at validation time; undefined, or no schema there: the merged edit runs as it is. */
+  schema?: (() => unknown) | undefined;
+  invokeWith: (extra: RequestTrailer | undefined, args: unknown) => unknown;
+}
+
+/** A check that reads the tool's schema when an edit arrives (it may have been updated). */
+function lazySchemaCheck(schema: (() => unknown) | undefined): SchemaCheck | undefined {
+  if (schema === undefined) return undefined;
+  return (value) => {
+    const check = toolSchemaCheck(schema());
+    return check === undefined ? { ok: true, value } : check(value);
+  };
 }
 
 interface RequestDescriptor {
@@ -204,6 +234,7 @@ function makeRegistrar(
     // schema) is the host's error and must surface exactly once.
     const registration = original.apply(target, callArgs);
     if (ref === undefined || !isObject(registration)) return registration;
+    ref.registration = registration;
     try {
       return wrapRegistration(registration, shape, ref, state);
     } catch {
@@ -275,24 +306,50 @@ function wrapHandlerCallback(
   state: ServerState,
 ): AnyFn {
   return async function graphmindHandler(this: unknown, ...args: unknown[]): Promise<unknown> {
-    let plan: { descriptor: RequestDescriptor; extra: RequestTrailer | undefined } | undefined;
+    let plan:
+      | { descriptor: RequestDescriptor; extra: RequestTrailer | undefined; handlerArgs: unknown[] }
+      | undefined;
     try {
       const last = args.length > 0 ? args[args.length - 1] : undefined;
       const extra = isRequestTrailer(last) ? last : undefined;
       const handlerArgs = extra === undefined ? args : args.slice(0, args.length - 1);
-      plan = { descriptor: describeCallback(shape, ref, handlerArgs), extra };
+      plan = { descriptor: describeCallback(shape, ref, handlerArgs), extra, handlerArgs };
     } catch {
       plan = undefined;
     }
     if (plan === undefined) return await original.apply(this, args);
 
-    const { descriptor, extra } = plan;
+    const { descriptor, extra, handlerArgs } = plan;
     const self = this;
-    return await runInstrumentedRequest(state, descriptor, extra, (nextExtra) => {
-      const callArgs =
-        extra === undefined ? args : [...args.slice(0, args.length - 1), nextExtra];
-      return original.apply(self, callArgs);
-    });
+    // A tool registered with an input schema gets its parsed arguments first;
+    // one registered without gets only the trailer — nothing to edit. Without
+    // a recognised trailer nothing says which argument is the tool's input,
+    // so nothing is offered for editing.
+    const edit: RequestEdit | undefined =
+      shape === 'tool' && extra !== undefined && handlerArgs.length >= 1 && isEditableToolInput(handlerArgs[0])
+        ? {
+            live: handlerArgs[0],
+            schema: () => (ref.registration as { inputSchema?: unknown } | undefined)?.inputSchema,
+            invokeWith: (nextExtra, edited) =>
+              original.apply(
+                self,
+                extra === undefined
+                  ? [edited, ...handlerArgs.slice(1)]
+                  : [edited, ...handlerArgs.slice(1), nextExtra],
+              ),
+          }
+        : undefined;
+    return await runInstrumentedRequest(
+      state,
+      descriptor,
+      extra,
+      (nextExtra) => {
+        const callArgs =
+          extra === undefined ? args : [...args.slice(0, args.length - 1), nextExtra];
+        return original.apply(self, callArgs);
+      },
+      edit,
+    );
   };
 }
 
@@ -372,6 +429,11 @@ function makeSetRequestHandler(target: object, original: AnyFn, state: ServerSta
         descriptor,
         isRequestTrailer(extra) ? extra : undefined,
         (nextExtra) => handler.call(self, first, nextExtra ?? extra),
+        descriptor.kind === 'tool'
+          ? rawToolCallEdit(first, paramsOnly, (request, nextExtra) =>
+              handler.call(self, request, nextExtra ?? extra),
+            )
+          : undefined,
       );
     };
 
@@ -431,6 +493,7 @@ async function runInstrumentedRequest(
   descriptor: RequestDescriptor,
   extra: RequestTrailer | undefined,
   invoke: (extra: RequestTrailer | undefined) => unknown,
+  edit?: RequestEdit,
 ): Promise<unknown> {
   const core = state.core;
   const wait = core.maybeWaitForAttach();
@@ -472,6 +535,15 @@ async function runInstrumentedRequest(
         input: descriptor.input,
         invoke: () => invoke(handlerExtra),
         coerce: (value) => coerceInjected(descriptor.shape, value, descriptor.uri),
+        edit:
+          edit === undefined
+            ? undefined
+            : {
+                live: edit.live,
+                check: lazySchemaCheck(edit.schema),
+                invokeWith: (args) => edit.invokeWith(handlerExtra, args),
+              },
+        reportResult: descriptor.kind === 'tool',
       });
     } catch (error) {
       status = ctx?.signal.aborted === true || isAbortError(error) ? 'aborted' : 'error';
@@ -509,6 +581,40 @@ function gateSampling(
     invoke,
     coerce: (value) => coerceInjected('sampling', value),
   });
+}
+
+/**
+ * The edit plan for a `tools/call` reaching a low-level handler: the request's
+ * `params.arguments` (or, in the 2.x params-only form, `arguments` of the
+ * params the handler gets) are what an edit merges into; the handler is then
+ * called with a copy of the request whose arguments are replaced — `name` and
+ * `_meta` stay as the client sent them. No schema at this level (the host
+ * validates its own raw requests): the merged edit runs as it is. Undefined
+ * when the arguments are not an object.
+ */
+function rawToolCallEdit(
+  first: unknown,
+  paramsOnly: boolean,
+  call: (request: unknown, extra: RequestTrailer | undefined) => unknown,
+): RequestEdit | undefined {
+  try {
+    if (!isObject(first)) return undefined;
+    const params = paramsOnly ? first : first['params'];
+    const live = isObject(params) ? params['arguments'] : undefined;
+    if (!isEditableToolInput(live)) return undefined;
+    return {
+      live,
+      invokeWith: (extra, edited) =>
+        call(
+          paramsOnly
+            ? { ...first, arguments: edited }
+            : { ...first, params: { ...(isObject(params) ? params : {}), arguments: edited } },
+          extra,
+        ),
+    };
+  } catch {
+    return undefined; // an unreadable request is simply not editable
+  }
 }
 
 // -- descriptors -------------------------------------------------------------

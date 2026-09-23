@@ -185,6 +185,18 @@ Resources and prompts get the same treatment against `ReadResourceResult` and
   error. Pause-on-error is armed by default by the CLI.
 * **abort** — aborts the run's `AbortController` (which is chained into your
   handler's `extra.signal`) and makes the request terminal.
+* **edit a tool's arguments (0.6.0)** — with a 0.6 debugger, every gate of a
+  tool call is editable: `continue` with new arguments at `before`, or `retry`
+  with new arguments at `after` / `error`, invokes your handler with the edit
+  merged into the live arguments (top-level keys replace). The SDK validated
+  the client's arguments before your handler ran, so an edit is re-validated
+  with the tool's registered `inputSchema` (1.x zod, 2.x Standard Schema) and
+  the handler receives the parsed value; a refused edit keeps the gate held. On
+  a low-level `Server`, your `tools/call` handler receives a copy of the
+  request with `params.arguments` replaced (`name` and `_meta` untouched). A
+  tool registered without an input schema, resources and prompts are not
+  editable. The `after` gate also hands the `CallToolResult` to the
+  debugger's smart holds.
 
 ## `@graphmind-ai/mcp` vs `graphmind mcp-proxy`
 

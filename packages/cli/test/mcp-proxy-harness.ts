@@ -41,6 +41,11 @@ export interface FakeViewerOptions {
   breakpoints?: BreakpointMatcher[];
   mode?: RunMode;
   autoAck?: boolean;
+  /**
+   * `hubCapabilities` inside hello.ack (what a 0.6 debugger implements).
+   * Default: absent, like a 0.5 debugger.
+   */
+  hubCapabilities?: string[] | undefined;
 }
 
 /** The GraphMind end: a real ws server that speaks the ingest protocol. */
@@ -136,6 +141,11 @@ export class FakeViewer {
     });
   }
 
+  /** `exec.resume` with any payload fields (input, requestId, ...). */
+  resumeWith(payload: { pauseId: string; action: ResumeAction; [key: string]: unknown }): void {
+    this.sendControl('exec.resume', payload);
+  }
+
   setBreakpoint(matcher: BreakpointMatcher): void {
     this.sendControl('breakpoint.set', { matcher });
   }
@@ -171,6 +181,7 @@ export class FakeViewer {
           capabilities: ['pause', 'step', 'inject', 'retry', 'abort'],
           breakpoints: this.options.breakpoints ?? [],
           mode: this.options.mode ?? 'run',
+          ...(this.options.hubCapabilities === undefined ? {} : { hubCapabilities: this.options.hubCapabilities }),
         });
       }
     });

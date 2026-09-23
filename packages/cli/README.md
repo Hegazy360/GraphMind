@@ -242,6 +242,20 @@ certain no answer is coming.)
 | `after` | a response, before the requester sees it | forward it | forward a rewritten frame carrying the injected `result` | re-send the original request and wait for a new answer | reply `-32099` instead |
 | `error` | a JSON-RPC error, or an MCP tool result with `isError: true` | forward the failure | forward the injected result instead | re-send the request | reply `-32099` |
 
+**Editing a `tools/call`'s arguments (0.6.0).** With a 0.6 debugger, every
+gate of a client->server `tools/call` is editable. The edit has the shape of
+the node's recorded input — the request's `params` (`{name, arguments,
+_meta}`) — and only `arguments` may change (`name` and `_meta` are locked); the
+new arguments are merged into the live ones (top-level keys replace). `continue`
+at `before` relays the held frame re-serialized with its `params.arguments`
+replaced (id, name, `_meta` and key order kept; it is the only frame that is
+ever re-serialized); `retry` at `after` / `error` re-sends that rewritten
+request instead of the original, and a later plain `retry` re-sends what last
+ran. An edit is first checked against the tool's `inputSchema` from the
+server's last `tools/list` (a conservative shape check; with no schema known,
+the server judges), and a refused edit keeps the frame held. The JSON-RPC
+result (including `isError`) is handed to the debugger's smart holds.
+
 `error` is armed by default (see `--pause-on-error`), so a broken MCP server
 holds at the failure with no setup at all. A hold is indistinguishable from a
 hung server from the client's side, so the proxy says so on stderr — `HOLDING

@@ -136,6 +136,19 @@ all keep working. Per call it runs:
   `continue` rethrows the original, `abort` throws an `AbortError`,
 - `after` gate post-execute, pre-return → `inject` patches the result.
 
+**Editing a tool's arguments (0.6.0).** With a 0.6 debugger, every gate of a
+wrapped call whose input is an object is editable: `continue` with new
+arguments at `before`, or `retry` with new arguments at `after` / `error`, runs
+the real tool with the edit merged into the live input (top-level keys
+replace). A `wrapStructuredTool` tool's own `schema` checks the merged input
+first — LangChain parsed the model's arguments before the tool ran, and an edit
+arrives after that — and the tool receives the parsed value; a refused edit
+keeps the gate held. A `ToolCall` handed to a class-based tool keeps its id. A
+`gm.tool` function has no schema and runs the merged input as it is. This call
+only: the model still sees the arguments it asked for. Callback-only gates and
+model calls are not editable. The `after` gate also hands the result to the
+debugger's smart holds.
+
 When the callback handler is attached it already announced the tool run (with
 LangChain's run id, parentage and `toolCallId`), so the wrapper stays quiet and
 just annotates the result (`injected: true`, `attempts: n`,

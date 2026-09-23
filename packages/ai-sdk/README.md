@@ -95,6 +95,20 @@ and later calls never wait. Disabled sessions skip the wait entirely.
   `AbortError`-named error out of `execute` (terminal — AI SDK retry logic
   never retries abort errors).
 
+**Editing a tool's arguments (0.6.0).** With a 0.6 debugger, every gate of a
+tool call whose arguments are an object is offered as editable: `continue` with
+new arguments at `before`, or `retry` with new arguments at `after` / `error`,
+runs the real `execute` with them. The edit is merged into the live arguments
+(top-level keys replace, the rest keep their values) and re-validated with the
+tool's own `asSchema(tool.inputSchema).validate` — the SDK validated the
+model's arguments before `execute` ran, and an edit arrives after that — so the
+tool receives the schema's parsed value; a refused edit keeps the gate held and
+the viewer is told why (field and problem, never the value). A `jsonSchema()`
+tool without a validator runs the merged arguments as they are (warned once).
+This call only: the model still sees the arguments it asked for. Streaming
+tools can be edited at their `before` gate. Model steps are not editable. The
+`after` gate also hands the tool's result to the debugger's smart holds.
+
 **What an abort looks like to your app.** The throw above is what the tool's
 *caller* sees — the SDK's tool-call machinery, or your own code if you invoke
 a wrapped `execute` directly. A host consuming the stream does **not** see an

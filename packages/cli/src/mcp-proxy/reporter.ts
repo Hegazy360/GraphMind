@@ -60,6 +60,30 @@
  *     inject            forward the injected object in its place
  *     abort             swallow it
  *
+ * Edited tool arguments (0.6.0, contract C2), client->server `tools/call`
+ * only: every gate of the call is offered as `editable` (the session shows it
+ * only when the app and the debugger both enabled edits). The edit comes in
+ * the shape of the node's recorded input — the request's `params`, `{name,
+ * arguments, _meta}` — and only `arguments` may differ (see `toolEdit`).
+ *     continue + input  at `before`: the held frame is re-serialized with its
+ *                       `params.arguments` replaced by the edited arguments
+ *                       merged into the live ones — `name`, `_meta`, the id
+ *                       and every other key keep their values and order —
+ *                       and relayed in place of the original bytes. It is the
+ *                       only frame that is re-serialized; every other frame
+ *                       stays byte-for-byte.
+ *     retry + input     at `after` / `error`: the same rewrite, re-sent down
+ *                       the retry path; the rewritten bytes become what a
+ *                       later plain `retry` re-sends.
+ *   Before an edit runs it is checked against the tool's `inputSchema` as the
+ *   server listed it in its last `tools/list` answer (a conservative
+ *   JSON-schema-lite check: only what the schema clearly forbids is refused,
+ *   and the gate stays held); with no schema known, the server is the judge.
+ *   The node's recorded input keeps the client's arguments and
+ *   `exec.resumed.edited` records what ran. At the tool's `after` / `error`
+ *   gate the JSON-RPC result (including `isError`) goes to the session's
+ *   after-gate detectors.
+ *
  * A request that never gets an answer keeps its node OPEN — that is a real
  * server bug and the graph has to show it. Only when the child process dies
  * do the still-open requests become errors, because then we know for a fact
@@ -85,12 +109,21 @@
  * clock.ts); envelope timestamps stay integer epoch ms (the client's job).
  */
 import {
+  canonicalize,
+  editedArgs,
+  isEditableToolInput,
+  jsonSchemaLiteCheck,
+  mergeToolInput,
+  toolGateOptions,
   type GateDecision,
   type GateNode,
+  type GateOptions,
+  type InputValidation,
   type PausePoint,
   type RunStatus,
   type Session,
   type TokenDelta,
+  type ToolEdit,
 } from '@graphmind-ai/client';
 import { durationBetween, monotonicNow, type Clock } from './clock.js';
 import { describeExit } from './exit-status.js';
@@ -178,6 +211,8 @@ interface PendingRequest {
 }
 
 const MAX_PENDING = 10_000;
+/** Tools whose `inputSchema` is remembered from `tools/list` (for checking edits). */
+const MAX_TOOL_SCHEMAS = 1_000;
 /**
  * How long a gate may hold before we say so on stderr.
  *
@@ -205,6 +240,12 @@ const STDERR_TAIL_ON_TERMINAL = 40;
 export class ProxyReporter {
   private readonly session: Session;
   private readonly pending = new Map<string, PendingRequest>();
+  /**
+   * Each tool's `inputSchema` from the server's `tools/list` answers (pages
+   * accumulate); dropped on `notifications/tools/list_changed`. Only ever used
+   * to check an edited `tools/call` before it is relayed.
+   */
+  private readonly toolSchemas = new Map<string, unknown>();
   private readonly label: string;
   private readonly now: Clock;
   private readonly stderrFlushMs: number;
@@ -572,8 +613,13 @@ export class ProxyReporter {
    * `session.gate`, plus a stderr notice if it actually holds. Every gate in
    * this file goes through here.
    */
-  private async gate(point: PausePoint, node: MappedNode, label: string): Promise<GateDecision> {
-    const decision = this.session.gate(point, toGateNode(node));
+  private async gate(
+    point: PausePoint,
+    node: MappedNode,
+    label: string,
+    options?: GateOptions,
+  ): Promise<GateDecision> {
+    const decision = this.session.gate(point, toGateNode(node), options);
     let held = false;
     const timer = setTimeout(() => {
       held = true;
@@ -617,7 +663,12 @@ export class ProxyReporter {
     this.start(entry, frame.params);
     this.trace(direction, `-> ${frame.method} #${String(frame.id)}`);
 
-    const decision = await this.gate('before', node, `${frame.method} #${String(frame.id)}`);
+    const decision = await this.gate(
+      'before',
+      node,
+      `${frame.method} #${String(frame.id)}`,
+      toolGateOptions(this.session, () => this.toolEdit(entry)),
+    );
     if (decision.action === 'inject') {
       // Coerced into the result shape this method must answer with; see
       // coerce.ts. Without it, injecting `{"price":42}` at a `tools/call`
@@ -642,6 +693,13 @@ export class ProxyReporter {
       return { kind: 'drop' };
     }
     // continue / retry: nothing has been sent yet, so both mean "send it".
+    // An accepted edit (continue + input) sends the rewritten frame instead.
+    const edited = editedArgs(decision);
+    if (edited !== undefined && this.applyEditedArguments(entry, edited.args)) {
+      this.remember(entry);
+      this.trace(direction, `-> ${frame.method} #${String(frame.id)} sent with edited arguments`);
+      return { kind: 'replace', raw: entry.raw };
+    }
     this.remember(entry);
     return FORWARD;
   }
@@ -654,6 +712,11 @@ export class ProxyReporter {
     const node = mapMethod(frame.method, frame.params, direction);
     const instanceId = this.nextInstanceId();
     const startedAt = this.now();
+    // The server's tool list changed: the remembered schemas may be stale, and
+    // a stale schema must never refuse an edit the server would accept.
+    if (frame.method === 'notifications/tools/list_changed' && direction === 'server-to-client') {
+      this.toolSchemas.clear();
+    }
     this.parentReady(node);
     this.session.emit('node.started', {
       nodeId: node.nodeId,
@@ -720,6 +783,7 @@ export class ProxyReporter {
     }
     this.pending.delete(key);
     this.rememberNegotiated(entry.method, entry.params, frame.result, frame.error);
+    this.rememberToolSchemas(entry, frame.result, frame.error);
 
     const failed = frame.error !== undefined || isErrorResult(frame.result);
     const output = frame.error !== undefined ? { error: frame.error } : frame.result;
@@ -727,11 +791,24 @@ export class ProxyReporter {
     this.trace(direction, `<- ${entry.method} #${String(frame.id)} ${failed ? 'ERROR' : 'ok'}`);
 
     const point: PausePoint = failed ? 'error' : 'after';
-    const decision = await this.gate(point, entry.node, `${entry.method} #${String(frame.id)}`);
+    const decision = await this.gate(
+      point,
+      entry.node,
+      `${entry.method} #${String(frame.id)}`,
+      toolGateOptions(
+        this.session,
+        () => this.toolEdit(entry),
+        entry.node.kind === 'tool' ? { result: output } : undefined,
+      ),
+    );
 
     if (decision.action === 'retry') {
-      // Re-send the ORIGINAL bytes down the same path the request took. The
-      // node stays open (same instanceId) and closes on the new answer.
+      // Re-send the request bytes down the same path the request took — the
+      // original bytes, or the rewritten ones once an edit was accepted
+      // (retry + input rewrites them now). The node stays open (same
+      // instanceId) and closes on the new answer.
+      const edited = editedArgs(decision);
+      if (edited !== undefined) this.applyEditedArguments(entry, edited.args);
       entry.retries += 1;
       this.remember(entry);
       await this.options.sinkFor(entry.origin).writeFrame(entry.raw);
@@ -941,6 +1018,100 @@ export class ProxyReporter {
       if (oldest.done !== true) this.pending.delete(oldest.value);
     }
     this.pending.set(pendingKey(entry.origin, entry.id), entry);
+  }
+
+  // -- edited tool arguments (contract C2) -----------------------------------
+
+  /**
+   * How a held request can take edited arguments: a client->server
+   * `tools/call` whose `arguments` are an object (or absent — a call that
+   * forgot its arguments can be given them).
+   *
+   * The edit arrives in the shape of the node's recorded input, which for the
+   * proxy is the request's whole `params` — `{name, arguments, _meta}` — so
+   * the viewer's before/after diff lines up with `node.started.input`. Only
+   * `arguments` may change: any other key must be absent or equal to what
+   * the client sent (`name` and `_meta` are locked), else the edit is refused
+   * (`shape`). The proposed `arguments` are merged into the live ones
+   * (`mergeToolInput`: top-level argument keys replace, the rest keep their
+   * live values), then checked against the tool's `inputSchema` from the last
+   * `tools/list`, read when the edit arrives; without one the merged
+   * arguments are relayed as they are and the server judges them. The
+   * verdict — and `exec.resumed.edited.after` — is the effective `params`.
+   */
+  private toolEdit(entry: PendingRequest): ToolEdit | undefined {
+    if (entry.method !== 'tools/call' || entry.node.kind !== 'tool') return undefined;
+    const params = entry.params;
+    if (!isFrameObject(params) || !isEditableToolInput(params['arguments'])) return undefined;
+    const name = params['name'];
+    return {
+      args: params,
+      // `merged` is `{...params, ...proposed}` (see toolArgsValidator).
+      check: (merged) => {
+        const proposed = merged as Record<string, unknown>;
+        for (const key of Object.keys(proposed)) {
+          if (key === 'arguments') continue;
+          if (canonicalize(proposed[key]) !== canonicalize(params[key])) {
+            return {
+              ok: false,
+              code: 'shape',
+              message: `only the tool's arguments can be edited; ${JSON.stringify(key.slice(0, 48))} must stay as the client sent it`,
+            };
+          }
+        }
+        const args = mergeToolInput(params['arguments'], proposed['arguments']);
+        if (!args.ok) return args;
+        const effective = (value: unknown): InputValidation => ({ ok: true, value: { ...params, arguments: value } });
+        const schema = typeof name === 'string' ? this.toolSchemas.get(name) : undefined;
+        if (schema === undefined) return effective(args.value);
+        const verdict = jsonSchemaLiteCheck(schema)(args.value) as InputValidation;
+        return verdict.ok ? effective(verdict.value) : verdict;
+      },
+    };
+  }
+
+  /**
+   * Rewrite the request's `params.arguments` to those of `edited` (the
+   * validated effective params, see `toolEdit`): the frame is parsed from its
+   * exact bytes, only `arguments` is replaced — the id, `name`, `_meta` and
+   * every other key keep their values and order — and it is re-serialized.
+   * `entry.raw` / `entry.params` become the edited request, so a later retry
+   * re-sends what last ran. False (nothing changed, one line on stderr) if the
+   * frame cannot be rewritten, which a request the proxy already parsed and
+   * an edit the session already serialized never produce.
+   */
+  private applyEditedArguments(entry: PendingRequest, edited: unknown): boolean {
+    const message = parseFrame(entry.raw);
+    const params = isFrameObject(message) ? message['params'] : undefined;
+    const args = isFrameObject(edited) ? edited['arguments'] : undefined;
+    const nextParams = { ...(isFrameObject(params) ? params : {}), arguments: args };
+    const raw = isFrameObject(message) ? encodeFrame({ ...message, params: nextParams }) : undefined;
+    if (raw === undefined) {
+      this.options.log(
+        `graphmind mcp-proxy: could not rewrite ${entry.method} #${String(entry.id)} with the edited arguments; ` +
+          'relaying the request as the client sent it',
+      );
+      return false;
+    }
+    entry.raw = raw;
+    entry.params = nextParams;
+    return true;
+  }
+
+  /** Remember each tool's `inputSchema` from a successful client->server `tools/list`. */
+  private rememberToolSchemas(entry: PendingRequest, result: unknown, error: JsonRpcErrorBody | undefined): void {
+    if (entry.method !== 'tools/list' || entry.origin !== 'client-to-server' || error !== undefined) return;
+    if (!isFrameObject(result) || !Array.isArray(result['tools'])) return;
+    for (const tool of result['tools'] as unknown[]) {
+      if (!isFrameObject(tool) || typeof tool['name'] !== 'string') continue;
+      const schema = tool['inputSchema'];
+      if (!isFrameObject(schema)) {
+        this.toolSchemas.delete(tool['name']);
+        continue;
+      }
+      if (!this.toolSchemas.has(tool['name']) && this.toolSchemas.size >= MAX_TOOL_SCHEMAS) continue;
+      this.toolSchemas.set(tool['name'], schema);
+    }
   }
 
   private async replyTo(direction: Direction, raw: Buffer): Promise<void> {

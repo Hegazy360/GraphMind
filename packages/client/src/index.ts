@@ -44,6 +44,24 @@ export {
   type ValidateInputContext,
 } from './edit-input.js';
 
+// Tool-argument edits (0.6.0, W2): what every adapter's tool wrapper passes to
+// `session.gate` (editable + validateInput, and the result at `after`), the
+// schema checks (zod, Standard Schema, conservative JSON-schema-lite) and the
+// value-free descriptions of what a schema refused.
+export {
+  checkJsonSchemaLite,
+  describeIssues,
+  describeValidationError,
+  editedArgs,
+  isEditableToolInput,
+  jsonSchemaLiteCheck,
+  toolArgsValidator,
+  toolGateOptions,
+  toolSchemaCheck,
+  type SchemaCheck,
+  type ToolEdit,
+} from './tool-edit.js';
+
 export { GraphMindAbortError, isAbortError, toErrorInfo } from './errors.js';
 
 // Duration clock: every adapter measures `durationMs` with these, never with
