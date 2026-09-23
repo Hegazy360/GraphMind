@@ -13,11 +13,17 @@ module Graphmind
   # no callbacks.
   #
   #   GRAPHMIND_HIDE_INPUTS        (hide_inputs:)        node.started.input, every kind;
-  #                                                      streamed `tool-args` deltas
+  #                                                      streamed `tool-args` deltas; the
+  #                                                      arguments of output.toolCalls[]
   #   GRAPHMIND_HIDE_OUTPUTS       (hide_outputs:)       node.finished.output, every kind;
   #                                                      every streamed delta
   #   GRAPHMIND_HIDE_TOOL_ARGS     (hide_tool_args:)     node.started.input when kind is
-  #                                                      tool; streamed `tool-args` deltas
+  #                                                      tool; streamed `tool-args` deltas;
+  #                                                      the arguments of output.toolCalls[]
+  #                                                      (input / inputText, and the older
+  #                                                      arguments / args) — the calls a
+  #                                                      model requested carry the tool
+  #                                                      node's own input
   #   GRAPHMIND_HIDE_TOOL_RESULTS  (hide_tool_results:)  node.finished.output when the
   #                                                      instance's kind is tool; deltas a
   #                                                      tool node streams
@@ -300,14 +306,34 @@ module Graphmind
       ok && value >= 0 ? value : nil
     end
 
-    # {inputTokens, outputTokens}, both safe integers >= 0, or nil.
+    # The optional usage counts the failed form keeps (with `inclusive`), in wire order.
+    OPTIONAL_USAGE_COUNTS = %w[cacheReadTokens cacheWriteTokens reasoningTokens].freeze
+    USAGE_FIELDS = (%w[inputTokens outputTokens inclusive] + OPTIONAL_USAGE_COUNTS).freeze
+
+    # The fields of an output.toolCalls[] entry that carry the model's tool
+    # arguments: input / inputText (0.6.0+) and the spellings older senders used
+    # (arguments — the 0.5 OpenAI adapters; args — LangChain's own).
+    TOOL_CALL_ARG_KEYS = %w[input inputText arguments args].freeze
+
+    # {inputTokens, outputTokens} (both safe integers >= 0, else nil), plus
+    # `inclusive` when it is a boolean and cacheReadTokens / cacheWriteTokens /
+    # reasoningTokens when each is a safe integer >= 0 (0.6.0+). Nothing else.
     def usage_field(value)
       return nil unless Hash === value
 
-      counts = identity_fields(value, %w[inputTokens outputTokens])
+      counts = identity_fields(value, USAGE_FIELDS)
       input = safe_count(counts["inputTokens"])
       output = safe_count(counts["outputTokens"])
-      input && output ? { "inputTokens" => input, "outputTokens" => output } : nil
+      return nil unless input && output
+
+      out = { "inputTokens" => input, "outputTokens" => output }
+      inclusive = counts["inclusive"]
+      out["inclusive"] = inclusive if TrueClass === inclusive || FalseClass === inclusive
+      OPTIONAL_USAGE_COUNTS.each do |name|
+        count = safe_count(counts[name])
+        out[name] = count unless count.nil?
+      end
+      out
     end
 
     # Applies the switches to one event at a time. One per session.
@@ -451,7 +477,68 @@ module Graphmind
         kind = node_id ? kind_of(run_id, node_id, instance_id) : nil
         @mutex.synchronize { @instances.delete([run_id, node_id, instance_id]) } if node_id && instance_id
         hide = @switches.hide_outputs || (@switches.hide_tool_results && Redaction.wire_eq?(kind, "tool"))
-        replace(snap, "output", 1, hide)
+        return replace(snap, "output", 1, true) if hide
+        # The tool calls a model requested carry the very arguments the tool
+        # node will receive: hide them wherever tool arguments are hidden (the
+        # same switches as `tool-args` deltas).
+        return hide_tool_call_args(snap) if @switches.hide_tool_args || @switches.hide_inputs
+
+        snap
+      end
+
+      # output.toolCalls[*] with every argument field (TOOL_CALL_ARG_KEYS)
+      # replaced by the placeholder, from one-read snapshots of the output and of
+      # each call. A toolCalls that is not an Array, or an entry that is neither
+      # nil nor a Hash, is replaced whole. Every spelling (String/Symbol key) is
+      # covered; the count is the one the reader keeps (the last). TS parity:
+      # hideToolCallArgs.
+      def hide_tool_call_args(snap)
+        count = 0
+        Redaction.keys_of(snap, "output").each do |output_key|
+          output = snap[output_key]
+          next unless Hash === output
+
+          copy = Redaction.snapshot(output)
+          call_keys = Redaction.keys_of(copy, "toolCalls")
+          next if call_keys.empty?
+
+          call_keys.each do |call_key|
+            calls = copy[call_key]
+            next if calls.nil? || Redaction.placeholder?(calls)
+
+            if Array === calls
+              count, copy[call_key] = redact_tool_calls(ARRAY_TO_A.bind_call(calls))
+            else
+              copy[call_key] = REDACTED
+              count = 1
+            end
+          end
+          snap[output_key] = copy
+        end
+        count.zero? ? snap : with_summary(snap, count, "output.toolCalls")
+      end
+
+      # [count, copied calls].
+      def redact_tool_calls(calls)
+        count = 0
+        out = calls.map do |call|
+          next call if call.nil? || Redaction.placeholder?(call)
+          unless Hash === call
+            count += 1
+            next REDACTED
+          end
+
+          entry = Redaction.snapshot(call)
+          TOOL_CALL_ARG_KEYS.each do |name|
+            keys = Redaction.keys_of(entry, name)
+            next if keys.empty?
+
+            count += 1 unless Redaction.placeholder?(entry[keys.last])
+            keys.each { |key| entry[key] = REDACTED }
+          end
+          entry
+        end
+        [count, out]
       end
 
       def replace(snap, field, count, hide)

@@ -8,6 +8,7 @@
  * result carries viewer deep links (see links.ts) so coding agents can
  * cite the exact run/node.
  */
+import { normalizeFinishReason, readUsage, type UsageView } from '@graphmind-ai/schema';
 import type { RunSummary, Storage } from '../storage.js';
 import { nodeLink, runLink } from './links.js';
 import {
@@ -69,9 +70,86 @@ function runSummaryJson(run: RunSummary, baseUrl: string) {
   };
 }
 
+// -- token usage (contract C1) ------------------------------------------------
+//
+// A 0.6 sender stamps `usage.inclusive: true` (inputTokens counts cached
+// tokens too). Older events are passed on "as reported", except the 0.5
+// Anthropic TS adapter's (`cacheCreationTokens`), whose uncached tail is
+// recomputed into a total. Coding agents read `basis` instead of guessing.
+
+type UsageBasisLabel = 'inclusive' | 'inclusive (recomputed)' | 'as reported' | 'mixed';
+
+const BASIS_NOTES: Partial<Record<UsageBasisLabel, string>> = {
+  'inclusive (recomputed)':
+    'recorded by a 0.5 Anthropic adapter: inputTokens recomputed as uncached + cache read + cache write',
+  'as reported': 'recorded before GraphMind 0.6: inputTokens is as the SDK reported it and may exclude cached tokens',
+  mixed: 'some executions were recorded before GraphMind 0.6; their inputTokens may exclude cached tokens',
+};
+
+function basisLabel(view: UsageView): UsageBasisLabel {
+  if (view.basis === 'inclusive') return 'inclusive';
+  return view.basis === 'recomputed' ? 'inclusive (recomputed)' : 'as reported';
+}
+
+function usageJson(view: UsageView, basis: UsageBasisLabel) {
+  const note = BASIS_NOTES[basis];
+  return {
+    inputTokens: view.inputTokens,
+    outputTokens: view.outputTokens,
+    ...(view.cacheReadTokens !== undefined ? { cacheReadTokens: view.cacheReadTokens } : {}),
+    ...(view.cacheWriteTokens !== undefined ? { cacheWriteTokens: view.cacheWriteTokens } : {}),
+    ...(view.reasoningTokens !== undefined ? { reasoningTokens: view.reasoningTokens } : {}),
+    basis,
+    ...(note !== undefined ? { note } : {}),
+  };
+}
+
+/** One stored usage as get_node reports it; undefined when it is not a usage. */
+export function instanceUsageJson(usage: unknown) {
+  const view = readUsage(usage);
+  return view === undefined ? undefined : usageJson(view, basisLabel(view));
+}
+
+/** Summed usage over many stored usages; undefined when none was a usage. */
+export function totalUsageJson(usages: unknown[]) {
+  let total: UsageView | undefined;
+  let basis: UsageBasisLabel | undefined;
+  for (const raw of usages) {
+    const view = readUsage(raw);
+    if (view === undefined) continue;
+    const label: UsageBasisLabel = view.basis === 'reported' ? 'as reported' : 'inclusive';
+    basis = basis === undefined || basis === label ? label : 'mixed';
+    if (total === undefined) {
+      total = { ...view };
+      continue;
+    }
+    total.inputTokens += view.inputTokens;
+    total.outputTokens += view.outputTokens;
+    for (const key of ['cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens'] as const) {
+      const value = view[key];
+      if (value !== undefined) total[key] = (total[key] ?? 0) + value;
+    }
+  }
+  return total === undefined || basis === undefined ? undefined : usageJson(total, basis);
+}
+
+/**
+ * The normalized finish reason of an LLM output: 0.6 senders already write it;
+ * older ones wrote the provider's string (`finishReason`, or `stopReason` from
+ * the 0.5 Anthropic TS adapter), normalized here the same way.
+ */
+export function outputFinishReason(output: unknown): string | undefined {
+  if (output === null || typeof output !== 'object' || Array.isArray(output)) return undefined;
+  const record = output as Record<string, unknown>;
+  const calls = record['toolCalls'];
+  const hasCalls = Array.isArray(calls) && calls.length > 0;
+  return normalizeFinishReason(record['finishReason'] ?? record['stopReason'], hasCalls);
+}
+
 function nodeSummaryJson(node: NodeModel, runId: string, baseUrl: string) {
   const durationMs = nodeDurationMs(node);
   const lastError = nodeLastError(node);
+  const tokens = totalUsageJson(node.instances.map((instance) => instance.usage));
   return {
     nodeId: node.nodeId,
     kind: node.kind,
@@ -81,6 +159,7 @@ function nodeSummaryJson(node: NodeModel, runId: string, baseUrl: string) {
     executions: node.instances.length,
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(lastError === undefined ? {} : { errorMessage: lastError.message }),
+    ...(tokens === undefined ? {} : { tokens }),
     link: nodeLink(baseUrl, runId, node.nodeId),
   };
 }
@@ -111,8 +190,11 @@ export function getRun(ctx: ToolContext, args: Record<string, unknown>) {
   const runId = readString(args, 'runId');
   const run = requireRun(ctx, runId);
   const model = buildRunModel(ctx.storage.listEvents(runId).events);
+  const tokens = totalUsageJson(
+    [...model.nodes.values()].flatMap((node) => node.instances.map((instance) => instance.usage)),
+  );
   return {
-    run: runSummaryJson(run, ctx.viewerBaseUrl),
+    run: { ...runSummaryJson(run, ctx.viewerBaseUrl), ...(tokens === undefined ? {} : { tokens }) },
     nodes: [...model.nodes.values()].map((node) => nodeSummaryJson(node, runId, ctx.viewerBaseUrl)),
   };
 }
@@ -134,18 +216,23 @@ export function getNode(ctx: ToolContext, args: Record<string, unknown>) {
   }
 
   const omitted = Math.max(0, node.instances.length - MAX_INSTANCES);
-  const instances = node.instances.slice(omitted).map((instance) => ({
-    instanceId: instance.instanceId,
-    startedAt: iso(instance.startedAt),
-    status: instance.status,
-    ...(instance.durationMs === undefined ? {} : { durationMs: instance.durationMs }),
-    input: compactPayload(instance.input, PAYLOAD_PREVIEW_CHARS),
-    ...(instance.output === undefined
-      ? {}
-      : { output: compactPayload(instance.output, PAYLOAD_PREVIEW_CHARS) }),
-    ...(instance.usage === undefined ? {} : { usage: instance.usage }),
-    ...(instance.error === undefined ? {} : { error: instance.error }),
-  }));
+  const instances = node.instances.slice(omitted).map((instance) => {
+    const usage = instanceUsageJson(instance.usage);
+    const finishReason = node.kind === 'llm' ? outputFinishReason(instance.output) : undefined;
+    return {
+      instanceId: instance.instanceId,
+      startedAt: iso(instance.startedAt),
+      status: instance.status,
+      ...(instance.durationMs === undefined ? {} : { durationMs: instance.durationMs }),
+      input: compactPayload(instance.input, PAYLOAD_PREVIEW_CHARS),
+      ...(instance.output === undefined
+        ? {}
+        : { output: compactPayload(instance.output, PAYLOAD_PREVIEW_CHARS) }),
+      ...(finishReason === undefined ? {} : { finishReason }),
+      ...(usage === undefined ? {} : { usage }),
+      ...(instance.error === undefined ? {} : { error: instance.error }),
+    };
+  });
 
   const durationMs = nodeDurationMs(node);
   const lastError = nodeLastError(node);

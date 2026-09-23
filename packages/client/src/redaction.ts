@@ -8,9 +8,14 @@
  * chosen by node kind. No deny lists, no regexes, no callbacks — those were
  * refuted (internal/research/phase6-plan-2026-09.md, W7).
  *
- *   GRAPHMIND_HIDE_INPUTS        node.started.input, every kind; `tool-args` deltas
+ *   GRAPHMIND_HIDE_INPUTS        node.started.input, every kind; `tool-args` deltas;
+ *                                the arguments of `output.toolCalls[]`
  *   GRAPHMIND_HIDE_OUTPUTS       node.finished.output, every kind; every delta
- *   GRAPHMIND_HIDE_TOOL_ARGS     node.started.input when kind is tool; `tool-args` deltas
+ *   GRAPHMIND_HIDE_TOOL_ARGS     node.started.input when kind is tool; `tool-args` deltas;
+ *                                the arguments of `output.toolCalls[]` (0.6.0+:
+ *                                `input`/`inputText`, and the older `arguments`/
+ *                                `args` spellings) — the tool calls a model
+ *                                requested carry the tool node's own input
  *   GRAPHMIND_HIDE_TOOL_RESULTS  node.finished.output when the instance's kind
  *                                is tool; deltas streamed by a tool node
  *
@@ -75,6 +80,9 @@
  *
  *   node.started   {nodeId, parentId?, kind, name, instanceId, input: "__REDACTED__"}
  *   node.finished  {nodeId, instanceId?, durationMs, heldMs?, status, usage?, output: "__REDACTED__"}
+ *                  (usage keeps inputTokens/outputTokens, `inclusive` when a
+ *                  boolean, and cacheReadTokens/cacheWriteTokens/reasoningTokens
+ *                  when non-negative safe integers — nothing else)
  *   node.token     {nodeId, instanceId?, deltas: []}
  *
  * each with `redaction: {count: 0, keys: ["input","output","deltas"], failed:
@@ -241,6 +249,16 @@ function identity(p: Record<string, unknown>, key: string): string | undefined {
 }
 const isDuration = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
 const isTokenCount = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+
+/** The optional usage counts the failed form keeps (with `inclusive`), in wire order. */
+const OPTIONAL_USAGE_COUNTS = ['cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens'] as const;
+
+/**
+ * The fields of an `output.toolCalls[]` entry that carry the model's tool
+ * arguments: `input` / `inputText` (0.6.0+), and the spellings older senders
+ * used (`arguments` — the 0.5 OpenAI adapters; `args` — LangChain's own).
+ */
+export const TOOL_CALL_ARG_KEYS: readonly string[] = Object.freeze(['input', 'inputText', 'arguments', 'args']);
 
 export class Redactor {
   /** Kind per open instance (run + nodeId + instanceId), insertion-ordered. */
@@ -453,7 +471,18 @@ export class Redactor {
         if (typeof usage === 'object' && usage !== null) {
           const inputTokens = read(usage, 'inputTokens');
           const outputTokens = read(usage, 'outputTokens');
-          if (isTokenCount(inputTokens) && isTokenCount(outputTokens)) out['usage'] = { inputTokens, outputTokens };
+          if (isTokenCount(inputTokens) && isTokenCount(outputTokens)) {
+            // The counts and the inclusive marker only (0.6.0+): numbers a
+            // reader needs, nothing that could carry a value.
+            const kept: Record<string, unknown> = { inputTokens, outputTokens };
+            const inclusive = read(usage, 'inclusive');
+            if (typeof inclusive === 'boolean') kept['inclusive'] = inclusive;
+            for (const key of OPTIONAL_USAGE_COUNTS) {
+              const value = read(usage, key);
+              if (isTokenCount(value)) kept[key] = value;
+            }
+            out['usage'] = kept;
+          }
         }
         return { ...out, output: REDACTED, redaction: failed };
       }
@@ -499,8 +528,56 @@ export class Redactor {
       this.instances.delete(instanceKey(runId, nodeId, instanceId));
     }
     const hide = this.switches.hideOutputs || (this.switches.hideToolResults && kind === 'tool');
-    if (!hide || !('output' in p) || p.output === undefined || p.output === REDACTED) return p;
-    return { ...p, output: REDACTED, redaction: mergeSummary(p['redaction'], 1, 'output') };
+    if (hide) {
+      if (!('output' in p) || p.output === undefined || p.output === REDACTED) return p;
+      return { ...p, output: REDACTED, redaction: mergeSummary(p['redaction'], 1, 'output') };
+    }
+    // The tool calls a model requested carry the very arguments the tool node
+    // will receive: hide them wherever tool arguments are hidden (the same
+    // switches as `tool-args` deltas).
+    if (this.switches.hideToolArgs || this.switches.hideInputs) return this.hideToolCallArgs(p);
+    return p;
+  }
+
+  /**
+   * `output.toolCalls[*]` with every argument field (TOOL_CALL_ARG_KEYS)
+   * replaced by the placeholder, from one-read copies of the output and of
+   * each call (what was inspected is what is sent). A `toolCalls` that is not
+   * an array, or an entry that is neither null nor an object, is replaced
+   * whole — its shape says nothing about where the arguments are. Only an own
+   * `toolCalls` field of an object output is considered; anything else is
+   * returned untouched.
+   */
+  private hideToolCallArgs(p: EventPayloadMap['node.finished']): EventPayloadMap['node.finished'] {
+    const output: unknown = p.output;
+    if (!isRecord(output) || !Object.prototype.hasOwnProperty.call(output, 'toolCalls')) return p;
+    const copy = snapshot(output);
+    const calls = copy['toolCalls'];
+    if (calls === undefined || calls === null || calls === REDACTED) return p;
+    let count = 0;
+    if (!Array.isArray(calls)) {
+      copy['toolCalls'] = REDACTED;
+      count = 1;
+    } else {
+      copy['toolCalls'] = Array.from(calls as unknown[]).map((call): unknown => {
+        if (call === null || call === undefined || call === REDACTED) return call;
+        if (!isRecord(call)) {
+          count += 1;
+          return REDACTED;
+        }
+        const entry = snapshot(call);
+        for (const key of TOOL_CALL_ARG_KEYS) {
+          if (!Object.prototype.hasOwnProperty.call(entry, key)) continue;
+          const value = entry[key];
+          if (value === undefined || value === REDACTED) continue;
+          entry[key] = REDACTED;
+          count += 1;
+        }
+        return entry;
+      });
+    }
+    if (count === 0) return { ...p, output: copy };
+    return { ...p, output: copy, redaction: mergeSummary(p['redaction'], count, 'output.toolCalls') };
   }
 
   private onToken(p: EventPayloadMap['node.token'], runId: string): EventPayloadMap['node.token'] {

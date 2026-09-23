@@ -96,7 +96,8 @@ async function instrumentedCall(params) {
     session.emit('node.finished', {
       nodeId, instanceId,
       output: result,
-      usage: { inputTokens: result.usage.input, outputTokens: result.usage.output },
+      // Inclusive (0.6+): inputTokens is the WHOLE prompt, cached tokens included.
+      usage: makeUsage({ input: result.usage.input, output: result.usage.output }),
       durationMs: elapsedMs(startedAt),
       status: 'ok',
     });
@@ -110,6 +111,13 @@ async function instrumentedCall(params) {
   }
 }
 ```
+
+Build usage with `makeUsage` from `@graphmind-ai/client` (0.6+): pass `input` as the **whole
+prompt** — if your provider reports only the uncached tail (Anthropic does), add its cache reads
+and writes back — and `cacheRead` / `cacheWrite` / `reasoning` only when the provider reported
+them. It stamps `inclusive: true`, which is how readers know the number is a total (see [usage
+and cost](/debugging/inspecting/#usage-and-cost)). `toolCall`, `normalizeFinishReason`,
+`captureTools` and `pickParams` from the same package build the rest of an LLM step's record.
 
 Time with `monotonicNow()` / `elapsedMs()`, not `Date.now()`: they are monotonic, fractional to
 0.01 ms and never negative. Start the clock before the gate and report the whole wall-clock

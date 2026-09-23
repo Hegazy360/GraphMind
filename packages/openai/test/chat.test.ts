@@ -21,9 +21,12 @@ afterEach(async () => {
 const EXPECTED_USAGE = {
   inputTokens: 20,
   outputTokens: 10,
+  inclusive: true,
+  cacheReadTokens: 4,
+  reasoningTokens: 6,
+  // 0.5 extras, kept: the reported total and the old name of cacheReadTokens.
   totalTokens: 30,
   cachedInputTokens: 4,
-  reasoningTokens: 6,
 };
 
 describe('stream tee', () => {
@@ -186,9 +189,10 @@ describe('non-streaming', () => {
     expect(finished?.payload['api']).toBe('chat.completions');
     const output = finished?.payload['output'] as Record<string, unknown>;
     expect(output['text']).toBe('here you go');
-    expect(output['finishReason']).toBe('tool_calls');
+    expect(output['finishReason']).toBe('tool-calls');
+    expect(output['rawFinishReason']).toBe('tool_calls');
     expect(output['toolCalls']).toEqual([
-      { id: 'call-9', name: 'checkWeather', arguments: { city: 'Lisbon' } },
+      { id: 'call-9', name: 'checkWeather', input: { city: 'Lisbon' } },
     ]);
   });
 });

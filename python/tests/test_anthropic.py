@@ -68,9 +68,9 @@ def test_messages_create_emits_a_gated_llm_node_with_usage(attached: Any) -> Non
     finished = viewer.wait_for(
         lambda f: f.get("type") == "node.finished" and f["payload"]["nodeId"] == "llm:step"
     )
-    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6}
+    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6, "inclusive": True}
     assert finished["payload"]["output"]["text"] == "Lisbon is sunny."
-    assert finished["payload"]["output"]["finishReason"] == "end_turn"
+    assert finished["payload"]["output"]["finishReason"] == "stop"
 
 
 def test_the_before_gate_holds_the_request(attached: Any) -> None:
@@ -150,7 +150,7 @@ def test_create_with_stream_true_is_teed(attached: Any) -> None:
     )
     assert finished["payload"]["streaming"] is True
     assert finished["payload"]["output"]["text"] == "Lisbon"
-    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6}
+    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6, "inclusive": True}
 
 
 def test_messages_stream_gates_in_enter_and_observes_text_stream(attached: Any) -> None:
@@ -183,7 +183,7 @@ def test_messages_stream_gates_in_enter_and_observes_text_stream(attached: Any) 
         lambda f: f.get("type") == "node.finished" and f["payload"]["nodeId"] == "llm:step"
     )
     assert finished["payload"]["output"]["text"] == "Lisbon"
-    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6}
+    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6, "inclusive": True}
 
     tokens = viewer.of_type("node.token")
     assert "".join(d["v"] for f in tokens for d in f["payload"]["deltas"]) == "Lisbon"
@@ -231,7 +231,7 @@ async def test_async_create(attached: Any) -> None:
     finished = await viewer.wait_for_async(
         lambda f: f.get("type") == "node.finished" and f["payload"]["nodeId"] == "llm:step"
     )
-    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6}
+    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6, "inclusive": True}
 
 
 async def test_async_gate_does_not_block_the_loop(attached: Any) -> None:
@@ -271,4 +271,4 @@ async def test_async_messages_stream(attached: Any) -> None:
     assert finished["payload"]["output"]["text"] == "Lisbon"
     # Usage is recovered from the SDK's message snapshot even though the host
     # only touched `.text_stream` (which bypasses the raw-event tee).
-    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6}
+    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6, "inclusive": True}

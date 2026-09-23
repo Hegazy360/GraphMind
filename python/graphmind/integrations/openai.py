@@ -36,6 +36,15 @@ from typing import Any
 from ..clock import elapsed_ms, monotonic_ms
 from ..gate import GateNode
 from ..ids import LLM_NODE_ID, LLM_NODE_NAME, agent_node_id, next_id
+from ..llm_capture import (
+    capture_tools,
+    finish_fields,
+    openai_chat_usage,
+    openai_responses_usage,
+    pick_params,
+    record_value,
+    tool_call,
+)
 from ..session import Session
 from ._common import (
     AsyncStreamTee,
@@ -48,7 +57,6 @@ from ._common import (
     is_async_callable,
     is_async_client,
     json_arguments,
-    merge_usage,
     observe_raw_stream,
     parse_raw,
     parse_raw_async,
@@ -60,7 +68,6 @@ from ._common import (
     safe_value,
     sdk_packages,
     unpatch_method,
-    usage_of,
     warn_once,
 )
 
@@ -94,30 +101,102 @@ _STREAM_INJECT = (
 # -- input / output shaping ---------------------------------------------------
 
 
-def _describe(flavor: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+def _describe(session: Session, flavor: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """``node.started.input``: the request as sent (contract C1) — ``model``,
+    ``instructions`` and ``messages`` / ``input`` in full (the per-event 512 KB
+    shrink is the only bound), the sampling parameters under the API's own
+    names (``temperature``, ``max_tokens`` / ``max_completion_tokens`` /
+    ``max_output_tokens``, ``top_p``, ``stop``, ``seed``, ``tool_choice``,
+    ``reasoning``, ``text``, ... — an allow-list; ``metadata``, ``user`` and
+    the ``extra_*`` request options are never read), and ``tools: [{name,
+    schemaHash}]`` with each definition sent once per run as ``toolSchemas``."""
     payload: dict[str, Any] = {"provider": SDK_NAME}
-    for key in ("model", "temperature", "max_tokens", "max_output_tokens", "instructions"):
-        if key in kwargs:
-            payload[key] = safe_value(kwargs[key])
+    for key in ("model", "instructions", "previous_response_id"):
+        value = kwargs.get(key)
+        if value is not None and type(value).__name__ not in ("NotGiven", "Omit"):
+            payload[key] = record_value(value)
     if flavor == "chat":
-        payload["messages"] = safe_value(kwargs.get("messages"))
+        payload["messages"] = record_value(kwargs.get("messages"))
     else:
-        payload["input"] = safe_value(kwargs.get("input"))
-    tools = kwargs.get("tools")
+        payload["input"] = record_value(kwargs.get("input"))
+    payload.update(pick_params(kwargs))
+    ctx = session.current_run()
+    run_key = ctx.run_id if ctx is not None else "implicit"
+    tools = capture_tools(session, run_key, kwargs.get("tools"))
     if tools:
-        payload["tools"] = safe_value(tools)
-    if kwargs.get("stream"):
+        payload.update(tools)
+    if kwargs.get("stream") is True:
         payload["stream"] = True
     return payload
 
 
+def _chat_tool_calls(calls: Any) -> list[dict[str, Any]]:
+    """A message's ``tool_calls`` as ``{id, name, input, inputText?}``: a
+    function's JSON arguments parsed (the text kept when it does not parse —
+    cut off by ``length``); a custom (freeform) tool's input is text by design
+    and recorded as the string it is."""
+    out: list[dict[str, Any]] = []
+    for call in calls or []:
+        function = getattr(call, "function", None)
+        if function is None and isinstance(call, dict):
+            function = call.get("function")
+        if function is not None:
+            name = getattr(function, "name", None)
+            arguments = getattr(function, "arguments", None)
+            if isinstance(function, dict):
+                name, arguments = function.get("name"), function.get("arguments")
+            call_id = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
+            recorded = tool_call(call_id, name, arguments)
+            if recorded is not None:
+                out.append(recorded)
+            continue
+        custom = getattr(call, "custom", None)
+        name = getattr(custom, "name", None)
+        if isinstance(name, str) and name:
+            entry: dict[str, Any] = {"name": name, "input": getattr(custom, "input", None) or ""}
+            call_id = getattr(call, "id", None)
+            if isinstance(call_id, str) and call_id:
+                entry = {"id": call_id, **entry}
+            out.append(entry)
+    return out
+
+
+def _responses_tool_calls(output: Any) -> list[dict[str, Any]]:
+    """The locally executed calls in a Response's ``output`` items."""
+    out: list[dict[str, Any]] = []
+    for item in output or []:
+        kind = getattr(item, "type", None)
+        if kind == "function_call":
+            recorded = tool_call(
+                getattr(item, "call_id", None),
+                getattr(item, "name", None),
+                getattr(item, "arguments", None),
+            )
+            if recorded is not None:
+                out.append(recorded)
+        elif kind == "custom_tool_call":
+            name = getattr(item, "name", None)
+            if not isinstance(name, str) or not name:
+                continue
+            entry: dict[str, Any] = {"name": name, "input": getattr(item, "input", None) or ""}
+            call_id = getattr(item, "call_id", None)
+            if isinstance(call_id, str) and call_id:
+                entry = {"id": call_id, **entry}
+            out.append(entry)
+    return out
+
+
 def _summarize(flavor: str, result: Any) -> dict[str, Any]:
+    """``node.finished.output``: text, the requested ``toolCalls``, the
+    normalized ``finishReason`` and the API's own value as ``rawFinishReason``
+    (chat: the first choice's ``finish_reason``; Responses: the incomplete
+    reason when it stopped early, else the ``status``)."""
     out: dict[str, Any] = {}
     try:
         if flavor == "chat":
             choices = getattr(result, "choices", None) or []
             texts: list[str] = []
-            tool_calls: list[Any] = []
+            tool_calls: list[dict[str, Any]] = []
             finish_reason: str | None = None
             for choice in choices:
                 message = getattr(choice, "message", None)
@@ -127,36 +206,38 @@ def _summarize(flavor: str, result: Any) -> dict[str, Any]:
                 parsed = getattr(message, "parsed", None)
                 if parsed is not None:
                     out["parsed"] = safe_value(parsed)
-                calls = getattr(message, "tool_calls", None) or []
-                for call in calls:
-                    function = getattr(call, "function", None)
-                    tool_calls.append(
-                        {
-                            "id": getattr(call, "id", None),
-                            "name": getattr(function, "name", None),
-                            "arguments": safe_value(getattr(function, "arguments", None)),
-                        }
-                    )
+                tool_calls.extend(_chat_tool_calls(getattr(message, "tool_calls", None)))
                 if finish_reason is None:
                     finish_reason = getattr(choice, "finish_reason", None)
             out["text"] = "".join(texts)
             if tool_calls:
                 out["toolCalls"] = tool_calls
-            if finish_reason:
-                out["finishReason"] = finish_reason
+            out.update(finish_fields(finish_reason, bool(tool_calls)))
         else:
             text = getattr(result, "output_text", None)
             if isinstance(text, str):
                 out["text"] = safe_value(text)
-            status = getattr(result, "status", None)
-            if isinstance(status, str):
-                out["finishReason"] = status
             output = getattr(result, "output", None)
+            calls = _responses_tool_calls(output)
+            if calls:
+                out["toolCalls"] = calls
+            status = getattr(result, "status", None)
+            reason = getattr(getattr(result, "incomplete_details", None), "reason", None)
+            raw = reason if isinstance(reason, str) and reason else status
+            out.update(finish_fields(raw, bool(calls)))
+            if isinstance(status, str):
+                out["status"] = status
             if output is not None:
                 out["output"] = safe_value(output)
     except Exception:
         pass
     return out
+
+
+def _reported_usage(flavor: str, result: Any) -> dict[str, Any] | None:
+    """The inclusive wire usage of a complete (non-streamed) result."""
+    usage = getattr(result, "usage", None)
+    return openai_chat_usage(usage) if flavor == "chat" else openai_responses_usage(usage)
 
 
 # -- typed inject: what a human types -> the SDK type's fields ------------------
@@ -342,28 +423,43 @@ _REPLY_BUILDERS: dict[str, Callable[[Any, str], dict[str, Any] | None]] = {
 
 
 class _StreamState:
-    __slots__ = ("chunks", "final", "finish_reason", "text", "usage")
+    __slots__ = ("calls", "chunks", "final", "finish_reason", "text", "usage")
 
     def __init__(self) -> None:
         self.text: list[str] = []
-        self.usage: dict[str, int] | None = None
+        self.usage: dict[str, Any] | None = None
         self.finish_reason: str | None = None
         self.chunks = 0
         #: The terminal ``Response`` of a Responses-API stream, when one arrived.
         self.final: Any = None
+        #: Streamed chat tool calls by index: [id, name, argument text].
+        self.calls: dict[int, list[Any]] = {}
+
+    def tool_calls(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for index in sorted(self.calls):
+            call_id, name, text = self.calls[index]
+            recorded = tool_call(call_id, name, text)
+            if recorded is not None:
+                out.append(recorded)
+        return out
 
     def output(self) -> dict[str, Any]:
         out: dict[str, Any] = {"text": safe_value("".join(self.text)), "chunks": self.chunks}
-        if self.finish_reason:
-            out["finishReason"] = self.finish_reason
+        calls = self.tool_calls()
+        if calls:
+            out["toolCalls"] = calls
+        out.update(finish_fields(self.finish_reason, bool(calls)))
         return out
 
 
 def _observe_chat_chunk(session: Session, node_id: str, state: _StreamState, chunk: Any) -> None:
     state.chunks += 1
-    usage = usage_of(getattr(chunk, "usage", None))
+    # With stream_options.include_usage the usage rides the LAST chunk (empty
+    # choices); a later report replaces an earlier one.
+    usage = openai_chat_usage(getattr(chunk, "usage", None))
     if usage is not None:
-        state.usage = merge_usage(state.usage, usage)
+        state.usage = usage
     for choice in getattr(chunk, "choices", None) or []:
         delta = getattr(choice, "delta", None)
         if delta is None:
@@ -378,7 +474,16 @@ def _observe_chat_chunk(session: Session, node_id: str, state: _StreamState, chu
         for call in getattr(delta, "tool_calls", None) or []:
             function = getattr(call, "function", None)
             arguments = getattr(function, "arguments", None)
+            index = getattr(call, "index", None)
+            entry = state.calls.setdefault(index if isinstance(index, int) else 0, [None, None, ""])
+            call_id = getattr(call, "id", None)
+            if isinstance(call_id, str) and call_id:
+                entry[0] = call_id
+            name = getattr(function, "name", None)
+            if isinstance(name, str) and name:
+                entry[1] = name
             if isinstance(arguments, str) and arguments:
+                entry[2] += arguments
                 session.push_token(node_id, "tool-args", arguments)
         reason = getattr(choice, "finish_reason", None)
         if isinstance(reason, str) and reason:
@@ -405,9 +510,9 @@ def _observe_responses_event(
         response = getattr(event, "response", None)
         if response is not None:
             state.final = response
-        usage = usage_of(getattr(response, "usage", None))
+        usage = openai_responses_usage(getattr(response, "usage", None))
         if usage is not None:
-            state.usage = merge_usage(state.usage, usage)
+            state.usage = usage
         status = getattr(response, "status", None)
         if isinstance(status, str):
             state.finish_reason = status
@@ -459,7 +564,7 @@ class _Call:
             name=LLM_NODE_NAME,
             instance_id=self.instance_id,
             parent_id=agent_node_id(ctx.name) if ctx is not None else None,
-            input=_describe(self.flavor, kwargs),
+            input=_describe(self.session, self.flavor, kwargs),
             extra={"sdk": SDK_NAME},
         )
         model = kwargs.get("model")
@@ -649,7 +754,7 @@ def _make_sync_wrapper(
                         close_raw(result)
                     call.finish(None, "aborted")
                     raise session.abort_error(ctx)
-                call.finish(_summarize(flavor, parsed), "ok", usage_of(parsed))
+                call.finish(_summarize(flavor, parsed), "ok", _reported_usage(flavor, parsed))
                 return result
 
         return wrapper
@@ -714,7 +819,7 @@ def _make_async_wrapper(
                         await close_raw_async(result)
                     call.finish(None, "aborted")
                     raise session.abort_error(ctx)
-                call.finish(_summarize(flavor, parsed), "ok", usage_of(parsed))
+                call.finish(_summarize(flavor, parsed), "ok", _reported_usage(flavor, parsed))
                 return result
 
         return wrapper

@@ -120,8 +120,10 @@ client = gm.instrument_openai(OpenAI::Client.new(access_token: ENV['OPENAI_API_K
 client.chat(parameters: { model: 'gpt-4o-mini', messages: [...] })
 ```
 
-An `llm:step` node per `chat` / `responses.create`, with the model, the trimmed messages, the
-reply and token usage. The `before` gate means the debugger can pause and `inject` a response
+An `llm:step` node per `chat` / `responses.create`, with the model, every message in full, the
+sampling parameters, the tools by schema hash, the reply, the requested tool calls, the
+normalized finish reason and inclusive token usage (`inputTokens` includes cached tokens —
+see [usage and cost](/debugging/inspecting/#usage-and-cost)). The `before` gate means the debugger can pause and `inject` a response
 **without the request ever leaving the process**; the `error` gate catches a 429 or a timeout, and
 `retry` re-sends. Streamed deltas reach the canvas when you pass `stream:`.
 

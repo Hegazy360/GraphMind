@@ -25,6 +25,7 @@
  * to hold there — the stream tee reports it as it flows instead.
  */
 import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
+import { captureTools, pickParams } from '@graphmind-ai/client';
 import type { GateNode, RunContext, RunStatus } from '@graphmind-ai/client';
 import { GatedApiPromise, type ApiTracker } from './api-promise.js';
 import type { AdapterCore } from './core.js';
@@ -34,6 +35,7 @@ import { isAbortLikeError } from './signals.js';
 import {
   isStreamLike,
   isThenable,
+  toolDefName,
   type RequestBodyLike,
   type StreamLike,
   type UsageWithExtras,
@@ -266,6 +268,30 @@ async function runGatedRequest(
   }
 }
 
+/**
+ * `node.started.input` (contract C1): the flavor's prompt fields in full,
+ * then the sampling parameters actually sent under the API's own names
+ * (`temperature`, `max_tokens` / `max_completion_tokens` / `max_output_tokens`,
+ * `top_p`, `stop`, `seed`, `tool_choice`, `reasoning`, `text`, ... — the
+ * allow-list in @graphmind-ai/client; `metadata`, `user`, `store` and the
+ * request options are never read), and `tools: [{name, schemaHash}]` with
+ * each definition sent once per run as `toolSchemas`.
+ */
+function stepInput(
+  core: AdapterCore,
+  flavor: LlmFlavor,
+  request: RequestBodyLike,
+  scopeId: string,
+): unknown {
+  const base = flavor.nodeInput(request);
+  const tools = captureTools(core.session, scopeId, request.tools, toolDefName);
+  return {
+    ...(typeof base === 'object' && base !== null ? base : {}),
+    ...pickParams(request),
+    ...(tools !== undefined ? tools : {}),
+  };
+}
+
 /** Emit `graph.hint` (first step) + `node.started`. Undefined if it failed. */
 function beginStep(
   core: AdapterCore,
@@ -285,7 +311,7 @@ function beginStep(
       name: LLM_NODE_NAME,
       instanceId,
       parentId: ctx !== undefined ? agentNodeId(ctx.name) : undefined,
-      input: flavor.nodeInput(request),
+      input: stepInput(core, flavor, request, scopeId),
       extra: { api: flavor.api },
     });
     return makeReporter(core, {

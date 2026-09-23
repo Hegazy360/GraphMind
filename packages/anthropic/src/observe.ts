@@ -17,7 +17,14 @@
  * side and cannot be held, so they are observed and marked `ungated`.
  */
 import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
-import { isAbortError, type RunContext, type RunStatus } from '@graphmind-ai/client';
+import {
+  isAbortError,
+  normalizeFinishReason,
+  toolCall,
+  type RecordedToolCall,
+  type RunContext,
+  type RunStatus,
+} from '@graphmind-ai/client';
 import type { AdapterCore } from './core.js';
 import { LLM_NODE_ID, toolNodeId } from './ids.js';
 import {
@@ -142,6 +149,41 @@ export class StepReporter {
   }
 }
 
+/**
+ * `node.finished.output` of an LLM step (contract C1): the text, the
+ * normalized `finishReason` with Anthropic's own `stop_reason` as
+ * `rawFinishReason`, and the `tool_use` calls the model requested
+ * (`server_tool_use` blocks run on Anthropic's side and are their own tool
+ * nodes). `stopReason` is the 0.5 name of `rawFinishReason`, kept through 0.6.x.
+ */
+export function stepOutput(
+  text: string,
+  stopReason: string | undefined,
+  model: string | undefined,
+  calls: RecordedToolCall[] = [],
+): Record<string, unknown> {
+  const finishReason = normalizeFinishReason(stopReason, calls.length > 0);
+  return {
+    text,
+    ...(finishReason !== undefined ? { finishReason } : {}),
+    ...(stopReason !== undefined ? { rawFinishReason: stopReason } : {}),
+    ...(calls.length > 0 ? { toolCalls: calls } : {}),
+    stopReason,
+    model,
+  };
+}
+
+/** The `tool_use` blocks of a complete message, as recorded tool calls. */
+function messageToolCalls(message: MessageLike): RecordedToolCall[] {
+  const calls: RecordedToolCall[] = [];
+  for (const block of message.content ?? []) {
+    if (!isToolUseBlock(block)) continue;
+    const call = toolCall(block.id, block.name, block.input);
+    if (call !== undefined) calls.push(call);
+  }
+  return calls;
+}
+
 /** Report a completed non-streaming `messages.create`. */
 export function observeMessage(reporter: StepReporter, message: MessageLike): void {
   try {
@@ -149,7 +191,7 @@ export function observeMessage(reporter: StepReporter, message: MessageLike): vo
     const text = collectText(message);
     if (text.length > 0) reporter.core.pushToken(LLM_NODE_ID, 'text', text);
     reporter.finish(
-      { text, stopReason: message.stop_reason ?? undefined, model: message.model },
+      stepOutput(text, message.stop_reason ?? undefined, message.model, messageToolCalls(message)),
       message.usage,
       'ok',
     );
@@ -209,11 +251,28 @@ async function* teeIterator(
   inner: AsyncIterator<StreamEventLike>,
 ): AsyncGenerator<StreamEventLike, void, undefined> {
   const open = new Map<number, OpenBlock>();
+  /** Completed `tool_use` calls by block index (stream order on output). */
+  const calls = new Map<number, RecordedToolCall>();
   let text = '';
   let usage: UsageLike | undefined;
   let stopReason: string | undefined;
   let model: string | undefined;
   let streamError: unknown;
+  /** Completed calls plus any `tool_use` block the stream never closed. */
+  const output = (): Record<string, unknown> => {
+    try {
+      const all = new Map(calls);
+      for (const [index, block] of open) {
+        if (block.type !== 'tool_use' || all.has(index)) continue;
+        const call = toolCall(block.id, block.name, block.json);
+        if (call !== undefined) all.set(index, call);
+      }
+      const ordered = [...all.entries()].sort((a, b) => a[0] - b[0]).map(([, call]) => call);
+      return stepOutput(text, stopReason, model, ordered);
+    } catch {
+      return { text, stopReason, model }; // reporting must never throw
+    }
+  };
 
   try {
     for (;;) {
@@ -264,7 +323,11 @@ async function* teeIterator(
             if (typeof event.index !== 'number') break;
             const block = open.get(event.index);
             open.delete(event.index);
-            if (block?.type === SERVER_TOOL_USE_BLOCK) {
+            if (block?.type === 'tool_use') {
+              // An argument-less call streams no deltas: '' is `{}`.
+              const call = toolCall(block.id, block.name, block.json);
+              if (call !== undefined) calls.set(event.index, call);
+            } else if (block?.type === SERVER_TOOL_USE_BLOCK) {
               reporter.observeBlock({
                 type: block.type,
                 id: block.id,
@@ -292,14 +355,14 @@ async function* teeIterator(
       }
       yield event;
     }
-    if (streamError !== undefined) reporter.fail(streamError, { text, stopReason, model });
-    else reporter.finish({ text, stopReason, model }, usage, reporter.endStatus());
+    if (streamError !== undefined) reporter.fail(streamError, output());
+    else reporter.finish(output(), usage, reporter.endStatus());
   } catch (error) {
-    reporter.fail(error, { text, stopReason, model });
+    reporter.fail(error, output());
     throw error; // the host's own error — always propagates untouched
   } finally {
     // The host broke out early (or threw): the step is over either way.
-    if (!reporter.done) reporter.finish({ text, stopReason, model }, usage, reporter.endStatus());
+    if (!reporter.done) reporter.finish(output(), usage, reporter.endStatus());
     try {
       await inner.return?.(undefined);
     } catch {

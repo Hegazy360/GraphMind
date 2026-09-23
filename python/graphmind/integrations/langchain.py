@@ -35,8 +35,17 @@ from ..clock import elapsed_ms, monotonic_ms
 from ..errors import GraphMindAbortError, to_error_info
 from ..gate import GateNode
 from ..ids import agent_node_id
+from ..llm_capture import (
+    capture_tools,
+    finish_fields,
+    langchain_usage,
+    pick_params,
+    record_value,
+    tool_call,
+    usage_of,
+)
 from ..session import Session
-from ._common import safe_value, usage_of, warn_once
+from ._common import safe_value, warn_once
 
 try:  # pragma: no cover - exercised by the "framework absent" path
     from langchain_core.callbacks.base import (  # type: ignore[import-not-found]
@@ -102,7 +111,68 @@ def _name_of(serialized: Any, kwargs: dict[str, Any], fallback: str) -> str:
     return fallback
 
 
+def _message_of(response: Any) -> Any:
+    """The first generation's message (chat models), or ``None``."""
+    for batch in getattr(response, "generations", None) or []:
+        for generation in batch or []:
+            return getattr(generation, "message", None)
+    return None
+
+
+def _first_generation(response: Any) -> Any:
+    for batch in getattr(response, "generations", None) or []:
+        for generation in batch or []:
+            return generation
+    return None
+
+
+def _raw_finish_reason(response: Any) -> str | None:
+    """The provider's own finish reason: OpenAI ``finish_reason`` (in
+    ``response_metadata`` / ``generation_info``), Anthropic ``stop_reason``,
+    Gemini ``finish_reason`` / ``finishReason``."""
+    generation = _first_generation(response)
+    metadata = getattr(getattr(generation, "message", None), "response_metadata", None)
+    info = getattr(generation, "generation_info", None)
+    for source in (metadata, info):
+        if not isinstance(source, dict):
+            continue
+        for key in ("finish_reason", "stop_reason", "finishReason"):
+            value = source.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def _requested_tool_calls(message: Any) -> list[dict[str, Any]]:
+    """``AIMessage.tool_calls`` (args parsed by LangChain) plus
+    ``invalid_tool_calls`` (args the raw text, recorded as ``inputText``)."""
+    calls: list[dict[str, Any]] = []
+    for call in getattr(message, "tool_calls", None) or []:
+        if isinstance(call, dict):
+            recorded = tool_call(call.get("id"), call.get("name"), call.get("args"))
+            if recorded is not None:
+                calls.append(recorded)
+    for call in getattr(message, "invalid_tool_calls", None) or []:
+        if not isinstance(call, dict):
+            continue
+        args = call.get("args")
+        text = args if isinstance(args, str) else None
+        recorded = tool_call(call.get("id"), call.get("name"), text)
+        if recorded is None:
+            continue
+        if "inputText" not in recorded and isinstance(args, str) and args:
+            # Invalid by LangChain's judgement even when the text happens to parse.
+            recorded = {**recorded, "input": None, "inputText": args}
+        calls.append(recorded)
+    return calls
+
+
 def _llm_output(response: Any) -> dict[str, Any]:
+    """``node.finished.output`` of an LLM run (contract C1): text, the requested
+    ``toolCalls``, the normalized ``finishReason`` + ``rawFinishReason``; the
+    inclusive usage rides along as ``_usage`` (popped by the caller) —
+    ``usage_metadata`` first (inclusive by LangChain's definition), then
+    whatever raw shape the integration left in ``llm_output``."""
     out: dict[str, Any] = {}
     try:
         texts: list[str] = []
@@ -113,23 +183,50 @@ def _llm_output(response: Any) -> dict[str, Any]:
                 if isinstance(text, str) and text:
                     texts.append(text)
         out["text"] = safe_value("".join(texts))
+        message = _message_of(response)
+        calls = _requested_tool_calls(message)
+        if calls:
+            out["toolCalls"] = calls
+        out.update(finish_fields(_raw_finish_reason(response), bool(calls)))
+        usage = langchain_usage(getattr(message, "usage_metadata", None))
         llm_output = getattr(response, "llm_output", None)
         if isinstance(llm_output, dict):
-            usage = usage_of(llm_output.get("token_usage") or llm_output)
-            if usage is not None:
-                out["_usage"] = usage
+            if usage is None:
+                raw = llm_output.get("token_usage") or llm_output.get("usage") or llm_output
+                usage = langchain_usage(raw) if isinstance(raw, dict) else usage_of(raw)
             model = llm_output.get("model_name") or llm_output.get("model")
             if isinstance(model, str):
                 out["model"] = model
-        if "_usage" not in out:
-            for batch in generations:
-                for generation in batch or []:
-                    message = getattr(generation, "message", None)
-                    metadata = getattr(message, "usage_metadata", None)
-                    usage = usage_of(metadata)
-                    if usage is not None:
-                        out["_usage"] = usage
-                        break
+        if usage is None:
+            metadata = getattr(message, "response_metadata", None)
+            if isinstance(metadata, dict) and metadata.get("usage") is not None:
+                usage = langchain_usage(metadata.get("usage"))
+        if usage is not None:
+            out["_usage"] = usage
+    except Exception:
+        pass
+    return out
+
+
+def _input_payload(session: Session, kind: str, payload: Any, kwargs: dict[str, Any]) -> Any:
+    """``node.started.input``. An LLM run's prompt is recorded in full (the
+    per-event 512 KB shrink is the only bound) with the sampling parameters
+    from LangChain's ``invocation_params`` (allow-listed: API keys and client
+    config are never read) and the bound tools as ``{name, schemaHash}``, each
+    definition sent once per run as ``toolSchemas``. Other kinds keep the
+    bounded preview."""
+    if kind != "llm":
+        return safe_value(payload)
+    out = record_value(payload)
+    try:
+        invocation = kwargs.get("invocation_params")
+        if isinstance(out, dict) and isinstance(invocation, dict):
+            out.update(pick_params(invocation))
+            ctx = session.current_run()
+            run_key = ctx.run_id if ctx is not None else "implicit"
+            tools = capture_tools(session, run_key, invocation.get("tools"))
+            if tools:
+                out.update(tools)
     except Exception:
         pass
     return out
@@ -410,7 +507,12 @@ class GraphMindCallbackHandler(_HandlerMixin, _SyncBase):  # type: ignore[misc]
         try:
             name = _name_of(serialized, kwargs, fallback)
             node = self._core.register(
-                run_id, f"{kind}:{name}", kind, name, parent_run_id, safe_value(payload)
+                run_id,
+                f"{kind}:{name}",
+                kind,
+                name,
+                parent_run_id,
+                _input_payload(self._core.session, kind, payload, kwargs),
             )
         except GraphMindAbortError:
             raise
@@ -586,7 +688,12 @@ class AsyncGraphMindCallbackHandler(_HandlerMixin, _AsyncBase):  # type: ignore[
         try:
             name = _name_of(serialized, kwargs, fallback)
             node = self._core.register(
-                run_id, f"{kind}:{name}", kind, name, parent_run_id, safe_value(payload)
+                run_id,
+                f"{kind}:{name}",
+                kind,
+                name,
+                parent_run_id,
+                _input_payload(self._core.session, kind, payload, kwargs),
             )
         except GraphMindAbortError:
             raise

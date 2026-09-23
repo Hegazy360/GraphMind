@@ -9,6 +9,8 @@ import { gatedApiPromise } from '../src/api-promise.js';
 import { InvocationTracker } from '../src/invocation.js';
 import { chainAbortSignals, isTimeoutAbortReason } from '../src/signals.js';
 import { TokenBatcher } from '../src/token-batcher.js';
+import { readFileSync } from 'node:fs';
+import { stepOutput } from '../src/observe.js';
 import {
   isBuiltinToolDef,
   isServerToolResultBlock,
@@ -17,8 +19,24 @@ import {
   mergeUsage,
   messageText,
   parseToolInput,
+  type UsageLike,
 } from '../src/sdk-types.js';
 import { tick } from './helpers/fake-viewer.js';
+
+/** The shared LLM-capture fixture's usage cases for one provider. */
+function usageCases(provider: string): [string, unknown, unknown][] {
+  const fixture = JSON.parse(
+    readFileSync(new URL('../../client/test/fixtures/llm.json', import.meta.url), 'utf8'),
+  ) as { usage: { provider: string; name: string; raw: unknown; out: unknown }[] };
+  return fixture.usage.filter((c) => c.provider === provider).map((c) => [c.name, c.raw, c.out]);
+}
+
+/** The fixture compares the canonical fields; the 0.5 alias is checked separately. */
+function withoutAliases(usage: Record<string, unknown> | undefined): unknown {
+  if (usage === undefined) return null;
+  const { cacheCreationTokens: _alias, ...rest } = usage;
+  return rest;
+}
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -30,7 +48,7 @@ function timeoutError(): DOMException {
 }
 
 describe('Anthropic shape mapping', () => {
-  it('mapUsage carries cache accounting as loose extra fields', () => {
+  it('mapUsage: input is uncached tail + cache reads + cache writes, inclusive; cacheCreationTokens stays as an alias', () => {
     expect(
       mapUsage({
         input_tokens: 20,
@@ -39,9 +57,11 @@ describe('Anthropic shape mapping', () => {
         cache_creation_input_tokens: 2,
       }),
     ).toEqual({
-      inputTokens: 20,
+      inputTokens: 27,
       outputTokens: 10,
+      inclusive: true,
       cacheReadTokens: 5,
+      cacheWriteTokens: 2,
       cacheCreationTokens: 2,
     });
     // Nulls (the wire default) are dropped, not coerced into zeros.
@@ -52,9 +72,21 @@ describe('Anthropic shape mapping', () => {
         cache_read_input_tokens: null,
         cache_creation_input_tokens: null,
       }),
-    ).toEqual({ inputTokens: 7, outputTokens: 3 });
+    ).toEqual({ inputTokens: 7, outputTokens: 3, inclusive: true });
     expect(mapUsage({})).toBeUndefined();
     expect(mapUsage(undefined)).toBeUndefined();
+    expect(mapUsage(null)).toBeUndefined();
+  });
+
+  it.each(usageCases('anthropic'))('mapUsage (shared fixture): %s', (_name, raw, expected) => {
+    expect(withoutAliases(mapUsage(raw as UsageLike))).toEqual(expected);
+  });
+
+  it('the cacheCreationTokens alias always equals cacheWriteTokens (split sums included)', () => {
+    for (const [, raw] of usageCases('anthropic')) {
+      const usage = mapUsage(raw as UsageLike);
+      expect(usage?.['cacheCreationTokens']).toBe(usage?.['cacheWriteTokens']);
+    }
   });
 
   it('mergeUsage merges message_start input counts with message_delta output counts', () => {
@@ -69,6 +101,44 @@ describe('Anthropic shape mapping', () => {
     });
     expect(mergeUsage(undefined, { output_tokens: 1 })).toEqual({ output_tokens: 1 });
     expect(mergeUsage({ input_tokens: 1 }, undefined)).toEqual({ input_tokens: 1 });
+  });
+
+  it('mergeUsage keeps the 5m/1h split and lets a cumulative message_delta update every count', () => {
+    const merged = mergeUsage(
+      {
+        input_tokens: 3,
+        output_tokens: 1,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 150,
+        cache_creation: { ephemeral_5m_input_tokens: 100, ephemeral_1h_input_tokens: 50 },
+      },
+      // Newer API versions repeat the input/cache counts (null when unknown).
+      { output_tokens: 99, input_tokens: null, cache_read_input_tokens: null, cache_creation: { ephemeral_1h_input_tokens: 60 } },
+    );
+    expect(mapUsage(merged)).toEqual({
+      inputTokens: 153,
+      outputTokens: 99,
+      inclusive: true,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 150,
+      cacheCreationTokens: 150,
+    });
+    expect(merged?.cache_creation).toEqual({ ephemeral_5m_input_tokens: 100, ephemeral_1h_input_tokens: 60 });
+  });
+
+  it('stepOutput normalizes stop_reason, keeps it raw (and as the 0.5 stopReason), lists tool calls', () => {
+    expect(stepOutput('hi', 'end_turn', 'claude-x')).toEqual({
+      text: 'hi',
+      finishReason: 'stop',
+      rawFinishReason: 'end_turn',
+      stopReason: 'end_turn',
+      model: 'claude-x',
+    });
+    expect(
+      stepOutput('', 'max_tokens', 'm', [{ id: 't1', name: 'write', input: null, inputText: '{"a":' }]),
+    ).toMatchObject({ finishReason: 'length', rawFinishReason: 'max_tokens', toolCalls: [{ id: 't1', name: 'write' }] });
+    expect(stepOutput('', 'refusal', 'm')).toMatchObject({ finishReason: 'content-filter' });
+    expect(stepOutput('', undefined, 'm')).toEqual({ text: '', stopReason: undefined, model: 'm' });
   });
 
   it('classifies tool definitions and content blocks', () => {

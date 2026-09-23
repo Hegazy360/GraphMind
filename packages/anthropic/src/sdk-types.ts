@@ -8,9 +8,14 @@
  * the adapter working across SDK versions and keeps the peer dependency truly
  * optional at load time.
  */
-import type { TokenUsage } from '@graphmind-ai/client';
+import { makeUsage, sumReported, tokenCount, type WireUsage } from '@graphmind-ai/client';
 
-/** `client.messages.create(...)` / `client.messages.stream(...)` body. */
+/**
+ * `client.messages.create(...)` / `client.messages.stream(...)` body. The
+ * sampling parameters (`max_tokens`, `temperature`, `top_p`, `top_k`,
+ * `stop_sequences`, `tool_choice`, `thinking`, ...) are read by name from the
+ * allow-list in @graphmind-ai/client, hence the index signature.
+ */
 export interface MessageCreateParamsLike {
   model?: unknown;
   messages?: unknown[];
@@ -18,6 +23,7 @@ export interface MessageCreateParamsLike {
   tools?: ToolDefLike[] | undefined;
   stream?: boolean | undefined;
   max_tokens?: number;
+  [param: string]: unknown;
 }
 
 /** One entry of `params.tools`: a custom tool or a built-in/server tool. */
@@ -34,12 +40,25 @@ export interface RequestOptionsLike {
   [key: string]: unknown;
 }
 
-/** `Usage` / `MessageDeltaUsage`. All fields are nullable on the wire. */
+/**
+ * `Usage` / `MessageDeltaUsage`. All fields are nullable on the wire.
+ * `input_tokens` is the UNCACHED tail of the prompt only; the prompt total is
+ * `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`
+ * (platform.claude.com prompt-caching docs). `cache_creation` splits the write
+ * by TTL (5 minutes at 1.25x, 1 hour at 2x).
+ */
 export interface UsageLike {
   input_tokens?: number | null | undefined;
   output_tokens?: number | null | undefined;
   cache_read_input_tokens?: number | null | undefined;
   cache_creation_input_tokens?: number | null | undefined;
+  cache_creation?:
+    | {
+        ephemeral_5m_input_tokens?: number | null | undefined;
+        ephemeral_1h_input_tokens?: number | null | undefined;
+      }
+    | null
+    | undefined;
 }
 
 /** Any `ContentBlock` (assistant output) the adapter looks at. */
@@ -121,51 +140,47 @@ export function isBuiltinToolDef(def: ToolDefLike): boolean {
   return typeof def.type === 'string' && def.type.length > 0 && def.type !== 'custom';
 }
 
-function count(value: number | null | undefined): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0
-    ? Math.round(value)
-    : undefined;
-}
-
 /**
- * Map an Anthropic `Usage` to the wire `TokenUsage`. Cache accounting is
- * carried in extra fields — the wire schema is loose and preserves them.
+ * Map an Anthropic `Usage` to the wire `TokenUsage` (contract C1):
+ * `inputTokens` = uncached tail + cache reads + cache writes, `inclusive:
+ * true`; `cacheWriteTokens` is `cache_creation_input_tokens`, or the sum of
+ * the 5m/1h split when only the split was reported. `cacheCreationTokens`
+ * stays as a documented alias of `cacheWriteTokens` through 0.6.x (0.5 events
+ * carried it next to an UNCACHED `inputTokens` — readers recompute those).
  */
-export function mapUsage(
-  usage: UsageLike | undefined,
-): (TokenUsage & Record<string, number>) | undefined {
+export function mapUsage(usage: UsageLike | undefined | null): WireUsage | undefined {
   if (usage === undefined || usage === null) return undefined;
-  const inputTokens = count(usage.input_tokens);
-  const outputTokens = count(usage.output_tokens);
-  const cacheReadTokens = count(usage.cache_read_input_tokens);
-  const cacheCreationTokens = count(usage.cache_creation_input_tokens);
-  if (
-    inputTokens === undefined &&
-    outputTokens === undefined &&
-    cacheReadTokens === undefined &&
-    cacheCreationTokens === undefined
-  ) {
-    return undefined;
-  }
-  return {
-    inputTokens: inputTokens ?? 0,
-    outputTokens: outputTokens ?? 0,
-    ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
-    ...(cacheCreationTokens !== undefined ? { cacheCreationTokens } : {}),
-  };
+  const uncached = tokenCount(usage.input_tokens);
+  const cacheRead = tokenCount(usage.cache_read_input_tokens);
+  const split = usage.cache_creation;
+  const cacheWrite =
+    tokenCount(usage.cache_creation_input_tokens) ??
+    (split !== null && typeof split === 'object'
+      ? sumReported(tokenCount(split.ephemeral_5m_input_tokens), tokenCount(split.ephemeral_1h_input_tokens))
+      : undefined);
+  return makeUsage(
+    {
+      input: sumReported(uncached, cacheRead, cacheWrite),
+      output: tokenCount(usage.output_tokens),
+      cacheRead,
+      cacheWrite,
+    },
+    { cacheCreationTokens: cacheWrite },
+  );
 }
 
 /**
  * Merge the usage seen on `message_start` (input + cache counts) with the
- * cumulative usage of `message_delta` (output count). Later non-undefined
- * fields win; both sides may be partial.
+ * cumulative usage of `message_delta` (output count; newer API versions repeat
+ * the input and cache counts there too). Later reported fields win; both
+ * sides may be partial.
  */
 export function mergeUsage(
   base: UsageLike | undefined,
   next: UsageLike | undefined,
 ): UsageLike | undefined {
-  if (base === undefined) return next;
-  if (next === undefined) return base;
+  if (base === undefined || base === null) return next;
+  if (next === undefined || next === null) return base;
   const merged: UsageLike = { ...base };
   for (const key of [
     'input_tokens',
@@ -175,6 +190,14 @@ export function mergeUsage(
   ] as const) {
     const value = next[key];
     if (typeof value === 'number') merged[key] = value;
+  }
+  const split = next.cache_creation;
+  if (split !== null && typeof split === 'object') {
+    merged.cache_creation = { ...(merged.cache_creation ?? {}) };
+    for (const key of ['ephemeral_5m_input_tokens', 'ephemeral_1h_input_tokens'] as const) {
+      const value = split[key];
+      if (typeof value === 'number') merged.cache_creation[key] = value;
+    }
   }
   return merged;
 }

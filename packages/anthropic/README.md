@@ -107,8 +107,19 @@ const final = await helper.finalMessage();
   returned as a delegating Proxy that tees `node.token` deltas (text,
   thinking → `reasoning`, `tool_use` input JSON → `tool-args`), batched at one
   frame per node per ~34ms.
-- `node.finished` with usage — `inputTokens` / `outputTokens` plus
-  `cacheReadTokens` / `cacheCreationTokens` when the response reports them.
+- `node.finished` with the text, the requested `toolCalls` (`{id, name,
+  input}`; a call cut off by `max_tokens` keeps its partial JSON as
+  `inputText`), the normalized `finishReason` with Anthropic's own
+  `rawFinishReason`, and **inclusive** usage: Anthropic's `input_tokens` is only
+  the uncached tail, so `inputTokens` = `input_tokens + cache_read_input_tokens
+  + cache_creation_input_tokens`, with `inclusive: true` and `cacheReadTokens` /
+  `cacheWriteTokens` (5-minute and 1-hour writes summed) when reported.
+  `cacheCreationTokens` (= `cacheWriteTokens`) and `stopReason` (=
+  `rawFinishReason`) stay as aliases through 0.6.x.
+- `node.started` with the request as sent: every message and the system prompt
+  in full, the sampling parameters (`max_tokens`, `temperature`, `tool_choice`,
+  `thinking`, …) and `tools` as `{name, schemaHash}`, each definition once per
+  run as `toolSchemas`.
 - `graph.hint` on the first call of an invocation, from the request's `tools`
   array, so the viewer pre-renders the whole roster in grey.
 

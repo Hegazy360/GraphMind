@@ -87,9 +87,9 @@ def test_beta_create_emits_a_gated_llm_node_with_usage(attached: Any) -> None:
     assert started["payload"]["sdk"] == "anthropic"
     assert started["payload"]["input"]["model"] == MODEL
     (finished,) = _finished(viewer)
-    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6}
+    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6, "inclusive": True}
     assert finished["payload"]["output"]["text"] == "Lisbon is sunny."
-    assert finished["payload"]["output"]["finishReason"] == "end_turn"
+    assert finished["payload"]["output"]["finishReason"] == "stop"
 
 
 def test_beta_create_holds_before_the_request_and_honours_abort(attached: Any) -> None:
@@ -152,7 +152,7 @@ def test_beta_create_with_stream_true_is_teed(attached: Any) -> None:
     (finished,) = _finished(viewer)
     assert finished["payload"]["streaming"] is True
     assert finished["payload"]["output"]["text"] == "Lisbon"
-    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6}
+    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6, "inclusive": True}
 
 
 def test_beta_stream_with_no_usage_events_records_text_only(attached: Any) -> None:
@@ -223,7 +223,7 @@ def test_beta_stream_gates_in_enter_and_observes_text_stream(attached: Any) -> N
     assert collected == ["Lisbon"]
     (finished,) = _finished(viewer)
     assert finished["payload"]["output"]["text"] == "Lisbon"
-    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6}
+    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6, "inclusive": True}
 
 
 def test_beta_parse_is_recorded(attached: Any) -> None:
@@ -235,7 +235,7 @@ def test_beta_parse_is_recorded(attached: Any) -> None:
         message = client.beta.messages.parse(model=MODEL, max_tokens=64, messages=MESSAGES)
     assert message.content[0].text == "Lisbon is sunny."
     (finished,) = _finished(viewer)
-    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6}
+    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6, "inclusive": True}
 
 
 # -- async --------------------------------------------------------------------------
@@ -257,9 +257,9 @@ async def test_async_beta_create_and_stream(attached: Any) -> None:
     assert message.content[0].text == "Lisbon is sunny."
     assert types == EVENT_TYPES
     first, second = await _finished_async(viewer, 2)
-    assert first["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6}
+    assert first["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6, "inclusive": True}
     assert second["payload"]["output"]["text"] == "Lisbon"
-    assert second["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6}
+    assert second["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6, "inclusive": True}
 
 
 async def test_async_beta_gate_does_not_block_the_loop(attached: Any) -> None:
@@ -291,7 +291,7 @@ async def test_async_beta_messages_stream_text_stream(attached: Any) -> None:
         text = "".join([piece async for piece in stream.text_stream])
     assert text == "Lisbon"
     (finished,) = await _finished_async(viewer)
-    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6}
+    assert finished["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6, "inclusive": True}
 
 
 # -- raw responses on Anthropic -------------------------------------------------------
@@ -322,9 +322,9 @@ def test_with_raw_response_records_once_in_either_access_order(
     first, second = _finished(viewer, 2)
     time.sleep(0.1)
     assert len(_llm(viewer, "node.started")) == 2
-    assert first["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6}
+    assert first["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6, "inclusive": True}
     assert second["payload"]["output"]["text"] == "Lisbon"
-    assert second["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6}
+    assert second["payload"]["usage"] == {"inputTokens": 12, "outputTokens": 6, "inclusive": True}
 
 
 def test_inject_into_anthropic_with_raw_response(attached: Any) -> None:

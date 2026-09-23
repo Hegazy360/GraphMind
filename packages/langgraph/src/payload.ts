@@ -3,14 +3,17 @@
  *
  * LangGraph node inputs/outputs are whole graph states, which can be large,
  * cyclic (checkpointers, runtime handles) or hold class instances. Everything
- * that goes on the wire passes through `safePayload`, which
- *  - drops values it cannot serialize (rather than letting `JSON.stringify`
- *    throw inside `session.emit`, which would silently lose the event), and
- *  - truncates anything bigger than `maxChars` to a preview, so one fat state
- *    object cannot evict a whole replay ring buffer.
+ * that goes on the wire passes through `safePayload`, which drops values it
+ * cannot serialize (rather than letting `JSON.stringify` throw inside
+ * `session.emit`, which would silently lose the event).
+ *
+ * Size is NOT capped here by default (0.6.0, contract C1: prompts are
+ * recorded in full). The session shrinks every event to the 512 KB wire
+ * budget at emit (type-preserving, see @graphmind-ai/schema `serializePayload`)
+ * before the replay ring buffer, so one fat state can no longer evict a whole
+ * buffer — the reason the old 20,000-char preview existed. `maxPayloadChars`
+ * still truncates to a preview when a host asks for it explicitly.
  */
-
-export const DEFAULT_MAX_PAYLOAD_CHARS = 20_000;
 
 export interface TruncatedPayload {
   __graphmind: 'truncated';
@@ -23,7 +26,7 @@ export interface UnserializablePayload {
   preview: string;
 }
 
-export function safePayload(value: unknown, maxChars = DEFAULT_MAX_PAYLOAD_CHARS): unknown {
+export function safePayload(value: unknown, maxChars: number = Number.POSITIVE_INFINITY): unknown {
   if (value === undefined || value === null) return value;
   const primitive = typeof value;
   if (primitive === 'number' || primitive === 'boolean') return value;

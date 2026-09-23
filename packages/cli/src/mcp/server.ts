@@ -55,7 +55,7 @@ const TOOLS: Tool[] = [
     name: 'get_run',
     title: 'Get one run with its node breakdown',
     description:
-      'Summary of one run plus its logical nodes (agents, LLM steps, tool calls): nodeId, kind, name, status, execution count, total duration, last error message, and a viewer deep link per node.',
+      'Summary of one run plus its logical nodes (agents, LLM steps, tool calls): nodeId, kind, name, status, execution count, total duration, last error message, token totals (run and LLM nodes), and a viewer deep link per node. Token counts carry a basis: \'inclusive\' means inputTokens includes cached tokens (cacheReadTokens / cacheWriteTokens / reasoningTokens appear when the provider reported them); \'as reported\' means a pre-0.6 recording whose inputTokens may exclude cached tokens.',
     inputSchema: {
       type: 'object',
       properties: { runId: RUN_ID_PROPERTY },
@@ -67,7 +67,7 @@ const TOOLS: Tool[] = [
     name: 'get_node',
     title: 'Get full detail for one node of a run',
     description:
-      'Everything recorded for one logical node in a run: every execution instance with input/output (huge payloads truncated with a note), error + stack trace, timings, and token usage. Use the nodeId reported by get_run or find_errors.',
+      'Everything recorded for one logical node in a run: every execution instance with input/output (huge payloads truncated with a note), error + stack trace, timings, token usage (with its basis — see get_run) and, for LLM steps, the normalized finish reason (stop, length, tool-calls, content-filter, error, other). Use the nodeId reported by get_run or find_errors.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -6,6 +6,7 @@
  * Everything here is a pure projection of `RunState` — the collapsed set
  * itself lives in the UI store (per run), never in the reducer.
  */
+import { usageView } from '../lib/usage.js';
 import { ranMs } from '../lib/duration.js';
 import { isContainerKind, kindMeta } from '../lib/kinds.js';
 import { nodeStatus, type NodeLifeStatus, type NodeState, type RunState } from './types.js';
@@ -178,9 +179,11 @@ export function summarizeGroup(
       // the developer's time, not the group's (see lib/duration.ts).
       const ran = ranMs(exec);
       if (ran !== undefined) summary.durationMs += ran;
-      if (exec.usage !== undefined) {
-        summary.tokensIn += exec.usage.inputTokens;
-        summary.tokensOut += exec.usage.outputTokens;
+      const usage = usageView(exec.usage);
+      if (usage !== undefined) {
+        // Totals, cached tokens included (lib/usage.ts, contract C1).
+        summary.tokensIn += usage.inputTokens;
+        summary.tokensOut += usage.outputTokens;
       }
     }
     if (node.activePauseId !== undefined) summary.paused += 1;

@@ -188,7 +188,7 @@ in.
 ```ts
 graphmind({
   chains: 'all',          // 'all' (default) | 'langgraph' | 'none'
-  maxPayloadChars: 20000, // bigger inputs/outputs ship as a truncated preview
+  maxPayloadChars: 20000, // opt-in: bigger inputs/outputs ship as a truncated preview
 });
 ```
 
@@ -196,9 +196,15 @@ graphmind({
 noise); `'none'` keeps only LLMs, tools and retrievers.
 
 Graph state can be large, cyclic or full of class instances, so every payload
-goes through a sanitizer: cycles become `'[Circular]'`, unserializable values
-degrade instead of throwing, and anything over `maxPayloadChars` is replaced by
+goes through a sanitizer: cycles become `'[Circular]'` and unserializable values
+degrade instead of throwing. Since 0.6 nothing is cut to a preview by default
+(prompts are recorded in full; the 512 KB per-event budget is the only bound);
+with `maxPayloadChars` set, anything over it is replaced by
 `{ __graphmind: 'truncated', preview, chars }`.
+
+Token usage on LLM steps is **inclusive** since 0.6: `inputTokens` counts cached
+tokens, `inclusive: true` is set, and `cacheReadTokens` / `cacheWriteTokens` /
+`reasoningTokens` appear when the provider reported them.
 
 Optionally pre-render the whole graph grey before anything executes:
 

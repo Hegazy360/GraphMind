@@ -15,15 +15,29 @@ import { nodeIdFor } from '../src/ids.js';
 import { peerVersion } from '../src/peer-version.js';
 import { FakeViewer, waitUntil } from './helpers/fake-viewer.js';
 import { graphmind } from '../src/index.js';
+import { schemaHash } from '@graphmind-ai/client';
 import {
   compactMessages,
+  llmOutput,
+  llmStartExtras,
   parseToolInput,
+  rawFinishReasonFromLLMResult,
   resolveChainStartArgs,
   serializedName,
   textFromLLMResult,
+  toolCallsFromLLMResult,
   unwrapToolOutput,
   usageFromLLMResult,
+  usageFromRecord,
 } from '../src/lc-types.js';
+
+/** The shared LLM-capture fixture's usage cases for one provider. */
+function usageCases(provider: string): [string, unknown, unknown][] {
+  const fixture = JSON.parse(
+    readFileSync(new URL('../../client/test/fixtures/llm.json', import.meta.url), 'utf8'),
+  ) as { usage: { provider: string; name: string; raw: unknown; out: unknown }[] };
+  return fixture.usage.filter((c) => c.provider === provider).map((c) => [c.name, c.raw, c.out]);
+}
 import { safePayload } from '../src/payload.js';
 import { RunScope } from '../src/run-scope.js';
 import { RunTree } from '../src/run-tree.js';
@@ -65,7 +79,7 @@ describe('usageFromLLMResult', () => {
       usageFromLLMResult({
         generations: [[{ text: 'hi', message: { usage_metadata: { input_tokens: 7, output_tokens: 3 } } }]],
       }),
-    ).toEqual({ inputTokens: 7, outputTokens: 3 });
+    ).toEqual({ inputTokens: 7, outputTokens: 3, inclusive: true });
   });
 
   it('reads llmOutput.tokenUsage (OpenAI-style LLMs)', () => {
@@ -74,7 +88,7 @@ describe('usageFromLLMResult', () => {
         generations: [[{ text: 'hi' }]],
         llmOutput: { tokenUsage: { promptTokens: 11, completionTokens: 5, totalTokens: 16 } },
       }),
-    ).toEqual({ inputTokens: 11, outputTokens: 5 });
+    ).toEqual({ inputTokens: 11, outputTokens: 5, inclusive: true });
   });
 
   it('reads snake_case llmOutput.usage', () => {
@@ -83,7 +97,45 @@ describe('usageFromLLMResult', () => {
         generations: [[{ text: 'hi' }]],
         llmOutput: { usage: { prompt_tokens: 2, completion_tokens: 4 } },
       }),
-    ).toEqual({ inputTokens: 2, outputTokens: 4 });
+    ).toEqual({ inputTokens: 2, outputTokens: 4, inclusive: true });
+  });
+
+  it.each(usageCases('langchain'))('usageFromRecord (shared fixture): %s', (_name, raw, expected) => {
+    expect(usageFromRecord(raw) ?? null).toEqual(expected);
+  });
+
+  it('prefers usage_metadata, falls back to the raw Anthropic usage in response_metadata (exclusive -> summed)', () => {
+    expect(
+      usageFromLLMResult({
+        generations: [
+          [
+            {
+              text: 'hi',
+              message: {
+                response_metadata: {
+                  usage: { input_tokens: 5, output_tokens: 9, cache_read_input_tokens: 100, cache_creation_input_tokens: 20 },
+                },
+              },
+            },
+          ],
+        ],
+      }),
+    ).toEqual({ inputTokens: 125, outputTokens: 9, inclusive: true, cacheReadTokens: 100, cacheWriteTokens: 20 });
+    expect(
+      usageFromLLMResult({
+        generations: [
+          [
+            {
+              text: 'hi',
+              message: {
+                usage_metadata: { input_tokens: 125, output_tokens: 9, input_token_details: { cache_read: 100, cache_creation: 20 } },
+                response_metadata: { usage: { input_tokens: 5, output_tokens: 9, cache_read_input_tokens: 100 } },
+              },
+            },
+          ],
+        ],
+      }),
+    ).toEqual({ inputTokens: 125, outputTokens: 9, inclusive: true, cacheReadTokens: 100, cacheWriteTokens: 20 });
   });
 
   it('returns undefined when the provider reported nothing', () => {
@@ -94,6 +146,110 @@ describe('usageFromLLMResult', () => {
   it('concatenates generation text', () => {
     expect(textFromLLMResult({ generations: [[{ text: 'a' }, { text: 'b' }]] })).toBe('ab');
     expect(textFromLLMResult({})).toBe('');
+  });
+});
+
+describe('LLM output: finish reason and tool calls (C1)', () => {
+  const result = (message: Record<string, unknown>, generationInfo?: Record<string, unknown>) => ({
+    generations: [[{ text: 'x', message, ...(generationInfo !== undefined ? { generationInfo } : {}) }]],
+  });
+
+  it('reads the raw finish reason wherever the provider put it', () => {
+    expect(rawFinishReasonFromLLMResult(result({ response_metadata: { finish_reason: 'tool_calls' } }))).toBe('tool_calls');
+    expect(rawFinishReasonFromLLMResult(result({ response_metadata: { stop_reason: 'max_tokens' } }))).toBe('max_tokens');
+    expect(rawFinishReasonFromLLMResult(result({ response_metadata: { finishReason: 'SAFETY' } }))).toBe('SAFETY');
+    expect(rawFinishReasonFromLLMResult(result({}, { finish_reason: 'stop' }))).toBe('stop');
+    expect(rawFinishReasonFromLLMResult(result({}))).toBeUndefined();
+    expect(rawFinishReasonFromLLMResult(undefined)).toBeUndefined();
+  });
+
+  it('lists tool_calls (parsed) and invalid_tool_calls (raw text as inputText)', () => {
+    const out = toolCallsFromLLMResult(
+      result({
+        tool_calls: [
+          { id: 'a', name: 'search', args: { q: 'x' }, type: 'tool_call' },
+          { id: 'b', args: {} },
+        ],
+        invalid_tool_calls: [
+          { id: 'c', name: 'write', args: '{"path":"a.txt","content":"hel', error: 'bad json' },
+          { id: 'd', name: 'weird', args: '{"ok":true}', error: 'schema' },
+        ],
+      }),
+    );
+    expect(out).toEqual([
+      { id: 'a', name: 'search', input: { q: 'x' } },
+      { id: 'c', name: 'write', input: null, inputText: '{"path":"a.txt","content":"hel' },
+      { id: 'd', name: 'weird', input: null, inputText: '{"ok":true}' },
+    ]);
+  });
+
+  it('llmOutput: text, normalized finish reason with raw, tool calls', () => {
+    expect(
+      llmOutput(
+        result({
+          response_metadata: { stop_reason: 'end_turn' },
+          tool_calls: [{ id: 'a', name: 'search', args: { q: 'x' } }],
+        }),
+      ),
+    ).toEqual({
+      text: 'x',
+      finishReason: 'tool-calls',
+      rawFinishReason: 'end_turn',
+      toolCalls: [{ id: 'a', name: 'search', input: { q: 'x' } }],
+    });
+    expect(llmOutput(result({}))).toEqual({ text: 'x' });
+    expect(llmOutput(undefined)).toEqual({ text: '' });
+  });
+
+  it('llmStartExtras: allow-listed invocation params and tools by hash, once per run', () => {
+    const owner = {};
+    const weather = { type: 'function', function: { name: 'get_weather', parameters: { type: 'object' } } };
+    const lookup = { name: 'lookup', input_schema: { type: 'object' } };
+    const extra = {
+      invocation_params: {
+        model: 'gpt-5.4',
+        temperature: 0.2,
+        max_tokens: 50,
+        stop: ['X'],
+        tool_choice: 'auto',
+        tools: [weather, lookup],
+        openai_api_key: 'SECRET',
+        stream: true,
+      },
+    };
+    const first = llmStartExtras(owner, 'run', extra);
+    expect(first).toEqual({
+      temperature: 0.2,
+      max_tokens: 50,
+      stop: ['X'],
+      tool_choice: 'auto',
+      tools: [
+        { name: 'get_weather', schemaHash: schemaHash(weather) },
+        { name: 'lookup', schemaHash: schemaHash(lookup) },
+      ],
+      toolSchemas: { [schemaHash(weather)]: weather, [schemaHash(lookup)]: lookup },
+    });
+    expect(JSON.stringify(first)).not.toContain('SECRET');
+    expect(llmStartExtras(owner, 'run', extra)).not.toHaveProperty('toolSchemas');
+    expect(llmStartExtras(owner, 'run', undefined)).toEqual({});
+    expect(llmStartExtras(owner, 'run', { invocation_params: 'nope' })).toEqual({});
+  });
+
+  it('compactMessages keeps every message whole, with tool_call_id', () => {
+    const msg = (type: string, extra: Record<string, unknown>) => ({ _getType: () => type, ...extra });
+    const long = 'z'.repeat(30_000);
+    const out = compactMessages([
+      [
+        msg('human', { content: long }),
+        msg('ai', { content: '', tool_calls: [{ id: 't1', name: 'f', args: {} }] }),
+        msg('tool', { content: 'r', tool_call_id: 't1', name: 'f' }),
+      ],
+    ]) as Record<string, unknown>[][];
+    expect(out[0]).toEqual([
+      { role: 'human', content: long },
+      { role: 'ai', content: '', tool_calls: [{ id: 't1', name: 'f', args: {} }] },
+      { role: 'tool', content: 'r', tool_call_id: 't1', name: 'f' },
+    ]);
   });
 });
 
@@ -146,7 +302,13 @@ describe('safePayload', () => {
     expect(safePayload(7)).toBe(7);
   });
 
-  it('truncates oversized payloads to a preview', () => {
+  it('records large payloads in full by default (the 512 KB shrink is the bound)', () => {
+    const big = { text: 'x'.repeat(60_000) };
+    expect(safePayload(big)).toEqual(big);
+    expect(safePayload('y'.repeat(60_000))).toBe('y'.repeat(60_000));
+  });
+
+  it('truncates oversized payloads to a preview when a cap is asked for', () => {
     const big = { text: 'x'.repeat(5000) };
     const out = safePayload(big, 100) as { __graphmind: string; chars: number; preview: string };
     expect(out.__graphmind).toBe('truncated');

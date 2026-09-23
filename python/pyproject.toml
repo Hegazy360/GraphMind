@@ -71,6 +71,7 @@ include = ["/graphmind", "/tests", "/README.md", "/LICENSE", "/Makefile"]
 exclude = [
   "/tests/test_loop_guard.py",
   "/tests/test_redaction.py",
+  "/tests/test_llm_capture.py",
   "/tests/fixtures/differential.json",
   "/tests/fixtures/gen_differential.mjs",
 ]

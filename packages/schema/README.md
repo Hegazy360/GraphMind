@@ -39,7 +39,7 @@ Every frame is one JSON text message:
 | `graph.hint` | `nodes: [{nodeId, kind, name, parentId?}]` — optional static structure |
 | `node.started` | `nodeId`, `parentId?`, `kind: agent\|llm\|tool\|custom`, `name`, `instanceId`, `input` |
 | `node.token` | `nodeId`, `deltas: [{t: text\|reasoning\|tool-args, v}]` |
-| `node.finished` | `nodeId`, `output`, `usage? {inputTokens, outputTokens}`, `durationMs`, `status` |
+| `node.finished` | `nodeId`, `output`, `usage? {inputTokens, outputTokens, inclusive?, cacheReadTokens?, cacheWriteTokens?, reasoningTokens?}`, `durationMs`, `status` |
 | `node.error` | `nodeId`, `error {name, message, stack?}` |
 | `exec.paused` | `pauseId`, `nodeId`, `point: before\|after\|error` |
 | `exec.resumed` | `pauseId`, `action: continue\|retry\|inject\|abort` |

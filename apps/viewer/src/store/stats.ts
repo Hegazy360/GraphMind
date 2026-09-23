@@ -6,16 +6,55 @@
  * shown: the wire protocol carries token counts, not prices, so we apply one
  * blended rate. It is here to answer "which step is eating the budget",
  * never to reconcile a bill.
+ *
+ * Token counts go through lib/usage.ts (contract C1): input totals include
+ * cached tokens when the sender stamped `inclusive`, and are labelled "as
+ * reported" otherwise; cache read / write and reasoning counts are summed
+ * only when some execution reported them.
  */
 import { heldMsOf, ranMs, runHeldMs } from '../lib/duration.js';
+import { addUsage, emptyTotals, mergeTotals, type TotalBasis, type UsageTotals } from '../lib/usage.js';
 import type { RunState, NodeState } from './types.js';
 
 /** Blended per-million-token rate (mid-tier frontier model, 2026). */
 export const RATE_IN_PER_MTOK = 3;
 export const RATE_OUT_PER_MTOK = 15;
+/** The common provider multipliers on the input rate: cache reads 0.1x, 5-minute cache writes 1.25x. */
+export const CACHE_READ_RATE = 0.1;
+export const CACHE_WRITE_RATE = 1.25;
 
-export function estimateCostUsd(tokensIn: number, tokensOut: number): number {
-  return (tokensIn / 1_000_000) * RATE_IN_PER_MTOK + (tokensOut / 1_000_000) * RATE_OUT_PER_MTOK;
+/**
+ * Blended estimate. `tokensIn` is the prompt total; the cached share (when
+ * reported) is priced at the cache multipliers instead of the full rate — a
+ * cache-heavy agent would otherwise read ~10x too expensive.
+ */
+export function estimateCostUsd(
+  tokensIn: number,
+  tokensOut: number,
+  cache: { read?: number | undefined; write?: number | undefined } = {},
+): number {
+  const read = cache.read ?? 0;
+  const write = cache.write ?? 0;
+  const fresh = Math.max(0, tokensIn - read - write);
+  const promptUnits = fresh + read * CACHE_READ_RATE + write * CACHE_WRITE_RATE;
+  return (promptUnits / 1_000_000) * RATE_IN_PER_MTOK + (tokensOut / 1_000_000) * RATE_OUT_PER_MTOK;
+}
+
+function costOf(totals: UsageTotals): number {
+  return estimateCostUsd(totals.inputTokens, totals.outputTokens, {
+    read: totals.cacheReadTokens,
+    write: totals.cacheWriteTokens,
+  });
+}
+
+/** The optional token fields of a stats object, present only when reported. */
+function tokenExtras(totals: UsageTotals): Pick<NodeStats, 'cacheReadTokens' | 'cacheWriteTokens' | 'reasoningTokens' | 'tokenBasis'> {
+  return {
+    ...(totals.cacheReadTokens !== undefined ? { cacheReadTokens: totals.cacheReadTokens } : {}),
+    ...(totals.cacheWriteTokens !== undefined ? { cacheWriteTokens: totals.cacheWriteTokens } : {}),
+    ...(totals.reasoningTokens !== undefined ? { reasoningTokens: totals.reasoningTokens } : {}),
+    ...(totals.basis !== undefined ? { tokenBasis: totals.basis } : {}),
+  };
 }
 
 export interface NodeStats {
@@ -29,9 +68,17 @@ export interface NodeStats {
   maxMs: number;
   /** Time the debugger held this node's executions, summed. */
   heldMs: number;
+  /** Prompt tokens: totals (cache included) unless `tokenBasis` says otherwise. */
   tokensIn: number;
   tokensOut: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  /** `reported` / `mixed`: some counts predate 0.6 and may exclude cached tokens. */
+  tokenBasis?: TotalBasis;
   estCostUsd: number;
+  /** The raw totals (for rollups). */
+  usage: UsageTotals;
 }
 
 export function nodeStats(node: NodeState): NodeStats {
@@ -40,8 +87,7 @@ export function nodeStats(node: NodeState): NodeStats {
   let heldMs = 0;
   let timed = 0;
   let errors = 0;
-  let tokensIn = 0;
-  let tokensOut = 0;
+  const usage = emptyTotals();
   for (const exec of node.executions) {
     const ran = ranMs(exec);
     if (ran !== undefined) {
@@ -51,10 +97,7 @@ export function nodeStats(node: NodeState): NodeStats {
       timed += 1;
     }
     if (exec.status === 'error' || exec.error !== undefined) errors += 1;
-    if (exec.usage !== undefined) {
-      tokensIn += exec.usage.inputTokens;
-      tokensOut += exec.usage.outputTokens;
-    }
+    if (exec.usage !== undefined) addUsage(usage, exec.usage);
   }
   return {
     executions: node.executions.length,
@@ -64,9 +107,11 @@ export function nodeStats(node: NodeState): NodeStats {
     avgMs: timed === 0 ? 0 : totalMs / timed,
     maxMs,
     heldMs,
-    tokensIn,
-    tokensOut,
-    estCostUsd: estimateCostUsd(tokensIn, tokensOut),
+    tokensIn: usage.inputTokens,
+    tokensOut: usage.outputTokens,
+    ...tokenExtras(usage),
+    estCostUsd: costOf(usage),
+    usage,
   };
 }
 
@@ -78,6 +123,10 @@ export interface RunStats {
   steps: number;
   tokensIn: number;
   tokensOut: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  tokenBasis?: TotalBasis;
   estCostUsd: number;
   /** Wall-clock span of the run so far — held time INCLUDED (it is wall time). */
   wallMs: number;
@@ -101,6 +150,7 @@ export function runStats(run: RunState, now: number = Date.now()): RunStats {
     heldMs: 0,
     ranMs: 0,
   };
+  const usage = emptyTotals();
   for (const nodeId of run.order) {
     const node = run.nodes[nodeId];
     if (node === undefined) continue;
@@ -108,12 +158,14 @@ export function runStats(run: RunState, now: number = Date.now()): RunStats {
     const per = nodeStats(node);
     stats.executions += per.executions;
     stats.errors += per.errors;
-    stats.tokensIn += per.tokensIn;
-    stats.tokensOut += per.tokensOut;
+    mergeTotals(usage, per.usage);
     if (node.kind === 'tool') stats.tools += per.executions;
     if (node.kind === 'llm') stats.steps += per.executions;
   }
-  stats.estCostUsd = estimateCostUsd(stats.tokensIn, stats.tokensOut);
+  stats.tokensIn = usage.inputTokens;
+  stats.tokensOut = usage.outputTokens;
+  Object.assign(stats, tokenExtras(usage));
+  stats.estCostUsd = costOf(usage);
   const start = run.meta.startedTs;
   if (start !== undefined) {
     stats.wallMs = Math.max(0, (run.meta.finishedTs ?? now) - start);

@@ -164,8 +164,21 @@ Streaming and non-streaming, on both `client.messages` and `client.beta.messages
 - The result is observed: a `Message` is reported directly; a `Stream` comes back as a
   delegating Proxy that tees `node.token` deltas — text, thinking → `reasoning`, `tool_use`
   input JSON → `tool-args` — batched at one frame per node per ~34 ms.
-- `node.finished` with usage: `inputTokens` / `outputTokens`, plus `cacheReadTokens` /
-  `cacheCreationTokens` when the response reports them.
+- `node.finished` with the text, the `tool_use` calls the model requested (`toolCalls: [{id,
+  name, input}]`; a call cut off by `max_tokens` keeps its partial JSON as `inputText`), the
+  normalized `finishReason` (`stop`, `length`, `tool-calls`, `content-filter`, …) with
+  Anthropic's own `stop_reason` as `rawFinishReason`, and usage. Usage is **inclusive**:
+  Anthropic's `input_tokens` is only the uncached tail, so `inputTokens` = `input_tokens +
+  cache_read_input_tokens + cache_creation_input_tokens` and the usage carries `inclusive:
+  true`; `cacheReadTokens` / `cacheWriteTokens` (the 5-minute and 1-hour writes summed) appear
+  when the response reports them. `cacheCreationTokens` stays as an alias of `cacheWriteTokens`
+  through 0.6.x, and `stopReason` as an alias of `rawFinishReason` (see [usage and
+  cost](/debugging/inspecting/#usage-and-cost)).
+- `node.started` records the request as sent: `model`, every message and the `system` prompt
+  in full, the sampling parameters under their Anthropic names (`max_tokens`, `temperature`,
+  `stop_sequences`, `tool_choice`, `thinking`, …; fields such as `metadata` and `mcp_servers`
+  are never read) and `tools` as `{name, schemaHash}` — each tool's full definition is sent once
+  per run as `toolSchemas`. Request options (signal, headers, timeout) are not recorded.
 - `graph.hint` on the first call of an invocation, from the request's `tools` array, so the
   viewer pre-renders the whole roster in grey.
 

@@ -34,10 +34,11 @@ import { nodeIdFor } from './ids.js';
 import {
   compactMessages,
   langgraphTaskKey,
+  llmOutput,
+  llmStartExtras,
   parseToolInput,
   resolveChainStartArgs,
   serializedName,
-  textFromLLMResult,
   toolArgsDeltas,
   unwrapToolOutput,
   usageFromLLMResult,
@@ -205,7 +206,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
     messages: unknown,
     runId: string,
     parentRunId?: string,
-    _extraParams?: Record<string, unknown>,
+    extraParams?: Record<string, unknown>,
     _tags?: string[],
     metadata?: Record<string, unknown>,
     runName?: string,
@@ -218,6 +219,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
         parentRunId,
         metadata,
         runName,
+        extraParams,
       ),
     );
   }
@@ -227,13 +229,13 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
     prompts: string[],
     runId: string,
     parentRunId?: string,
-    _extraParams?: Record<string, unknown>,
+    extraParams?: Record<string, unknown>,
     _tags?: string[],
     metadata?: Record<string, unknown>,
     runName?: string,
   ): Promise<void> {
     return this.guard('llm-start', () =>
-      this.startLlm(llm, { prompts }, runId, parentRunId, metadata, runName),
+      this.startLlm(llm, { prompts }, runId, parentRunId, metadata, runName, extraParams),
     );
   }
 
@@ -264,9 +266,8 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       const record = this.tree.take(runId);
       if (record === undefined || !record.emitted) return;
       const usage = usageFromLLMResult(output);
-      const text = textFromLLMResult(output);
       await this.inRoot(record.rootRunId, () =>
-        this.emitFinish(record, { text }, 'ok', { usage }),
+        this.emitFinish(record, llmOutput(output), 'ok', { usage }),
       );
       await this.closeRoot(record);
     });
@@ -576,6 +577,7 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
     parentRunId: string | undefined,
     metadata: Record<string, unknown> | undefined,
     runName: string | undefined,
+    extraParams?: Record<string, unknown> | undefined,
   ): Promise<void> {
     const modelName = readString(metadata?.['ls_model_name']);
     const name = runName ?? modelName ?? serializedName(llm) ?? 'llm';
@@ -591,7 +593,16 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
     if (langgraphNode !== undefined) extra['langgraphNode'] = langgraphNode;
 
     await this.inRoot(rootRunId, async () => {
-      this.emitStart(record, input, extra);
+      // Sampling params + tools by schema hash (C1); inside the run context so
+      // the per-run schema memory keys on the GraphMind run.
+      let full = input;
+      try {
+        const runKey = this.core.session.currentRun()?.runId ?? 'implicit';
+        full = { ...(input as Record<string, unknown>), ...llmStartExtras(this.core.session, runKey, extraParams) };
+      } catch {
+        // an exotic extraParams: the prompt alone
+      }
+      this.emitStart(record, full, extra);
       await this.gateBefore(record);
     });
   }

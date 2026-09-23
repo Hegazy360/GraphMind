@@ -226,7 +226,7 @@ your provider fills in.
 ```ts
 graphmind({
   chains: 'all',          // 'all' (default) | 'langgraph' | 'none'
-  maxPayloadChars: 20000, // bigger inputs/outputs ship as a truncated preview
+  maxPayloadChars: 20000, // opt-in: bigger inputs/outputs ship as a truncated preview
 });
 ```
 
@@ -234,8 +234,20 @@ graphmind({
 keeps only LLMs, tools and retrievers.
 
 Graph state can be large, cyclic or full of class instances, so every payload goes through a
-sanitiser: cycles become `'[Circular]'`, unserialisable values degrade instead of throwing, and
-anything over `maxPayloadChars` is replaced by a truncated preview marker.
+sanitiser: cycles become `'[Circular]'` and unserialisable values degrade instead of throwing.
+Since 0.6 nothing is cut to a preview by default — prompts and states are recorded in full, and
+the 512 KB per-event budget every GraphMind client applies is the only bound. Set
+`maxPayloadChars` to get the old behaviour (anything over it is replaced by a truncated preview
+marker).
+
+LLM steps also record, since 0.6, the sampling parameters from LangChain's `invocation_params`
+and the bound tools as `{name, schemaHash}` (each definition once per run as `toolSchemas`) on
+`node.started`, and on `node.finished` the requested `toolCalls` (LangChain's
+`invalid_tool_calls` keep their raw text as `inputText`), the normalized `finishReason` with the
+provider's own `rawFinishReason`, and **inclusive** usage — `usage_metadata` first (LangChain
+already counts cached tokens in `input_tokens`), else the raw provider usage, where Anthropic's
+uncached `input_tokens` gets its cache reads and writes added back (see [usage and
+cost](/debugging/inspecting/#usage-and-cost)).
 
 Pre-render the whole graph grey before anything executes:
 

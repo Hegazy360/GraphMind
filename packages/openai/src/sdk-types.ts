@@ -15,7 +15,7 @@
  *   core/streaming.d.ts                          (Stream<Item>, .tee())
  *   core/api-promise.d.ts                        (APIPromise<T>)
  */
-import type { TokenUsage } from '@graphmind-ai/client';
+import { makeUsage, tokenCount, type WireUsage } from '@graphmind-ai/client';
 
 // -- request bodies ----------------------------------------------------------
 
@@ -148,63 +148,51 @@ export interface ResponseEventLike {
 // -- usage -------------------------------------------------------------------
 
 export interface ChatUsageLike {
+  /** Inclusive: cached tokens are part of it. */
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
-  prompt_tokens_details?: { cached_tokens?: number; audio_tokens?: number } | null;
+  prompt_tokens_details?: {
+    cached_tokens?: number;
+    /** Newer models bill prompt-cache writes (1.25x); reported here. */
+    cache_write_tokens?: number;
+    audio_tokens?: number;
+  } | null;
   completion_tokens_details?: { reasoning_tokens?: number; audio_tokens?: number } | null;
+  /** OpenAI-compatible servers (DeepSeek) report cache hits here instead. */
+  prompt_cache_hit_tokens?: number;
 }
 
 export interface ResponsesUsageLike {
+  /** Inclusive: cached tokens are part of it. */
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
-  input_tokens_details?: { cached_tokens?: number } | null;
+  input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } | null;
   output_tokens_details?: { reasoning_tokens?: number } | null;
 }
 
 /**
- * The wire `TokenUsage` plus the loose extras GraphMind viewers render when
- * present. `TokenUsageSchema` is a loose object, so unknown fields survive.
+ * The wire `TokenUsage` (inclusive, contract C1) plus the loose extras this
+ * adapter has always sent: `totalTokens` as reported, and `cachedInputTokens`
+ * — the 0.5 name of `cacheReadTokens`, a documented alias through 0.6.x.
  */
-export type UsageWithExtras = TokenUsage & {
-  totalTokens?: number;
-  cachedInputTokens?: number;
-  reasoningTokens?: number;
-};
-
-function count(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0
-    ? Math.round(value)
-    : undefined;
-}
-
-function assemble(
-  input: number | undefined,
-  output: number | undefined,
-  total: number | undefined,
-  cached: number | undefined,
-  reasoning: number | undefined,
-): UsageWithExtras | undefined {
-  if (input === undefined && output === undefined && total === undefined) return undefined;
-  return {
-    inputTokens: input ?? 0,
-    outputTokens: output ?? 0,
-    ...(total !== undefined ? { totalTokens: total } : {}),
-    ...(cached !== undefined ? { cachedInputTokens: cached } : {}),
-    ...(reasoning !== undefined ? { reasoningTokens: reasoning } : {}),
-  };
-}
+export type UsageWithExtras = WireUsage;
 
 /** Map `chat.completions` usage (`prompt_tokens`/`completion_tokens`). */
 export function mapChatUsage(usage: ChatUsageLike | null | undefined): UsageWithExtras | undefined {
   if (usage === null || usage === undefined) return undefined;
-  return assemble(
-    count(usage.prompt_tokens),
-    count(usage.completion_tokens),
-    count(usage.total_tokens),
-    count(usage.prompt_tokens_details?.cached_tokens),
-    count(usage.completion_tokens_details?.reasoning_tokens),
+  const details = usage.prompt_tokens_details;
+  const cacheRead = tokenCount(details?.cached_tokens) ?? tokenCount(usage.prompt_cache_hit_tokens);
+  return makeUsage(
+    {
+      input: tokenCount(usage.prompt_tokens),
+      output: tokenCount(usage.completion_tokens),
+      cacheRead,
+      cacheWrite: tokenCount(details?.cache_write_tokens),
+      reasoning: tokenCount(usage.completion_tokens_details?.reasoning_tokens),
+    },
+    { totalTokens: tokenCount(usage.total_tokens), cachedInputTokens: cacheRead },
   );
 }
 
@@ -213,12 +201,17 @@ export function mapResponsesUsage(
   usage: ResponsesUsageLike | null | undefined,
 ): UsageWithExtras | undefined {
   if (usage === null || usage === undefined) return undefined;
-  return assemble(
-    count(usage.input_tokens),
-    count(usage.output_tokens),
-    count(usage.total_tokens),
-    count(usage.input_tokens_details?.cached_tokens),
-    count(usage.output_tokens_details?.reasoning_tokens),
+  const details = usage.input_tokens_details;
+  const cacheRead = tokenCount(details?.cached_tokens);
+  return makeUsage(
+    {
+      input: tokenCount(usage.input_tokens),
+      output: tokenCount(usage.output_tokens),
+      cacheRead,
+      cacheWrite: tokenCount(details?.cache_write_tokens),
+      reasoning: tokenCount(usage.output_tokens_details?.reasoning_tokens),
+    },
+    { totalTokens: tokenCount(usage.total_tokens), cachedInputTokens: cacheRead },
   );
 }
 
@@ -254,6 +247,22 @@ export function outputItemName(item: ResponseOutputItemLike): string {
 export interface ToolRosterEntry {
   name: string;
   providerExecuted: boolean;
+}
+
+/**
+ * The name of one request tool definition, in either API's shape (the same
+ * rule `toolRoster` uses): `function.name`, `custom.name`, `name`, or — for a
+ * built-in like `{type: 'web_search'}` — its type. Undefined when it has none.
+ */
+export function toolDefName(raw: unknown): string | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const def = raw as ToolDefLike;
+  const name =
+    def.function?.name ??
+    def.custom?.name ??
+    (typeof def.name === 'string' ? def.name : undefined) ??
+    (typeof def.type === 'string' ? def.type : undefined);
+  return typeof name === 'string' && name.length > 0 ? name : undefined;
 }
 
 /**

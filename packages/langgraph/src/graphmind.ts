@@ -62,8 +62,10 @@ export interface GraphmindOptions extends Omit<SessionOptions, 'appName' | 'sdk'
    */
   chains?: ChainPolicy;
   /**
-   * Cap on the serialized size of any single `input`/`output` payload, in
-   * characters. Larger values are sent as a truncated preview. Default 20000.
+   * Opt-in cap on the serialized size of any single `input`/`output` payload,
+   * in characters; larger values are sent as a truncated preview. Default: no
+   * cap (0.6.0+) — prompts and states are recorded in full, bounded only by
+   * the 512 KB per-event wire budget every GraphMind client applies.
    */
   maxPayloadChars?: number;
   /**

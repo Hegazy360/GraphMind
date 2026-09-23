@@ -327,13 +327,16 @@ describe('pure helpers', () => {
     ).toEqual({
       inputTokens: 10,
       outputTokens: 3,
+      inclusive: true,
+      cacheReadTokens: 2,
+      reasoningTokens: 1,
       totalTokens: 13,
       cachedInputTokens: 2,
-      reasoningTokens: 1,
     });
     expect(mapResponsesUsage({ input_tokens: 5, output_tokens: 2, total_tokens: 7 })).toEqual({
       inputTokens: 5,
       outputTokens: 2,
+      inclusive: true,
       totalTokens: 7,
     });
     // Garbage in, nothing out (never a NaN on the wire).

@@ -16,7 +16,10 @@ module Graphmind
     #
     # What you get:
     #   * a `llm:step` node for every `chat` / `responses.create` call, with
-    #     the model, the (trimmed) messages, the response text and token usage;
+    #     the request as sent (messages / input in full, the sampling
+    #     parameters, tools by schema hash), the response text, the requested
+    #     tool calls, the normalized finish reason and inclusive token usage
+    #     (contract C1: prompt tokens INCLUDE cached ones);
     #   * a `before` gate — the debugger can pause and `inject` a response
     #     without the request ever leaving the process;
     #   * an `error` gate — a 429 or a timeout pauses instead of raising, and
@@ -45,23 +48,76 @@ module Graphmind
         !client.instance_variable_get(MARKER).nil?
       end
 
+      # What a `stream:` proc saw: the gem hands the caller chunks, and what
+      # `chat` returns for a streamed call is not the completion.
+      class StreamState
+        attr_reader :text, :calls, :usage, :finish_reason, :final
+
+        def initialize
+          @text = +""
+          @calls = {}
+          @usage = nil
+          @finish_reason = nil
+          @final = nil
+          @seen = false
+        end
+
+        def seen? = @seen
+
+        def observe(chunk)
+          return unless chunk.is_a?(Hash)
+
+          @seen = true
+          @usage = chunk["usage"] if chunk["usage"].is_a?(Hash)
+          choice = chunk.dig("choices", 0)
+          observe_choice(choice) if choice.is_a?(Hash)
+          type = chunk["type"].to_s
+          @final = chunk["response"] if type.start_with?("response.") && chunk["response"].is_a?(Hash) &&
+                                         %w[response.completed response.incomplete response.failed].include?(type)
+        end
+
+        def observe_choice(choice)
+          @finish_reason = choice["finish_reason"] if choice["finish_reason"].is_a?(String)
+          delta = choice["delta"]
+          return unless delta.is_a?(Hash)
+
+          content = delta["content"]
+          @text << content if content.is_a?(String)
+          Array(delta["tool_calls"]).each do |call|
+            next unless call.is_a?(Hash)
+
+            entry = (@calls[call["index"].is_a?(Integer) ? call["index"] : 0] ||= [nil, nil, +""])
+            entry[0] = call["id"] if call["id"].is_a?(String) && !call["id"].empty?
+            function = call["function"].is_a?(Hash) ? call["function"] : {}
+            entry[1] = function["name"] if function["name"].is_a?(String) && !function["name"].empty?
+            entry[2] << function["arguments"] if function["arguments"].is_a?(String)
+          end
+        end
+
+        def tool_calls
+          @calls.keys.sort.filter_map { |index| Support.tool_call(*@calls[index]) }
+        end
+      end
+
       # One gated LLM call.
       def call(config, parameters, operation)
         session = config[:session]
         node_id = config[:node_id]
         return yield(parameters) if session.nil? || !session.enabled? || session.disposed?
 
+        stream = StreamState.new
         Graphmind::Wrap.invoke(
           session,
           node_id: node_id,
           kind: "llm",
           name: config[:name],
-          input: describe(parameters, operation),
-          output_for: ->(response) { summarize_response(response) },
-          finish_extra: ->(response) { extra_for(response) },
+          input: describe(parameters, operation, session),
+          full_input: true,
+          output_for: ->(response) { summarize_response(response, stream) },
+          finish_extra: ->(response) { extra_for(response, stream) },
           inject_as: ->(value) { coerce_response(value, operation) }
         ) do
-          yield(instrument_stream(parameters, session, node_id))
+          yield(instrument_stream(parameters, session, node_id, stream))
         end
       end
 
@@ -91,36 +147,44 @@ module Graphmind
         end
       end
 
-      def describe(parameters, operation)
+      # node.started.input: the request as sent (contract C1) — model,
+      # instructions and messages / input in FULL (no message-count or length
+      # trim; the 512 KB shrink bounds the event), the sampling parameters under
+      # the API's own names (an allow-list: `user`, `metadata` and the stream
+      # proc are never read), and tools as {name, schemaHash} with each
+      # definition sent once per run as toolSchemas.
+      def describe(parameters, operation, session = nil)
         out = { "operation" => operation }
-        model = Support.param(parameters, :model)
-        out["model"] = model unless model.nil?
-        messages = Support.summarize_messages(Support.param(parameters, :messages))
-        out["messages"] = messages unless messages.nil?
+        %i[model instructions previous_response_id].each do |key|
+          value = Support.param(parameters, key)
+          out[key.to_s] = Support.record(value) unless value.nil?
+        end
+        messages = Support.param(parameters, :messages)
+        out["messages"] = Support.record(messages) unless messages.nil?
         input = Support.param(parameters, :input)
-        out["input"] = Support.truncate(input) if input.is_a?(String)
-        tools = Support.param(parameters, :tools)
-        out["tools"] = tool_names(tools) if tools.is_a?(Array)
+        out["input"] = Support.record(input) unless input.nil?
+        out.merge!(Support.pick_params(parameters))
+        tools = capture_tools(session, Support.param(parameters, :tools))
+        out.merge!(tools) unless tools.nil?
         out["stream"] = true if Support.param(parameters, :stream)
         out
       rescue StandardError
         { "operation" => operation }
       end
 
-      def tool_names(tools)
-        tools.map do |tool|
-          next tool["name"] || tool[:name] unless tool.is_a?(Hash) && (tool["function"] || tool[:function])
+      def capture_tools(session, tools)
+        return nil unless tools.is_a?(Array)
 
-          fn = tool["function"] || tool[:function]
-          fn["name"] || fn[:name]
-        end.compact
+        run = session&.current_run
+        Support.capture_tools(session || self, run.nil? ? "implicit" : run.run_id, tools)
       rescue StandardError
-        []
+        nil
       end
 
-      # Wrap a caller-supplied `stream:` proc so deltas also reach the canvas.
-      # The caller's proc still runs, with the same arity it declared.
-      def instrument_stream(parameters, session, node_id)
+      # Wrap a caller-supplied `stream:` proc so deltas also reach the canvas
+      # (and the step's tool calls, finish reason and last-chunk usage reach
+      # `stream`). The caller's proc still runs, with the same arity it declared.
+      def instrument_stream(parameters, session, node_id, stream = nil)
         return parameters unless parameters.is_a?(Hash)
 
         key = Support.param_key(parameters, :stream)
@@ -132,6 +196,7 @@ module Graphmind
           begin
             text = delta_text(chunk)
             session.push_token(node_id, "text", text) if text
+            stream&.observe(chunk)
           rescue StandardError
             nil
           end
@@ -157,22 +222,78 @@ module Graphmind
         nil
       end
 
-      def summarize_response(response)
+      # node.finished.output (contract C1): text, the requested tool calls as
+      # {id, name, input, inputText?}, the normalized finishReason and the API's
+      # own value as rawFinishReason (chat: finish_reason; Responses: the
+      # incomplete reason, else the status). A streamed call reports what the
+      # stream proc saw.
+      def summarize_response(response, stream = nil)
+        response = stream.final if stream&.final && !completion?(response)
+        return streamed_output(stream) if stream&.seen? && !completion?(response)
         return Support.truncate(response.to_s) unless response.is_a?(Hash)
 
-        text = response.dig("choices", 0, "message", "content")
-        text ||= response.dig("choices", 0, "text")
-        text ||= output_text(response)
-        calls = response.dig("choices", 0, "message", "tool_calls")
-
-        out = {}
-        out["text"] = Support.truncate(text) if text.is_a?(String)
-        out["toolCalls"] = calls if calls.is_a?(Array) && !calls.empty?
+        out = response.key?("choices") ? chat_output(response) : responses_output(response)
         out["id"] = response["id"] if response["id"]
         out["model"] = response["model"] if response["model"]
         out.empty? ? Support.truncate(response.to_s) : out
       rescue StandardError
         nil
+      end
+
+      def completion?(response)
+        response.is_a?(Hash) && (response.key?("choices") || response.key?("output"))
+      end
+
+      def chat_output(response)
+        choice = response.dig("choices", 0) || {}
+        message = choice.is_a?(Hash) ? choice["message"] : nil
+        text = message.is_a?(Hash) ? message["content"] : nil
+        text = choice["text"] if text.nil? && choice.is_a?(Hash)
+        calls = chat_tool_calls(message.is_a?(Hash) ? message["tool_calls"] : nil)
+        out = {}
+        out["text"] = text if text.is_a?(String)
+        out["toolCalls"] = calls unless calls.empty?
+        out.merge!(Support.finish_fields(choice.is_a?(Hash) ? choice["finish_reason"] : nil, !calls.empty?))
+      end
+
+      def chat_tool_calls(calls)
+        Array(calls).filter_map do |call|
+          next nil unless call.is_a?(Hash)
+
+          function = call["function"]
+          if function.is_a?(Hash)
+            Support.tool_call(call["id"], function["name"], function["arguments"])
+          elsif call["custom"].is_a?(Hash) && call["custom"]["name"].is_a?(String)
+            entry = { "name" => call["custom"]["name"], "input" => call["custom"]["input"] || "" }
+            call["id"].is_a?(String) ? { "id" => call["id"] }.merge(entry) : entry
+          end
+        end
+      end
+
+      def responses_output(response)
+        calls = Array(response["output"]).filter_map do |item|
+          next nil unless item.is_a?(Hash) && item["type"] == "function_call"
+
+          Support.tool_call(item["call_id"], item["name"], item["arguments"])
+        end
+        text = output_text(response)
+        reason = response.dig("incomplete_details", "reason")
+        raw = reason.is_a?(String) && !reason.empty? ? reason : response["status"]
+        out = {}
+        out["text"] = text if text.is_a?(String)
+        out["toolCalls"] = calls unless calls.empty?
+        out.merge!(Support.finish_fields(raw, !calls.empty?))
+        out["status"] = response["status"] if response["status"].is_a?(String)
+        out
+      end
+
+      def streamed_output(stream)
+        calls = stream.tool_calls
+        out = { "text" => stream.text.dup }
+        out["toolCalls"] = calls unless calls.empty?
+        out.merge!(Support.finish_fields(stream.finish_reason, !calls.empty?))
+        out["streamed"] = true
+        out
       end
 
       def output_text(response)
@@ -189,16 +310,14 @@ module Graphmind
         nil
       end
 
-      def extra_for(response)
-        return nil unless response.is_a?(Hash)
-
-        usage = response["usage"]
-        return nil unless usage.is_a?(Hash)
-
-        tokens = Support.usage(
-          usage["prompt_tokens"] || usage["input_tokens"],
-          usage["completion_tokens"] || usage["output_tokens"]
-        )
+      # {"usage" => ...}: inclusive, cache and reasoning counts only when
+      # reported. A streamed chat call's usage rides its last chunk (with
+      # `stream_options: {include_usage: true}`).
+      def extra_for(response, stream = nil)
+        usage = response["usage"] if response.is_a?(Hash)
+        usage = stream.usage if usage.nil? && stream
+        usage = stream.final["usage"] if usage.nil? && stream&.final
+        tokens = Support.openai_usage(usage)
         tokens.nil? ? nil : { "usage" => tokens }
       rescue StandardError
         nil

@@ -108,9 +108,9 @@ def test_streaming_response_records_text_and_usage_and_hands_back_the_raw_stream
     assert payload["status"] == "ok"
     assert payload["streaming"] is True
     assert payload["output"]["text"] == "Lisbon"
-    assert payload["output"]["finishReason"] == "completed"
+    assert payload["output"]["finishReason"] == "stop"
     assert payload["output"]["chunks"] == 4
-    assert payload["usage"] == {"inputTokens": 5, "outputTokens": 2}
+    assert payload["usage"] == {"inputTokens": 5, "outputTokens": 2, "inclusive": True, "cacheReadTokens": 0, "reasoningTokens": 0}
     streamed = "".join(d["v"] for f in viewer.of_type("node.token") for d in f["payload"]["deltas"])
     assert streamed == "Lisbon"
 
@@ -374,7 +374,7 @@ def test_chat_completions_streaming_response_is_teed(attached: Any) -> None:
     assert text == "Lisbon"
     (finished,) = _finished(viewer)
     assert finished["payload"]["output"]["text"] == "Lisbon"
-    assert finished["payload"]["usage"] == {"inputTokens": 7, "outputTokens": 3}
+    assert finished["payload"]["usage"] == {"inputTokens": 7, "outputTokens": 3, "inclusive": True}
 
 
 def test_chat_stream_without_include_usage_records_no_usage(attached: Any) -> None:
@@ -416,7 +416,7 @@ def test_streaming_response_without_stream_records_the_parsed_reply(attached: An
     assert len(recorder) == 1
     (finished,) = _finished(viewer)
     assert finished["payload"]["output"]["text"] == "Lisbon is sunny."
-    assert finished["payload"]["usage"] == {"inputTokens": 5, "outputTokens": 2}
+    assert finished["payload"]["usage"] == {"inputTokens": 5, "outputTokens": 2, "inclusive": True, "cacheReadTokens": 0, "reasoningTokens": 0}
     assert "streaming" not in finished["payload"]
 
 
@@ -437,7 +437,7 @@ def test_with_raw_response_records_usage_and_keeps_headers(attached: Any) -> Non
     assert raw.parse().choices[0].message.content == "Lisbon is sunny."
     (finished,) = _finished(viewer)
     assert finished["payload"]["output"]["text"] == "Lisbon is sunny."
-    assert finished["payload"]["usage"] == {"inputTokens": 11, "outputTokens": 7}
+    assert finished["payload"]["usage"] == {"inputTokens": 11, "outputTokens": 7, "inclusive": True}
 
 
 def test_with_raw_response_on_a_stream_tees_the_parsed_stream(attached: Any) -> None:
@@ -453,7 +453,7 @@ def test_with_raw_response_on_a_stream_tees_the_parsed_stream(attached: Any) -> 
 
     (finished,) = _finished(viewer)
     assert finished["payload"]["output"]["text"] == "Lisbon"
-    assert finished["payload"]["usage"] == {"inputTokens": 5, "outputTokens": 2}
+    assert finished["payload"]["usage"] == {"inputTokens": 5, "outputTokens": 2, "inclusive": True, "cacheReadTokens": 0, "reasoningTokens": 0}
 
 
 def test_retry_at_the_after_gate_re_issues_a_raw_call(attached: Any) -> None:
@@ -615,7 +615,7 @@ async def test_async_streaming_response_records_text_and_usage(attached: Any) ->
     assert len(recorder) == 1
     (finished,) = await _finished_async(viewer)
     assert finished["payload"]["output"]["text"] == "Lisbon"
-    assert finished["payload"]["usage"] == {"inputTokens": 5, "outputTokens": 2}
+    assert finished["payload"]["usage"] == {"inputTokens": 5, "outputTokens": 2, "inclusive": True, "cacheReadTokens": 0, "reasoningTokens": 0}
 
 
 @pytest.mark.parametrize("touched_first", [False, True], ids=["instrument-first", "touch-first"])
@@ -702,7 +702,7 @@ async def test_async_with_raw_response_non_streamed(attached: Any) -> None:
     # LegacyAPIResponse.parse() stays synchronous on the async client.
     assert raw.parse().output_text == "Lisbon is sunny."
     (finished,) = await _finished_async(viewer)
-    assert finished["payload"]["usage"] == {"inputTokens": 5, "outputTokens": 2}
+    assert finished["payload"]["usage"] == {"inputTokens": 5, "outputTokens": 2, "inclusive": True, "cacheReadTokens": 0, "reasoningTokens": 0}
 
 
 async def test_async_inject_into_streaming_response(attached: Any) -> None:

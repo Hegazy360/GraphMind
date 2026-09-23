@@ -99,3 +99,15 @@ export {
   serializePayload,
   type TruncatedPayload,
 } from './shrink.js';
+
+// LLM-step conventions (0.6.0+): the normalized finish reasons senders write
+// and readers apply to legacy events, and how a reader interprets a stored
+// TokenUsage (`inclusive` marker, 0.5 aliases, "as reported").
+export {
+  FINISH_REASONS,
+  normalizeFinishReason,
+  readUsage,
+  type FinishReason,
+  type UsageBasis,
+  type UsageView,
+} from './llm.js';

@@ -20,7 +20,12 @@
  * `client.responses.stream()` and `client.responses.parse()` route through
  * this same path — see `wrap-client.ts`.
  */
-import type { RunStatus } from '@graphmind-ai/client';
+import {
+  normalizeFinishReason,
+  toolCall,
+  type RecordedToolCall,
+  type RunStatus,
+} from '@graphmind-ai/client';
 import { promptKey, type PromptKey } from './invocation.js';
 import type { LlmFlavor, ResultSummary, StepReporter } from './llm-step.js';
 import { isAbortLikeError } from './signals.js';
@@ -28,7 +33,6 @@ import {
   isProviderExecutedItem,
   mapResponsesUsage,
   outputItemName,
-  parseToolInput,
   type RequestBodyLike,
   type ResponseEventLike,
   type ResponseLike,
@@ -61,17 +65,52 @@ function responseText(response: ResponseLike): string {
   return text;
 }
 
-function functionCalls(response: ResponseLike): unknown[] {
-  const calls: unknown[] = [];
+/**
+ * The locally-executed calls the model requested (contract C1 shape): a
+ * `function_call`'s JSON arguments parsed (text kept as `inputText` when they
+ * do not parse — an `incomplete` response cut them off); a
+ * `custom_tool_call`'s freeform `input` recorded as the string it is.
+ */
+function functionCalls(response: ResponseLike): RecordedToolCall[] {
+  const calls: RecordedToolCall[] = [];
   for (const item of response.output ?? []) {
-    if (item.type !== 'function_call' && item.type !== 'custom_tool_call') continue;
-    calls.push({
-      ...(item.call_id !== undefined ? { id: item.call_id } : {}),
-      ...(item.name !== undefined ? { name: item.name } : {}),
-      arguments: parseToolInput(item.arguments ?? item.input),
-    });
+    if (item.type === 'function_call') {
+      const call = toolCall(item.call_id, item.name, item.arguments);
+      if (call !== undefined) calls.push(call);
+    } else if (item.type === 'custom_tool_call') {
+      if (typeof item.name !== 'string' || item.name.length === 0) continue;
+      calls.push({
+        ...(typeof item.call_id === 'string' && item.call_id.length > 0 ? { id: item.call_id } : {}),
+        name: item.name,
+        input: item.input ?? '',
+      });
+    }
   }
   return calls;
+}
+
+/**
+ * Responses has no single finish reason: `status`, plus
+ * `incomplete_details.reason` when it stopped early. The raw value is the
+ * reason when there is one (`max_output_tokens`, `content_filter`), else the
+ * status (`completed`, `failed`, `cancelled`, ...).
+ */
+function finishFields(
+  response: ResponseLike,
+  hasToolCalls: boolean,
+): { finishReason?: string; rawFinishReason?: string } {
+  const reason = response.incomplete_details?.reason;
+  const raw =
+    typeof reason === 'string' && reason.length > 0
+      ? reason
+      : typeof response.status === 'string' && response.status.length > 0
+        ? response.status
+        : undefined;
+  const finishReason = normalizeFinishReason(raw, hasToolCalls);
+  return {
+    ...(finishReason !== undefined ? { finishReason } : {}),
+    ...(raw !== undefined ? { rawFinishReason: raw } : {}),
+  };
 }
 
 /** Emit observe-only nodes for the built-in tools OpenAI ran server-side. */
@@ -102,6 +141,7 @@ function summarizeResponse(reporter: StepReporter, response: ResponseLike): Resu
       model: response.model,
       text: responseText(response),
       ...(calls.length > 0 ? { toolCalls: calls } : {}),
+      ...finishFields(response, calls.length > 0),
       status: response.status,
       ...(response.incomplete_details != null
         ? { incompleteReason: response.incomplete_details.reason }

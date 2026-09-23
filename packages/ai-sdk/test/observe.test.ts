@@ -78,7 +78,7 @@ describe('stream tee', () => {
       .ofType('node.finished')
       .filter((f) => f.payload['nodeId'] === 'llm:step');
     for (const frame of llmFinished) {
-      expect(frame.payload['usage']).toEqual({ inputTokens: 20, outputTokens: 10 });
+      expect(frame.payload['usage']).toEqual({ inputTokens: 20, outputTokens: 10, inclusive: true });
       expect(frame.payload['status']).toBe('ok');
     }
     // Batching: deltas arrive in node.token batches, not one frame per delta.
@@ -359,8 +359,8 @@ describe('wrapGenerate (non-streaming)', () => {
       (f) => f.type === 'node.finished' && f.payload['nodeId'] === 'llm:step',
     );
     expect(finished.payload['status']).toBe('ok');
-    expect(finished.payload['usage']).toEqual({ inputTokens: 8, outputTokens: 3 });
-    expect(finished.payload['output']).toMatchObject({ text: 'forty-two', finishReason: 'stop' });
+    expect(finished.payload['usage']).toEqual({ inputTokens: 8, outputTokens: 3, inclusive: true });
+    expect(finished.payload['output']).toEqual({ text: 'forty-two', finishReason: 'stop', rawFinishReason: 'stop' });
   });
 });
 

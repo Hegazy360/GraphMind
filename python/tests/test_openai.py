@@ -73,7 +73,7 @@ def test_a_non_streaming_call_emits_a_gated_llm_node_with_usage(attached: Any) -
         lambda f: f.get("type") == "node.finished" and f["payload"]["nodeId"] == "llm:step"
     )
     assert finished["payload"]["status"] == "ok"
-    assert finished["payload"]["usage"] == {"inputTokens": 11, "outputTokens": 7}
+    assert finished["payload"]["usage"] == {"inputTokens": 11, "outputTokens": 7, "inclusive": True}
     assert finished["payload"]["output"]["text"] == "Lisbon is sunny."
     assert finished["payload"]["output"]["finishReason"] == "stop"
     assert finished["payload"]["instanceId"] == started["payload"]["instanceId"]
@@ -195,7 +195,7 @@ def test_streaming_is_teed_without_disturbing_the_consumer(attached: Any) -> Non
     assert finished["payload"]["streaming"] is True
     assert finished["payload"]["output"]["text"] == "Lisbon"
     assert finished["payload"]["output"]["finishReason"] == "stop"
-    assert finished["payload"]["usage"] == {"inputTokens": 7, "outputTokens": 3}
+    assert finished["payload"]["usage"] == {"inputTokens": 7, "outputTokens": 3, "inclusive": True}
 
     tokens = viewer.of_type("node.token")
     assert tokens
@@ -255,7 +255,7 @@ async def test_async_client_non_streaming(attached: Any) -> None:
     finished = await viewer.wait_for_async(
         lambda f: f.get("type") == "node.finished" and f["payload"]["nodeId"] == "llm:step"
     )
-    assert finished["payload"]["usage"] == {"inputTokens": 11, "outputTokens": 7}
+    assert finished["payload"]["usage"] == {"inputTokens": 11, "outputTokens": 7, "inclusive": True}
 
 
 async def test_async_client_gate_holds_before_the_request(attached: Any) -> None:
@@ -298,7 +298,7 @@ async def test_async_streaming_is_teed(attached: Any) -> None:
         lambda f: f.get("type") == "node.finished" and f["payload"]["nodeId"] == "llm:step"
     )
     assert finished["payload"]["output"]["text"] == "Lisbon"
-    assert finished["payload"]["usage"] == {"inputTokens": 7, "outputTokens": 3}
+    assert finished["payload"]["usage"] == {"inputTokens": 7, "outputTokens": 3, "inclusive": True}
 
 
 async def test_the_async_tee_adds_no_async_generator_to_your_loop(attached: Any) -> None:

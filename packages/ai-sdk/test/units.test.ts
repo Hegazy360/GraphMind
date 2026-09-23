@@ -10,13 +10,23 @@ import { graphmind } from '../src/index.js';
 import { InvocationTracker } from '../src/invocation.js';
 import { chainAbortSignals, isTimeoutAbortReason } from '../src/signals.js';
 import { TokenBatcher } from '../src/token-batcher.js';
+import { readFileSync } from 'node:fs';
 import {
+  finishFields,
   isAsyncGeneratorFunction,
   mapUsage,
   parseToolInput,
   unifiedFinishReason,
 } from '../src/sdk-types.js';
 import { tick } from './helpers/fake-viewer.js';
+
+/** The shared LLM-capture fixture's usage cases for one provider. */
+function usageCases(provider: string): [string, unknown, unknown][] {
+  const fixture = JSON.parse(
+    readFileSync(new URL('../../client/test/fixtures/llm.json', import.meta.url), 'utf8'),
+  ) as { usage: { provider: string; name: string; raw: unknown; out: unknown }[] };
+  return fixture.usage.filter((c) => c.provider === provider).map((c) => [c.name, c.raw, c.out]);
+}
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -167,19 +177,45 @@ describe('SDK shape mapping', () => {
         inputTokens: { total: 20 },
         outputTokens: { total: 10 },
       }),
-    ).toEqual({ inputTokens: 20, outputTokens: 10 });
+    ).toEqual({ inputTokens: 20, outputTokens: 10, inclusive: true });
     expect(mapUsage({ inputTokens: 5, outputTokens: 7 })).toEqual({
       inputTokens: 5,
       outputTokens: 7,
+      inclusive: true,
     });
     expect(mapUsage({ inputTokens: { total: undefined }, outputTokens: {} })).toBeUndefined();
     expect(mapUsage(undefined)).toBeUndefined();
+    // One side nested, the other a number: each side is read on its own.
+    expect(mapUsage({ inputTokens: { total: 9, cacheRead: 4 }, outputTokens: 2 })).toEqual({
+      inputTokens: 9,
+      outputTokens: 2,
+      inclusive: true,
+      cacheReadTokens: 4,
+    });
+  });
+
+  it.each(usageCases('ai-sdk'))('mapUsage (shared fixture): %s', (_name, raw, expected) => {
+    expect(mapUsage(raw as Parameters<typeof mapUsage>[0]) ?? null).toEqual(expected);
   });
 
   it('unifiedFinishReason handles V4 objects and legacy strings', () => {
     expect(unifiedFinishReason({ unified: 'stop' })).toBe('stop');
     expect(unifiedFinishReason('tool-calls')).toBe('tool-calls');
     expect(unifiedFinishReason(undefined)).toBeUndefined();
+  });
+
+  it('finishFields: normalized value plus the raw provider string when reported', () => {
+    expect(finishFields({ unified: 'stop', raw: 'end_turn' }, false)).toEqual({
+      finishReason: 'stop',
+      rawFinishReason: 'end_turn',
+    });
+    expect(finishFields({ unified: 'stop', raw: 'STOP' }, true)).toEqual({
+      finishReason: 'tool-calls',
+      rawFinishReason: 'STOP',
+    });
+    expect(finishFields({ unified: 'length', raw: undefined }, true)).toEqual({ finishReason: 'length' });
+    expect(finishFields('unknown', false)).toEqual({ finishReason: 'other' });
+    expect(finishFields(undefined, false)).toEqual({});
   });
 
   it('parseToolInput parses stringified JSON and passes anything else through', () => {

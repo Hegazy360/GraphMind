@@ -87,6 +87,33 @@ export {
   type ResolvedLoopGuard,
 } from './loop-guard.js';
 
+// LLM-step capture (contract C1, 0.6.0+): inclusive usage, normalized finish
+// reasons and tool calls, tool definitions recorded once per run by hash,
+// the allow-listed sampling parameters. Shared by every TS adapter.
+export {
+  MAX_SCHEMA_HASHES_PER_RUN,
+  MAX_SCHEMA_RUNS,
+  SAMPLING_PARAM_KEYS,
+  SCHEMA_HASH_HEX_CHARS,
+  captureTools,
+  makeUsage,
+  normalizeFinishReason,
+  pickParams,
+  resetToolSchemaMemory,
+  schemaHash,
+  sumReported,
+  tokenCount,
+  toolCall,
+  toolCalls,
+  withBinaryPlaceholders,
+  type CapturedTools,
+  type FinishReason,
+  type RecordedToolCall,
+  type ToolRef,
+  type UsageParts,
+  type WireUsage,
+} from './llm-capture.js';
+
 export type { WebSocketLike, WebSocketConstructor } from './transport.js';
 
 // Re-export the wire-contract types adapters typically need, so most

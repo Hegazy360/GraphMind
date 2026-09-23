@@ -37,6 +37,15 @@ from typing import Any
 from ..clock import elapsed_ms, monotonic_ms
 from ..gate import GateNode
 from ..ids import LLM_NODE_ID, LLM_NODE_NAME, agent_node_id, next_id
+from ..llm_capture import (
+    AnthropicUsageAccumulator,
+    anthropic_usage,
+    capture_tools,
+    finish_fields,
+    pick_params,
+    record_value,
+    tool_call,
+)
 from ..session import Session
 from ._common import (
     AsyncStreamTee,
@@ -48,7 +57,6 @@ from ._common import (
     injected_response,
     is_async_callable,
     is_async_client,
-    merge_usage,
     observe_raw_stream,
     parse_raw,
     parse_raw_async,
@@ -60,7 +68,6 @@ from ._common import (
     safe_value,
     sdk_packages,
     unpatch_method,
-    usage_of,
     warn_once,
 )
 
@@ -100,21 +107,35 @@ _STREAM_INJECT = (
 )
 
 
-def _describe(kwargs: dict[str, Any]) -> dict[str, Any]:
+def _describe(session: Session, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """``node.started.input``: the request as sent (contract C1) — ``model``,
+    ``system`` and ``messages`` in full (the per-event 512 KB shrink is the
+    only bound), the sampling parameters under Anthropic's own names
+    (``max_tokens``, ``temperature``, ``top_p``, ``top_k``, ``stop_sequences``,
+    ``tool_choice``, ``thinking``, ... — an allow-list; ``metadata``,
+    ``mcp_servers`` and the ``extra_*`` request options are never read), and
+    ``tools: [{name, schemaHash}]`` with each definition sent once per run as
+    ``toolSchemas``."""
     payload: dict[str, Any] = {"provider": SDK_NAME}
-    for key in ("model", "max_tokens", "temperature", "system"):
-        if key in kwargs:
-            payload[key] = safe_value(kwargs[key])
-    payload["messages"] = safe_value(kwargs.get("messages"))
-    tools = kwargs.get("tools")
+    for key in ("model", "system"):
+        if key in kwargs and kwargs[key] is not None:
+            payload[key] = record_value(kwargs[key])
+    payload["messages"] = record_value(kwargs.get("messages"))
+    payload.update(pick_params(kwargs))
+    ctx = session.current_run()
+    run_key = ctx.run_id if ctx is not None else "implicit"
+    tools = capture_tools(session, run_key, kwargs.get("tools"))
     if tools:
-        payload["tools"] = safe_value(tools)
+        payload.update(tools)
     if kwargs.get("stream"):
         payload["stream"] = True
     return payload
 
 
 def _summarize(message: Any) -> dict[str, Any]:
+    """``node.finished.output``: text, thinking, the ``tool_use`` calls the model
+    requested (``{id, name, input}``), the normalized ``finishReason`` and
+    Anthropic's own ``stop_reason`` as ``rawFinishReason``."""
     out: dict[str, Any] = {}
     try:
         texts: list[str] = []
@@ -126,13 +147,13 @@ def _summarize(message: Any) -> dict[str, Any]:
                 if isinstance(text, str):
                     texts.append(text)
             elif block_type == "tool_use":
-                tool_calls.append(
-                    {
-                        "id": getattr(block, "id", None),
-                        "name": getattr(block, "name", None),
-                        "input": safe_value(getattr(block, "input", None)),
-                    }
+                call = tool_call(
+                    getattr(block, "id", None),
+                    getattr(block, "name", None),
+                    getattr(block, "input", None),
                 )
+                if call is not None:
+                    tool_calls.append(call)
             elif block_type == "thinking":
                 thinking = getattr(block, "thinking", None)
                 if isinstance(thinking, str):
@@ -140,9 +161,7 @@ def _summarize(message: Any) -> dict[str, Any]:
         out["text"] = safe_value("".join(texts))
         if tool_calls:
             out["toolCalls"] = tool_calls
-        stop_reason = getattr(message, "stop_reason", None)
-        if isinstance(stop_reason, str):
-            out["finishReason"] = stop_reason
+        out.update(finish_fields(getattr(message, "stop_reason", None), bool(tool_calls)))
     except Exception:
         pass
     return out
@@ -196,19 +215,45 @@ def _message_reply(value: Any, model: str) -> dict[str, Any] | None:
     return data
 
 
+def _usage(message: Any) -> dict[str, Any] | None:
+    """The inclusive wire usage of a complete ``Message``."""
+    return anthropic_usage(getattr(message, "usage", None))
+
+
 class _StreamState:
-    __slots__ = ("chunks", "finish_reason", "text", "usage")
+    __slots__ = ("accumulator", "blocks", "calls", "chunks", "finish_reason", "text")
 
     def __init__(self) -> None:
         self.text: list[str] = []
-        self.usage: dict[str, int] | None = None
+        self.accumulator = AnthropicUsageAccumulator()
         self.finish_reason: str | None = None
         self.chunks = 0
+        #: Open ``tool_use`` blocks by index: [id, name, streamed argument JSON].
+        self.blocks: dict[int, list[Any]] = {}
+        #: Completed tool calls by block index.
+        self.calls: dict[int, dict[str, Any]] = {}
+
+    @property
+    def usage(self) -> dict[str, Any] | None:
+        return self.accumulator.usage()
+
+    def tool_calls(self) -> list[dict[str, Any]]:
+        """Completed calls plus any ``tool_use`` block the stream never closed
+        (cut off by ``max_tokens``: its partial text becomes ``inputText``)."""
+        calls = dict(self.calls)
+        for index, (block_id, name, text) in self.blocks.items():
+            if index not in calls:
+                call = tool_call(block_id, name, text)
+                if call is not None:
+                    calls[index] = call
+        return [calls[index] for index in sorted(calls)]
 
     def output(self) -> dict[str, Any]:
         out: dict[str, Any] = {"text": safe_value("".join(self.text)), "chunks": self.chunks}
-        if self.finish_reason:
-            out["finishReason"] = self.finish_reason
+        calls = self.tool_calls()
+        if calls:
+            out["toolCalls"] = calls
+        out.update(finish_fields(self.finish_reason, bool(calls)))
         return out
 
 
@@ -216,9 +261,21 @@ def _observe_event(session: Session, node_id: str, state: _StreamState, event: A
     state.chunks += 1
     event_type = getattr(event, "type", None)
     if event_type == "message_start":
-        usage = usage_of(getattr(getattr(event, "message", None), "usage", None))
-        if usage is not None:
-            state.usage = merge_usage(state.usage, usage)
+        state.accumulator.add(getattr(getattr(event, "message", None), "usage", None))
+        return
+    if event_type == "content_block_start":
+        block = getattr(event, "content_block", None)
+        index = getattr(event, "index", None)
+        if getattr(block, "type", None) == "tool_use" and isinstance(index, int):
+            state.blocks[index] = [getattr(block, "id", None), getattr(block, "name", None), ""]
+        return
+    if event_type == "content_block_stop":
+        index = getattr(event, "index", None)
+        if isinstance(index, int) and index in state.blocks:
+            block_id, name, text = state.blocks.pop(index)
+            call = tool_call(block_id, name, text)
+            if call is not None:
+                state.calls[index] = call
         return
     if event_type == "content_block_delta":
         delta = getattr(event, "delta", None)
@@ -232,15 +289,16 @@ def _observe_event(session: Session, node_id: str, state: _StreamState, event: A
             partial = getattr(delta, "partial_json", None)
             if isinstance(partial, str) and partial:
                 session.push_token(node_id, "tool-args", partial)
+                block = state.blocks.get(getattr(event, "index", None))  # type: ignore[arg-type]
+                if block is not None:
+                    block[2] += partial
         elif delta_type == "thinking_delta":
             thinking = getattr(delta, "thinking", None)
             if isinstance(thinking, str) and thinking:
                 session.push_token(node_id, "reasoning", thinking)
         return
     if event_type == "message_delta":
-        usage = usage_of(getattr(event, "usage", None))
-        if usage is not None:
-            state.usage = merge_usage(state.usage, usage)
+        state.accumulator.add(getattr(event, "usage", None))
         stop_reason = getattr(getattr(event, "delta", None), "stop_reason", None)
         if isinstance(stop_reason, str):
             state.finish_reason = stop_reason
@@ -277,7 +335,7 @@ class _Call:
             name=LLM_NODE_NAME,
             instance_id=self.instance_id,
             parent_id=agent_node_id(ctx.name) if ctx is not None else None,
-            input=_describe(kwargs),
+            input=_describe(self.session, kwargs),
             extra={"sdk": SDK_NAME},
         )
         model = kwargs.get("model")
@@ -462,8 +520,7 @@ def _finish_stream(
     the stream, so usage and the full text land on the node even when the host
     only ever touched ``.text_stream`` (which bypasses our event tee).
     """
-    output = state.output()
-    usage = state.usage
+    summary: dict[str, Any] | None = None
     if error is None:
         final = None
         try:
@@ -478,12 +535,18 @@ def _finish_stream(
             final = None
         try:
             if final is not None and not inspect.isawaitable(final):
-                usage = merge_usage(usage, usage_of(getattr(final, "usage", None)))
+                # The SDK's snapshot has the whole message (usage accumulated,
+                # tool_use inputs parsed), however the host read the stream.
+                state.accumulator.add(getattr(final, "usage", None))
                 summary = _summarize(final)
-                if summary.get("text"):
-                    output.update(summary)
+                if not summary.get("text"):
+                    summary.pop("text", None)
         except Exception:
-            pass
+            summary = None
+    output = state.output()
+    if summary:
+        output.update(summary)
+    usage = state.usage
     if error is not None:
         call.session.error_node(LLM_NODE_ID, call.instance_id, error)
         call.finish(output, "error", usage, {"streaming": True})
@@ -648,7 +711,7 @@ def _make_create_sync(
                         close_raw(result)
                     call.finish(None, "aborted")
                     raise session.abort_error(ctx)
-                call.finish(_summarize(parsed), "ok", usage_of(parsed))
+                call.finish(_summarize(parsed), "ok", _usage(parsed))
                 return result
 
         return wrapper
@@ -713,7 +776,7 @@ def _make_create_async(
                         await close_raw_async(result)
                     call.finish(None, "aborted")
                     raise session.abort_error(ctx)
-                call.finish(_summarize(parsed), "ok", usage_of(parsed))
+                call.finish(_summarize(parsed), "ok", _usage(parsed))
                 return result
 
         return wrapper

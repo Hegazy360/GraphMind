@@ -145,7 +145,14 @@ type ResumeAction = 'continue' | 'retry' | 'inject' | 'abort';
 type RunMode     = 'run' | 'step';
 
 interface ErrorInfo   { name: string; message: string; stack?: string }
-interface TokenUsage  { inputTokens: number; outputTokens: number }
+interface TokenUsage  {
+  inputTokens: number;       // with inclusive: true, the whole prompt, cache included
+  outputTokens: number;
+  inclusive?: boolean;       // 0.6+: every usage a 0.6 SDK writes; absent = "as reported"
+  cacheReadTokens?: number;  // only when the provider reported it
+  cacheWriteTokens?: number; // only when the provider reported it
+  reasoningTokens?: number;  // only when the provider reported it (part of outputTokens)
+}
 interface TokenDelta  { t: 'text' | 'reasoning' | 'tool-args'; v: string }
 interface SdkInfo     { name: string; version: string }
 

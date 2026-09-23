@@ -128,8 +128,9 @@ client.chat(parameters: { model: "gpt-4o-mini", messages: [...] })
 client.responses.create(parameters: { model: "gpt-4o-mini", input: "hi" })
 ```
 
-One `llm:step` node per call, with model, trimmed messages, reply text and
-token usage. Streaming (`stream:`) forwards deltas to the canvas and still
+One `llm:step` node per call, with the model, every message in full, the
+sampling parameters, the tools by schema hash, the reply text, the requested tool
+calls, the normalized finish reason and token usage. Streaming (`stream:`) forwards deltas to the canvas and still
 calls your own handler with the arity it declared.
 
 The module is prepended to **that client's singleton class**: nothing global is
@@ -145,6 +146,12 @@ chat.ask("what's the weather in Cairo?")
 One `llm:step` node per provider round-trip (not per `ask`), plus a
 `tool:<name>` node per `RubyLLM::Tool#call` — where `inject` genuinely replaces
 the tool result the model sees next.
+
+**Token usage is inclusive** (0.6+) in both integrations: `inputTokens` is the
+whole prompt, cached tokens included, and the usage carries `inclusive: true`.
+ruby_llm counts input WITHOUT cached tokens (2.0's `tokens.input` is "standard,
+non-cached"), so the cache reads and writes are added back; `cacheReadTokens`,
+`cacheWriteTokens` and `reasoningTokens` appear only when reported.
 
 ### Injecting values from the viewer
 

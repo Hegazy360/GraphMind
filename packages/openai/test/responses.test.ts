@@ -24,9 +24,14 @@ afterEach(async () => {
 const EXPECTED_USAGE = {
   inputTokens: 31,
   outputTokens: 12,
+  inclusive: true,
+  cacheReadTokens: 8,
+  // Reported as 0 by the fixture: a reported zero stays (never dropped, never invented).
+  cacheWriteTokens: 0,
+  reasoningTokens: 5,
+  // 0.5 extras, kept: the reported total and the old name of cacheReadTokens.
   totalTokens: 43,
   cachedInputTokens: 8,
-  reasoningTokens: 5,
 };
 
 describe('responses.create', () => {
@@ -53,7 +58,7 @@ describe('responses.create', () => {
     const output = finished?.payload['output'] as Record<string, unknown>;
     expect(output['text']).toBe('Booked.');
     expect(output['toolCalls']).toEqual([
-      { id: 'call_abc', name: 'searchFlights', arguments: { from: 'VIE', to: 'LIS' } },
+      { id: 'call_abc', name: 'searchFlights', input: { from: 'VIE', to: 'LIS' } },
     ]);
   });
 

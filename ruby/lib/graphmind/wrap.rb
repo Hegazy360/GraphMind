@@ -37,16 +37,25 @@ module Graphmind
     # plain JSON over the socket — into whatever the call site expects
     # (a provider response object, say). Without it, `inject` is only usable
     # where the host already speaks Hash/String.
+    # `full_input: true` records `input` as given — it must already be
+    # JSON-safe (Integrations::Support.record) — instead of through the
+    # session's bounded preview: an LLM prompt is recorded in full (contract
+    # C1; the 512 KB per-event shrink is the only bound).
     def invoke(session, node_id:, kind:, name:, parent_id: nil, input: nil, output_for: nil,
-               finish_extra: nil, inject_as: nil, &body)
+               finish_extra: nil, inject_as: nil, full_input: false, &body)
       return body.call if session.nil? || !session.enabled? || session.disposed?
 
       node = GateNode.new(node_id, kind, name)
       ctx = session.current_run
       instance_id = Ids.next_id("call")
       started = Clock.now_ms
-      session.start_node(node_id: node_id, kind: kind, name: name, instance_id: instance_id,
-                         parent_id: parent_id, input: input)
+      if full_input && !input.nil?
+        session.start_node(node_id: node_id, kind: kind, name: name, instance_id: instance_id,
+                           parent_id: parent_id, extra: { "input" => input })
+      else
+        session.start_node(node_id: node_id, kind: kind, name: name, instance_id: instance_id,
+                           parent_id: parent_id, input: input)
+      end
 
       finish = lambda do |output, status, extra = nil|
         session.finish_node(

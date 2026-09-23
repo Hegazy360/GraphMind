@@ -10,6 +10,7 @@ import type { NodeProps, Node } from '@xyflow/react';
 import type { FlowNodeData } from '../../store/runStateToFlow.js';
 import { fmtRanHeld, ranMs } from '../../lib/duration.js';
 import { fmtDuration, fmtTokens } from '../../lib/format.js';
+import { usageSummary, usageView } from '../../lib/usage.js';
 import { useTokenSnapshot } from '../../hooks/useTokenSnapshot.js';
 import { latestExecution, nodeStatus as statusOf } from '../../store/types.js';
 import { KindMark } from '../KindMark.js';
@@ -58,7 +59,7 @@ function LlmStepNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
 
   if (node === undefined) return null;
   const exec = latestExecution(node);
-  const usage = exec?.usage;
+  const usage = usageView(exec?.usage);
 
   return (
     <>
@@ -79,8 +80,9 @@ function LlmStepNodeImpl({ data }: NodeProps<Node<FlowNodeData>>) {
       )}
       <div className="gm-node-meta gm-node-meta--tail">
         {usage !== undefined ? (
-          <span title={`${usage.inputTokens} in · ${usage.outputTokens} out`}>
+          <span title={usageSummary(usage)}>
             {fmtTokens(usage.inputTokens)} → {fmtTokens(usage.outputTokens)} tok
+            {usage.basis === 'reported' ? '*' : ''}
           </span>
         ) : (
           <span>{status === 'running' ? 'streaming…' : status === 'ghost' ? 'not started' : ''}</span>

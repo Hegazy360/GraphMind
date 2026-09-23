@@ -34,6 +34,7 @@ import { JsonTree } from './JsonTree.js';
 import { KindGlyph } from './KindMark.js';
 import { PauseActions } from './nodes/PauseActions.js';
 import { StatusPill } from './nodes/nodeParts.js';
+import { detailCells, inputLabel, inputTitle, usageView } from '../lib/usage.js';
 
 // ── W7: coarse redaction ─────────────────────────────────────────────────────
 // Under GRAPHMIND_HIDE_INPUTS / _OUTPUTS / _TOOL_ARGS / _TOOL_RESULTS the
@@ -136,13 +137,18 @@ function StatCell({
   label,
   value,
   tone,
+  title,
 }: {
   label: string;
   value: string;
   tone?: 'error' | 'dim' | undefined;
+  title?: string | undefined;
 }) {
   return (
-    <div className={`gm-inspect-stat${tone !== undefined ? ` gm-inspect-stat--${tone}` : ''}`}>
+    <div
+      className={`gm-inspect-stat${tone !== undefined ? ` gm-inspect-stat--${tone}` : ''}`}
+      {...(title !== undefined && title !== '' ? { title } : {})}
+    >
       <span className="gm-inspect-stat-value">{value}</span>
       <span className="gm-inspect-stat-label">{label}</span>
     </div>
@@ -286,6 +292,7 @@ function ExecutionDetails({
     exec.error ??
     (exec.status === 'error' || exec.status === 'running' ? node.lastError : undefined);
   const stats = nodeStats(node);
+  const usage = usageView(exec.usage);
   const firstTokenMs = timing === undefined ? undefined : Math.max(0, timing.firstTs - exec.startedTs);
 
   return (
@@ -306,10 +313,17 @@ function ExecutionDetails({
           {heldMsOf(exec) > 0 && (
             <StatCell label="held" value={fmtDuration(heldMsOf(exec))} tone="dim" />
           )}
-          {exec.usage !== undefined && (
+          {usage !== undefined && (
             <>
-              <StatCell label="tokens in" value={fmtTokens(exec.usage.inputTokens)} />
-              <StatCell label="tokens out" value={fmtTokens(exec.usage.outputTokens)} />
+              <StatCell
+                label={inputLabel(usage.basis)}
+                value={fmtTokens(usage.inputTokens)}
+                title={inputTitle(usage.basis)}
+              />
+              <StatCell label="tokens out" value={fmtTokens(usage.outputTokens)} />
+              {detailCells(usage).map((cell) => (
+                <StatCell key={cell.label} label={cell.label} value={cell.value} title={cell.title} tone="dim" />
+              ))}
             </>
           )}
           {firstTokenMs !== undefined && (
@@ -355,7 +369,14 @@ function ExecutionDetails({
             {stats.heldMs > 0 && <StatCell label="held" value={fmtDuration(stats.heldMs)} tone="dim" />}
             {stats.tokensIn + stats.tokensOut > 0 && (
               <>
-                <StatCell label="tokens" value={`${fmtTokens(stats.tokensIn)}→${fmtTokens(stats.tokensOut)}`} />
+                <StatCell
+                  label={stats.tokenBasis === 'inclusive' || stats.tokenBasis === undefined ? 'tokens' : 'tokens (as reported)'}
+                  value={`${fmtTokens(stats.tokensIn)}→${fmtTokens(stats.tokensOut)}`}
+                  title={inputTitle(stats.tokenBasis)}
+                />
+                {detailCells(stats).map((cell) => (
+                  <StatCell key={cell.label} label={cell.label} value={cell.value} title={cell.title} tone="dim" />
+                ))}
                 <StatCell label="est. cost" value={fmtCost(stats.estCostUsd)} tone="dim" />
               </>
             )}

@@ -28,6 +28,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..ids import LLM_NODE_ID, LLM_NODE_NAME, agent_node_id, tool_node_id
+from ..llm_capture import usage_of
 from ..safe import OnceWarner
 from ..session import Session
 
@@ -46,7 +47,11 @@ def warn_once(key: str, message: str, cause: Any = None) -> None:
 
 
 def safe_value(value: Any, depth: int = 0) -> Any:
-    """Bound a user value so it is cheap and safe to serialize."""
+    """Bound a user value so it is cheap and safe to serialize.
+
+    Used for tool arguments/results and LLM output text. An LLM step's PROMPT
+    is recorded in full instead (:func:`graphmind.llm_capture.record_value`,
+    contract C1): capping message history made every step look trimmed."""
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
@@ -152,49 +157,12 @@ class GraphHinter:
 
 
 # -- usage --------------------------------------------------------------------
-
-_INPUT_FIELDS = ("input_tokens", "prompt_tokens")
-_OUTPUT_FIELDS = ("output_tokens", "completion_tokens")
-
-
-def usage_of(obj: Any) -> dict[str, int] | None:
-    """Map any provider usage object onto the wire ``TokenUsage`` shape."""
-    if obj is None:
-        return None
-    source = obj
-    if not any(hasattr(source, field) for field in _INPUT_FIELDS + _OUTPUT_FIELDS):
-        source = getattr(obj, "usage", None)
-        if source is None and isinstance(obj, dict):
-            source = obj.get("usage")
-    if source is None:
-        return None
-
-    def read(fields: tuple[str, ...]) -> int | None:
-        for field in fields:
-            value = source.get(field) if isinstance(source, dict) else getattr(source, field, None)
-            if isinstance(value, int) and not isinstance(value, bool):
-                return value
-        return None
-
-    input_tokens = read(_INPUT_FIELDS)
-    output_tokens = read(_OUTPUT_FIELDS)
-    if input_tokens is None and output_tokens is None:
-        return None
-    return {
-        "inputTokens": max(0, input_tokens or 0),
-        "outputTokens": max(0, output_tokens or 0),
-    }
-
-
-def merge_usage(left: dict[str, int] | None, right: dict[str, int] | None) -> dict[str, int] | None:
-    if left is None:
-        return right
-    if right is None:
-        return left
-    return {
-        "inputTokens": max(left.get("inputTokens", 0), right.get("inputTokens", 0)),
-        "outputTokens": max(left.get("outputTokens", 0), right.get("outputTokens", 0)),
-    }
+#
+# The provider mappers live in :mod:`graphmind.llm_capture` (contract C1:
+# inclusive input totals, cache/reasoning counts only when reported). The
+# 0.5 ``merge_usage`` (max of two MAPPED usages) is gone: a streamed Anthropic
+# message must merge its RAW pieces (``AnthropicUsageAccumulator``), and OpenAI
+# reports usage once, on the last chunk / terminal event.
 
 
 # -- stream tees --------------------------------------------------------------
@@ -876,7 +844,6 @@ __all__ = [
     "is_async_client",
     "json_arguments",
     "looks_like_stream",
-    "merge_usage",
     "observe_raw_stream",
     "parse_raw",
     "parse_raw_async",

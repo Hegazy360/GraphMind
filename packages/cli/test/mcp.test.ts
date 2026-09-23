@@ -268,7 +268,9 @@ describe('graphmind mcp over stdio', () => {
     expect(instance.output.preview.length).toBe(4000);
 
     const llm = await call(seeded.client, 'get_node', { runId: 'run-ok-1', nodeId: 'llm:step' });
-    expect(llm.value.instances[0].usage).toEqual({ inputTokens: 120, outputTokens: 45 });
+    // A pre-0.6 recording (no inclusive marker): passed on as reported, labelled.
+    expect(llm.value.instances[0].usage).toMatchObject({ inputTokens: 120, outputTokens: 45, basis: 'as reported' });
+    expect(llm.value.instances[0].usage.note).toContain('may exclude cached tokens');
     expect(llm.value.instances[0].output).toEqual({ text: 'searching flights' });
   });
 

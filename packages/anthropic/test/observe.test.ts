@@ -5,6 +5,7 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { afterEach, describe, expect, it } from 'vitest';
+import { parseEnvelope } from '@graphmind-ai/schema';
 import { graphmind, type Graphmind, type GraphmindOptions } from '../src/index.js';
 import { FakeViewer, tick, waitUntil, type FakeViewerOptions } from './helpers/fake-viewer.js';
 import {
@@ -112,10 +113,14 @@ describe('stream tee', () => {
       .ofType('node.finished')
       .filter((f) => f.payload['nodeId'] === 'llm:step')) {
       expect(frame.payload['status']).toBe('ok');
+      // Inclusive (C1): the uncached tail plus cache reads and writes.
       expect(frame.payload['usage']).toEqual({
-        inputTokens: USAGE.input_tokens,
+        inputTokens:
+          USAGE.input_tokens + USAGE.cache_read_input_tokens + USAGE.cache_creation_input_tokens,
         outputTokens: USAGE.output_tokens,
+        inclusive: true,
         cacheReadTokens: USAGE.cache_read_input_tokens,
+        cacheWriteTokens: USAGE.cache_creation_input_tokens,
         cacheCreationTokens: USAGE.cache_creation_input_tokens,
       });
     }
@@ -135,13 +140,44 @@ describe('stream tee', () => {
     const first = finished[0]!.payload['output'] as Record<string, unknown>;
     expect(first['text']).toBe(TURN_TEXT[0]);
     expect(first['stopReason']).toBe('tool_use');
+    expect(first['finishReason']).toBe('tool-calls');
+    expect(first['rawFinishReason']).toBe('tool_use');
     expect(first['model']).toBe('claude-sonnet-4-5');
+    expect(first['toolCalls']).toEqual([
+      { id: expect.any(String) as string, name: 'searchFlights', input: expect.any(Object) as object },
+    ]);
     const last = finished[2]!.payload['output'] as Record<string, unknown>;
     expect(last['stopReason']).toBe('end_turn');
+    expect(last['finishReason']).toBe('stop');
+    expect(last).not.toHaveProperty('toolCalls');
     expect(finished[0]!.payload['usage']).toMatchObject({
-      inputTokens: USAGE.input_tokens,
+      inputTokens:
+        USAGE.input_tokens + USAGE.cache_read_input_tokens + USAGE.cache_creation_input_tokens,
       outputTokens: USAGE.output_tokens,
+      inclusive: true,
     });
+  });
+
+  it('streamed tool calls are rebuilt from input_json_delta and match the non-streamed ones', async () => {
+    const { viewer, gm } = await setup();
+    await attach(gm);
+    const result = await runScenario(gm, { mode: 'stream-helper' });
+    expect(result.runError).toBeUndefined();
+    await waitForLlmFinishes(viewer, 3);
+    const outputs = viewer
+      .ofType('node.finished')
+      .filter((f) => f.payload['nodeId'] === 'llm:step')
+      .map((f) => f.payload['output'] as Record<string, unknown>);
+    // Tool starts carry the exact input the model sent (the wrapper records it).
+    const toolStarts = viewer.ofType('node.started').filter((f) => f.payload['kind'] === 'tool');
+    const requested = outputs.flatMap((o) => (o['toolCalls'] as { id: string; input: unknown }[] | undefined) ?? []);
+    expect(requested.length).toBe(toolStarts.length);
+    for (const call of requested) {
+      const start = toolStarts.find((f) => f.payload['instanceId'] === call.id);
+      expect(start?.payload['input']).toEqual(call.input);
+    }
+    expect(outputs[0]?.['finishReason']).toBe('tool-calls');
+    for (const frame of viewer.received) expect(parseEnvelope(frame).kind, frame.type).toBe('ok');
   });
 });
 

@@ -44,7 +44,7 @@ class TestRubyOpenAI < Minitest::Test
     assert_equal "gpt-4o-mini", started["payload"]["input"]["model"]
     assert_equal "hi", started["payload"]["input"]["messages"].first["content"]
     assert_equal "Hello there", finished["payload"]["output"]["text"]
-    assert_equal({ "inputTokens" => 11, "outputTokens" => 3 }, finished["payload"]["usage"])
+    assert_equal({ "inputTokens" => 11, "outputTokens" => 3, "inclusive" => true }, finished["payload"]["usage"])
     assert_valid_frame(started)
     assert_valid_frame(finished)
   end

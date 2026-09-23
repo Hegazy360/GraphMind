@@ -11,13 +11,21 @@
  *   choices[].finish_reason            -> reported on node.finished
  *   usage                              -> only present with
  *                                         `stream_options: {include_usage:true}`
+ *                                         (the LAST chunk, with empty choices)
+ *
+ * `node.finished.output` (contract C1): `finishReason` normalized, the API's
+ * own `finish_reason` as `rawFinishReason`, and `toolCalls: [{id, name,
+ * input, inputText?}]`. A function call's arguments are JSON text; when they
+ * do not parse (cut off by `length`), `input` is null and `inputText` keeps
+ * the text. A custom (freeform) tool's input is text by design and is
+ * recorded as the `input` string.
  */
+import { normalizeFinishReason, toolCall, type RecordedToolCall } from '@graphmind-ai/client';
 import type { StepReporter, LlmFlavor, ResultSummary } from './llm-step.js';
 import { promptKey, type PromptKey } from './invocation.js';
 import { isAbortLikeError } from './signals.js';
 import {
   mapChatUsage,
-  parseToolInput,
   type ChatChunkLike,
   type ChatCompletionLike,
   type RequestBodyLike,
@@ -25,23 +33,37 @@ import {
   type ToolCallLike,
 } from './sdk-types.js';
 
-export interface ObservedToolCall {
-  id?: string;
-  name?: string;
-  arguments?: unknown;
+function mapToolCalls(calls: ToolCallLike[] | undefined): RecordedToolCall[] {
+  if (!Array.isArray(calls)) return [];
+  const out: RecordedToolCall[] = [];
+  for (const call of calls) {
+    if (call === null || typeof call !== 'object') continue;
+    if (call.function === undefined && call.custom !== undefined) {
+      const name = call.custom.name;
+      if (typeof name !== 'string' || name.length === 0) continue;
+      out.push({
+        ...(typeof call.id === 'string' && call.id.length > 0 ? { id: call.id } : {}),
+        name,
+        input: call.custom.input ?? '',
+      });
+      continue;
+    }
+    const recorded = toolCall(call.id, call.function?.name, call.function?.arguments);
+    if (recorded !== undefined) out.push(recorded);
+  }
+  return out;
 }
 
-function mapToolCalls(calls: ToolCallLike[] | undefined): ObservedToolCall[] {
-  if (!Array.isArray(calls)) return [];
-  return calls.map((call) => ({
-    ...(call.id !== undefined ? { id: call.id } : {}),
-    ...(call.function?.name !== undefined
-      ? { name: call.function.name }
-      : call.custom?.name !== undefined
-        ? { name: call.custom.name }
-        : {}),
-    arguments: parseToolInput(call.function?.arguments ?? call.custom?.input),
-  }));
+/** `finishReason` + `rawFinishReason` for a chat completion. */
+function finishFields(
+  raw: string | null | undefined,
+  hasToolCalls: boolean,
+): { finishReason?: string; rawFinishReason?: string } {
+  const finishReason = normalizeFinishReason(raw, hasToolCalls);
+  return {
+    ...(finishReason !== undefined ? { finishReason } : {}),
+    ...(typeof raw === 'string' && raw.length > 0 ? { rawFinishReason: raw } : {}),
+  };
 }
 
 export const chatFlavor: LlmFlavor = {
@@ -74,7 +96,7 @@ export const chatFlavor: LlmFlavor = {
         ...(message?.refusal != null ? { refusal: message.refusal } : {}),
         ...(message?.reasoning_content != null ? { reasoning: message.reasoning_content } : {}),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
-        finishReason: choice?.finish_reason ?? undefined,
+        ...finishFields(choice?.finish_reason, toolCalls.length > 0),
       },
       usage: mapChatUsage(completion.usage),
       status: 'ok',
@@ -89,6 +111,15 @@ export const chatFlavor: LlmFlavor = {
     let id: string | undefined;
     let model: string | undefined;
     const toolCalls = new Map<number, { id?: string; name?: string; args: string }>();
+    /** The streamed calls in index order; unparseable (cut-off) args kept as text. */
+    const collected = (): RecordedToolCall[] => {
+      const out: RecordedToolCall[] = [];
+      for (const [, entry] of [...toolCalls.entries()].sort((a, b) => a[0] - b[0])) {
+        const call = toolCall(entry.id, entry.name, entry.args);
+        if (call !== undefined) out.push(call);
+      }
+      return out;
+    };
 
     try {
       for await (const raw of stream) {
@@ -127,13 +158,7 @@ export const chatFlavor: LlmFlavor = {
         }
       }
 
-      const observed = [...toolCalls.entries()]
-        .sort((a, b) => a[0] - b[0])
-        .map(([, entry]) => ({
-          ...(entry.id !== undefined ? { id: entry.id } : {}),
-          ...(entry.name !== undefined ? { name: entry.name } : {}),
-          arguments: parseToolInput(entry.args),
-        }));
+      const observed = collected();
 
       reporter.finish(
         {
@@ -142,7 +167,7 @@ export const chatFlavor: LlmFlavor = {
           text,
           ...(refusal.length > 0 ? { refusal } : {}),
           ...(observed.length > 0 ? { toolCalls: observed } : {}),
-          finishReason,
+          ...finishFields(finishReason, observed.length > 0),
         },
         reporter.endStatus(),
         usage,
@@ -153,9 +178,17 @@ export const chatFlavor: LlmFlavor = {
       try {
         const aborted = isAbortLikeError(error);
         if (!aborted) reporter.error(error);
-        reporter.finish({ text, finishReason }, aborted ? 'aborted' : 'error', usage, {
-          streamed: true,
-        });
+        const observed = collected();
+        reporter.finish(
+          {
+            text,
+            ...(observed.length > 0 ? { toolCalls: observed } : {}),
+            ...finishFields(finishReason, observed.length > 0),
+          },
+          aborted ? 'aborted' : 'error',
+          usage,
+          { streamed: true },
+        );
       } catch {
         // never throw out of the observer
       }

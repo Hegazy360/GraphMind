@@ -38,7 +38,7 @@ class TestRubyLLM < Minitest::Test
     assert_equal "provider_completion", started["payload"]["input"]["hook"]
     assert_equal "what is 2 + 2?", started["payload"]["input"]["messages"].last["content"]
     assert_equal "four", finished["payload"]["output"]["text"]
-    assert_equal({ "inputTokens" => 7, "outputTokens" => 2 }, finished["payload"]["usage"])
+    assert_equal({ "inputTokens" => 7, "outputTokens" => 2, "inclusive" => true }, finished["payload"]["usage"])
     assert_valid_frame(started)
     assert_valid_frame(finished)
   end

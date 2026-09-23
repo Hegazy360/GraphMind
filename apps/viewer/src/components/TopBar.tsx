@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from 'react';
 import { copyText, deepLink } from '../lib/commands.js';
 import { KIND_ORDER, kindMeta } from '../lib/kinds.js';
 import { fmtCost, fmtCount, fmtDuration, fmtTokens } from '../lib/format.js';
+import { detailCells, inputTitle } from '../lib/usage.js';
 import { nextTheme, themeLabel } from '../lib/theme.js';
 import { filterSummary, isFilterActive, type StatusFilter } from '../store/filters.js';
 import { useRunStore } from '../store/runStore.js';
@@ -223,14 +224,20 @@ export function TopBar({ runId }: { runId: string }) {
             <>
               <Stat
                 value={`${fmtTokens(stats.tokensIn)}→${fmtTokens(stats.tokensOut)}`}
-                label="tokens"
+                label={stats.tokenBasis === 'inclusive' || stats.tokenBasis === undefined ? 'tokens' : 'tokens*'}
                 optional
+                title={[
+                  inputTitle(stats.tokenBasis),
+                  ...detailCells(stats).map((cell) => `${cell.value} ${cell.label}`),
+                ]
+                  .filter((part) => part !== '')
+                  .join(' · ')}
               />
               <Stat
                 value={fmtCost(stats.estCostUsd)}
                 label="est. cost"
                 optional
-                title="Rough estimate at $3/$15 per million tokens — token counts come from the run, prices do not."
+                title="Rough estimate at $3/$15 per million tokens (cache reads at 10%, cache writes at 125% when reported) — token counts come from the run, prices do not."
               />
             </>
           )}

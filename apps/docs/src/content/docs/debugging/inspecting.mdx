@@ -23,7 +23,7 @@ not a rendered summary, the values themselves.
 | **Output** | The return value, or the model's completion |
 | **Error** | `name`, `message` and `stack` when the node threw |
 | **Duration** | How long the code ran. Once a gate has held the execution, the inspector splits it into **ran** and **held**; see [durations](/reference/viewer/#durations). |
-| **Usage** | `inputTokens` / `outputTokens` on LLM nodes |
+| **Usage** | `inputTokens` / `outputTokens` on LLM nodes, plus cache read / cache write / reasoning when the provider reported them (see [usage and cost](#usage-and-cost)) |
 | **Status** | `ok`, `error` or `aborted` |
 | **Instances** | Every execution of this logical node, newest first |
 
@@ -62,16 +62,40 @@ you can have a breakpoint on that tool waiting before it finishes writing the ar
 
 ## Usage and cost
 
-`node.finished` on an LLM node carries `TokenUsage` — `inputTokens` and `outputTokens` as
-integers. The viewer shows them per step and rolled up for the run, which makes the "why did
-this run cost eleven cents" question answerable in one look: usually one tool returning a huge
-blob that gets re-sent on every subsequent step.
+`node.finished` on an LLM node carries `TokenUsage`. The viewer shows it per step and rolled up
+for the run, which makes the "why did this run cost eleven cents" question answerable in one
+look: usually one tool returning a huge blob that gets re-sent on every subsequent step.
 
-<Aside type="tip">
-Providers put extra fields (cached tokens, reasoning tokens) on their usage objects. The wire
-schema is deliberately **loose** — unknown fields are preserved rather than stripped — so
-adapters can pass them straight through.
-</Aside>
+Since 0.6 every SDK (TypeScript, Python, Ruby) writes usage the same way:
+
+| Field | Meaning |
+| --- | --- |
+| `inputTokens` | The **whole prompt**, cached tokens included — tokens read from the provider's cache and tokens written to it are part of it |
+| `outputTokens` | The completion, reasoning tokens included |
+| `inclusive` | `true`: `inputTokens` is that total. Stamped on every usage a 0.6 SDK writes |
+| `cacheReadTokens` | Prompt tokens served from the provider's cache |
+| `cacheWriteTokens` | Prompt tokens written to the provider's cache (Anthropic's 5-minute and 1-hour writes, summed) |
+| `reasoningTokens` | Output tokens spent reasoning |
+
+The last three appear **only when the provider reported them** — a reported `0` stays `0`, an
+unreported count is absent, never filled with `0`. Providers disagree about what "input" means
+(Anthropic's `input_tokens` is only the uncached tail; OpenAI's `prompt_tokens` already includes
+cached tokens; ruby_llm counts input without cache), so each adapter adds the cache counts back
+where its provider left them out. That is what makes one step comparable with the next, and the
+context-window gauge honest.
+
+Events recorded before 0.6 carry no `inclusive` marker. The viewer and `graphmind mcp` show
+their `inputTokens` **as reported** (it may exclude cached tokens), labelled so. The one
+exception is the 0.5 Anthropic TypeScript adapter, recognisable by `cacheCreationTokens`: its
+total is recomputed from the uncached count plus the cache fields.
+
+The older field names stay as aliases through 0.6.x: `cacheCreationTokens` (Anthropic
+TypeScript) equals `cacheWriteTokens`, and `cachedInputTokens` (OpenAI TypeScript) equals
+`cacheReadTokens`; the OpenAI adapter also keeps `totalTokens` as reported.
+
+The run's **est. cost** is a blended estimate ($3 / $15 per million tokens, cache reads at 10%
+and cache writes at 125% of the input rate when they were reported) — it answers "which step is
+eating the budget", never a bill.
 
 ## Live vs. history
 

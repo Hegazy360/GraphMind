@@ -21,7 +21,7 @@
  * (events, `finalMessage()`, `abort()`), and its request is still held at the
  * gate before anything reaches the network.
  */
-import type { GateNode, RunContext } from '@graphmind-ai/client';
+import { captureTools, pickParams, type GateNode, type RunContext } from '@graphmind-ai/client';
 import { gatedApiPromise } from './api-promise.js';
 import type { AdapterCore } from './core.js';
 import { LLM_NODE_ID, LLM_NODE_NAME, agentNodeId } from './ids.js';
@@ -196,21 +196,43 @@ function beginStep(
       name: LLM_NODE_NAME,
       instanceId,
       parentId: ctx !== undefined ? agentNodeId(ctx.name) : undefined,
-      input: {
-        model: params?.model,
-        messages: params?.messages,
-        ...(params?.system !== undefined ? { system: params.system } : {}),
-        ...(params?.tools !== undefined
-          ? { tools: params.tools.map((t) => t?.name).filter((n) => typeof n === 'string') }
-          : {}),
-        stream: streaming,
-      },
+      input: stepInput(core, params, ctx, streaming),
     });
     return new StepReporter(core, instanceId, scopeId, ctx);
   } catch {
     // Instrumentation prep must never break the host call.
     return undefined;
   }
+}
+
+/**
+ * `node.started.input`: the request as sent (contract C1) — `model`,
+ * `messages`, `system` in full, the sampling parameters under their Anthropic
+ * names (`max_tokens`, `temperature`, `top_p`, `top_k`, `stop_sequences`,
+ * `tool_choice`, `thinking`, ... — the allow-list in @graphmind-ai/client;
+ * fields like `mcp_servers[].authorization_token` or `metadata.user_id` are
+ * never read), `tools: [{name, schemaHash}]` with each definition sent once
+ * per run as `toolSchemas`, and `stream`. Request options (signal, headers,
+ * timeout) are the SDK's second argument and never recorded.
+ */
+function stepInput(
+  core: AdapterCore,
+  params: MessageCreateParamsLike,
+  ctx: RunContext | undefined,
+  streaming: boolean,
+): Record<string, unknown> {
+  const tools = captureTools(core.session, ctx?.runId ?? 'implicit', params?.tools, (def) => {
+    const name = (def as { name?: unknown } | null)?.name;
+    return typeof name === 'string' && name.length > 0 ? name : undefined;
+  });
+  return {
+    model: params?.model,
+    messages: params?.messages,
+    ...(params?.system !== undefined ? { system: params.system } : {}),
+    ...pickParams(params),
+    ...(tools !== undefined ? tools : {}),
+    stream: streaming,
+  };
 }
 
 /** Chain the debugger's abort signal into the request options (attached only). */

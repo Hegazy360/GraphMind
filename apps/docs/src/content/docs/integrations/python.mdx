@@ -365,8 +365,9 @@ The Python package holds the identical contract:
   well under 100 ms. An `atexit` hook does the same at interpreter exit, and the transport thread
   is a daemon, so GraphMind can never keep a process alive.
 - **Bounded memory and payloads.** Events emitted while detached go into a ring buffer (default
-  2,000 events, `buffer_size`) and are replayed with their original `seq` when a viewer attaches. Prompts, arguments and
-  results are depth-, width- and length-capped before serialization.
+  2,000 events, `buffer_size`) and are replayed with their original `seq` when a viewer attaches. Tool arguments and
+  results are depth-, width- and length-capped before serialization; an LLM step's prompt is
+  recorded in full (since 0.6), bounded only by the 512 KB per-event budget.
 - **`fork()`-safe.** The loop thread is re-created in the child, so pre-forking servers
   (gunicorn, uvicorn workers, Celery) keep working.
 - **Off in production.** See below.

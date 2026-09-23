@@ -23,15 +23,35 @@
  *     tools are observed without disturbing what the SDK consumes.
  *  3. The observer emits batched `node.token` deltas and `node.finished`
  *     with usage on the finish part.
+ *
+ * What is recorded (contract C1): `node.started.input` is the prompt as the
+ * provider receives it (bytes as `{type:'binary', bytes}`), the model, the
+ * sampling options actually passed (`temperature`, `maxOutputTokens`, ... —
+ * the AI SDK's own names; `providerOptions` and `headers` are never read, they
+ * can carry credentials) and `tools: [{name, schemaHash}]` with each tool
+ * definition sent once per run as `toolSchemas`. `node.finished.output` has
+ * the text, the normalized `finishReason` + the provider's `rawFinishReason`,
+ * and `toolCalls` — the client-executed tool calls the model requested
+ * (provider-executed ones are their own ungated tool nodes). A tool call cut
+ * off mid-arguments (no `tool-call` part arrived) is still listed, with its
+ * partial text as `inputText`.
  */
 import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
-import { isAbortError, type GateNode } from '@graphmind-ai/client';
+import {
+  captureTools,
+  isAbortError,
+  pickParams,
+  toolCall,
+  withBinaryPlaceholders,
+  type GateNode,
+  type RecordedToolCall,
+} from '@graphmind-ai/client';
 import type { LanguageModelMiddleware } from 'ai';
 import type { AdapterCore } from './core.js';
 import { LLM_NODE_ID, LLM_NODE_NAME, agentNodeId } from './ids.js';
 import {
+  finishFields,
   mapUsage,
-  unifiedFinishReason,
   type CallParamsLike,
   type GenerateResultLike,
   type StreamPartLike,
@@ -83,6 +103,80 @@ export function createDebugMiddleware(
   };
 }
 
+/** `node.started.input` for one model step (see the module comment). */
+function stepInput(
+  core: AdapterCore,
+  params: CallParamsLike,
+  model: ModelLike,
+  runId: string | undefined,
+): Record<string, unknown> {
+  const tools = captureTools(core.session, runId ?? 'implicit', params.tools, (def) => {
+    const name = (def as { name?: unknown } | null)?.name;
+    return typeof name === 'string' && name.length > 0 ? name : undefined;
+  });
+  return {
+    prompt: withBinaryPlaceholders(params.prompt),
+    modelId: model?.modelId,
+    provider: model?.provider,
+    ...pickParams(params),
+    ...(tools !== undefined ? tools : {}),
+  };
+}
+
+/**
+ * The tool calls a step requested, in stream order: completed `tool-call`
+ * parts, then any tool input that started streaming but never completed.
+ */
+class ToolCallCollector {
+  private readonly calls = new Map<string, RecordedToolCall>();
+  private readonly partial = new Map<string, { name: string | undefined; text: string }>();
+
+  /** A `tool-call` part (stream or generate). Provider-executed calls are skipped. */
+  onCall(part: StreamPartLike): void {
+    if (part.providerExecuted === true) return;
+    const call = toolCall(part.toolCallId, part.toolName, part.input);
+    if (call === undefined) return;
+    const key = typeof part.toolCallId === 'string' ? part.toolCallId : `#${this.calls.size}`;
+    this.partial.delete(key);
+    this.calls.set(key, call);
+  }
+
+  onInputStart(part: StreamPartLike): void {
+    if (part.providerExecuted === true || typeof part.id !== 'string') return;
+    if (this.calls.has(part.id)) return;
+    this.partial.set(part.id, { name: part.toolName, text: '' });
+  }
+
+  onInputDelta(part: StreamPartLike): void {
+    if (typeof part.id !== 'string' || typeof part.delta !== 'string') return;
+    const entry = this.partial.get(part.id);
+    if (entry !== undefined) entry.text += part.delta;
+  }
+
+  list(): RecordedToolCall[] {
+    const out = [...this.calls.values()];
+    for (const [id, entry] of this.partial) {
+      // Never completed: record what arrived (unparseable -> inputText).
+      const call = toolCall(id, entry.name, entry.text);
+      if (call !== undefined) out.push(call);
+    }
+    return out;
+  }
+}
+
+/** `node.finished.output` of a completed step. */
+function stepOutput(
+  text: string,
+  finishReason: StreamPartLike['finishReason'],
+  calls: RecordedToolCall[],
+): Record<string, unknown> {
+  return {
+    text,
+    ...finishFields(finishReason, calls.length > 0),
+    ...(calls.length > 0 ? { toolCalls: calls } : {}),
+  };
+}
+
 /** Shared step bookkeeping. Returns undefined if instrumentation must bail. */
 function beginStep(
   core: AdapterCore,
@@ -100,11 +194,7 @@ function beginStep(
       name: LLM_NODE_NAME,
       instanceId,
       parentId: ctx !== undefined ? agentNodeId(ctx.name) : undefined,
-      input: {
-        prompt: params.prompt,
-        modelId: model?.modelId,
-        provider: model?.provider,
-      },
+      input: stepInput(core, params, model, ctx?.runId),
     });
     return { instanceId };
   } catch {
@@ -180,9 +270,10 @@ async function observeStream(
 ): Promise<void> {
   let text = '';
   let usage: ReturnType<typeof mapUsage>;
-  let finishReason: string | undefined;
+  let finishReason: StreamPartLike['finishReason'];
   let errorPart: unknown;
   let sawError = false;
+  const calls = new ToolCallCollector();
   const reader = stream.getReader();
   try {
     for (;;) {
@@ -201,20 +292,25 @@ async function observeStream(
             core.pushToken(LLM_NODE_ID, 'reasoning', part.delta);
           }
           break;
+        case 'tool-input-start':
+          calls.onInputStart(part);
+          break;
         case 'tool-input-delta':
           if (typeof part.delta === 'string') {
             core.pushToken(LLM_NODE_ID, 'tool-args', part.delta);
+            calls.onInputDelta(part);
           }
           break;
         case 'tool-call':
           if (part.providerExecuted === true) core.providerToolStarted(part);
+          else calls.onCall(part);
           break;
         case 'tool-result':
           core.providerToolFinished(part);
           break;
         case 'finish':
           usage = mapUsage(part.usage);
-          finishReason = unifiedFinishReason(part.finishReason);
+          finishReason = part.finishReason;
           break;
         case 'error':
           sawError = true;
@@ -236,7 +332,7 @@ async function observeStream(
     } else {
       core.finishNode({
         nodeId: LLM_NODE_ID,
-        output: { text, finishReason },
+        output: stepOutput(text, finishReason, calls.list()),
         usage,
         durationMs: elapsedMs(startedAt),
         status: 'ok',
@@ -306,15 +402,17 @@ async function instrumentGenerate<R extends GenerateResultLike>(
 
   try {
     let text = '';
+    const calls = new ToolCallCollector();
     for (const part of result.content ?? []) {
       if (part.type === 'text' && typeof part.text === 'string') text += part.text;
       else if (part.type === 'tool-call' && part.providerExecuted === true) {
         core.providerToolStarted(part);
-      } else if (part.type === 'tool-result') core.providerToolFinished(part);
+      } else if (part.type === 'tool-call') calls.onCall(part);
+      else if (part.type === 'tool-result') core.providerToolFinished(part);
     }
     core.finishNode({
       nodeId: LLM_NODE_ID,
-      output: { text, finishReason: unifiedFinishReason(result.finishReason) },
+      output: stepOutput(text, result.finishReason, calls.list()),
       usage: mapUsage(result.usage),
       durationMs: elapsedMs(startedAt),
       status: 'ok',

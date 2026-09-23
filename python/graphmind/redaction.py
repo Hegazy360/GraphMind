@@ -7,11 +7,15 @@ placeholder ``"__REDACTED__"``, chosen by node kind. No deny lists, no
 regexes, no callbacks.
 
 * ``GRAPHMIND_HIDE_INPUTS`` (``hide_inputs``): ``node.started.input`` on
-  every kind, plus streamed ``tool-args`` deltas;
+  every kind, plus streamed ``tool-args`` deltas and the arguments of
+  ``output.toolCalls[]``;
 * ``GRAPHMIND_HIDE_OUTPUTS`` (``hide_outputs``): ``node.finished.output`` on
   every kind, plus every streamed delta;
 * ``GRAPHMIND_HIDE_TOOL_ARGS`` (``hide_tool_args``): ``node.started.input``
-  when the kind is ``tool``, plus streamed ``tool-args`` deltas;
+  when the kind is ``tool``, plus streamed ``tool-args`` deltas and the
+  arguments of ``output.toolCalls[]`` (``input`` / ``inputText``, and the
+  older ``arguments`` / ``args``) — the calls a model requested carry the
+  tool node's own input;
 * ``GRAPHMIND_HIDE_TOOL_RESULTS`` (``hide_tool_results``):
   ``node.finished.output`` when the instance's kind is ``tool``, plus the
   deltas a tool node streams.
@@ -227,6 +231,16 @@ def _merge_summary(existing: Any, count: int, key: str) -> dict[str, Any]:
     return {"count": count, "keys": [key]}
 
 
+#: The optional usage counts the failed form keeps (with ``inclusive``), in wire order.
+_OPTIONAL_USAGE_COUNTS = ("cacheReadTokens", "cacheWriteTokens", "reasoningTokens")
+
+#: The fields of an ``output.toolCalls[]`` entry that carry the model's tool
+#: arguments: ``input`` / ``inputText`` (0.6.0+) and the spellings older
+#: senders used (``arguments`` — the 0.5 OpenAI integrations; ``args`` —
+#: LangChain's own).
+TOOL_CALL_ARG_KEYS = ("input", "inputText", "arguments", "args")
+
+
 def _plain_str(value: Any) -> str | None:
     """A ``str`` (a subclass as the plain string it serialises as, so its
     ``__eq__`` / ``__hash__`` cannot lie to a privacy decision), else ``None``."""
@@ -411,7 +425,19 @@ class Redactor:
                 input_tokens = _token_count(_read(usage, "inputTokens"))
                 output_tokens = _token_count(_read(usage, "outputTokens"))
                 if input_tokens is not None and output_tokens is not None:
-                    out["usage"] = {"inputTokens": input_tokens, "outputTokens": output_tokens}
+                    # The counts and the inclusive marker only (0.6.0+).
+                    kept: dict[str, Any] = {
+                        "inputTokens": input_tokens,
+                        "outputTokens": output_tokens,
+                    }
+                    inclusive = _read(usage, "inclusive")
+                    if isinstance(inclusive, bool):
+                        kept["inclusive"] = inclusive
+                    for key in _OPTIONAL_USAGE_COUNTS:
+                        value = _token_count(_read(usage, key))
+                        if value is not None:
+                            kept[key] = value
+                    out["usage"] = kept
             return {**out, "output": REDACTED, "redaction": failed}
         if type == "node.token":
             instance_id = _plain_str(_read(payload, "instanceId"))
@@ -454,12 +480,63 @@ class Redactor:
                 self._instances.pop((run_id, node_id, instance_id), None)
         s = self.switches
         hide = s.hide_outputs or (s.hide_tool_results and kind == "tool")
-        if not hide or "output" not in p or _is_placeholder(p["output"]):
+        if hide:
+            if "output" not in p or _is_placeholder(p["output"]):
+                return p
+            return {
+                **p,
+                "output": REDACTED,
+                "redaction": _merge_summary(p.get("redaction"), 1, "output"),
+            }
+        # The tool calls a model requested carry the very arguments the tool
+        # node will receive: hide them wherever tool arguments are hidden (the
+        # same switches as `tool-args` deltas).
+        if s.hide_tool_args or s.hide_inputs:
+            return self._hide_tool_call_args(p)
+        return p
+
+    def _hide_tool_call_args(self, p: dict[str, Any]) -> dict[str, Any]:
+        """``output.toolCalls[*]`` with every argument field
+        (:data:`TOOL_CALL_ARG_KEYS`) replaced by the placeholder, from one-read
+        snapshots of the output and of each call. A ``toolCalls`` that is not a
+        list, or an entry that is neither ``None`` nor a mapping, is replaced
+        whole. Only a ``toolCalls`` key of a mapping output is considered (TS
+        parity: ``hideToolCallArgs``)."""
+        output = p.get("output")
+        if not isinstance(output, Mapping) or "toolCalls" not in output:
             return p
+        copy = _snapshot(output)
+        calls = copy.get("toolCalls")
+        if calls is None or _is_placeholder(calls):
+            return p
+        count = 0
+        if not isinstance(calls, (list, tuple)):
+            copy["toolCalls"] = REDACTED
+            count = 1
+        else:
+            hidden: list[Any] = []
+            for call in list(calls):
+                if call is None or _is_placeholder(call):
+                    hidden.append(call)
+                    continue
+                if not isinstance(call, Mapping):
+                    count += 1
+                    hidden.append(REDACTED)
+                    continue
+                entry = _snapshot(call)
+                for key in TOOL_CALL_ARG_KEYS:
+                    if key not in entry or _is_placeholder(entry[key]):
+                        continue
+                    entry[key] = REDACTED
+                    count += 1
+                hidden.append(entry)
+            copy["toolCalls"] = hidden
+        if count == 0:
+            return {**p, "output": copy}
         return {
             **p,
-            "output": REDACTED,
-            "redaction": _merge_summary(p.get("redaction"), 1, "output"),
+            "output": copy,
+            "redaction": _merge_summary(p.get("redaction"), count, "output.toolCalls"),
         }
 
     def _on_token(self, p: dict[str, Any], run_id: str) -> dict[str, Any]:

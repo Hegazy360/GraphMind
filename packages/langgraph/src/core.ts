@@ -18,7 +18,7 @@ import {
   type TokenDelta,
   type TokenUsage,
 } from '@graphmind-ai/client';
-import { DEFAULT_MAX_PAYLOAD_CHARS, safePayload } from './payload.js';
+import { safePayload } from './payload.js';
 import { TokenBatcher, type TokenBatchSink } from './token-batcher.js';
 import { OnceWarner, type WarnSink } from './warn.js';
 
@@ -86,7 +86,8 @@ const MAX_HINTED_RUNS = 1000;
 export class AdapterCore {
   readonly warner: OnceWarner;
   readonly batcher: TokenBatcher;
-  readonly maxPayloadChars: number;
+  /** Opt-in preview cap (chars); undefined = record in full (the 512 KB shrink bounds it). */
+  readonly maxPayloadChars: number | undefined;
   readonly chains: ChainPolicy;
   readonly autoRun: boolean;
   readonly abortMode: AbortMode;
@@ -181,7 +182,7 @@ export class AdapterCore {
       (nodeId, deltas) => this.session.emit('node.token', { nodeId, deltas }),
       options.tokenFlushIntervalMs,
     );
-    this.maxPayloadChars = options.maxPayloadChars ?? DEFAULT_MAX_PAYLOAD_CHARS;
+    this.maxPayloadChars = options.maxPayloadChars;
     this.chains = options.chains ?? 'all';
     this.autoRun = options.autoRun ?? true;
     this.abortMode = options.abortMode ?? 'throw';

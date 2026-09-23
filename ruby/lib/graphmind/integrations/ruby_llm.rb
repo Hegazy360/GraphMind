@@ -20,7 +20,11 @@ module Graphmind
     #
     # What you get:
     #   * a `llm:step` node per provider round-trip (one per API call, not one
-    #     per `ask`), with model, trimmed messages, reply text and usage;
+    #     per `ask`), with the model, every message in full, the sampling
+    #     parameters and tools (by schema hash), the reply text, the requested
+    #     tool calls, the normalized finish reason (2.0) and inclusive usage
+    #     (contract C1: ruby_llm counts input WITHOUT cache, GraphMind adds the
+    #     cache reads and writes back);
     #   * a `tool:<name>` node per `RubyLLM::Tool#call`, with real `inject`
     #     and `retry` — the debugger can replace a tool result and let the
     #     model carry on with it;
@@ -142,6 +146,7 @@ module Graphmind
           kind: "llm",
           name: config[:name],
           input: describe(chat, config),
+          full_input: true,
           output_for: ->(message) { summarize(message) },
           finish_extra: ->(message) { extra_for(message) },
           inject_as: ->(value) { coerce_message(value) },
@@ -173,13 +178,20 @@ module Graphmind
         ::RubyLLM::Message.new(role: :assistant, content: value.to_s)
       end
 
+      # node.started.input (contract C1): the hook, the model, EVERY message
+      # in full (no 12-message / 2,000-char trim; the 512 KB shrink bounds the
+      # event), the sampling parameters the chat will send (temperature, 2.0's
+      # max_output_tokens, allow-listed `with_params` / provider options), and
+      # the tools as {name, schemaHash} with each definition ({name,
+      # description, parameters}) sent once per run as toolSchemas.
       def describe(chat, config)
         out = { "hook" => config[:hook].to_s }
         out["model"] = chat.model.id if chat.respond_to?(:model) && chat.model.respond_to?(:id)
-        messages = Support.summarize_messages(message_hashes(chat))
+        messages = message_hashes(chat)
         out["messages"] = messages unless messages.nil?
-        tools = chat.respond_to?(:tools) ? chat.tools : nil
-        out["tools"] = tools.keys.map(&:to_s) if tools.respond_to?(:keys) && !tools.empty?
+        out.merge!(sampling_params(chat))
+        tools = tool_capture(chat, config)
+        out.merge!(tools) unless tools.nil?
         out
       rescue StandardError
         { "hook" => config[:hook].to_s }
@@ -189,11 +201,74 @@ module Graphmind
         return nil unless chat.respond_to?(:messages)
 
         chat.messages.map do |message|
-          {
-            "role" => message.role.to_s,
-            "content" => Support.truncate(text_of(message.content))
-          }
+          entry = { "role" => message.role.to_s, "content" => text_of(message.content) }
+          calls = message.respond_to?(:tool_calls) ? message.tool_calls : nil
+          if calls.respond_to?(:each_value) && !calls.empty?
+            entry["tool_calls"] = calls.each_value.filter_map { |call| requested_call(call) }
+          end
+          if message.respond_to?(:tool_call_id) && !message.tool_call_id.nil?
+            entry["tool_call_id"] = message.tool_call_id.to_s
+          end
+          entry
         end
+      rescue StandardError
+        nil
+      end
+
+      # temperature (2.0 reader, 1.x ivar), 2.0's max_output_tokens, and the
+      # allow-listed keys of 1.x `params` / 2.0 `provider_options`.
+      def sampling_params(chat)
+        out = {}
+        temperature = chat.respond_to?(:temperature) ? chat.temperature : chat.instance_variable_get(:@temperature)
+        out["temperature"] = temperature if temperature.is_a?(Numeric)
+        max = chat.respond_to?(:max_output_tokens) ? chat.max_output_tokens : nil
+        out["max_output_tokens"] = max if max.is_a?(Integer)
+        %i[params provider_options].each do |reader|
+          extra = chat.respond_to?(reader) ? chat.public_send(reader) : nil
+          out.merge!(Support.pick_params(extra)) if extra.is_a?(Hash)
+        end
+        out
+      rescue StandardError
+        {}
+      end
+
+      def tool_capture(chat, config)
+        registry = chat.respond_to?(:tools) ? chat.tools : nil
+        return nil unless registry.respond_to?(:each_value) && !registry.empty?
+
+        definitions = registry.each_value.filter_map { |tool| tool_definition(tool) }
+        session = config[:session]
+        run = session.respond_to?(:current_run) ? session.current_run : nil
+        Support.capture_tools(session, run.nil? ? "implicit" : run.run_id, definitions)
+      rescue StandardError
+        nil
+      end
+
+      # {name, description, parameters}: 1.x `params_schema`, 2.0 `parameters_schema`.
+      def tool_definition(tool)
+        name = tool.respond_to?(:name) ? tool.name.to_s : nil
+        return nil if name.nil? || name.empty?
+
+        definition = { "name" => name }
+        description = tool.respond_to?(:description) ? tool.description : nil
+        definition["description"] = description.to_s unless description.nil?
+        schema = if tool.respond_to?(:parameters_schema)
+                   tool.parameters_schema
+                 elsif tool.respond_to?(:params_schema)
+                   tool.params_schema
+                 end
+        definition["parameters"] = Support.record(schema) unless schema.nil?
+        definition
+      rescue StandardError
+        nil
+      end
+
+      # One RubyLLM::ToolCall as recorded in output.toolCalls.
+      def requested_call(call)
+        return nil unless call.respond_to?(:name)
+
+        Support.tool_call(call.respond_to?(:id) ? call.id : nil, call.name.to_s,
+                          call.respond_to?(:arguments) ? call.arguments : nil)
       rescue StandardError
         nil
       end
@@ -207,15 +282,22 @@ module Graphmind
         ""
       end
 
+      # node.finished.output (contract C1): the full reply text, the tool calls
+      # the model requested as {id, name, input}, 2.0's finish reason normalized
+      # (+ rawFinishReason; 1.x reports none), and the model.
       def summarize(message)
         return nil if message.nil?
 
         out = {}
-        out["text"] = Support.truncate(text_of(message.content)) if message.respond_to?(:content)
+        out["text"] = text_of(message.content) if message.respond_to?(:content)
+        calls = []
         if message.respond_to?(:tool_call?) && message.tool_call?
-          calls = message.tool_calls
-          out["toolCalls"] = calls.respond_to?(:keys) ? calls.keys.map(&:to_s) : calls.to_s
+          registry = message.tool_calls
+          calls = registry.each_value.filter_map { |call| requested_call(call) } if registry.respond_to?(:each_value)
+          out["toolCalls"] = calls unless calls.empty?
         end
+        raw = message.respond_to?(:finish_reason) ? message.finish_reason : nil
+        out.merge!(Support.finish_fields(raw, !calls.empty?))
         model = model_of(message)
         out["model"] = model unless model.nil?
         out.empty? ? nil : out
@@ -236,19 +318,40 @@ module Graphmind
         nil
       end
 
-      # 1.x: Message#input_tokens / #output_tokens. 2.0: Message#tokens.input / .output.
+      # Inclusive usage (contract C1). ruby_llm's input count EXCLUDES cached
+      # tokens in both majors (2.0 Tokens#input is "standard (non-cached)"; 1.x
+      # providers report or subtract to the uncached tail), so the cache reads
+      # and writes are added back. 1.16+ and 2.0: Message#tokens (2.0:
+      # cache_read / cache_write / thinking; 1.16: cached / cache_creation, with
+      # cache_read / cache_write aliases). Older 1.x: the Message readers.
       def extra_for(message)
-        input, output =
-          if message.respond_to?(:input_tokens) && message.respond_to?(:output_tokens)
-            [message.input_tokens, message.output_tokens]
-          elsif message.respond_to?(:tokens) && message.tokens.respond_to?(:input) &&
-                message.tokens.respond_to?(:output)
-            [message.tokens.input, message.tokens.output]
-          end
-        return nil if input.nil? && output.nil?
-
-        usage = Support.usage(input, output)
+        usage = Support.ruby_llm_usage(**token_counts(message))
         usage.nil? ? nil : { "usage" => usage }
+      rescue StandardError
+        nil
+      end
+
+      def token_counts(message)
+        tokens = message.respond_to?(:tokens) ? message.tokens : nil
+        source = tokens.respond_to?(:input) ? tokens : message
+        {
+          input: read_first(source, :input, :input_tokens),
+          output: read_first(source, :output, :output_tokens),
+          cache_read: read_first(source, :cache_read, :cached, :cache_read_tokens, :cached_tokens),
+          cache_write: read_first(source, :cache_write, :cache_creation, :cache_write_tokens,
+                                  :cache_creation_tokens),
+          thinking: read_first(source, :thinking, :thinking_tokens, :reasoning_tokens)
+        }
+      end
+
+      def read_first(source, *names)
+        names.each do |name|
+          next unless source.respond_to?(name)
+
+          value = source.public_send(name)
+          return value unless value.nil? || !value.is_a?(Numeric)
+        end
+        nil
       rescue StandardError
         nil
       end

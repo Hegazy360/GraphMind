@@ -110,9 +110,14 @@ to `text`, `response.reasoning_summary_text.delta` and
 `function_call_arguments` / `custom_tool_call_input` / `mcp_call_arguments` /
 `code_interpreter_call_code` deltas to `tool-args`.
 
-**Token usage** is normalized onto the wire's `inputTokens` / `outputTokens`,
-with `totalTokens`, `cachedInputTokens` and `reasoningTokens` carried as loose
-fields (the wire schema preserves unknown fields). Chat Completions only reports
+**Token usage** is normalized onto the wire's inclusive usage: `inputTokens`
+(`prompt_tokens` / `input_tokens`, which already include cached tokens) with
+`inclusive: true`, plus `cacheReadTokens`, `cacheWriteTokens` and
+`reasoningTokens` when reported. `totalTokens` and `cachedInputTokens` (the 0.5
+name of `cacheReadTokens`) stay as loose fields through 0.6.x. `node.finished`
+also carries the requested `toolCalls: [{id, name, input}]` (unparseable
+arguments kept as `inputText`) and the normalized `finishReason` with the API's
+own `rawFinishReason`. Chat Completions only reports
 usage on a stream when you pass `stream_options: { include_usage: true }` —
 that's the API, not the adapter.
 
