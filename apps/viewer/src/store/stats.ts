@@ -1,51 +1,19 @@
 /**
  * Per-node and per-run rollups: how many times did this run, how long did it
- * take, how many tokens did it burn, and roughly what did that cost.
- *
- * The cost figure is deliberately labelled as an estimate everywhere it is
- * shown: the wire protocol carries token counts, not prices, so we apply one
- * blended rate. It is here to answer "which step is eating the budget",
- * never to reconcile a bill.
+ * take, how many tokens did it burn.
  *
  * Token counts go through lib/usage.ts (contract C1): input totals include
  * cached tokens when the sender stamped `inclusive`, and are labelled "as
  * reported" otherwise; cache read / write and reasoning counts are summed
  * only when some execution reported them.
+ *
+ * Cost is not here: it used to be one blended $3/$15 rate applied to every
+ * model. It is now priced per step, per model, from the bundled genai-prices
+ * snapshot (context/cost.ts), and only for models the snapshot knows.
  */
 import { heldMsOf, ranMs, runHeldMs } from '../lib/duration.js';
 import { addUsage, emptyTotals, mergeTotals, type TotalBasis, type UsageTotals } from '../lib/usage.js';
 import type { RunState, NodeState } from './types.js';
-
-/** Blended per-million-token rate (mid-tier frontier model, 2026). */
-export const RATE_IN_PER_MTOK = 3;
-export const RATE_OUT_PER_MTOK = 15;
-/** The common provider multipliers on the input rate: cache reads 0.1x, 5-minute cache writes 1.25x. */
-export const CACHE_READ_RATE = 0.1;
-export const CACHE_WRITE_RATE = 1.25;
-
-/**
- * Blended estimate. `tokensIn` is the prompt total; the cached share (when
- * reported) is priced at the cache multipliers instead of the full rate — a
- * cache-heavy agent would otherwise read ~10x too expensive.
- */
-export function estimateCostUsd(
-  tokensIn: number,
-  tokensOut: number,
-  cache: { read?: number | undefined; write?: number | undefined } = {},
-): number {
-  const read = cache.read ?? 0;
-  const write = cache.write ?? 0;
-  const fresh = Math.max(0, tokensIn - read - write);
-  const promptUnits = fresh + read * CACHE_READ_RATE + write * CACHE_WRITE_RATE;
-  return (promptUnits / 1_000_000) * RATE_IN_PER_MTOK + (tokensOut / 1_000_000) * RATE_OUT_PER_MTOK;
-}
-
-function costOf(totals: UsageTotals): number {
-  return estimateCostUsd(totals.inputTokens, totals.outputTokens, {
-    read: totals.cacheReadTokens,
-    write: totals.cacheWriteTokens,
-  });
-}
 
 /** The optional token fields of a stats object, present only when reported. */
 function tokenExtras(totals: UsageTotals): Pick<NodeStats, 'cacheReadTokens' | 'cacheWriteTokens' | 'reasoningTokens' | 'tokenBasis'> {
@@ -76,7 +44,6 @@ export interface NodeStats {
   reasoningTokens?: number;
   /** `reported` / `mixed`: some counts predate 0.6 and may exclude cached tokens. */
   tokenBasis?: TotalBasis;
-  estCostUsd: number;
   /** The raw totals (for rollups). */
   usage: UsageTotals;
 }
@@ -110,7 +77,6 @@ export function nodeStats(node: NodeState): NodeStats {
     tokensIn: usage.inputTokens,
     tokensOut: usage.outputTokens,
     ...tokenExtras(usage),
-    estCostUsd: costOf(usage),
     usage,
   };
 }
@@ -127,7 +93,6 @@ export interface RunStats {
   cacheWriteTokens?: number;
   reasoningTokens?: number;
   tokenBasis?: TotalBasis;
-  estCostUsd: number;
   /** Wall-clock span of the run so far — held time INCLUDED (it is wall time). */
   wallMs: number;
   /** Wall time during which some gate in the run was held (union of pauses). */
@@ -145,7 +110,6 @@ export function runStats(run: RunState, now: number = Date.now()): RunStats {
     steps: 0,
     tokensIn: 0,
     tokensOut: 0,
-    estCostUsd: 0,
     wallMs: 0,
     heldMs: 0,
     ranMs: 0,
@@ -165,7 +129,6 @@ export function runStats(run: RunState, now: number = Date.now()): RunStats {
   stats.tokensIn = usage.inputTokens;
   stats.tokensOut = usage.outputTokens;
   Object.assign(stats, tokenExtras(usage));
-  stats.estCostUsd = costOf(usage);
   const start = run.meta.startedTs;
   if (start !== undefined) {
     stats.wallMs = Math.max(0, (run.meta.finishedTs ?? now) - start);

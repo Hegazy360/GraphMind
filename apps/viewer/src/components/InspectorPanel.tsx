@@ -23,6 +23,8 @@ import {
   fmtTokens,
 } from '../lib/format.js';
 import { useTokenSnapshot } from '../hooks/useTokenSnapshot.js';
+import { ContextCost } from './ContextCost.js';
+import { costTotalTitle, useNodeCost } from './costHooks.js';
 import { identicalCalls, loopBannerText } from '../store/loop.js';
 import { tokenBuffers } from '../store/tokenBuffers.js';
 import { useRunStore } from '../store/runStore.js';
@@ -295,12 +297,17 @@ function ExecutionDetails({
     (exec.status === 'error' || exec.status === 'running' ? node.lastError : undefined);
   const stats = nodeStats(node);
   const usage = usageView(exec.usage);
+  const nodeCost = useNodeCost(node);
   const firstTokenMs = timing === undefined ? undefined : Math.max(0, timing.firstTs - exec.startedTs);
 
   return (
     <>
       {error !== undefined && (
         <WhyItFailed runId={runId} node={node} exec={exec} error={error} />
+      )}
+
+      {node.kind === 'llm' && (
+        <ContextCost runId={runId} node={node} exec={exec} execIndex={execIndex} />
       )}
 
       <Section label="This execution">
@@ -315,7 +322,8 @@ function ExecutionDetails({
           {heldMsOf(exec) > 0 && (
             <StatCell label="held" value={fmtDuration(heldMsOf(exec))} tone="dim" />
           )}
-          {usage !== undefined && (
+          {/* An LLM step's usage heads its Context & cost section above. */}
+          {usage !== undefined && node.kind !== 'llm' && (
             <>
               <StatCell
                 label={inputLabel(usage.basis)}
@@ -385,8 +393,15 @@ function ExecutionDetails({
                 {detailCells(stats).map((cell) => (
                   <StatCell key={cell.label} label={cell.label} value={cell.value} title={cell.title} tone="dim" />
                 ))}
-                <StatCell label="est. cost" value={fmtCost(stats.estCostUsd)} tone="dim" />
               </>
+            )}
+            {nodeCost !== undefined && (
+              <StatCell
+                label="est. cost"
+                value={fmtCost(nodeCost.total)}
+                tone="dim"
+                title={costTotalTitle(nodeCost, 'execution')}
+              />
             )}
           </div>
         </Section>

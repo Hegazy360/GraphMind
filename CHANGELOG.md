@@ -55,6 +55,35 @@ control plane, usage truth and the context view are written when each lands. -->
   an immediate refusal, with the `outcome`) and under the pause row, instead of
   the editor waiting 10 s and saying the app had not answered.
 
+### Added — what changed between two LLM steps, and what it cost (context view)
+
+- **Context & cost**, at the top of an LLM step in the inspector: tokens in
+  (the whole prompt, cached tokens included — or "as reported" for events
+  recorded before 0.6), tokens out, cache read / cache write / reasoning when
+  the provider reported them, how full the model's context window was, and
+  the step's and the run's cost so far.
+- **Prompt diff against the previous LLM step of the same agent**: the first
+  message that differs, the messages added, removed ("trimmed?") or changed
+  (open any of them), the system prompt as a line diff, tools added, removed
+  or changed by schema hash (a changed tool opens as a diff of its two
+  recorded definitions), changed sampling parameters and model, and where a
+  provider's prompt cache stops matching (tools → system → messages). Moving a
+  cache breakpoint is not a change. The diff **refuses, and says why**, when
+  either side is not the prompt that was sent: shrunk to the 512 KB event
+  limit, redacted, a preview, a batch, or a server-side conversation
+  (`previous_response_id`).
+- **"Held 8 min before this call — the provider's 5-minute prompt cache has
+  likely expired"** when a gate hold (or, labelled differently, idle time)
+  pushed a step past the cache lifetime.
+- **Cost from a bundled price snapshot** —
+  [genai-prices](https://github.com/pydantic/genai-prices) (MIT, notice
+  shipped as `THIRD_PARTY_NOTICES.txt`), per model, with cache reads and
+  writes at their own rates, labelled "≈ est. (prices as of 2026-09-22)". A
+  model the snapshot does not know gets **no dollar figure**. This replaces
+  the flat $3 / $15 per million tokens estimate in the top bar and the
+  inspector. The table is a separate chunk the viewer fetches only for a run
+  with token usage; a single-file export opened from disk shows no cost.
+
 ### Changed — control needs a credential (security)
 
 - At start the server mints a **viewer** token (full control; reaches the

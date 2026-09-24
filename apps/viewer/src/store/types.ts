@@ -55,6 +55,12 @@ export interface NodeExecution {
    * node's own input; `input` above stays what the model asked for.
    */
   edited?: EditedInput;
+  /**
+   * Model / provider named at the top level of an LLM `node.started`
+   * (LangGraph puts `modelId`/`provider` there, imports put `model`) — the
+   * price lookup's hints when the recorded input does not carry them.
+   */
+  modelHint?: { model?: string; provider?: string };
 }
 
 /** `exec.resumed.edited`: the effective input of an edited call. */

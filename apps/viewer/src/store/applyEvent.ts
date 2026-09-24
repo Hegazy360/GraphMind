@@ -85,6 +85,22 @@ function heldMsField(payload: Record<string, unknown>): number | undefined {
   return typeof held === 'number' && Number.isFinite(held) && held >= 0 ? held : undefined;
 }
 
+/** W5: top-level model/provider strings on an LLM `node.started` (price-lookup hints). */
+function modelHintField(payload: Record<string, unknown>): NodeExecution['modelHint'] {
+  if (payload['kind'] !== 'llm') return undefined;
+  const pick = (...keys: string[]): string | undefined => {
+    for (const key of keys) {
+      const value = payload[key];
+      if (typeof value === 'string' && value !== '' && value.length <= 200) return value;
+    }
+    return undefined;
+  };
+  const model = pick('modelId', 'model');
+  const provider = pick('provider');
+  if (model === undefined && provider === undefined) return undefined;
+  return { ...(model !== undefined ? { model } : {}), ...(provider !== undefined ? { provider } : {}) };
+}
+
 /** Oldest execution still marked running, else -1. */
 function oldestRunningIndex(node: NodeState): number {
   for (let i = 0; i < node.executions.length; i++) {
@@ -294,6 +310,7 @@ function applyNodeStarted(
 ): RunState {
   const existing = run.nodes[payload.nodeId];
   const structural = existing === undefined || existing.ghost || existing.parentId !== payload.parentId;
+  const modelHint = modelHintField(payload as Record<string, unknown>);
   const base: NodeState =
     existing ??
     ({
@@ -326,6 +343,7 @@ function applyNodeStarted(
         status: 'running',
         startedTs: ts,
         seq,
+        ...(modelHint !== undefined ? { modelHint } : {}),
       },
     ],
   };

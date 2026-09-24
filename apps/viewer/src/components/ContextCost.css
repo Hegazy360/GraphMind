@@ -1,0 +1,232 @@
+/* Context & cost (inspector section on LLM steps). Uses the theme tokens of
+   index.css only, so light/dark follow automatically. */
+
+.gm-ctx .gm-inspect-stats {
+  margin-bottom: var(--sp-2);
+}
+.gm-ctx-money .gm-inspect-stat-value {
+  color: var(--accent-strong);
+}
+.gm-ctx-est {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gm-ctx-note {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.gm-ctx-note code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text);
+}
+.gm-ctx-note--faint {
+  color: var(--text-faint);
+}
+.gm-ctx-note--warn,
+.gm-ctx-note--held {
+  color: var(--amber-text);
+  background: var(--amber-tint);
+  border: 1px solid color-mix(in srgb, var(--amber) 28%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+}
+.gm-ctx-refusal {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
+.gm-ctx-diff-label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.gm-ctx-diff-label .gm-copy {
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: auto;
+}
+
+.gm-ctx-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.gm-ctx-summary-lead {
+  margin-right: 2px;
+}
+.gm-ctx-chip--added {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
+}
+.gm-ctx-chip--removed {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 35%, var(--border));
+}
+.gm-ctx-chip--changed {
+  color: var(--amber-text);
+  border-color: color-mix(in srgb, var(--amber) 35%, var(--border));
+}
+
+.gm-ctx-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+.gm-ctx-tools-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.gm-ctx-rows {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.gm-ctx-rows--nested {
+  margin: 2px 0 4px 14px;
+}
+.gm-ctx-row {
+  min-width: 0;
+}
+.gm-ctx-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.gm-ctx-row-head:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+.gm-ctx-row-head:disabled {
+  cursor: default;
+}
+.gm-ctx-row-mark {
+  flex: none;
+  width: 10px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.gm-ctx-row--added .gm-ctx-row-mark {
+  color: var(--ok);
+}
+.gm-ctx-row--removed .gm-ctx-row-mark {
+  color: var(--err);
+}
+.gm-ctx-row--changed .gm-ctx-row-mark {
+  color: var(--amber-text);
+}
+.gm-ctx-row--same .gm-ctx-row-mark {
+  color: var(--text-faint);
+}
+.gm-ctx-row--removed .gm-ctx-row-label {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--err) 55%, transparent);
+}
+.gm-ctx-row-index {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.gm-ctx-row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gm-ctx-row-size {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.gm-ctx-body {
+  margin: 2px 0 6px;
+}
+.gm-ctx-more {
+  margin: 2px 0 4px;
+  border: none;
+  background: none;
+  padding: 2px 6px;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.gm-ctx-more:hover {
+  color: var(--text);
+}
+
+.gm-ctx-linediff {
+  margin: 2px 0 6px;
+  padding: 6px 0;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+}
+.gm-ctx-line {
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-dim);
+}
+.gm-ctx-line-mark {
+  display: inline-block;
+  width: 12px;
+  color: var(--text-faint);
+}
+.gm-ctx-line--del {
+  background: var(--err-soft);
+  color: var(--text);
+}
+.gm-ctx-line--del .gm-ctx-line-mark {
+  color: var(--err);
+}
+.gm-ctx-line--ins {
+  background: var(--ok-soft);
+  color: var(--text);
+}
+.gm-ctx-line--ins .gm-ctx-line-mark {
+  color: var(--ok);
+}
+.gm-ctx-line--fold {
+  color: var(--text-faint);
+  font-style: italic;
+}

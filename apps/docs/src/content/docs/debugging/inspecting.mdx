@@ -92,9 +92,42 @@ The older field names stay as aliases through 0.6.x: `cacheCreationTokens` (Anth
 TypeScript) equals `cacheWriteTokens`, and `cachedInputTokens` (OpenAI TypeScript) equals
 `cacheReadTokens`; the OpenAI adapter also keeps `totalTokens` as reported.
 
-The run's **est. cost** is a blended estimate ($3 / $15 per million tokens, cache reads at 10%
-and cache writes at 125% of the input rate when they were reported) — it answers "which step is
-eating the budget", never a bill.
+**Cost** is priced per step and per model from a bundled snapshot of
+[genai-prices](https://github.com/pydantic/genai-prices) (MIT; the notice ships with the viewer as
+`THIRD_PARTY_NOTICES.txt`): the uncached share of the prompt at the input rate, cache reads and
+cache writes at their own rates, output at the output rate. Every figure is labelled
+**≈ est. (prices as of 2026-09-22)** — it answers "which step is eating the budget", never a
+bill. A model the snapshot does not know gets **no dollar figure** rather than a guess, and a
+run's total counts only the steps it could price (the tooltip says how many it left out). The
+price table is a separate download the viewer fetches only for a run with token usage; a
+single-file export (`graphmind record --html`) opened from disk shows no cost.
+
+## Context & cost: what changed since the previous step
+
+Selecting an LLM step opens **Context & cost** at the top of the inspector: the usage above, how
+full the model's context window was, the step's cost and the run's cost so far — then the prompt
+compared with the **previous LLM step of the same agent**:
+
+- the first message that differs, and the messages added, removed ("trimmed?") or changed — open
+  any of them to read it, or to see a changed one as a line diff;
+- the system prompt, as a line diff;
+- tools added, removed or changed — by the schema hash every 0.6 SDK records, so a tool whose
+  definition changed under the same name opens as a diff of its two definitions;
+- sampling parameters (`temperature`, `max_tokens`, `tool_choice`, …) and the model, when they
+  changed;
+- where a provider's prompt cache stops matching: caches are prefix-based over tools, then the
+  system prompt, then the messages, so the first changed part is where the step starts paying the
+  full input price. Moving a cache breakpoint (`cache_control`) is not a change.
+
+When more than five minutes passed between the previous step and this call, the view says so —
+**"Held 8 min before this call — the provider's 5-minute prompt cache has likely expired"** when
+a debugger hold accounts for the gap, so a cache-write spike after a long pause is not a mystery.
+
+The comparison **refuses, and says why**, when either side is not the prompt that was sent: the
+event was shrunk to the 512 KB limit, a value in the prompt was redacted (`GRAPHMIND_HIDE_INPUTS`
+or a secret-shaped key — two hidden values cannot be compared), the input is a preview, several
+prompts went out in one batched call, or an OpenAI Responses call continued a server-side
+conversation (`previous_response_id`) and sent only the new items.
 
 ## Live vs. history
 

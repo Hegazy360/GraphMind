@@ -17,6 +17,7 @@ import { runBadgeStatus, type RunBadgeStatus } from '../store/types.js';
 import { collapsedFor, useUiStore } from '../store/uiStore.js';
 import { collapsibleRoots } from '../store/collapse.js';
 import { KindGlyph } from './KindMark.js';
+import { costTotalTitle, useRunCost } from './costHooks.js';
 import {
   IconCollapse,
   IconExpand,
@@ -168,6 +169,9 @@ export function TopBar({ runId }: { runId: string }) {
   const statusVersion = useRunStore((s) => s.runs[runId]?.statusVersion ?? 0);
   const meta = useRunStore((s) => s.runs[runId]?.meta);
   const [copied, setCopied] = useState(false);
+  // Priced per step from the bundled genai-prices snapshot (a lazy chunk,
+  // fetched once the run has token usage); no figure for unknown models.
+  const runCost = useRunCost(runId);
 
   const stats = (() => {
     void statusVersion;
@@ -221,25 +225,25 @@ export function TopBar({ runId }: { runId: string }) {
             <Stat value={fmtDuration(stats.heldMs)} label="held" title="Time a gate held execution — not run time" />
           )}
           {stats.tokensIn + stats.tokensOut > 0 && (
-            <>
-              <Stat
-                value={`${fmtTokens(stats.tokensIn)}→${fmtTokens(stats.tokensOut)}`}
-                label={stats.tokenBasis === 'inclusive' || stats.tokenBasis === undefined ? 'tokens' : 'tokens*'}
-                optional
-                title={[
-                  inputTitle(stats.tokenBasis),
-                  ...detailCells(stats).map((cell) => `${cell.value} ${cell.label}`),
-                ]
-                  .filter((part) => part !== '')
-                  .join(' · ')}
-              />
-              <Stat
-                value={fmtCost(stats.estCostUsd)}
-                label="est. cost"
-                optional
-                title="Rough estimate at $3/$15 per million tokens (cache reads at 10%, cache writes at 125% when reported) — token counts come from the run, prices do not."
-              />
-            </>
+            <Stat
+              value={`${fmtTokens(stats.tokensIn)}→${fmtTokens(stats.tokensOut)}`}
+              label={stats.tokenBasis === 'inclusive' || stats.tokenBasis === undefined ? 'tokens' : 'tokens*'}
+              optional
+              title={[
+                inputTitle(stats.tokenBasis),
+                ...detailCells(stats).map((cell) => `${cell.value} ${cell.label}`),
+              ]
+                .filter((part) => part !== '')
+                .join(' · ')}
+            />
+          )}
+          {runCost !== undefined && (
+            <Stat
+              value={fmtCost(runCost.total)}
+              label="est. cost"
+              optional
+              title={`${costTotalTitle(runCost, 'LLM step')} Token counts come from the run; prices do not.`}
+            />
           )}
         </div>
       )}

@@ -12,7 +12,7 @@ import {
   matchingNodeIds,
   slowThresholdMs,
 } from '../src/store/filters.js';
-import { estimateCostUsd, failureContext, nodeStats, runStats } from '../src/store/stats.js';
+import { failureContext, nodeStats, runStats } from '../src/store/stats.js';
 import { agentCountsFor, childrenIndexOf, forgetRun, hasChildren } from '../src/store/derived.js';
 import type { RunState } from '../src/store/types.js';
 import { RUN, ev, resetCounters, started } from './helpers.js';
@@ -104,7 +104,7 @@ describe('stats', () => {
     expect(stats).toMatchObject({ executions: 2, retries: 1, errors: 1, totalMs: 400, avgMs: 200, maxMs: 300 });
   });
 
-  it('sums usage and estimates spend', () => {
+  it('sums usage (cost is priced per model elsewhere — no blended rate)', () => {
     const run = buildRun([
       ev('run.started', { app: 'a', sdk: { name: 'ai', version: '7' } }, { ts: 1000 }),
       started('llm:s', 'llm'),
@@ -121,8 +121,7 @@ describe('stats', () => {
     expect(stats.tokensIn).toBe(1_000_000);
     expect(stats.steps).toBe(1);
     expect(stats.wallMs).toBe(5000);
-    expect(stats.estCostUsd).toBeCloseTo(18, 6); // $3 in + $15 out per Mtok
-    expect(estimateCostUsd(0, 0)).toBe(0);
+    expect('estCostUsd' in stats).toBe(false);
   });
 
   it('collects the parent and siblings of a failure', () => {

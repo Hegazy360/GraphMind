@@ -1,0 +1,3287 @@
+{
+ "$comment": "Recorded LLM steps (node.started input + node.finished usage/output) as each adapter puts them on the wire, for the W5 Context & cost tests. CURRENT (0.6.0, contract C1) entries were captured on 2026-09-25 from master cd8d240 by driving each adapter through its own test fakes and recording what the fake viewer received: aiSdk (ai@7 streamText + MockLanguageModel, 3 steps), anthropicTs (real @anthropic-ai/sdk client over a scripted fetch, 3 turns, cache breakpoint moved to the newest message every turn), openaiChat / openaiResponses (real openai client over a scripted fetch), langgraphTs (a real LangGraph StateGraph ReAct loop with gm.handler()), python* (python/graphmind integrations through the real anthropic / openai SDKs over httpx.MockTransport, and a LangChain chat model), rubyOpenAI (ruby-openai over a Faraday test adapter) and rubyLlm (ruby_llm, identical on 1.x and 2.x). LEGACY entries are what the 0.5 senders recorded (captured 2026-09-23 on master 3ba874e; legacyDemoAiSdk is the bundled demo recording packages/cli/src/demo/fixture-data.ts; legacyPythonTrimmed / legacyRubyTrimmed are the 0.5 ports' preview trims) — old histories still hold them. otlpImport / openInference: packages/cli/test/fixtures/*.expected.json.",
+ "aiSdk": [
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "inv_98613a_1:s0",
+   "seq": 4,
+   "ts": 1790291795271,
+   "input": {
+    "prompt": [
+     {
+      "role": "system",
+      "content": "You plan trips.\nAlways check the weather."
+     },
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "Plan my trip from Vienna to Lisbon with a 100 EUR budget check."
+       }
+      ]
+     }
+    ],
+    "modelId": "claude-sonnet-4-5",
+    "provider": "anthropic.messages",
+    "maxOutputTokens": 1024,
+    "temperature": 0.2,
+    "toolChoice": {
+     "type": "auto"
+    },
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "2504a1140b95b9b6"
+     },
+     {
+      "name": "checkWeather",
+      "schemaHash": "dea0f76fa9c41aa8"
+     },
+     {
+      "name": "convertCurrency",
+      "schemaHash": "9a9f8d7605137da9"
+     }
+    ],
+    "toolSchemas": {
+     "2504a1140b95b9b6": {
+      "type": "function",
+      "name": "searchFlights",
+      "inputSchema": {
+       "$schema": "http://json-schema.org/draft-07/schema#",
+       "type": "object",
+       "properties": {
+        "from": {
+         "type": "string"
+        },
+        "to": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "from",
+        "to"
+       ],
+       "additionalProperties": false
+      },
+      "description": "Search for flights between two airports"
+     },
+     "dea0f76fa9c41aa8": {
+      "type": "function",
+      "name": "checkWeather",
+      "inputSchema": {
+       "$schema": "http://json-schema.org/draft-07/schema#",
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "city"
+       ],
+       "additionalProperties": false
+      },
+      "description": "Get the weather forecast for a city"
+     },
+     "9a9f8d7605137da9": {
+      "type": "function",
+      "name": "convertCurrency",
+      "inputSchema": {
+       "$schema": "http://json-schema.org/draft-07/schema#",
+       "type": "object",
+       "properties": {
+        "amount": {
+         "type": "number"
+        },
+        "from": {
+         "type": "string"
+        },
+        "to": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "amount",
+        "from",
+        "to"
+       ],
+       "additionalProperties": false
+      },
+      "description": "Convert an amount between currencies"
+     }
+    }
+   },
+   "finishedTs": 1790291795282,
+   "usage": {
+    "inputTokens": 1450,
+    "outputTokens": 60,
+    "inclusive": true,
+    "cacheReadTokens": 0,
+    "cacheWriteTokens": 1000
+   },
+   "output": {
+    "text": "Let me search for flights first. ",
+    "finishReason": "tool-calls",
+    "rawFinishReason": "tool_use",
+    "toolCalls": [
+     {
+      "id": "call-flights-1",
+      "name": "searchFlights",
+      "input": {
+       "from": "VIE",
+       "to": "LIS"
+      }
+     }
+    ]
+   },
+   "status": "ok"
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "inv_98613a_1:s1",
+   "seq": 9,
+   "ts": 1790291795313,
+   "input": {
+    "prompt": [
+     {
+      "role": "system",
+      "content": "You plan trips.\nAlways check the weather."
+     },
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "Plan my trip from Vienna to Lisbon with a 100 EUR budget check."
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "Let me search for flights first. "
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-flights-1",
+        "toolName": "searchFlights",
+        "input": {
+         "from": "VIE",
+         "to": "LIS"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "content": [
+       {
+        "type": "tool-result",
+        "toolCallId": "call-flights-1",
+        "toolName": "searchFlights",
+        "output": {
+         "type": "json",
+         "value": {
+          "flights": [
+           {
+            "id": "TP1234",
+            "from": "VIE",
+            "to": "LIS",
+            "priceEUR": 199
+           }
+          ]
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "modelId": "claude-sonnet-4-5",
+    "provider": "anthropic.messages",
+    "maxOutputTokens": 1024,
+    "temperature": 0.2,
+    "toolChoice": {
+     "type": "auto"
+    },
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "2504a1140b95b9b6"
+     },
+     {
+      "name": "checkWeather",
+      "schemaHash": "dea0f76fa9c41aa8"
+     },
+     {
+      "name": "convertCurrency",
+      "schemaHash": "9a9f8d7605137da9"
+     }
+    ]
+   },
+   "finishedTs": 1790291795326,
+   "usage": {
+    "inputTokens": 1620,
+    "outputTokens": 61,
+    "inclusive": true,
+    "cacheReadTokens": 1000,
+    "cacheWriteTokens": 0
+   },
+   "output": {
+    "text": "Now checking weather and budget in parallel. ",
+    "finishReason": "tool-calls",
+    "rawFinishReason": "tool_use",
+    "toolCalls": [
+     {
+      "id": "call-weather-1",
+      "name": "checkWeather",
+      "input": {
+       "city": "Lisbon"
+      }
+     },
+     {
+      "id": "call-currency-1",
+      "name": "convertCurrency",
+      "input": {
+       "amount": 100,
+       "from": "EUR",
+       "to": "USD"
+      }
+     }
+    ]
+   },
+   "status": "ok"
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "inv_98613a_1:s2",
+   "seq": 16,
+   "ts": 1790291795355,
+   "input": {
+    "prompt": [
+     {
+      "role": "system",
+      "content": "You plan trips.\nAlways check the weather."
+     },
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "Plan my trip from Vienna to Lisbon with a 100 EUR budget check."
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "Let me search for flights first. "
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-flights-1",
+        "toolName": "searchFlights",
+        "input": {
+         "from": "VIE",
+         "to": "LIS"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "content": [
+       {
+        "type": "tool-result",
+        "toolCallId": "call-flights-1",
+        "toolName": "searchFlights",
+        "output": {
+         "type": "json",
+         "value": {
+          "flights": [
+           {
+            "id": "TP1234",
+            "from": "VIE",
+            "to": "LIS",
+            "priceEUR": 199
+           }
+          ]
+         }
+        }
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "Now checking weather and budget in parallel. "
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-weather-1",
+        "toolName": "checkWeather",
+        "input": {
+         "city": "Lisbon"
+        }
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-currency-1",
+        "toolName": "convertCurrency",
+        "input": {
+         "amount": 100,
+         "from": "EUR",
+         "to": "USD"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "content": [
+       {
+        "type": "tool-result",
+        "toolCallId": "call-weather-1",
+        "toolName": "checkWeather",
+        "output": {
+         "type": "json",
+         "value": {
+          "city": "Lisbon",
+          "forecast": "sunny",
+          "tempC": 31
+         }
+        }
+       },
+       {
+        "type": "tool-result",
+        "toolCallId": "call-currency-1",
+        "toolName": "convertCurrency",
+        "output": {
+         "type": "json",
+         "value": {
+          "amount": 100,
+          "converted": 91.3,
+          "currency": "USD"
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "modelId": "claude-sonnet-4-5",
+    "provider": "anthropic.messages",
+    "maxOutputTokens": 1024,
+    "temperature": 0.2,
+    "toolChoice": {
+     "type": "auto"
+    },
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "2504a1140b95b9b6"
+     },
+     {
+      "name": "checkWeather",
+      "schemaHash": "dea0f76fa9c41aa8"
+     },
+     {
+      "name": "convertCurrency",
+      "schemaHash": "9a9f8d7605137da9"
+     }
+    ]
+   },
+   "finishedTs": 1790291795363,
+   "usage": {
+    "inputTokens": 1900,
+    "outputTokens": 62,
+    "inclusive": true,
+    "cacheReadTokens": 1000,
+    "cacheWriteTokens": 0
+   },
+   "output": {
+    "text": "Book TP1234; sunny, 91.3 USD.",
+    "finishReason": "stop",
+    "rawFinishReason": "end_turn"
+   },
+   "status": "ok"
+  }
+ ],
+ "anthropicTs": [
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "inv_d551f0_1:s0",
+   "seq": 4,
+   "ts": 1790291837032,
+   "input": {
+    "model": "claude-sonnet-4-5",
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "Plan my trip from Vienna to Lisbon with a 100 EUR budget check.",
+        "cache_control": {
+         "type": "ephemeral"
+        }
+       }
+      ]
+     }
+    ],
+    "system": [
+     {
+      "type": "text",
+      "text": "You plan trips.\nAlways check the weather.",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ],
+    "temperature": 0.2,
+    "max_tokens": 1024,
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "897b7e0d4f5d36ba"
+     },
+     {
+      "name": "checkWeather",
+      "schemaHash": "3bb1a717d6f61d5b"
+     },
+     {
+      "name": "convertCurrency",
+      "schemaHash": "f4532b0f635f9395"
+     }
+    ],
+    "toolSchemas": {
+     "897b7e0d4f5d36ba": {
+      "name": "searchFlights",
+      "description": "Search for flights between two airports",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "from": {
+         "type": "string"
+        },
+        "to": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "3bb1a717d6f61d5b": {
+      "name": "checkWeather",
+      "description": "Get the weather forecast for a city",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "f4532b0f635f9395": {
+      "name": "convertCurrency",
+      "description": "Convert an amount between currencies",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "amount": {
+         "type": "number"
+        },
+        "from": {
+         "type": "string"
+        },
+        "to": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    },
+    "stream": false
+   },
+   "finishedTs": 1790291837035,
+   "usage": {
+    "inputTokens": 1840,
+    "outputTokens": 70,
+    "inclusive": true,
+    "cacheReadTokens": 0,
+    "cacheWriteTokens": 1800,
+    "cacheCreationTokens": 1800
+   },
+   "output": {
+    "text": "Let me search for flights first. ",
+    "finishReason": "tool-calls",
+    "rawFinishReason": "tool_use",
+    "toolCalls": [
+     {
+      "id": "toolu_flights_1",
+      "name": "searchFlights",
+      "input": {
+       "from": "VIE",
+       "to": "LIS"
+      }
+     }
+    ],
+    "stopReason": "tool_use",
+    "model": "claude-sonnet-4-5"
+   },
+   "status": "ok"
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "inv_d551f0_2:s0",
+   "seq": 10,
+   "ts": 1790291837048,
+   "input": {
+    "model": "claude-sonnet-4-5",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Plan my trip from Vienna to Lisbon with a 100 EUR budget check."
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "Let me search for flights first. "
+       },
+       {
+        "type": "tool_use",
+        "id": "toolu_flights_1",
+        "name": "searchFlights",
+        "input": {
+         "from": "VIE",
+         "to": "LIS"
+        }
+       }
+      ]
+     },
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_flights_1",
+        "content": "{\"flights\":[{\"id\":\"TP1234\",\"from\":\"VIE\",\"to\":\"LIS\",\"priceEUR\":199}]}",
+        "cache_control": {
+         "type": "ephemeral"
+        }
+       }
+      ]
+     }
+    ],
+    "system": [
+     {
+      "type": "text",
+      "text": "You plan trips.\nAlways check the weather.",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ],
+    "temperature": 0.2,
+    "max_tokens": 1024,
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "897b7e0d4f5d36ba"
+     },
+     {
+      "name": "checkWeather",
+      "schemaHash": "3bb1a717d6f61d5b"
+     },
+     {
+      "name": "convertCurrency",
+      "schemaHash": "f4532b0f635f9395"
+     }
+    ],
+    "stream": false
+   },
+   "finishedTs": 1790291837049,
+   "usage": {
+    "inputTokens": 2070,
+    "outputTokens": 90,
+    "inclusive": true,
+    "cacheReadTokens": 1800,
+    "cacheWriteTokens": 120,
+    "cacheCreationTokens": 120
+   },
+   "output": {
+    "text": "Now checking weather and budget in parallel. ",
+    "finishReason": "tool-calls",
+    "rawFinishReason": "tool_use",
+    "toolCalls": [
+     {
+      "id": "toolu_weather_1",
+      "name": "checkWeather",
+      "input": {
+       "city": "Lisbon"
+      }
+     },
+     {
+      "id": "toolu_currency_1",
+      "name": "convertCurrency",
+      "input": {
+       "amount": 100,
+       "from": "EUR",
+       "to": "USD"
+      }
+     }
+    ],
+    "stopReason": "tool_use",
+    "model": "claude-sonnet-4-5"
+   },
+   "status": "ok"
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "inv_d551f0_2:s1",
+   "seq": 17,
+   "ts": 1790291837072,
+   "input": {
+    "model": "claude-sonnet-4-5",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Plan my trip from Vienna to Lisbon with a 100 EUR budget check."
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "Let me search for flights first. "
+       },
+       {
+        "type": "tool_use",
+        "id": "toolu_flights_1",
+        "name": "searchFlights",
+        "input": {
+         "from": "VIE",
+         "to": "LIS"
+        }
+       }
+      ]
+     },
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_flights_1",
+        "content": "{\"flights\":[{\"id\":\"TP1234\",\"from\":\"VIE\",\"to\":\"LIS\",\"priceEUR\":199}]}"
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "Now checking weather and budget in parallel. "
+       },
+       {
+        "type": "tool_use",
+        "id": "toolu_weather_1",
+        "name": "checkWeather",
+        "input": {
+         "city": "Lisbon"
+        }
+       },
+       {
+        "type": "tool_use",
+        "id": "toolu_currency_1",
+        "name": "convertCurrency",
+        "input": {
+         "amount": 100,
+         "from": "EUR",
+         "to": "USD"
+        }
+       }
+      ]
+     },
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_weather_1",
+        "content": "{\"city\":\"Lisbon\",\"forecast\":\"sunny\",\"tempC\":31}"
+       },
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_currency_1",
+        "content": "{\"amount\":100,\"converted\":91.3,\"currency\":\"USD\"}",
+        "cache_control": {
+         "type": "ephemeral"
+        }
+       }
+      ]
+     }
+    ],
+    "system": [
+     {
+      "type": "text",
+      "text": "You plan trips.\nAlways check the weather.",
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ],
+    "temperature": 0.2,
+    "max_tokens": 1024,
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "897b7e0d4f5d36ba"
+     },
+     {
+      "name": "checkWeather",
+      "schemaHash": "3bb1a717d6f61d5b"
+     },
+     {
+      "name": "convertCurrency",
+      "schemaHash": "f4532b0f635f9395"
+     }
+    ],
+    "stream": false
+   },
+   "finishedTs": 1790291837073,
+   "usage": {
+    "inputTokens": 2130,
+    "outputTokens": 140,
+    "inclusive": true,
+    "cacheReadTokens": 1920,
+    "cacheWriteTokens": 0,
+    "cacheCreationTokens": 0
+   },
+   "output": {
+    "text": "Trip report: {\"toolu_flights_1\":\"{\\\"flights\\\":[{\\\"id\\\":\\\"TP1234\\\",\\\"from\\\":\\\"VIE\\\",\\\"to\\\":\\\"LIS\\\",\\\"priceEUR\\\":199}]}\",\"toolu_weather_1\":\"{\\\"city\\\":\\\"Lisbon\\\",\\\"forecast\\\":\\\"sunny\\\",\\\"tempC\\\":31}\",\"toolu_currency_1\":\"{\\\"amount\\\":100,\\\"converted\\\":91.3,\\\"currency\\\":\\\"USD\\\"}\"}",
+    "finishReason": "stop",
+    "rawFinishReason": "end_turn",
+    "stopReason": "end_turn",
+    "model": "claude-sonnet-4-5"
+   },
+   "status": "ok"
+  }
+ ],
+ "openaiChat": [
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "inv_0cc553_1:s0",
+   "seq": 4,
+   "ts": 1790291895392,
+   "input": {
+    "api": "chat.completions",
+    "model": "gpt-4o",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You plan trips.\nAlways check the weather."
+     },
+     {
+      "role": "user",
+      "content": "Plan my trip from Vienna to Lisbon with a 100 EUR budget check."
+     }
+    ],
+    "temperature": 0.2,
+    "max_completion_tokens": 1024,
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "87cd8f5e6e3bad91"
+     },
+     {
+      "name": "checkWeather",
+      "schemaHash": "4da25247e98d00f6"
+     },
+     {
+      "name": "convertCurrency",
+      "schemaHash": "2b261b9c9c7b41c2"
+     }
+    ],
+    "toolSchemas": {
+     "87cd8f5e6e3bad91": {
+      "type": "function",
+      "function": {
+       "name": "searchFlights",
+       "description": "Search for flights between two airports",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "from": {
+          "type": "string"
+         },
+         "to": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "from",
+         "to"
+        ]
+       }
+      }
+     },
+     "4da25247e98d00f6": {
+      "type": "function",
+      "function": {
+       "name": "checkWeather",
+       "description": "Get the weather forecast for a city",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       }
+      }
+     },
+     "2b261b9c9c7b41c2": {
+      "type": "function",
+      "function": {
+       "name": "convertCurrency",
+       "description": "Convert an amount between currencies",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "amount": {
+          "type": "number"
+         },
+         "from": {
+          "type": "string"
+         },
+         "to": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "amount",
+         "from",
+         "to"
+        ]
+       }
+      }
+     }
+    }
+   },
+   "startedExtra": {
+    "api": "chat.completions"
+   },
+   "finishedTs": 1790291895396,
+   "usage": {
+    "inputTokens": 1310,
+    "outputTokens": 40,
+    "inclusive": true,
+    "cacheReadTokens": 0,
+    "reasoningTokens": 0,
+    "totalTokens": 1350,
+    "cachedInputTokens": 0
+   },
+   "output": {
+    "id": "chatcmpl-1",
+    "model": "gpt-4o-2024-08-06",
+    "text": "Let me search for flights first. ",
+    "toolCalls": [
+     {
+      "id": "call-flights-1",
+      "name": "searchFlights",
+      "input": {
+       "from": "VIE",
+       "to": "LIS"
+      }
+     }
+    ],
+    "finishReason": "tool-calls",
+    "rawFinishReason": "tool_calls"
+   },
+   "status": "ok"
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "inv_0cc553_1:s1",
+   "seq": 8,
+   "ts": 1790291895424,
+   "input": {
+    "api": "chat.completions",
+    "model": "gpt-4o",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You plan trips.\nAlways check the weather."
+     },
+     {
+      "role": "user",
+      "content": "Plan my trip from Vienna to Lisbon with a 100 EUR budget check."
+     },
+     {
+      "role": "assistant",
+      "content": "Let me search for flights first. ",
+      "tool_calls": [
+       {
+        "id": "call-flights-1",
+        "type": "function",
+        "function": {
+         "name": "searchFlights",
+         "arguments": "{\"from\":\"VIE\",\"to\":\"LIS\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "call-flights-1",
+      "content": "{\"flights\":[{\"id\":\"TP1234\",\"from\":\"VIE\",\"to\":\"LIS\",\"priceEUR\":199}]}"
+     }
+    ],
+    "temperature": 0.2,
+    "max_completion_tokens": 1024,
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "87cd8f5e6e3bad91"
+     },
+     {
+      "name": "checkWeather",
+      "schemaHash": "4da25247e98d00f6"
+     },
+     {
+      "name": "convertCurrency",
+      "schemaHash": "2b261b9c9c7b41c2"
+     }
+    ]
+   },
+   "startedExtra": {
+    "api": "chat.completions"
+   },
+   "finishedTs": 1790291895424,
+   "usage": {
+    "inputTokens": 1420,
+    "outputTokens": 55,
+    "inclusive": true,
+    "cacheReadTokens": 1280,
+    "reasoningTokens": 12,
+    "totalTokens": 1475,
+    "cachedInputTokens": 1280
+   },
+   "output": {
+    "id": "chatcmpl-1",
+    "model": "gpt-4o-2024-08-06",
+    "text": "TP1234 at 199 EUR fits the budget.",
+    "finishReason": "stop",
+    "rawFinishReason": "stop"
+   },
+   "status": "ok"
+  }
+ ],
+ "openaiResponses": [
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "inv_0cc553_3:s0",
+   "seq": 4,
+   "ts": 1790291895492,
+   "input": {
+    "api": "responses",
+    "model": "gpt-5-mini",
+    "input": [
+     {
+      "role": "user",
+      "content": "Plan my trip from Vienna to Lisbon."
+     }
+    ],
+    "instructions": "You plan trips.",
+    "reasoning": {
+     "effort": "low"
+    },
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "aebbf7c44de043a8"
+     },
+     {
+      "name": "checkWeather",
+      "schemaHash": "044909379b8cf1d1"
+     },
+     {
+      "name": "convertCurrency",
+      "schemaHash": "9aa0cfe1ca781466"
+     }
+    ],
+    "toolSchemas": {
+     "aebbf7c44de043a8": {
+      "type": "function",
+      "name": "searchFlights",
+      "description": "Search for flights between two airports",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "from": {
+         "type": "string"
+        },
+        "to": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "from",
+        "to"
+       ]
+      }
+     },
+     "044909379b8cf1d1": {
+      "type": "function",
+      "name": "checkWeather",
+      "description": "Get the weather forecast for a city",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "city"
+       ]
+      }
+     },
+     "9aa0cfe1ca781466": {
+      "type": "function",
+      "name": "convertCurrency",
+      "description": "Convert an amount between currencies",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "amount": {
+         "type": "number"
+        },
+        "from": {
+         "type": "string"
+        },
+        "to": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "amount",
+        "from",
+        "to"
+       ]
+      }
+     }
+    }
+   },
+   "startedExtra": {
+    "api": "responses"
+   },
+   "finishedTs": 1790291895493,
+   "usage": {
+    "inputTokens": 900,
+    "outputTokens": 30,
+    "inclusive": true,
+    "cacheReadTokens": 0,
+    "reasoningTokens": 16,
+    "totalTokens": 930,
+    "cachedInputTokens": 0
+   },
+   "output": {
+    "id": "resp_1",
+    "model": "gpt-5-mini-2025-08-07",
+    "text": "",
+    "toolCalls": [
+     {
+      "id": "call_flights_1",
+      "name": "searchFlights",
+      "input": {
+       "from": "VIE",
+       "to": "LIS"
+      }
+     }
+    ],
+    "finishReason": "tool-calls",
+    "rawFinishReason": "completed",
+    "status": "completed"
+   },
+   "status": "ok"
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "inv_0cc553_3:s1",
+   "seq": 8,
+   "ts": 1790291895521,
+   "input": {
+    "api": "responses",
+    "model": "gpt-5-mini",
+    "input": [
+     {
+      "role": "user",
+      "content": "Plan my trip from Vienna to Lisbon."
+     },
+     {
+      "type": "function_call",
+      "call_id": "call_flights_1",
+      "name": "searchFlights",
+      "arguments": "{\"from\":\"VIE\",\"to\":\"LIS\"}"
+     },
+     {
+      "type": "function_call_output",
+      "call_id": "call_flights_1",
+      "output": "{\"flights\":[{\"id\":\"TP1234\",\"from\":\"VIE\",\"to\":\"LIS\",\"priceEUR\":199}]}"
+     }
+    ],
+    "instructions": "You plan trips.",
+    "reasoning": {
+     "effort": "low"
+    },
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "aebbf7c44de043a8"
+     },
+     {
+      "name": "checkWeather",
+      "schemaHash": "044909379b8cf1d1"
+     },
+     {
+      "name": "convertCurrency",
+      "schemaHash": "9aa0cfe1ca781466"
+     }
+    ]
+   },
+   "startedExtra": {
+    "api": "responses"
+   },
+   "finishedTs": 1790291895522,
+   "usage": {
+    "inputTokens": 1050,
+    "outputTokens": 30,
+    "inclusive": true,
+    "cacheReadTokens": 768,
+    "reasoningTokens": 16,
+    "totalTokens": 1080,
+    "cachedInputTokens": 768
+   },
+   "output": {
+    "id": "resp_2",
+    "model": "gpt-5-mini-2025-08-07",
+    "text": "TP1234 at 199 EUR fits the budget.",
+    "finishReason": "stop",
+    "rawFinishReason": "completed",
+    "status": "completed"
+   },
+   "status": "ok"
+  }
+ ],
+ "langgraphTs": [
+  {
+   "nodeId": "llm:claude-sonnet-4-5",
+   "parentId": "chain:agent",
+   "instanceId": "01a0d5b7-1036-74ed-b671-69a822f26512",
+   "seq": 4,
+   "ts": 1790291939383,
+   "input": {
+    "messages": [
+     [
+      {
+       "role": "system",
+       "content": "You plan trips.\nAlways check the weather."
+      },
+      {
+       "role": "human",
+       "content": "Plan my trip from Vienna to Lisbon."
+      }
+     ]
+    ],
+    "temperature": 0.2,
+    "max_tokens": 1024,
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "87cd8f5e6e3bad91"
+     }
+    ],
+    "toolSchemas": {
+     "87cd8f5e6e3bad91": {
+      "type": "function",
+      "function": {
+       "name": "searchFlights",
+       "description": "Search for flights between two airports",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "from": {
+          "type": "string"
+         },
+         "to": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "from",
+         "to"
+        ]
+       }
+      }
+     }
+    }
+   },
+   "startedExtra": {
+    "provider": "anthropic",
+    "modelId": "claude-sonnet-4-5",
+    "langgraphNode": "agent"
+   },
+   "finishedTs": 1790291939384,
+   "usage": {
+    "inputTokens": 1210,
+    "outputTokens": 44,
+    "inclusive": true,
+    "cacheReadTokens": 0,
+    "cacheWriteTokens": 1100
+   },
+   "output": {
+    "text": "Let me search for flights first.",
+    "finishReason": "tool-calls",
+    "rawFinishReason": "tool_use",
+    "toolCalls": [
+     {
+      "id": "toolu_flights_1",
+      "name": "searchFlights",
+      "input": {
+       "from": "VIE",
+       "to": "LIS"
+      }
+     }
+    ]
+   },
+   "status": "ok"
+  },
+  {
+   "nodeId": "llm:claude-sonnet-4-5",
+   "parentId": "chain:agent",
+   "instanceId": "01a0d5b7-103b-75df-9394-fe6c81920b0d",
+   "seq": 10,
+   "ts": 1790291939387,
+   "input": {
+    "messages": [
+     [
+      {
+       "role": "system",
+       "content": "You plan trips.\nAlways check the weather."
+      },
+      {
+       "role": "human",
+       "content": "Plan my trip from Vienna to Lisbon."
+      },
+      {
+       "role": "ai",
+       "content": "Let me search for flights first.",
+       "tool_calls": [
+        {
+         "id": "toolu_flights_1",
+         "name": "searchFlights",
+         "args": {
+          "from": "VIE",
+          "to": "LIS"
+         },
+         "type": "tool_call"
+        }
+       ]
+      },
+      {
+       "role": "tool",
+       "content": "{\"flight\":\"TP1234\",\"priceEUR\":199}",
+       "tool_call_id": "toolu_flights_1",
+       "name": "searchFlights"
+      }
+     ]
+    ],
+    "temperature": 0.2,
+    "max_tokens": 1024,
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "87cd8f5e6e3bad91"
+     }
+    ]
+   },
+   "startedExtra": {
+    "provider": "anthropic",
+    "modelId": "claude-sonnet-4-5",
+    "langgraphNode": "agent"
+   },
+   "finishedTs": 1790291939387,
+   "usage": {
+    "inputTokens": 1330,
+    "outputTokens": 30,
+    "inclusive": true,
+    "cacheReadTokens": 1100,
+    "cacheWriteTokens": 0
+   },
+   "output": {
+    "text": "TP1234 at 199 EUR fits the budget.",
+    "finishReason": "stop",
+    "rawFinishReason": "end_turn"
+   },
+   "status": "ok"
+  }
+ ],
+ "pythonAnthropic": [
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "step_75e661_1",
+   "seq": 4,
+   "ts": 1790292039143,
+   "input": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "system": "You plan trips.",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Plan my trip from Vienna to Lisbon."
+     }
+    ],
+    "max_tokens": 1024,
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "897b7e0d4f5d36ba"
+     }
+    ],
+    "toolSchemas": {
+     "897b7e0d4f5d36ba": {
+      "name": "searchFlights",
+      "description": "Search for flights between two airports",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "from": {
+         "type": "string"
+        },
+        "to": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   },
+   "startedExtra": {
+    "sdk": "anthropic"
+   },
+   "finishedTs": 1790292039153,
+   "usage": {
+    "inputTokens": 1530,
+    "outputTokens": 40,
+    "inclusive": true,
+    "cacheReadTokens": 0,
+    "cacheWriteTokens": 1500
+   },
+   "output": {
+    "text": "Let me search.",
+    "toolCalls": [
+     {
+      "id": "toolu_1",
+      "name": "searchFlights",
+      "input": {
+       "from": "VIE",
+       "to": "LIS"
+      }
+     }
+    ],
+    "finishReason": "tool-calls",
+    "rawFinishReason": "tool_use"
+   },
+   "status": "ok"
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "step_75e661_2",
+   "seq": 6,
+   "ts": 1790292039154,
+   "input": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "system": "You plan trips.",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Plan my trip from Vienna to Lisbon."
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "text": "Let me search.",
+        "type": "text"
+       },
+       {
+        "id": "toolu_1",
+        "input": {
+         "from": "VIE",
+         "to": "LIS"
+        },
+        "name": "searchFlights",
+        "type": "tool_use"
+       }
+      ]
+     },
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_1",
+        "content": "{\"flight\":\"TP1234\",\"priceEUR\":199}"
+       }
+      ]
+     }
+    ],
+    "max_tokens": 1024,
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "897b7e0d4f5d36ba"
+     }
+    ]
+   },
+   "startedExtra": {
+    "sdk": "anthropic"
+   },
+   "finishedTs": 1790292039155,
+   "usage": {
+    "inputTokens": 1620,
+    "outputTokens": 20,
+    "inclusive": true,
+    "cacheReadTokens": 1500,
+    "cacheWriteTokens": 0
+   },
+   "output": {
+    "text": "TP1234 fits the budget.",
+    "finishReason": "stop",
+    "rawFinishReason": "end_turn"
+   },
+   "status": "ok"
+  }
+ ],
+ "pythonOpenAIChat": [
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "step_75e661_3",
+   "seq": 4,
+   "ts": 1790292039435,
+   "input": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You plan trips."
+     },
+     {
+      "role": "user",
+      "content": "Plan my trip from Vienna to Lisbon."
+     }
+    ],
+    "temperature": 0.2,
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "af0e86e2d6adfcab"
+     }
+    ],
+    "toolSchemas": {
+     "af0e86e2d6adfcab": {
+      "type": "function",
+      "function": {
+       "name": "searchFlights",
+       "description": "Search for flights between two airports",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "from": {
+          "type": "string"
+         },
+         "to": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "startedExtra": {
+    "sdk": "openai"
+   },
+   "finishedTs": 1790292039454,
+   "usage": {
+    "inputTokens": 1200,
+    "outputTokens": 20,
+    "inclusive": true,
+    "cacheReadTokens": 0
+   },
+   "output": {
+    "text": "",
+    "toolCalls": [
+     {
+      "id": "call_1",
+      "name": "searchFlights",
+      "input": {
+       "from": "VIE",
+       "to": "LIS"
+      }
+     }
+    ],
+    "finishReason": "tool-calls",
+    "rawFinishReason": "tool_calls"
+   },
+   "status": "ok"
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "step_75e661_4",
+   "seq": 6,
+   "ts": 1790292039455,
+   "input": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You plan trips."
+     },
+     {
+      "role": "user",
+      "content": "Plan my trip from Vienna to Lisbon."
+     },
+     {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+       {
+        "id": "call_1",
+        "function": {
+         "arguments": "{\"from\":\"VIE\",\"to\":\"LIS\"}",
+         "name": "searchFlights"
+        },
+        "type": "function"
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "call_1",
+      "content": "{\"flight\":\"TP1234\"}"
+     }
+    ],
+    "temperature": 0.2,
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "af0e86e2d6adfcab"
+     }
+    ]
+   },
+   "startedExtra": {
+    "sdk": "openai"
+   },
+   "finishedTs": 1790292039456,
+   "usage": {
+    "inputTokens": 1290,
+    "outputTokens": 10,
+    "inclusive": true,
+    "cacheReadTokens": 1152
+   },
+   "output": {
+    "text": "TP1234 fits.",
+    "finishReason": "stop",
+    "rawFinishReason": "stop"
+   },
+   "status": "ok"
+  }
+ ],
+ "pythonOpenAIResponses": [
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "step_75e661_5",
+   "seq": 4,
+   "ts": 1790292039469,
+   "input": {
+    "provider": "openai",
+    "model": "gpt-5-mini",
+    "instructions": "You plan trips.",
+    "input": [
+     {
+      "role": "user",
+      "content": "Plan my trip."
+     }
+    ],
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "7b2b32856427c23d"
+     }
+    ],
+    "toolSchemas": {
+     "7b2b32856427c23d": {
+      "type": "function",
+      "name": "searchFlights",
+      "parameters": {
+       "type": "object",
+       "properties": {}
+      }
+     }
+    }
+   },
+   "startedExtra": {
+    "sdk": "openai"
+   },
+   "finishedTs": 1790292039523,
+   "usage": {
+    "inputTokens": 800,
+    "outputTokens": 20,
+    "inclusive": true,
+    "cacheReadTokens": 0,
+    "reasoningTokens": 8
+   },
+   "output": {
+    "text": "",
+    "toolCalls": [
+     {
+      "id": "call_1",
+      "name": "searchFlights",
+      "input": {
+       "from": "VIE",
+       "to": "LIS"
+      }
+     }
+    ],
+    "finishReason": "tool-calls",
+    "rawFinishReason": "completed",
+    "status": "completed",
+    "output": [
+     {
+      "arguments": "{\"from\":\"VIE\",\"to\":\"LIS\"}",
+      "call_id": "call_1",
+      "name": "searchFlights",
+      "type": "function_call",
+      "id": "fc_1",
+      "async_": null,
+      "caller": null,
+      "namespace": null,
+      "status": "completed"
+     }
+    ]
+   },
+   "status": "ok"
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:trip-planner",
+   "instanceId": "step_75e661_6",
+   "seq": 6,
+   "ts": 1790292039523,
+   "input": {
+    "provider": "openai",
+    "model": "gpt-5-mini",
+    "instructions": "You plan trips.",
+    "input": [
+     {
+      "role": "user",
+      "content": "Plan my trip."
+     },
+     {
+      "type": "function_call",
+      "call_id": "call_1",
+      "name": "searchFlights",
+      "arguments": "{\"from\":\"VIE\",\"to\":\"LIS\"}"
+     },
+     {
+      "type": "function_call_output",
+      "call_id": "call_1",
+      "output": "{\"flight\":\"TP1234\"}"
+     }
+    ],
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "7b2b32856427c23d"
+     }
+    ]
+   },
+   "startedExtra": {
+    "sdk": "openai"
+   },
+   "finishedTs": 1790292039526,
+   "usage": {
+    "inputTokens": 880,
+    "outputTokens": 20,
+    "inclusive": true,
+    "cacheReadTokens": 768,
+    "reasoningTokens": 8
+   },
+   "output": {
+    "text": "TP1234 fits.",
+    "finishReason": "stop",
+    "rawFinishReason": "completed",
+    "status": "completed",
+    "output": [
+     {
+      "id": "msg_1",
+      "content": [
+       {
+        "annotations": [],
+        "text": "TP1234 fits.",
+        "type": "output_text",
+        "logprobs": null
+       }
+      ],
+      "role": "assistant",
+      "status": "completed",
+      "type": "message",
+      "phase": null
+     }
+    ]
+   },
+   "status": "ok"
+  }
+ ],
+ "pythonLangchain": [
+  {
+   "nodeId": "llm:GenericFakeChatModel",
+   "parentId": "agent:trip-planner",
+   "instanceId": "01a0d5b8-97d1-7f22-b788-ed1eed1647f7",
+   "seq": 3,
+   "ts": 1790292039633,
+   "input": {
+    "messages": [
+     [
+      {
+       "content": "You plan trips.",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "system",
+       "name": null,
+       "id": null
+      },
+      {
+       "content": "Plan my trip.",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "human",
+       "name": null,
+       "id": null
+      }
+     ]
+    ]
+   },
+   "startedExtra": {
+    "framework": "langchain"
+   },
+   "finishedTs": 1790292039634,
+   "usage": {
+    "inputTokens": 900,
+    "outputTokens": 15,
+    "inclusive": true
+   },
+   "output": {
+    "text": "",
+    "toolCalls": [
+     {
+      "id": "call_1",
+      "name": "searchFlights",
+      "input": {
+       "from": "VIE",
+       "to": "LIS"
+      }
+     }
+    ]
+   },
+   "status": "ok"
+  },
+  {
+   "nodeId": "llm:GenericFakeChatModel",
+   "parentId": "agent:trip-planner",
+   "instanceId": "01a0d5b8-97d2-78a1-89a3-f8f5e93f6a01",
+   "seq": 5,
+   "ts": 1790292039634,
+   "input": {
+    "messages": [
+     [
+      {
+       "content": "You plan trips.",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "system",
+       "name": null,
+       "id": null
+      },
+      {
+       "content": "Plan my trip.",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "human",
+       "name": null,
+       "id": null
+      },
+      {
+       "content": "",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "ai",
+       "name": null,
+       "id": "lc_run--01a0d5b8-97d1-7f22-b788-ed1eed1647f7-0",
+       "tool_calls": [
+        {
+         "name": "searchFlights",
+         "args": {
+          "from": "VIE",
+          "to": "LIS"
+         },
+         "id": "call_1",
+         "type": "tool_call"
+        }
+       ],
+       "invalid_tool_calls": [],
+       "usage_metadata": {
+        "input_tokens": 900,
+        "output_tokens": 15,
+        "total_tokens": 915
+       }
+      },
+      {
+       "content": "{\"flight\":\"TP1234\"}",
+       "additional_kwargs": {},
+       "response_metadata": {},
+       "type": "tool",
+       "name": "searchFlights",
+       "id": null,
+       "tool_call_id": "call_1",
+       "artifact": null,
+       "status": "success"
+      }
+     ]
+    ]
+   },
+   "startedExtra": {
+    "framework": "langchain"
+   },
+   "finishedTs": 1790292039634,
+   "usage": {
+    "inputTokens": 960,
+    "outputTokens": 8,
+    "inclusive": true
+   },
+   "output": {
+    "text": "TP1234 fits."
+   },
+   "status": "ok"
+  }
+ ],
+ "rubyOpenAI": [
+  {
+   "nodeId": "llm:step",
+   "instanceId": "call_096a5c_4",
+   "seq": 3,
+   "ts": 1790292143496,
+   "input": {
+    "operation": "chat.completions",
+    "model": "gpt-4o-mini",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You plan trips."
+     },
+     {
+      "role": "user",
+      "content": "Plan my trip."
+     }
+    ],
+    "temperature": 0.2,
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "83828623a31648dd"
+     }
+    ],
+    "toolSchemas": {
+     "83828623a31648dd": {
+      "type": "function",
+      "function": {
+       "name": "searchFlights",
+       "description": "Search for flights",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "from": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "finishedTs": 1790292143497,
+   "usage": {
+    "inputTokens": 1100,
+    "outputTokens": 12,
+    "inclusive": true,
+    "cacheReadTokens": 0
+   },
+   "output": {
+    "toolCalls": [
+     {
+      "id": "call_1",
+      "name": "searchFlights",
+      "input": {
+       "from": "VIE"
+      }
+     }
+    ],
+    "finishReason": "tool-calls",
+    "rawFinishReason": "tool_calls",
+    "id": "chatcmpl-1",
+    "model": "gpt-4o-mini-2024-07-18"
+   },
+   "status": "ok"
+  },
+  {
+   "nodeId": "llm:step",
+   "instanceId": "call_096a5c_5",
+   "seq": 5,
+   "ts": 1790292143497,
+   "input": {
+    "operation": "chat.completions",
+    "model": "gpt-4o-mini",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You plan trips."
+     },
+     {
+      "role": "user",
+      "content": "Plan my trip."
+     },
+     {
+      "role": "assistant",
+      "tool_calls": [
+       {
+        "id": "call_1",
+        "type": "function",
+        "function": {
+         "name": "searchFlights",
+         "arguments": "{\"from\":\"VIE\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "call_1",
+      "content": "{\"flight\":\"TP1234\"}"
+     }
+    ],
+    "temperature": 0.2,
+    "tools": [
+     {
+      "name": "searchFlights",
+      "schemaHash": "83828623a31648dd"
+     }
+    ]
+   },
+   "finishedTs": 1790292143497,
+   "usage": {
+    "inputTokens": 1180,
+    "outputTokens": 6,
+    "inclusive": true,
+    "cacheReadTokens": 1024
+   },
+   "output": {
+    "text": "TP1234 fits.",
+    "finishReason": "stop",
+    "rawFinishReason": "stop",
+    "id": "chatcmpl-2",
+    "model": "gpt-4o-mini-2024-07-18"
+   },
+   "status": "ok"
+  }
+ ],
+ "rubyLlm": [
+  {
+   "nodeId": "llm:step",
+   "instanceId": "call_096a5c_1",
+   "seq": 3,
+   "ts": 1790292143376,
+   "input": {
+    "hook": "provider_completion",
+    "model": "gpt-4o-mini",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You plan trips."
+     },
+     {
+      "role": "user",
+      "content": "Weather in Lisbon?"
+     }
+    ],
+    "temperature": 0.2,
+    "tools": [
+     {
+      "name": "weather",
+      "schemaHash": "91845adf41addc5f"
+     }
+    ],
+    "toolSchemas": {
+     "91845adf41addc5f": {
+      "name": "weather",
+      "description": "Looks up the weather",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string",
+         "description": "City name"
+        }
+       },
+       "required": [
+        "city"
+       ],
+       "additionalProperties": false,
+       "strict": true
+      }
+     }
+    }
+   },
+   "finishedTs": 1790292143376,
+   "usage": {
+    "inputTokens": 700,
+    "outputTokens": 9,
+    "inclusive": true
+   },
+   "output": {
+    "text": "",
+    "toolCalls": [
+     {
+      "id": "call_1",
+      "name": "weather",
+      "input": {
+       "city": "Lisbon"
+      }
+     }
+    ],
+    "model": "gpt-4o-mini"
+   },
+   "status": "ok"
+  },
+  {
+   "nodeId": "llm:step",
+   "instanceId": "call_096a5c_3",
+   "seq": 7,
+   "ts": 1790292143377,
+   "input": {
+    "hook": "provider_completion",
+    "model": "gpt-4o-mini",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You plan trips."
+     },
+     {
+      "role": "user",
+      "content": "Weather in Lisbon?"
+     },
+     {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+       {
+        "id": "call_1",
+        "name": "weather",
+        "input": {
+         "city": "Lisbon"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "content": "sunny in Lisbon",
+      "tool_call_id": "call_1"
+     }
+    ],
+    "temperature": 0.2,
+    "tools": [
+     {
+      "name": "weather",
+      "schemaHash": "91845adf41addc5f"
+     }
+    ]
+   },
+   "finishedTs": 1790292143377,
+   "usage": {
+    "inputTokens": 760,
+    "outputTokens": 5,
+    "inclusive": true
+   },
+   "output": {
+    "text": "Sunny in Lisbon.",
+    "model": "gpt-4o-mini"
+   },
+   "status": "ok"
+  }
+ ],
+ "legacyDemoAiSdk": [
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:plan-tokyo-trip",
+   "instanceId": "inv_6369bc_1:s0",
+   "ts": 1787769609692,
+   "input": {
+    "prompt": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "Plan a 5-day trip to Tokyo in November for 2 people flying from San Francisco, budget $3,800. Search flights, check the weather, convert the total cost to USD, verify it against the budget, then summarize the plan."
+       }
+      ]
+     }
+    ],
+    "modelId": "mock-model-id",
+    "provider": "mock-provider"
+   },
+   "finishedTs": 1787769610415,
+   "usage": {
+    "inputTokens": 184,
+    "outputTokens": 52
+   },
+   "output": {
+    "text": "Planning a 5-day Tokyo trip for two in November on a $3,800 budget. Let me check flights and the weather. ",
+    "finishReason": "tool-calls"
+   }
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:plan-tokyo-trip",
+   "instanceId": "inv_6369bc_1:s1",
+   "ts": 1787769610426,
+   "input": {
+    "prompt": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "Plan a 5-day trip to Tokyo in November for 2 people flying from San Francisco, budget $3,800. Search flights, check the weather, convert the total cost to USD, verify it against the budget, then summarize the plan."
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "Planning a 5-day Tokyo trip for two in November on a $3,800 budget. Let me check flights and the weather. "
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-flights-1",
+        "toolName": "searchFlights",
+        "input": {
+         "from": "San Francisco",
+         "to": "Tokyo",
+         "month": "November",
+         "travelers": 2
+        }
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-weather-1",
+        "toolName": "getWeather",
+        "input": {
+         "city": "Tokyo",
+         "month": "November"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "content": [
+       {
+        "type": "tool-result",
+        "toolCallId": "call-flights-1",
+        "toolName": "searchFlights",
+        "output": {
+         "type": "json",
+         "value": {
+          "carrier": "ANA",
+          "route": "SFO → NRT (round trip)",
+          "pricePerPerson": 118500,
+          "currency": "JPY",
+          "travelers": 2,
+          "total": 237000,
+          "note": "cheapest nonstop found"
+         }
+        }
+       },
+       {
+        "type": "tool-result",
+        "toolCallId": "call-weather-1",
+        "toolName": "getWeather",
+        "output": {
+         "type": "json",
+         "value": {
+          "city": "Tokyo",
+          "month": "November",
+          "avgHighC": 16,
+          "avgLowC": 9,
+          "rainyDays": 6,
+          "summary": "crisp and clear — pack layers"
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "modelId": "mock-model-id",
+    "provider": "mock-provider"
+   },
+   "finishedTs": 1787769611345,
+   "usage": {
+    "inputTokens": 184,
+    "outputTokens": 52
+   },
+   "output": {
+    "text": "Flights: ANA round trip at ¥118,500 per person — ¥237,000 for two. November in Tokyo is 9–16°C and mostly dry. With ¥165,000 for hotels, food and transit, the trip totals ¥402,000. Converting to USD to check the budget. ",
+    "finishReason": "tool-calls"
+   }
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:plan-tokyo-trip",
+   "instanceId": "inv_6369bc_1:s2",
+   "ts": 1787769611350,
+   "input": {
+    "prompt": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "Plan a 5-day trip to Tokyo in November for 2 people flying from San Francisco, budget $3,800. Search flights, check the weather, convert the total cost to USD, verify it against the budget, then summarize the plan."
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "Planning a 5-day Tokyo trip for two in November on a $3,800 budget. Let me check flights and the weather. "
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-flights-1",
+        "toolName": "searchFlights",
+        "input": {
+         "from": "San Francisco",
+         "to": "Tokyo",
+         "month": "November",
+         "travelers": 2
+        }
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-weather-1",
+        "toolName": "getWeather",
+        "input": {
+         "city": "Tokyo",
+         "month": "November"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "content": [
+       {
+        "type": "tool-result",
+        "toolCallId": "call-flights-1",
+        "toolName": "searchFlights",
+        "output": {
+         "type": "json",
+         "value": {
+          "carrier": "ANA",
+          "route": "SFO → NRT (round trip)",
+          "pricePerPerson": 118500,
+          "currency": "JPY",
+          "travelers": 2,
+          "total": 237000,
+          "note": "cheapest nonstop found"
+         }
+        }
+       },
+       {
+        "type": "tool-result",
+        "toolCallId": "call-weather-1",
+        "toolName": "getWeather",
+        "output": {
+         "type": "json",
+         "value": {
+          "city": "Tokyo",
+          "month": "November",
+          "avgHighC": 16,
+          "avgLowC": 9,
+          "rainyDays": 6,
+          "summary": "crisp and clear — pack layers"
+         }
+        }
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "Flights: ANA round trip at ¥118,500 per person — ¥237,000 for two. November in Tokyo is 9–16°C and mostly dry. With ¥165,000 for hotels, food and transit, the trip totals ¥402,000. Converting to USD to check the budget. "
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-fx-1",
+        "toolName": "convertCurrency",
+        "input": {
+         "amount": 402000,
+         "from": "JPY",
+         "to": "USD"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "content": [
+       {
+        "type": "tool-result",
+        "toolCallId": "call-fx-1",
+        "toolName": "convertCurrency",
+        "output": {
+         "type": "json",
+         "value": {
+          "amount": 402000,
+          "from": "JPY",
+          "to": "USD",
+          "rate": 0.0067,
+          "converted": 60000000
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "modelId": "mock-model-id",
+    "provider": "mock-provider"
+   },
+   "finishedTs": 1787769611925,
+   "usage": {
+    "inputTokens": 184,
+    "outputTokens": 52
+   },
+   "output": {
+    "text": "That converts to $60,000,000. Checking it against the budget. ",
+    "finishReason": "tool-calls"
+   }
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:plan-tokyo-trip",
+   "instanceId": "inv_6369bc_1:s3",
+   "ts": 1787769611930,
+   "input": {
+    "prompt": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "Plan a 5-day trip to Tokyo in November for 2 people flying from San Francisco, budget $3,800. Search flights, check the weather, convert the total cost to USD, verify it against the budget, then summarize the plan."
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "Planning a 5-day Tokyo trip for two in November on a $3,800 budget. Let me check flights and the weather. "
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-flights-1",
+        "toolName": "searchFlights",
+        "input": {
+         "from": "San Francisco",
+         "to": "Tokyo",
+         "month": "November",
+         "travelers": 2
+        }
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-weather-1",
+        "toolName": "getWeather",
+        "input": {
+         "city": "Tokyo",
+         "month": "November"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "content": [
+       {
+        "type": "tool-result",
+        "toolCallId": "call-flights-1",
+        "toolName": "searchFlights",
+        "output": {
+         "type": "json",
+         "value": {
+          "carrier": "ANA",
+          "route": "SFO → NRT (round trip)",
+          "pricePerPerson": 118500,
+          "currency": "JPY",
+          "travelers": 2,
+          "total": 237000,
+          "note": "cheapest nonstop found"
+         }
+        }
+       },
+       {
+        "type": "tool-result",
+        "toolCallId": "call-weather-1",
+        "toolName": "getWeather",
+        "output": {
+         "type": "json",
+         "value": {
+          "city": "Tokyo",
+          "month": "November",
+          "avgHighC": 16,
+          "avgLowC": 9,
+          "rainyDays": 6,
+          "summary": "crisp and clear — pack layers"
+         }
+        }
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "Flights: ANA round trip at ¥118,500 per person — ¥237,000 for two. November in Tokyo is 9–16°C and mostly dry. With ¥165,000 for hotels, food and transit, the trip totals ¥402,000. Converting to USD to check the budget. "
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-fx-1",
+        "toolName": "convertCurrency",
+        "input": {
+         "amount": 402000,
+         "from": "JPY",
+         "to": "USD"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "content": [
+       {
+        "type": "tool-result",
+        "toolCallId": "call-fx-1",
+        "toolName": "convertCurrency",
+        "output": {
+         "type": "json",
+         "value": {
+          "amount": 402000,
+          "from": "JPY",
+          "to": "USD",
+          "rate": 0.0067,
+          "converted": 60000000
+         }
+        }
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "That converts to $60,000,000. Checking it against the budget. "
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-budget-1",
+        "toolName": "checkBudget",
+        "input": {
+         "totalUsd": 60000000,
+         "budgetUsd": 3800
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "content": [
+       {
+        "type": "tool-result",
+        "toolCallId": "call-budget-1",
+        "toolName": "checkBudget",
+        "output": {
+         "type": "json",
+         "value": {
+          "ok": true,
+          "totalUsd": 2693.4,
+          "budgetUsd": 3800,
+          "remainingUsd": 1106.6,
+          "note": "corrected by the debugger — convertCurrency inverted the rate"
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "modelId": "mock-model-id",
+    "provider": "mock-provider"
+   },
+   "finishedTs": 1787769612812,
+   "usage": {
+    "inputTokens": 184,
+    "outputTokens": 52
+   },
+   "output": {
+    "text": "Great news — the trip fits the budget with $1,106.6 to spare. Itinerary: fly SFO→NRT on ANA, base in Shinjuku, day trips to Kamakura and Hakone, and keep an evening free for Shibuya. Pack layers for 9–16°C days. ",
+    "finishReason": "stop"
+   }
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:plan-tokyo-trip",
+   "instanceId": "inv_6369bc_2:s3",
+   "ts": 1787769615406,
+   "input": {
+    "prompt": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "text",
+        "text": "Plan a 5-day trip to Tokyo in November for 2 people flying from San Francisco, budget $3,800. Search flights, check the weather, convert the total cost to USD, verify it against the budget, then summarize the plan."
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "Planning a 5-day Tokyo trip for two in November on a $3,800 budget. Let me check flights and the weather. "
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-flights-1",
+        "toolName": "searchFlights",
+        "input": {
+         "from": "San Francisco",
+         "to": "Tokyo",
+         "month": "November",
+         "travelers": 2
+        }
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-weather-1",
+        "toolName": "getWeather",
+        "input": {
+         "city": "Tokyo",
+         "month": "November"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "content": [
+       {
+        "type": "tool-result",
+        "toolCallId": "call-flights-1",
+        "toolName": "searchFlights",
+        "output": {
+         "type": "json",
+         "value": {
+          "carrier": "ANA",
+          "route": "SFO → NRT (round trip)",
+          "pricePerPerson": 118500,
+          "currency": "JPY",
+          "travelers": 2,
+          "total": 237000,
+          "note": "cheapest nonstop found"
+         }
+        }
+       },
+       {
+        "type": "tool-result",
+        "toolCallId": "call-weather-1",
+        "toolName": "getWeather",
+        "output": {
+         "type": "json",
+         "value": {
+          "city": "Tokyo",
+          "month": "November",
+          "avgHighC": 16,
+          "avgLowC": 9,
+          "rainyDays": 6,
+          "summary": "crisp and clear — pack layers"
+         }
+        }
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "Flights: ANA round trip at ¥118,500 per person — ¥237,000 for two. November in Tokyo is 9–16°C and mostly dry. With ¥165,000 for hotels, food and transit, the trip totals ¥402,000. Converting to USD to check the budget. "
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-fx-1",
+        "toolName": "convertCurrency",
+        "input": {
+         "amount": 402000,
+         "from": "JPY",
+         "to": "USD"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "content": [
+       {
+        "type": "tool-result",
+        "toolCallId": "call-fx-1",
+        "toolName": "convertCurrency",
+        "output": {
+         "type": "json",
+         "value": {
+          "amount": 402000,
+          "from": "JPY",
+          "to": "USD",
+          "rate": 0.0067,
+          "converted": 60000000
+         }
+        }
+       }
+      ]
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "That converts to $60,000,000. Checking it against the budget. "
+       },
+       {
+        "type": "tool-call",
+        "toolCallId": "call-budget-1",
+        "toolName": "checkBudget",
+        "input": {
+         "totalUsd": 60000000,
+         "budgetUsd": 3800
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "content": [
+       {
+        "type": "tool-result",
+        "toolCallId": "call-budget-1",
+        "toolName": "checkBudget",
+        "output": {
+         "type": "error-text",
+         "value": "BudgetExceededError: Trip total $60,000,000.00 exceeds the $3,800.00 budget by $59,996,200.00."
+        }
+       }
+      ]
+     }
+    ],
+    "modelId": "mock-model-id",
+    "provider": "mock-provider"
+   },
+   "finishedTs": 1787769616242,
+   "usage": {
+    "inputTokens": 184,
+    "outputTokens": 52
+   },
+   "output": {
+    "text": "I could not finish planning: the budget check failed with the total wildly over budget. The currency conversion looks wrong — ¥402,000 should be roughly $2,700, not tens of millions. Please review the convertCurrency tool. ",
+    "finishReason": "stop"
+   }
+  }
+ ],
+ "legacyAnthropicTs": [
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:scenario",
+   "instanceId": "inv_61af21_1:s0",
+   "ts": 1790171948276,
+   "input": {
+    "model": "claude-sonnet-4-5",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Plan my trip from Vienna to Lisbon with a 100 EUR budget check."
+     }
+    ],
+    "tools": [
+     "searchFlights",
+     "checkWeather",
+     "convertCurrency"
+    ],
+    "stream": false
+   },
+   "finishedTs": 1790171948280,
+   "usage": {
+    "inputTokens": 20,
+    "outputTokens": 10,
+    "cacheReadTokens": 5,
+    "cacheCreationTokens": 2
+   },
+   "output": {
+    "text": "Let me search for flights first. ",
+    "stopReason": "tool_use",
+    "model": "claude-sonnet-4-5"
+   }
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:scenario",
+   "instanceId": "inv_61af21_1:s1",
+   "ts": 1790171948294,
+   "input": {
+    "model": "claude-sonnet-4-5",
+    "messages": [
+     {
+      "role": "user",
+      "content": "Plan my trip from Vienna to Lisbon with a 100 EUR budget check."
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "text",
+        "text": "Let me search for flights first. "
+       },
+       {
+        "type": "tool_use",
+        "id": "toolu_flights_1",
+        "name": "searchFlights",
+        "input": {
+         "from": "VIE",
+         "to": "LIS"
+        }
+       }
+      ]
+     },
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_flights_1",
+        "content": "{\"flights\":[{\"id\":\"TP1234\",\"from\":\"VIE\",\"to\":\"LIS\",\"priceEUR\":199}]}"
+       }
+      ]
+     }
+    ],
+    "tools": [
+     "searchFlights",
+     "checkWeather",
+     "convertCurrency"
+    ],
+    "stream": false
+   },
+   "finishedTs": 1790171948296,
+   "usage": {
+    "inputTokens": 20,
+    "outputTokens": 10,
+    "cacheReadTokens": 5,
+    "cacheCreationTokens": 2
+   },
+   "output": {
+    "text": "Now checking weather and budget in parallel. ",
+    "stopReason": "tool_use",
+    "model": "claude-sonnet-4-5"
+   }
+  }
+ ],
+ "legacyOpenaiChat": [
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:scenario",
+   "instanceId": "inv_de1dfa_1:s0",
+   "ts": 1790171988089,
+   "input": {
+    "api": "chat.completions",
+    "model": "gpt-5.4",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You plan trips."
+     },
+     {
+      "role": "user",
+      "content": "Plan my trip from Vienna to Lisbon with a 100 EUR budget check."
+     }
+    ]
+   },
+   "finishedTs": 1790171988092,
+   "usage": {
+    "inputTokens": 20,
+    "outputTokens": 10,
+    "totalTokens": 30,
+    "cachedInputTokens": 4,
+    "reasoningTokens": 6
+   },
+   "output": {
+    "id": "chatcmpl-1",
+    "model": "gpt-5.4",
+    "text": "Let me search for flights first. ",
+    "toolCalls": [
+     {
+      "id": "call-flights-1",
+      "name": "searchFlights",
+      "arguments": {
+       "from": "VIE",
+       "to": "LIS"
+      }
+     }
+    ],
+    "finishReason": "tool_calls"
+   }
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:scenario",
+   "instanceId": "inv_de1dfa_1:s1",
+   "ts": 1790171988118,
+   "input": {
+    "api": "chat.completions",
+    "model": "gpt-5.4",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You plan trips."
+     },
+     {
+      "role": "user",
+      "content": "Plan my trip from Vienna to Lisbon with a 100 EUR budget check."
+     },
+     {
+      "role": "assistant",
+      "content": "Let me search for flights first. ",
+      "tool_calls": [
+       {
+        "id": "call-flights-1",
+        "type": "function",
+        "function": {
+         "name": "searchFlights",
+         "arguments": "{\"from\":\"VIE\",\"to\":\"LIS\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "call-flights-1",
+      "content": "{\"flights\":[{\"id\":\"TP1234\",\"from\":\"VIE\",\"to\":\"LIS\",\"priceEUR\":199}]}"
+     }
+    ]
+   },
+   "finishedTs": 1790171988119,
+   "usage": {
+    "inputTokens": 20,
+    "outputTokens": 10,
+    "totalTokens": 30,
+    "cachedInputTokens": 4,
+    "reasoningTokens": 6
+   },
+   "output": {
+    "id": "chatcmpl-1",
+    "model": "gpt-5.4",
+    "text": "Now checking weather and budget in parallel. ",
+    "toolCalls": [
+     {
+      "id": "call-weather-1",
+      "name": "checkWeather",
+      "arguments": {
+       "city": "Lisbon"
+      }
+     },
+     {
+      "id": "call-currency-1",
+      "name": "convertCurrency",
+      "arguments": {
+       "amount": 100,
+       "from": "EUR",
+       "to": "USD"
+      }
+     }
+    ],
+    "finishReason": "tool_calls"
+   }
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:scenario",
+   "instanceId": "inv_de1dfa_1:s2",
+   "ts": 1790171988147,
+   "input": {
+    "api": "chat.completions",
+    "model": "gpt-5.4",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You plan trips."
+     },
+     {
+      "role": "user",
+      "content": "Plan my trip from Vienna to Lisbon with a 100 EUR budget check."
+     },
+     {
+      "role": "assistant",
+      "content": "Let me search for flights first. ",
+      "tool_calls": [
+       {
+        "id": "call-flights-1",
+        "type": "function",
+        "function": {
+         "name": "searchFlights",
+         "arguments": "{\"from\":\"VIE\",\"to\":\"LIS\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "call-flights-1",
+      "content": "{\"flights\":[{\"id\":\"TP1234\",\"from\":\"VIE\",\"to\":\"LIS\",\"priceEUR\":199}]}"
+     },
+     {
+      "role": "assistant",
+      "content": "Now checking weather and budget in parallel. ",
+      "tool_calls": [
+       {
+        "id": "call-weather-1",
+        "type": "function",
+        "function": {
+         "name": "checkWeather",
+         "arguments": "{\"city\":\"Lisbon\"}"
+        }
+       },
+       {
+        "id": "call-currency-1",
+        "type": "function",
+        "function": {
+         "name": "convertCurrency",
+         "arguments": "{\"amount\":100,\"from\":\"EUR\",\"to\":\"USD\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "call-weather-1",
+      "content": "{\"city\":\"Lisbon\",\"forecast\":\"sunny\",\"tempC\":31}"
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "call-currency-1",
+      "content": "{\"amount\":100,\"converted\":91.3,\"currency\":\"USD\"}"
+     }
+    ]
+   },
+   "finishedTs": 1790171988147,
+   "usage": {
+    "inputTokens": 20,
+    "outputTokens": 10,
+    "totalTokens": 30,
+    "cachedInputTokens": 4,
+    "reasoningTokens": 6
+   },
+   "output": {
+    "id": "chatcmpl-1",
+    "model": "gpt-5.4",
+    "text": "Trip report: {\"searchFlights\":{\"flights\":[{\"id\":\"TP1234\",\"from\":\"VIE\",\"to\":\"LIS\",\"priceEUR\":199}]},\"checkWeather\":{\"city\":\"Lisbon\",\"forecast\":\"sunny\",\"tempC\":31},\"convertCurrency\":{\"amount\":100,\"converted\":91.3,\"currency\":\"USD\"}}",
+    "finishReason": "stop"
+   }
+  }
+ ],
+ "legacyLangchainTs": [
+  {
+   "nodeId": "llm:FakeListChatModel",
+   "parentId": "agent:planner",
+   "instanceId": "01a0ce91-30a3-70c9-bc57-a548feca9d3d",
+   "ts": 1790172016803,
+   "input": {
+    "messages": [
+     [
+      {
+       "role": "system",
+       "content": "You plan trips."
+      },
+      {
+       "role": "human",
+       "content": "Plan my trip from Vienna to Lisbon."
+      }
+     ]
+    ]
+   },
+   "startedExtra": {
+    "provider": "FakeListChatModel"
+   },
+   "finishedTs": 1790172016804,
+   "output": {
+    "text": "Let me search."
+   }
+  },
+  {
+   "nodeId": "llm:FakeListChatModel",
+   "parentId": "agent:planner",
+   "instanceId": "01a0ce91-30a4-73f8-a350-e54ae0521214",
+   "ts": 1790172016804,
+   "input": {
+    "messages": [
+     [
+      {
+       "role": "system",
+       "content": "You plan trips."
+      },
+      {
+       "role": "human",
+       "content": "Plan my trip from Vienna to Lisbon."
+      },
+      {
+       "role": "ai",
+       "content": "Let me search.",
+       "tool_calls": [
+        {
+         "id": "call_1",
+         "name": "searchFlights",
+         "args": {
+          "from": "VIE",
+          "to": "LIS"
+         }
+        }
+       ]
+      },
+      {
+       "role": "tool",
+       "content": "{\"flight\":\"TP1234\",\"priceEUR\":199}",
+       "name": "searchFlights"
+      }
+     ]
+    ]
+   },
+   "startedExtra": {
+    "provider": "FakeListChatModel"
+   },
+   "finishedTs": 1790172016804,
+   "output": {
+    "text": "Found TP1234."
+   }
+  }
+ ],
+ "legacyPythonTrimmed": [
+  {
+   "instanceId": "py-t-1",
+   "ts": 1000,
+   "input": {
+    "provider": "openai",
+    "model": "gpt-4o",
+    "messages": [
+     {
+      "role": "user",
+      "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…[truncated]"
+     }
+    ]
+   }
+  }
+ ],
+ "legacyRubyTrimmed": [
+  {
+   "instanceId": "rb-t-1",
+   "ts": 1000,
+   "input": {
+    "hook": "on_end_message",
+    "model": "gpt-4o-mini",
+    "messages": [
+     {
+      "role": "…",
+      "content": "3 earlier messages"
+     },
+     {
+      "role": "user",
+      "content": "hi"
+     }
+    ]
+   }
+  },
+  {
+   "instanceId": "rb-t-2",
+   "ts": 2000,
+   "input": {
+    "operation": "chat",
+    "model": "gpt-4o-mini",
+    "messages": [
+     {
+      "role": "user",
+      "content": "yyyyyyyyyyyyyyyyyyyy… (2345 chars)"
+     }
+    ]
+   }
+  }
+ ],
+ "otlpImport": [
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:searchFlights-agent",
+   "instanceId": "b2b2b2b2b2b2b2b2",
+   "ts": 1700000000100,
+   "input": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Find me a flight from SFO to JFK"
+      }
+     ]
+    }
+   ],
+   "startedExtra": {
+    "model": "gpt-4o-2024-08-06"
+   },
+   "finishedTs": 1700000001500,
+   "usage": {
+    "inputTokens": 180,
+    "outputTokens": 25
+   },
+   "output": [
+    {
+     "toolCallType": "function",
+     "toolCallId": "call_1",
+     "toolName": "searchFlights",
+     "args": "{\"from\":\"SFO\",\"to\":\"JFK\"}"
+    }
+   ]
+  },
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:searchFlights-agent",
+   "instanceId": "d4d4d4d4d4d4d4d4",
+   "ts": 1700000002500,
+   "input": [
+    {
+     "role": "tool",
+     "content": [
+      {
+       "type": "tool-result",
+       "toolCallId": "call_1"
+      }
+     ]
+    }
+   ],
+   "startedExtra": {
+    "model": "gpt-4o-2024-08-06"
+   },
+   "finishedTs": 1700000003900,
+   "usage": {
+    "inputTokens": 240,
+    "outputTokens": 40
+   },
+   "output": "Booked UA123 departing 9:05am."
+  }
+ ],
+ "openInference": [
+  {
+   "nodeId": "llm:step",
+   "parentId": "agent:weather-agent",
+   "instanceId": "s_llm1",
+   "ts": 1710000000100,
+   "input": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is the weather in Paris?"
+     }
+    ]
+   },
+   "startedExtra": {
+    "model": "gpt-4o-mini"
+   },
+   "finishedTs": 1710000001200,
+   "usage": {
+    "inputTokens": 96,
+    "outputTokens": 18
+   },
+   "output": {
+    "tool_calls": [
+     {
+      "name": "get_weather",
+      "arguments": "{\"city\":\"Paris\"}"
+     }
+    ]
+   }
+  }
+ ]
+}
