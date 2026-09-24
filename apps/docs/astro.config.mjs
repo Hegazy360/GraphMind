@@ -129,6 +129,7 @@ export default defineConfig({
             { slug: 'debugging/breakpoints-and-step' },
             { slug: 'debugging/inspecting' },
             { slug: 'debugging/inject-and-continue' },
+            { slug: 'debugging/edit-arguments' },
             { slug: 'debugging/retry-and-abort' },
             { slug: 'debugging/large-graphs' },
             { slug: 'debugging/comparing-runs' },

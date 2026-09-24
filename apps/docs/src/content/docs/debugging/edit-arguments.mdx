@@ -1,0 +1,127 @@
+---
+title: Edit arguments and run
+description: Fix the arguments of a held tool call and let the real call run with them — then keep watching the agent. New in 0.6.0.
+sidebar:
+  order: 5
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+[Inject](/debugging/inject-and-continue/) replaces a tool's **result**: the real call is skipped.
+**Edit arguments** replaces its **input**: the real call runs, with the arguments you typed. Use it
+when the tool is fine and the model asked for the wrong thing — a date in the wrong format, a
+limit that is too large, an id that does not exist — and you want to see what happens when the
+call goes through for real.
+
+## Using it
+
+<Steps>
+
+1. **Get to a gate on a tool call.** Pause-on-error is armed by default, so a tool that threw on
+   bad arguments is already held. For a call that did not fail, set a breakpoint on the tool
+   ([breakpoints & step mode](/debugging/breakpoints-and-step/)).
+
+2. **Choose "Edit arguments…"** (keyboard: `e`). It appears only on pauses the app marked as
+   editable — see [where it works](#where-it-works). The editor opens pre-filled with the
+   arguments the model asked for.
+
+3. **Change what is wrong.** The editor lists the keys you changed. **Only those keys are sent**;
+   every other key keeps its live value, so a large argument you did not touch is never replaced
+   by a shortened preview.
+
+4. **Run it.** At a `before` gate the button reads **Run with N changes**; at an `after` or
+   `error` gate it reads **Retry with N changes** and re-runs the call. The tool runs with the
+   edited arguments and the agent carries on with its real result.
+
+</Steps>
+
+The same works from a terminal or a coding agent — see [driving it from the CLI](#from-the-cli).
+
+## What happens to an edit
+
+- **It is checked against the tool's own schema first.** The AI SDK validates the *model's*
+  arguments before a tool runs, so an edited value would otherwise skip that check. GraphMind
+  re-runs it: the tool's `inputSchema` (AI SDK), its zod schema (LangGraph, MCP), or the
+  `inputSchema` from the last `tools/list` (`mcp-proxy`). The value the schema returns is what
+  runs.
+- **A refused edit keeps the call held.** The editor shows why — for a schema failure, *"The
+  tool's schema rejected this: …"* naming the field and the problem, never quoting your value —
+  and you can fix it and try again, or continue without an edit.
+- **It applies to this call only.** The model still sees the arguments it asked for in its
+  history; it is not told they were changed. A second call to the same tool starts from the
+  model's arguments again.
+- **A plain retry after an edit re-runs the edited arguments**, not the original ones — the
+  record already says the call ran with them.
+- **It is recorded.** The release carries `edited: {after}` with the arguments the call actually
+  ran with, the viewer marks the call **edited** and shows *asked for* next to *ran with*, and the
+  audit line says who resumed it ("resumed by viewer", "resumed by agent").
+
+| Refusal | Means |
+| --- | --- |
+| `schema` | The tool's schema rejected the edited arguments. |
+| `shape` | The edit is not an object of arguments, uses the wrong action for this gate, or tries to change something other than the arguments. |
+| `placeholder` / `truncated` | The value still contains `"__REDACTED__"` or a shortened preview that never reached the viewer in full. Type the real value. |
+| `disabled` | Editing is switched off — in the app, on the server, or for this credential. |
+| `unsupported` | This pause cannot take an edit (an LLM step, or a tool GraphMind cannot re-run with new arguments). |
+
+## Where it works
+
+| Integration | Editable tool calls |
+| --- | --- |
+| Vercel AI SDK (`@graphmind-ai/sdk`) | Every wrapped tool, including streaming tools at their `before` gate. |
+| Anthropic / OpenAI SDKs | Wrapped tools called with one object of arguments (OpenAI: or its JSON text). |
+| LangGraph (`@graphmind-ai/langgraph`) | Tools wrapped with `wrapStructuredTool` or `gm.tool`. |
+| MCP servers (`@graphmind-ai/mcp`) | Tools registered with an input schema. |
+| `graphmind mcp-proxy` | Every `tools/call`. Only `arguments` can change; `name` and `_meta` are locked. |
+
+**LLM steps are not editable in 0.6.0.** An edited prompt would last for one step — the
+framework rebuilds the next request from its own history — which is not a fix you could trust.
+
+It needs a 0.6.0 app and a 0.6.0 server. An older server never marks a pause editable, and an
+older app never offers one.
+
+## Turning it off, and who may use it
+
+- In the app: `GRAPHMIND_DISABLE_EDIT_INPUT=1`. The app stops offering editable pauses and
+  refuses edits. Any value except `0`, `false`, `off` and `no` counts.
+- On the server: `graphmind serve --no-edit-input` refuses every edit, from any credential.
+- An edit needs a credential. The viewer the server opened has one; a browser tab or script that
+  connects without it can still continue, retry, inject or abort (as in 0.5), but cannot edit.
+  The agent token used by `graphmind resume` can edit only when the server runs with
+  `--allow-control=edit`.
+
+<Aside type="caution" title="An edit runs your real tool">
+Unlike inject, an edit **executes** the tool — a shell command, a SQL query, a payment API —
+with the arguments you typed. That is the point, and the reason edits need a credential and can
+be switched off in the app and on the server.
+</Aside>
+
+<Aside type="note" title="Hidden inputs">
+With `GRAPHMIND_HIDE_INPUTS` or `GRAPHMIND_HIDE_TOOL_ARGS` on, the viewer never saw the live
+arguments. An edit is then a **full replacement** — nothing is merged from, or compared with, the
+hidden values — so the answer to an edit cannot reveal them. The recorded `edited.after` is
+hidden too.
+</Aside>
+
+## From the CLI
+
+A coding agent (or you, in a terminal) can do the same without the viewer. Start the server with
+edits allowed for the agent token:
+
+```sh
+npx graphmind-ai serve --allow-control=edit
+```
+
+Then, while your agent runs:
+
+```sh
+npx graphmind-ai wait --json
+npx graphmind-ai resume <pauseId> --run <runId> --action retry --input '{"limit": 50}'
+```
+
+Use `--action retry` at an `error` or `after` gate and `--action continue` at a `before` gate.
+
+`wait` blocks until something is held and prints it (large inputs go to files whose paths it
+prints). `resume` reports whether the app ran the edit, refused it (with the code above), or
+whether someone else resumed the pause first. `--input @args.json` reads the arguments from a
+file. See the [CLI reference](/reference/cli/).
