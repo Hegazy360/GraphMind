@@ -24,12 +24,22 @@
  * words under the panel's row whenever the editor is not already showing it. The
  * label names every kind of hold the SDK reports: loop (repeat, cycle,
  * error-repeat) and smart (error-result, truncated-tool-call).
+ *
+ * The HUB can answer a resume too, before it ever reaches the app: another
+ * resume got there first (`pause-taken` — another tab, `graphmind resume`),
+ * the pause is no longer held, this tab's credential may not do that. That
+ * reply is said under the panel's row, and on the card — where a click from
+ * the canvas lands — as a note floating below it (the card's height is fixed
+ * by the layout), dismissable. The answer to an edit belongs to the editor:
+ * the card leaves it there, and the panel's row says it only while the editor
+ * is closed.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { isExportedRun } from '../../connection/FixtureConnection.js';
 import { TOKENLESS_NOTE, controlAllows } from '../../lib/control.js';
 import { canEditArgs, latestRefusal, refusalText } from '../../lib/editArgs.js';
 import { injectAndResume, pausePointLabel, resumeGate, stepGate } from '../../lib/gate.js';
+import { hubReplyText, replyAnswers } from '../../lib/hubReply.js';
 import { useEditStore } from '../../store/editStore.js';
 import { holdBannerText, holdHint } from '../../store/holds.js';
 import { useRunStore } from '../../store/runStore.js';
@@ -90,6 +100,8 @@ export function PauseActions({
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const injectRequest = useUiStore((s) => s.injectRequest);
   const editorRequest = useEditStore((s) => s.editorRequest);
+  const reply = useEditStore((s) => s.replies[pause.pauseId]);
+  const pendingEdit = useEditStore((s) => s.pending[pause.pauseId]);
   const control = useUiStore((s) => s.control);
 
   const exec = latestExecution(node);
@@ -101,6 +113,17 @@ export function PauseActions({
   const canInject = controlAllows(control, 'inject');
   const canStep = controlAllows(control, 'debug');
   const refusal = latestRefusal(pause);
+  // The hub's answer to this tab's latest resume for this pause. When it
+  // answers the edit in flight, the open editor says it (in its own words).
+  const replyToEdit = pendingEdit !== undefined && replyAnswers(reply, pendingEdit);
+  const shownReply =
+    !replayed &&
+    reply !== undefined &&
+    (reply.runId === undefined || reply.runId === runId) &&
+    !(replyToEdit && (variant === 'card' || (editing && editable))) &&
+    !(variant === 'card' && injecting)
+      ? reply
+      : undefined;
 
   const prefill = useMemo(() => {
     const shape = exec?.output !== undefined && exec.output !== null ? exec.output : exec?.input;
@@ -324,6 +347,30 @@ export function PauseActions({
           arguments cannot be edited here. Continue, Retry and Inject still work.
         </div>
       )}
+
+      {shownReply !== undefined &&
+        (variant === 'card' ? (
+          <div
+            className="gm-pause-note gm-inject-refusal gm-pause-reply--float nowheel"
+            role="status"
+            data-testid="pause-reply"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span>{hubReplyText(shownReply, control, 'resume')}</span>
+            <button
+              className="gm-pause-reply-close"
+              aria-label="Dismiss"
+              title="Dismiss"
+              onClick={() => useEditStore.getState().clearReply(pause.pauseId)}
+            >
+              ×
+            </button>
+          </div>
+        ) : (
+          <div className="gm-pause-note gm-inject-refusal" role="status" data-testid="pause-reply">
+            {hubReplyText(shownReply, control, replyToEdit ? 'arguments' : 'resume')}
+          </div>
+        ))}
 
       {!replayed && variant === 'panel' && refusal !== undefined && !editing && (
         <div className="gm-pause-note gm-inject-refusal" role="status" data-testid="pause-refusal">

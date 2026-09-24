@@ -14,8 +14,11 @@
  *  - `replay.start {runId, count}` → `event {runId, envelope}` per event
  *    (original seq preserved; the viewer dedupes on `(runId, seq)`) →
  *    `replay.end {runId}` → live `event` frames continue (tail)
- *  - `error {message, runId?, code?, pauseId?}` — `code` (0.6): `pause-taken`,
- *    `no-such-pause`, `edit-refused`, `forbidden`, `placeholder`, `truncated`…
+ *  - `error {message, runId?, code?, pauseId?, requestId?, outcome?}` — `code`
+ *    (0.6): `pause-taken`, `no-such-pause`, `edit-refused`, `forbidden`,
+ *    `placeholder`, `truncated`…; on an immediate answer to `exec.resume`,
+ *    `outcome` (`refused` | `taken` | `no-such-pause`) and the resumer's own
+ *    `requestId` echoed (connection/hubReplies.ts routes it to the pause)
  *  - `resume.result {runId, pauseId, requestId, outcome, code?, message?}` (0.6):
  *    the app's answer to an `exec.resume` this socket sent
  *  - `welcome.control {principal, agentLevel, editInput, hubCapabilities}` (0.6)
@@ -92,8 +95,13 @@ export interface ErrorFrame {
   runId?: string;
   code?: string;
   pauseId?: string;
-  /** The resume this refuses (0.6): the requestId it carried, or the one the server minted. */
+  /** 0.6: the resumer's own `exec.resume.requestId`, echoed when it gave one. */
   requestId?: string;
+  /**
+   * 0.6: what the refused resume came to — `timeout` when an earlier resume of
+   * the pause is still unanswered (`still-resolving`).
+   */
+  outcome?: 'refused' | 'taken' | 'timeout' | 'no-such-pause';
 }
 
 export interface ResumeResultFrame {

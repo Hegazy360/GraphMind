@@ -489,11 +489,14 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: pnpm --filter viewer exec playwright install-deps chromium
 
-      - name: Build the viewer's workspace dependencies
-        # `viewer^...` is "everything viewer depends on, excluding viewer" —
-        # today just @graphmind-ai/schema. The viewer's own build is run by
-        # playwright.config.ts's webServer, which insists on a fresh one.
-        run: pnpm --filter 'viewer^...' run build
+      - name: Build the workspace packages
+        # The viewer itself needs only @graphmind-ai/schema, but
+        # e2e/edit-e2e.spec.ts drives the REAL stack: `graphmind serve` from
+        # packages/cli/dist and an agent importing @graphmind-ai/sdk's dist
+        # (on CI a missing build fails that spec rather than skipping it).
+        # The viewer's own build is run by playwright.config.ts's webServer,
+        # which insists on a fresh one.
+        run: pnpm -r --filter './packages/**' run build
 
       - name: E2E
         run: |

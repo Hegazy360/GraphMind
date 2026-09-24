@@ -48,6 +48,10 @@ The same works from a terminal or a coding agent — see [driving it from the CL
 - **A refused edit keeps the call held.** The editor shows why — for a schema failure, *"The
   tool's schema rejected this: …"* naming the field and the problem, never quoting your value —
   and you can fix it and try again, or continue without an edit.
+- **Someone else may answer first.** Only the first resume for a held call counts, from any
+  viewer tab or `graphmind resume`. A later one is not sent, and the editor (or the pause row)
+  says so — *"Taken — another resume for this pause got there first"* — right away. So does any
+  other refusal from the server itself, in plain words.
 - **It applies to this call only.** The model still sees the arguments it asked for in its
   history; it is not told they were changed. A second call to the same tool starts from the
   model's arguments again.

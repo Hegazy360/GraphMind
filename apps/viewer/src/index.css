@@ -2040,6 +2040,38 @@ button {
   color: var(--amber-text);
   margin-top: 6px;
 }
+/* The hub's answer to a resume from the card ("taken", "no longer held"). The
+   card's height is fixed by the layout (PAUSE_BANNER_HEIGHT), so the note
+   floats below it like the card's inject editor, and has its own dismiss. */
+.gm-pause-reply--float {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 0;
+  background: var(--surface);
+  border-style: solid;
+  box-shadow: var(--shadow-pop);
+}
+.gm-pause-reply-close {
+  flex: none;
+  margin: -2px -3px 0 auto;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-faint);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.gm-pause-reply-close:hover,
+.gm-pause-reply-close:focus-visible {
+  color: var(--text);
+}
 
 /* 0.6.0 holds and argument edits.
    A named hold's sentence can run long ("Loop: search → fetch, 3 identical

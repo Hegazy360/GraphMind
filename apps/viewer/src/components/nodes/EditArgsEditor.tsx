@@ -14,9 +14,12 @@
  *      value — and the reasons any change cannot be sent;
  *   3. "Run with 2 changes" (a `before` gate) / "Retry with 2 changes" (after
  *      or on error), separate from the row's plain Continue;
- *   4. the app's answer: the gate releases (the node gets an `edited` pill),
- *      or `exec.refused` comes back — matched to this request by requestId —
- *      and is shown in plain words with the draft kept, ready to fix and retry.
+ *   4. the answer: the gate releases (the node gets an `edited` pill), or
+ *      `exec.refused` comes back from the app — matched to this request by
+ *      requestId — or the HUB answers instead (another resume took the pause
+ *      first, it is no longer held, this tab may not edit: lib/hubReply.ts).
+ *      Either is shown in plain words with the draft kept, ready to fix and
+ *      retry. "No answer from the app yet" is only for real silence.
  *
  * Keyboard: ⌘/ctrl-Enter runs, Escape closes (and only closes — it must not
  * reach the app's Escape, which would close the inspector around it).
@@ -39,8 +42,10 @@ import {
   type ArgChange,
 } from '../../lib/editArgs.js';
 import { editAndResume } from '../../lib/gate.js';
+import { hubReplyText } from '../../lib/hubReply.js';
 import { useEditStore } from '../../store/editStore.js';
 import { useRunStore } from '../../store/runStore.js';
+import { useUiStore } from '../../store/uiStore.js';
 import type { NodeState, Pause } from '../../store/types.js';
 
 export interface EditArgsEditorProps {
@@ -83,6 +88,8 @@ export function EditArgsEditor({ runId, node, pause, onClose }: EditArgsEditorPr
   const prefill = useMemo(() => editPrefill(recorded, { edited, shape }), [recorded, edited, shape]);
   const stored = useEditStore((s) => s.drafts[pause.pauseId]);
   const pending = useEditStore((s) => s.pending[pause.pauseId]);
+  const reply = useEditStore((s) => s.replies[pause.pauseId]);
+  const control = useUiStore((s) => s.control);
   const draft = stored ?? (prefill.ok ? prefill.text : '');
   const plan = useMemo(
     () => (prefill.ok ? planEdit(recorded, draft, shape) : undefined),
@@ -93,7 +100,7 @@ export function EditArgsEditor({ runId, node, pause, onClose }: EditArgsEditorPr
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
-  const answer = pending === undefined ? undefined : answerFor(pause, pending, now);
+  const answer = pending === undefined ? undefined : answerFor(pause, pending, now, reply);
   const waiting = answer?.state === 'waiting';
 
   // Re-render once when the answer is overdue, so "no answer yet" can appear.
@@ -241,6 +248,11 @@ export function EditArgsEditor({ runId, node, pause, onClose }: EditArgsEditorPr
       {answer?.state === 'refused' && (
         <div className="gm-pause-note gm-inject-refusal gm-edit-refusal" role="alert" data-testid="edit-refusal">
           {refusalText(answer.refusal.code, answer.refusal.message)}
+        </div>
+      )}
+      {answer?.state === 'hub' && (
+        <div className="gm-pause-note gm-inject-refusal gm-edit-refusal" role="alert" data-testid="edit-reply">
+          {hubReplyText(answer.reply, control, 'arguments')}
         </div>
       )}
       {answer?.state === 'timeout' && (

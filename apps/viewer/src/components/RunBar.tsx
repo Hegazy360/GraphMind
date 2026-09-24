@@ -27,6 +27,7 @@ import {
   type ControlInfo,
   type StreamStatus,
 } from '../store/uiStore.js';
+import { controlNoticeLabel } from '../lib/hubReply.js';
 import { IconPause, IconReplay, IconStack } from './Icons.js';
 
 const CONNECTION_LABEL: Record<ConnectionStatus, string> = {
@@ -267,7 +268,7 @@ export function RunBar({
 
       {notice !== undefined && (
         <span className="gm-chip gm-chip--tiny gm-chip--notice" role="status" title={notice.message}>
-          {notice.code === 'pause-taken' ? 'pause taken by another resume' : notice.message}
+          {controlNoticeLabel(notice.code, notice.message)}
         </span>
       )}
       {!recorded && control !== undefined && <ControlChip control={control} />}

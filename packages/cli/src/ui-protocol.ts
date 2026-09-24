@@ -105,7 +105,15 @@ export type UiServerMessage =
       /** Machine-readable reason (0.6.0+): `pause-taken`, `no-such-pause`, `edit-refused`, ... */
       code?: string;
       pauseId?: string;
+      /**
+       * On an immediate answer to `exec.resume` (0.6.0+): the resumer's own
+       * `requestId`, echoed when it gave an acceptable one, and the outcome
+       * the HTTP endpoint would have returned (`refused`, `taken`,
+       * `no-such-pause`, or `timeout` for `still-resolving` /
+       * `app-disconnected`).
+       */
       requestId?: string;
+      outcome?: ResumeOutcomeKind;
     }
   /**
    * The answer to an `exec.resume` this socket sent (0.6.0+): `resumed`,

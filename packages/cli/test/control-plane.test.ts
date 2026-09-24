@@ -204,7 +204,15 @@ describe('first writer wins', () => {
     await waitForPause(ts, 'p1', 'resolving');
     two.control('exec.resume', held.runId, { pauseId: 'p1', action: 'abort' });
     const err = await errorFrame(two);
-    expect(err).toMatchObject({ code: 'pause-taken', runId: held.runId, pauseId: 'p1' });
+    expect(err).toMatchObject({ code: 'pause-taken', outcome: 'taken', runId: held.runId, pauseId: 'p1' });
+    // No requestId from the resumer: none is made up for it.
+    expect(err).not.toHaveProperty('requestId');
+    // With one, it comes back, so the viewer's editor can match the answer to
+    // ITS request; a malformed one is never echoed.
+    two.control('exec.resume', held.runId, { pauseId: 'p1', action: 'abort', requestId: 'edit-abc.123' });
+    expect(await errorFrame(two)).toMatchObject({ code: 'pause-taken', requestId: 'edit-abc.123', pauseId: 'p1' });
+    two.control('exec.resume', held.runId, { pauseId: 'p1', action: 'abort', requestId: 'bad id‮' });
+    expect(await errorFrame(two)).not.toHaveProperty('requestId');
     expect(held.resumes.map((r) => r.action)).toEqual(['continue']);
     // The app answers the winner (a legacy client, no requestId echo).
     held.app.send('exec.resumed', held.runId, { pauseId: 'p1', action: 'continue' });

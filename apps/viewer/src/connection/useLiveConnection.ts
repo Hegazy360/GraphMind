@@ -14,7 +14,6 @@ import {
   type MessagePayloadMap,
 } from '@graphmind-ai/schema';
 import useWebSocketWithRetry from '../hooks/useWebSocketWithRetry.js';
-import { useEditStore } from '../store/editStore.js';
 import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';
 import {
@@ -24,6 +23,7 @@ import {
   tokenFor,
   viewerToken,
 } from './auth.js';
+import { noteResumeResult, noteServerError } from './hubReplies.js';
 import { ingestValue } from './ingest.js';
 import {
   beginReplay,
@@ -47,12 +47,6 @@ function applyDebugState(frame: { breakpoints?: unknown; mode?: unknown }): void
   if (Array.isArray(frame.breakpoints)) {
     useUiStore.setState({ breakpoints: frame.breakpoints as typeof ui.breakpoints });
   }
-}
-
-/** Words for a control the server refused or could not complete (the run bar shows them). */
-function noticeFor(code: string | undefined, message: string): { code: string; message: string } | undefined {
-  if (code === undefined) return undefined;
-  return { code, message };
 }
 
 export function useLiveConnection(url: string | null): ServerConnection {
@@ -153,25 +147,13 @@ export function useLiveConnection(url: string | null): ServerConnection {
         case 'replay.end':
           endReplay(frame.runId);
           break;
-        case 'error': {
-          console.warn('[graphmind] server error:', frame.message);
-          const notice = noticeFor(frame.code, frame.message);
-          if (notice !== undefined) useUiStore.getState().noteControl(notice.code, notice.message);
-          // A refused resume never reached the app: an edit waiting on it
-          // hears the server's reason now, not "no answer" in 10 s.
-          if (frame.pauseId !== undefined && frame.code !== undefined) {
-            useEditStore.getState().noteServerAnswer(frame.pauseId, frame.requestId, frame.code, frame.message);
-          }
+        case 'error':
+          // A resume's refusal goes to its pause (the editor, the pause row);
+          // anything else to the run bar. See hubReplies.ts.
+          noteServerError(frame);
           break;
-        }
         case 'resume.result':
-          // `resumed` shows up on the canvas by itself (the exec.resumed event);
-          // everything else means the click did not do what it said.
-          if (frame.outcome !== 'resumed') {
-            const code = frame.code ?? frame.outcome;
-            useUiStore.getState().noteControl(code, frame.message ?? `resume ${frame.outcome}`);
-            useEditStore.getState().noteServerAnswer(frame.pauseId, frame.requestId, code, frame.message);
-          }
+          noteResumeResult(frame);
           break;
         default:
           break; // unknown frame types are ignored gracefully

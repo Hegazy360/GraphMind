@@ -46,10 +46,20 @@ describe('hub: exec.resume inject guard', () => {
       runId: RUN,
       pauseId: 'p1',
       code: 'placeholder',
+      outcome: 'refused',
       message: 'inject refused: this value contains redacted content ("__REDACTED__"); edit it before injecting',
-      // Which resume this refuses (the server mints one when none was given).
-      requestId: expect.any(String),
+      // No requestId: the resumer gave none, and one the server minted would
+      // match nothing on its side.
     });
+    expect(await appGotNothing(app)).toBe(true);
+    await app.close();
+  });
+
+  it('echoes the resumer\'s own requestId on that refusal, so it knows which of its requests was refused', async () => {
+    const { app, ui } = await ownedRun();
+    ui.control('exec.resume', RUN, { pauseId: 'p1', action: 'inject', output: REDACTED, requestId: 'inject-7' });
+    const err = await ui.next((m) => m.type === 'error', 'ui error');
+    expect(err).toMatchObject({ type: 'error', pauseId: 'p1', code: 'placeholder', outcome: 'refused', requestId: 'inject-7' });
     expect(await appGotNothing(app)).toBe(true);
     await app.close();
   });

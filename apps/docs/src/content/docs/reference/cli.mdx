@@ -503,7 +503,7 @@ JSON text frames, each an object with a `type` discriminant. Wire envelopes are 
 | `{ type: 'replay.start', runId, count }` | Reply to `subscribe` of a run |
 | `{ type: 'event', runId, envelope }` | One envelope — replayed history first, then live tail |
 | `{ type: 'replay.end', runId }` | History done; everything after is live |
-| `{ type: 'error', message, runId?, code?, pauseId?, requestId? }` | Bad request / refused control. `code` (0.6): `pause-taken`, `no-such-pause`, `no-owner`, `edit-refused`, `not-editable`, `forbidden`, `placeholder`, `truncated`, `still-resolving`, `app-disconnected`; a refused `exec.resume` carries its `requestId` |
+| `{ type: 'error', message, runId?, code?, pauseId?, outcome?, requestId? }` | Bad request / refused control. `code` (0.6): `pause-taken`, `no-such-pause`, `no-owner`, `edit-refused`, `not-editable`, `forbidden`, `placeholder`, `truncated`, `still-resolving`, `app-disconnected`. On an `exec.resume` the server did not forward, `outcome` (`refused`, `taken`, `timeout` or `no-such-pause`) and your own `requestId`, echoed when you gave one |
 | `{ type: 'resume.result', runId, pauseId, requestId, outcome, code?, message? }` | 0.6: the app's answer to an `exec.resume` this socket sent (outcomes as in the HTTP table) |
 
 **Viewer → server**

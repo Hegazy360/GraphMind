@@ -47,6 +47,13 @@ control plane, usage truth and the context view are written when each lands. -->
   `viewer`, `agent` or `anonymous`, from the credential — never from the app)
   and an optional sanitized `operator` label. The viewer shows "resumed by
   agent" and, in the run bar, its own control level and the agent's.
+- **The viewer says why a resume did not land.** The server's own answers —
+  `pause-taken` (another tab or `graphmind resume` got there first),
+  `no-such-pause`, `edit-refused` (a tab without the token, `--no-edit-input`),
+  `forbidden` — reach the pause they are about, in plain words: in the argument
+  editor (matched to its request by `requestId`, which the server now echoes on
+  an immediate refusal, with the `outcome`) and under the pause row, instead of
+  the editor waiting 10 s and saying the app had not answered.
 
 ### Changed — control needs a credential (security)
 

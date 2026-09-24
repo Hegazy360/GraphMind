@@ -5,9 +5,10 @@
  * an editable error gate; the fixture answers edits the way the app does
  * (store/editFixture.ts) — a schema refusal keeps the gate held, an accepted
  * edit releases it and the recorded retry succeeds. No GraphMind server is
- * involved: until the hub forwards input edits (W3), this is the whole loop
- * the viewer owns — the editor, the changed-keys payload, the refusal, the
- * edited pill and the before/after.
+ * involved: this pins the loop the viewer owns — the editor, the changed-keys
+ * payload, the refusal, the edited pill and the before/after. The same loop
+ * against the real server and a real agent (plus the hub's own refusals and
+ * first-writer-wins across tabs) is edit-e2e.spec.ts.
  */
 import { EDIT_NODES } from '../src/store/editFixture.js';
 import { expect, nodeCard, openFixtureRun, openViewer, pauseBanner, runStatusPill, test, waitForPlantedPause } from './harness.js';

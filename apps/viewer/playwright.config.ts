@@ -14,6 +14,11 @@
  * exported run inlined as `window.__GRAPHMIND_RUN__`, exactly the way
  * `graphmind record --html` does it.
  *
+ * One exception, on purpose: e2e/edit-e2e.spec.ts starts the real stack as
+ * child processes — `graphmind serve` (packages/cli/dist, serving this same
+ * fresh build via GRAPHMIND_VIEWER_DIST) and a real AI SDK agent — each test
+ * on its own free port. It needs the workspace packages built.
+ *
  * One command, headless: `pnpm --filter viewer test:e2e`.
  */
 import process from 'node:process';

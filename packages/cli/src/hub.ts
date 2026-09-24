@@ -880,14 +880,18 @@ export class Hub {
         const start = this.requestResume(known.runId, known.payload, conn.principal);
         if (start.kind === 'answered') {
           const { outcome } = start;
+          // `requestId` only when it is the resumer's own (a minted one would
+          // match nothing on its side), so the viewer's argument editor can
+          // tell "the hub refused MY edit" from any other resume's answer.
+          const echoed = acceptableRequestId(known.payload.requestId) && outcome.requestId === known.payload.requestId;
           this.sendToUi(conn, {
             type: 'error',
             runId: known.runId,
             message: outcome.message ?? outcome.outcome,
             ...(outcome.code === undefined ? {} : { code: outcome.code }),
             pauseId: outcome.pauseId,
-            // So the resumer can tell which of its requests this answers.
-            requestId: outcome.requestId,
+            outcome: outcome.outcome,
+            ...(echoed ? { requestId: outcome.requestId } : {}),
           });
           return;
         }

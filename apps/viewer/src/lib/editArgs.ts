@@ -25,6 +25,7 @@ import { MCP_PREVIEW_NOTE_PREFIX, TRUNCATION_SUFFIX } from '@graphmind-ai/schema
 import type { NodeExecution, NodeState, Pause, RefusalRecord } from '../store/types.js';
 import type { ControlInfo } from '../store/uiStore.js';
 import { controlAllows } from './control.js';
+import { replyAnswers, type HubReply } from './hubReply.js';
 
 /** The redaction placeholder (@graphmind-ai/client `REDACTED`). */
 export const REDACTED = '__REDACTED__';
@@ -560,28 +561,6 @@ export function refusalText(code: string, message?: string, subject: 'arguments'
       return (
         'This call cannot run with edited arguments here. Continue, Retry and Inject still work.'
       );
-    // The server's own answers: the resume never reached the app.
-    case 'pause-taken':
-      return (
-        'Another resume for this pause is already being answered (another tab, or a coding agent), so ' +
-        'this edit was not sent to the app. Wait for that answer, then try again if the gate is still held.'
-      );
-    case 'superseded':
-      return 'The pause was released by something else first (another resume, or the app on its own); this edit did not run.';
-    case 'still-resolving':
-      return 'The app has not answered an earlier resume of this pause yet; try again in a few seconds.';
-    case 'edit-refused':
-    case 'forbidden':
-      return `The server refused this edit${detail !== undefined ? `: ${detail}` : '.'}`;
-    case 'not-editable':
-      return `This call cannot run with edited arguments${detail !== undefined ? `: ${detail}` : '.'} Continue, Retry and Inject still work.`;
-    case 'no-owner':
-    case 'no-such-pause':
-    case 'run-finished':
-    case 'app-disconnected':
-      return `The app holding this pause is gone (it disconnected, or the run ended); nothing was run${
-        detail !== undefined ? ` (${detail})` : '.'
-      }`;
     case 'shape': {
       const what = subject === 'arguments' ? 'these arguments' : 'this';
       return detail !== undefined
@@ -623,17 +602,13 @@ export interface PendingEdit {
   sentAt: number;
   /** Seq of the newest refusal the pause carried at send (-1: none). */
   lastRefusalSeq: number;
-  /**
-   * The server refused the edit itself (no credential, another resume won
-   * the pause, the app is gone…): it never reached the app, so this is the
-   * answer — see editStore `noteServerAnswer`.
-   */
-  serverAnswer?: { code: string; message?: string };
 }
 
 export type EditAnswer =
   | { state: 'waiting' }
   | { state: 'refused'; refusal: RefusalRecord }
+  /** The hub answered instead of the app: taken, no longer held, edit refused… */
+  | { state: 'hub'; reply: HubReply }
   | { state: 'resolved' }
   | { state: 'timeout' };
 
@@ -644,26 +619,22 @@ export function latestRefusal(pause: Pause): RefusalRecord | undefined {
 }
 
 /**
- * Has the app answered this edit? A released pause answered it (the edited
- * pill follows); a refusal answers it when its `requestId` echoes ours — or,
- * from a sender that echoes none, when it arrived after we sent. Silence past
- * EDIT_ANSWER_TIMEOUT_MS is its own answer: the gate is still held here, the
- * user may try again.
+ * Has this edit been answered? A released pause answered it (the edited pill
+ * follows); an app refusal answers it when its `requestId` echoes ours — or,
+ * from a sender that echoes none, when it arrived after we sent. So does the
+ * hub's own reply (`reply`, lib/hubReply.ts): the edit never reached the app
+ * because another resume got there first, the pause is gone, or the server
+ * would not pass an edit from this tab — matched by requestId, else by pause
+ * and time. Only silence past EDIT_ANSWER_TIMEOUT_MS is "no answer yet": the
+ * gate is still held here, the user may try again.
  */
-export function answerFor(pause: Pause, pending: PendingEdit, now: number = Date.now()): EditAnswer {
+export function answerFor(
+  pause: Pause,
+  pending: PendingEdit,
+  now: number = Date.now(),
+  reply?: HubReply,
+): EditAnswer {
   if (!pause.active) return { state: 'resolved' };
-  if (pending.serverAnswer !== undefined) {
-    return {
-      state: 'refused',
-      refusal: {
-        code: pending.serverAnswer.code,
-        ...(pending.serverAnswer.message === undefined ? {} : { message: pending.serverAnswer.message }),
-        requestId: pending.requestId,
-        ts: pending.sentAt,
-        seq: -1,
-      },
-    };
-  }
   const refusals = pause.refusals ?? [];
   for (let i = refusals.length - 1; i >= 0; i--) {
     const refusal = refusals[i];
@@ -673,6 +644,7 @@ export function answerFor(pause: Pause, pending: PendingEdit, now: number = Date
       return { state: 'refused', refusal };
     }
   }
+  if (reply !== undefined && replyAnswers(reply, pending)) return { state: 'hub', reply };
   if (now - pending.sentAt >= EDIT_ANSWER_TIMEOUT_MS) return { state: 'timeout' };
   return { state: 'waiting' };
 }

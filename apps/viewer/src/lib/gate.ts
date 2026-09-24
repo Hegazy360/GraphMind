@@ -8,9 +8,10 @@
  * out in more than one component is how a debugger ends up releasing a gate
  * without arming step mode.
  */
-import type { ResumeAction } from '@graphmind-ai/schema';
+import type { MessagePayloadMap, ResumeAction } from '@graphmind-ai/schema';
 import { sendControl } from '../connection/ServerConnection.js';
 import { editAction, markerIn } from './editArgs.js';
+import { useEditStore } from '../store/editStore.js';
 import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';
 import type { Pause, RunSource, RunState } from '../store/types.js';
@@ -35,9 +36,20 @@ function sourceOf(runId: string): RunSource {
   return useRunStore.getState().runs[runId]?.meta.source ?? 'live';
 }
 
+/**
+ * Every `exec.resume` this tab sends goes through here. A new resume is a new
+ * question, so the hub's answer to the previous one for this pause ("taken",
+ * "no longer held", "edit refused" — lib/hubReply.ts) is dropped first:
+ * whatever the hub says next is about this one.
+ */
+function sendResume(runId: string, payload: MessagePayloadMap['exec.resume']): void {
+  useEditStore.getState().clearReply(payload.pauseId);
+  sendControl(sourceOf(runId), 'exec.resume', payload, runId);
+}
+
 /** Release a gate with `continue` / `retry` / `abort`. */
 export function resumeGate(runId: string, pauseId: string, action: ResumeAction): void {
-  sendControl(sourceOf(runId), 'exec.resume', { pauseId, action }, runId);
+  sendResume(runId, { pauseId, action });
 }
 
 /**
@@ -78,7 +90,7 @@ export type InjectResult = { ok: true } | { ok: false; reason: string };
 export function injectAndResume(runId: string, pauseId: string, output: unknown): InjectResult {
   const reason = injectRefusal(output);
   if (reason !== undefined) return { ok: false, reason };
-  sendControl(sourceOf(runId), 'exec.resume', { pauseId, action: 'inject', output }, runId);
+  sendResume(runId, { pauseId, action: 'inject', output });
   return { ok: true };
 }
 
@@ -112,12 +124,7 @@ export function editAndResume(
           : 'an argument still contains a truncated preview; replace it before running',
     };
   }
-  sendControl(
-    sourceOf(runId),
-    'exec.resume',
-    { pauseId: pause.pauseId, action: editAction(pause.point), input, requestId },
-    runId,
-  );
+  sendResume(runId, { pauseId: pause.pauseId, action: editAction(pause.point), input, requestId });
   return { ok: true };
 }
 
@@ -130,7 +137,7 @@ export function stepGate(runId: string, pauseId: string): void {
   const source = sourceOf(runId);
   useUiStore.getState().setMode('step');
   sendControl(source, 'mode.set', { mode: 'step' });
-  sendControl(source, 'exec.resume', { pauseId, action: 'continue' }, runId);
+  sendResume(runId, { pauseId, action: 'continue' });
 }
 
 /** Where a gate sits, in the words the UI uses for it. */

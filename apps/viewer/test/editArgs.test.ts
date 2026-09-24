@@ -32,6 +32,7 @@ import {
   type PendingEdit,
 } from '../src/lib/editArgs.js';
 import { editAndResume } from '../src/lib/gate.js';
+import { hubReplyText, outcomeForCode, replyAnswers, replyFromError } from '../src/lib/hubReply.js';
 import { sendControl } from '../src/connection/ServerConnection.js';
 import { applyEvent, type RunsMap } from '../src/store/applyEvent.js';
 import { useEditStore } from '../src/store/editStore.js';
@@ -682,30 +683,37 @@ describe('who may edit, and the server answering an edit itself', () => {
 
   it('a refusal the server sent at once (edit-refused, pause-taken, …) answers the edit now, in its own words', () => {
     const pause: Pause = { pauseId: 'p1', nodeId: 'tool:sql', point: 'before', ts: 0, active: true };
-    const pending: PendingEdit = {
-      runId: RUN,
-      pauseId: 'p1',
-      requestId: 'edit-1',
-      sentAt: 1_000,
-      lastRefusalSeq: -1,
-      serverAnswer: { code: 'pause-taken', message: 'another resume for this pause is already being answered' },
-    };
-    const answer = answerFor(pause, pending, 1_001);
-    expect(answer.state).toBe('refused');
-    if (answer.state !== 'refused') return;
-    expect(refusalText(answer.refusal.code, answer.refusal.message)).toContain('Another resume');
-    expect(refusalText('edit-refused', 'input edits need a credential: open the viewer…')).toContain('need a credential');
-    expect(refusalText('not-editable', 'this pause is not editable')).not.toContain('The app refused');
+    const pending: PendingEdit = { runId: RUN, pauseId: 'p1', requestId: 'edit-1', sentAt: 1_000, lastRefusalSeq: -1 };
+    // The hub's `error` frame for a resume it did not forward (lib/hubReply.ts).
+    const taken = replyFromError(
+      {
+        type: 'error',
+        runId: RUN,
+        pauseId: 'p1',
+        code: 'pause-taken',
+        outcome: 'taken',
+        requestId: 'edit-1',
+        message: 'another resume for this pause is already being answered',
+      },
+      1_001,
+    );
+    const answer = answerFor(pause, pending, 1_001, taken);
+    expect(answer.state).toBe('hub');
+    if (answer.state !== 'hub') return;
+    expect(hubReplyText(answer.reply, control('viewer'), 'arguments')).toContain('another resume');
+    const said = (code: string, message?: string): string =>
+      hubReplyText({ code, outcome: outcomeForCode(code), ...(message === undefined ? {} : { message }) }, control('viewer'), 'arguments');
+    expect(said('edit-refused', 'input edits need a credential: open the viewer…')).toContain('need a credential');
+    expect(said('not-editable', 'this pause is not editable')).not.toContain('The app refused');
+    expect(said('not-editable', 'this pause is not editable')).toContain('cannot run with edited arguments');
+    expect(said('still-resolving')).toContain('earlier resume');
   });
 
-  it('the edit store takes the server\'s answer only for the edit it is about', () => {
-    useEditStore.setState({ pending: {} });
-    useEditStore.getState().setPending({ runId: RUN, pauseId: 'p1', requestId: 'edit-1', sentAt: 1, lastRefusalSeq: -1 });
-    useEditStore.getState().noteServerAnswer('p1', 'someone-else', 'pause-taken', 'x');
-    expect(useEditStore.getState().pending['p1']?.serverAnswer).toBeUndefined();
-    useEditStore.getState().noteServerAnswer('p1', 'edit-1', 'pause-taken', 'taken');
-    expect(useEditStore.getState().pending['p1']?.serverAnswer).toEqual({ code: 'pause-taken', message: 'taken' });
-    useEditStore.getState().noteServerAnswer('p9', 'edit-1', 'pause-taken', 'x'); // no pending edit there: ignored
-    expect(useEditStore.getState().pending['p9']).toBeUndefined();
+  it("the server's answer counts only for the edit it is about", () => {
+    const pending: PendingEdit = { runId: RUN, pauseId: 'p1', requestId: 'edit-1', sentAt: 1, lastRefusalSeq: -1 };
+    const frame = (extra: Record<string, unknown>) => ({ type: 'error', pauseId: 'p1', code: 'pause-taken', ...extra });
+    expect(replyAnswers(replyFromError(frame({ requestId: 'someone-else' }), 2), pending)).toBe(false);
+    expect(replyAnswers(replyFromError(frame({ requestId: 'edit-1' }), 2), pending)).toBe(true);
+    expect(replyAnswers(replyFromError(frame({ pauseId: 'p9', requestId: 'edit-1' }), 2), pending)).toBe(false);
   });
 });
