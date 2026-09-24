@@ -122,6 +122,15 @@ const final = await helper.finalMessage();
   run as `toolSchemas`.
 - `graph.hint` on the first call of an invocation, from the request's `tools`
   array, so the viewer pre-renders the whole roster in grey.
+- (0.6.0) An **`after` gate** before you have the whole message: before a
+  `Message` is returned, and before a stream's `message_stop` event is handed
+  over (so `messages.stream()`'s `finalMessage()` waits too). While a debugger
+  is attached it hands the session the normalized output, so a step
+  `max_tokens` cut off in the middle of a tool call is a smart hold
+  (`truncated-tool-call`; `GRAPHMIND_BREAK_ON_TRUNCATED=0` turns it off).
+  `continue` hands the result over; `abort` rejects the call (or your stream
+  iteration) with the run's `AbortError`; `retry` / `inject` cannot re-run a
+  call the SDK already made and continue with a warning.
 
 **Per wrapped tool call** (parallel calls gate independently — each invocation
 is its own async frame, so `await Promise.all([...])` holds each separately):

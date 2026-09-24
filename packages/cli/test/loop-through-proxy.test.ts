@@ -258,7 +258,11 @@ describe('GRAPHMIND_LOOP_ALLOW through the proxy', () => {
       r.callTool(id, 'echo', SAME);
       await r.response(id);
     }
-    expect(v.forNode('tool:echo').filter((f) => f.type === 'node.started')).toHaveLength(5);
+    // The event reaches the debugger on its own socket: the answer can win the race.
+    await waitUntil(
+      () => v.forNode('tool:echo').filter((f) => f.type === 'node.started').length === 5,
+      'five echo starts',
+    );
     expect(v.ofType('exec.paused')).toHaveLength(0);
   });
 });

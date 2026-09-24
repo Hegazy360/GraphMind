@@ -179,7 +179,13 @@ describe('exec.paused.editable', () => {
     const { viewer, session } = await setup();
     const gate = session.gate('before', TOOL, toolEdit().options);
     const paused = await viewer.waitForType('exec.paused');
-    expect(paused.payload).toEqual({ pauseId: pauseIdOf(paused), nodeId: TOOL.nodeId, point: 'before', editable: true });
+    expect(paused.payload).toEqual({
+      pauseId: pauseIdOf(paused),
+      nodeId: TOOL.nodeId,
+      point: 'before',
+      reason: 'breakpoint', // every hold carries a reason (0.6.0)
+      editable: true,
+    });
     viewer.resume(pauseIdOf(paused), 'continue');
     expect(await gate).toEqual({ action: 'continue' });
   });
@@ -194,7 +200,7 @@ describe('exec.paused.editable', () => {
     const { viewer, session } = await setup();
     const gate = session.gate('before', TOOL, options);
     const paused = await viewer.waitForType('exec.paused');
-    expect(Object.keys(paused.payload)).toEqual(['pauseId', 'nodeId', 'point']);
+    expect(Object.keys(paused.payload)).toEqual(['pauseId', 'nodeId', 'point', 'reason']);
     viewer.resume(pauseIdOf(paused), 'continue');
     await gate;
   });
@@ -203,7 +209,7 @@ describe('exec.paused.editable', () => {
     const { viewer, session } = await setup({ hubCapabilities: undefined });
     const gate = session.gate('before', TOOL, toolEdit().options);
     const paused = await viewer.waitForType('exec.paused');
-    expect(Object.keys(paused.payload)).toEqual(['pauseId', 'nodeId', 'point']);
+    expect(Object.keys(paused.payload)).toEqual(['pauseId', 'nodeId', 'point', 'reason']);
     viewer.resume(pauseIdOf(paused), 'continue');
     expect(await gate).toEqual({ action: 'continue' });
   });

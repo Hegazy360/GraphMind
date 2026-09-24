@@ -11,9 +11,21 @@
  *   4. otherwise                   -> enabled.
  *
  * Loop hold (parsed in loop-guard.ts, option > env > default per field):
- *   GRAPHMIND_LOOP_THRESHOLD  non-negative integer, default 3; 0 disables.
- *   GRAPHMIND_ON_LOOP         pause (default) | warn | off.
- *   GRAPHMIND_LOOP_ALLOW      comma-separated node ids/names never held (tools that poll).
+ *   GRAPHMIND_LOOP_THRESHOLD  non-negative integer, default 3; 0 disables every
+ *                             loop kind. It sets only the identical-repeat rule:
+ *                             in 0.6.0 a `cycle` needs 3 identical laps and an
+ *                             `error-repeat` 3 identical failures, fixed.
+ *   GRAPHMIND_ON_LOOP         pause (default) | warn | off — all loop kinds.
+ *   GRAPHMIND_LOOP_ALLOW      comma-separated node ids/names never held (tools that
+ *                             poll); invisible to every loop kind.
+ *
+ * Smart breakpoints (0.6.0, parsed in smart.ts; a boolean session option beats
+ * the env). Default ON: unset or empty keeps them on, and only `0`, `false`,
+ * `off`, `no` (any case, trimmed) turn one off — killSwitchOn inverted.
+ *   GRAPHMIND_BREAK_ON_ERROR_RESULT  hold a tool whose result is error-shaped
+ *                                    (breakOnErrorResult).
+ *   GRAPHMIND_BREAK_ON_TRUNCATED     hold an LLM step cut off mid tool call
+ *                                    (breakOnTruncated).
  *
  * Edited input (0.6.0, see edit-input.ts):
  *   GRAPHMIND_DISABLE_EDIT_INPUT  kill switch (killSwitchOn spelling): `edit-input`

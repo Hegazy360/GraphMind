@@ -25,8 +25,13 @@ export interface GatedCall<T> {
    * boxed so `await` cannot flatten the SDK's own thenable too early.
    */
   start: () => Promise<{ api: ApiPromiseLike<T> }>;
-  /** Observe / wrap the resolved value. Called at most once per call. */
-  onValue: (value: T) => T;
+  /**
+   * Observe / wrap the resolved value. Called at most once per call. A
+   * synchronous throw is swallowed (observation never changes what the host
+   * receives); a returned promise that REJECTS rejects the call — the
+   * adapter's deliberate `abort` at the step's `after` gate, and nothing else.
+   */
+  onValue: (value: T) => T | Promise<T>;
   /** Report the failure. Called at most once per call. */
   onError: (error: unknown) => void;
 }
@@ -41,18 +46,19 @@ function helperUnavailable(name: string): Error {
 export function gatedApiPromise<T>(call: GatedCall<T>): ApiPromiseLike<T> {
   const pending = call.start();
 
-  let valueMemo: { value: T } | undefined;
-  const transform = (value: T): T => {
+  let valueMemo: Promise<T> | undefined;
+  const transform = (value: T): Promise<T> => {
     if (valueMemo === undefined) {
-      let next = value;
+      let next: T | Promise<T> = value;
       try {
         next = call.onValue(value);
       } catch {
         // observation must never change what the host receives
       }
-      valueMemo = { value: next };
+      // A rejection here is deliberate (see GatedCall.onValue).
+      valueMemo = Promise.resolve(next);
     }
-    return valueMemo.value;
+    return valueMemo;
   };
 
   let reported = false;
@@ -84,11 +90,11 @@ export function gatedApiPromise<T>(call: GatedCall<T>): ApiPromiseLike<T> {
   const withResponse = async (): Promise<ApiResponseEnvelope<T>> => {
     const { api } = await pending.catch(report);
     if (typeof api.withResponse !== 'function') {
-      const data = transform(await (api as PromiseLike<T>).then((v) => v, report));
+      const data = await transform(await (api as PromiseLike<T>).then((v) => v, report));
       return { data, response: undefined as unknown as Response };
     }
     const envelope = await api.withResponse().catch(report);
-    return { ...envelope, data: transform(envelope.data) };
+    return { ...envelope, data: await transform(envelope.data) };
   };
 
   return Object.defineProperties(settled, {

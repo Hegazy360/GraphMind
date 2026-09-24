@@ -139,6 +139,19 @@ export {
   type WireUsage,
 } from './llm-capture.js';
 
+// Smart breakpoints (0.6.0): the strict rules behind `error-result` and
+// `truncated-tool-call` (session options breakOnErrorResult / breakOnTruncated,
+// env GRAPHMIND_BREAK_ON_ERROR_RESULT / GRAPHMIND_BREAK_ON_TRUNCATED), exported
+// so adapters, ports and tests share one definition, and the options every
+// adapter's LLM `after` gate passes (`{result}` while attached, else none).
+export {
+  errorResultShape,
+  parseBreakOn,
+  resultGateOptions,
+  truncatedToolCall,
+  type ErrorResultShape,
+} from './smart.js';
+
 export type { WebSocketLike, WebSocketConstructor } from './transport.js';
 
 // Re-export the wire-contract types adapters typically need, so most

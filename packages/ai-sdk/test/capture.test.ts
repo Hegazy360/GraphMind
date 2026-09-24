@@ -214,7 +214,13 @@ describe('node.finished', () => {
     const res = await gm.wrapModel(mock).doStream({
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'write' }] }],
     } as CallOptions);
-    await drain(res.stream);
+    const drained = drain(res.stream);
+    // Attached, the cut-off call is a smart hold at the step's after gate
+    // (smart-llm-after.test.ts covers it end to end); release it.
+    const paused = await viewer.waitFor((f) => f.type === 'exec.paused' && f.payload['nodeId'] === 'llm:step');
+    expect(paused.payload['smart']).toMatchObject({ rule: 'truncated-tool-call' });
+    viewer.resume(paused.payload['pauseId'] as string, 'continue');
+    await drained;
     const finished = await viewer.waitFor((f) => f.type === 'node.finished' && f.payload['nodeId'] === 'llm:step');
     expect(finished.payload['output']).toEqual({
       text: '',

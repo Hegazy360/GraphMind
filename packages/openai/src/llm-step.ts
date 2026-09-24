@@ -20,12 +20,16 @@
  *  6. `node.finished` carries the output and mapped token usage.
  *
  * The `after` gate fires for non-streaming requests only (post-response,
- * pre-return; `inject` substitutes the whole completion). A streamed response
- * is already live by the time it is returned, so there is nothing meaningful
- * to hold there — the stream tee reports it as it flows instead.
+ * pre-return; `inject` substitutes the whole completion). While a debugger is
+ * attached it hands the session the normalized output (`{text, finishReason,
+ * toolCalls, …}`), so a completion the token limit or the content filter cut
+ * off in the middle of a tool call is a smart hold (`truncated-tool-call`).
+ * A streamed response is already live by the time it is returned, so there is
+ * nothing meaningful to hold there — the stream tee reports it as it flows
+ * instead (a truncated streamed tool call is recorded, not held).
  */
 import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
-import { captureTools, pickParams } from '@graphmind-ai/client';
+import { captureTools, pickParams, resultGateOptions } from '@graphmind-ai/client';
 import type { GateNode, RunContext, RunStatus } from '@graphmind-ai/client';
 import { GatedApiPromise, type ApiTracker } from './api-promise.js';
 import type { AdapterCore } from './core.js';
@@ -249,7 +253,7 @@ async function runGatedRequest(
     }
 
     const summary = flavor.summarize(reporter, value);
-    const post = await core.session.gate('after', LLM_GATE_NODE);
+    const post = await core.session.gate('after', LLM_GATE_NODE, resultGateOptions(core.session, summary.output));
     if (post.action === 'inject') {
       reporter.finish(post.output, 'ok', summary.usage, { injected: true, ...attemptExtra() });
       return post.output;

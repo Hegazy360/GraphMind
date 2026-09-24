@@ -158,6 +158,11 @@ twice rather than two unrelated calls.
 (post-response, pre-return; `inject` substitutes the whole completion). A
 streamed response is already live by the time it is returned, so there is
 nothing meaningful to hold there — the stream tee reports it as it flows.
+Since 0.6.0 that gate hands the session the normalized output while a debugger
+is attached, so a completion the token limit or the content filter cut off in
+the middle of a tool call is a smart hold (`truncated-tool-call`;
+`GRAPHMIND_BREAK_ON_TRUNCATED=0` turns it off) — `retry` re-issues the request
+there. A streamed one is recorded, not held.
 
 ## How the wrapper works
 

@@ -201,9 +201,17 @@ describe('streamed usage and tool calls', () => {
     ];
     const { client } = makeClient(gm, () => ({ events }));
     const stream = await client.messages.create({ model: 'claude-sonnet-4-5', max_tokens: 64, messages: [], stream: true });
-    for await (const _event of stream) {
-      // consume
-    }
+    const consumed = (async () => {
+      for await (const _event of stream) {
+        // consume
+      }
+    })();
+    // Attached, the cut-off call is a smart hold before `message_stop`
+    // (smart-llm-after.test.ts covers it end to end); release it.
+    const paused = await viewer.waitFor((f) => f.type === 'exec.paused' && f.payload['nodeId'] === 'llm:step');
+    expect(paused.payload['smart']).toMatchObject({ rule: 'truncated-tool-call' });
+    viewer.resume(paused.payload['pauseId'] as string, 'continue');
+    await consumed;
     const finished = await viewer.waitFor((f) => f.type === 'node.finished' && f.payload['nodeId'] === 'llm:step');
     expect(finished.payload['output']).toMatchObject({
       finishReason: 'length',

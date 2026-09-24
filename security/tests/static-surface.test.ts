@@ -117,6 +117,10 @@ describe('the client and the CLI read only documented environment variables', ()
     // 0.6.0 — edited input kill switch (client). Removes a capability; carries
     // no user data.
     'GRAPHMIND_DISABLE_EDIT_INPUT',
+    // 0.6.0 — smart breakpoints (client): each switches a hold (default on;
+    // `0`/`false`/`off`/`no` turn one off). No user data.
+    'GRAPHMIND_BREAK_ON_ERROR_RESULT',
+    'GRAPHMIND_BREAK_ON_TRUNCATED',
     'CI',
   ];
 

@@ -255,7 +255,7 @@ describe('loop hold — nothing leaks', () => {
 
     const bp = call(session, OTHER, { anything: 1 });
     const second = await viewer.waitFor((f) => f.type === 'exec.paused' && f.payload['nodeId'] === 'tool:other');
-    expect(second.payload['reason']).toBeUndefined();
+    expect(second.payload['reason']).toBe('breakpoint'); // its own reason (0.6.0), not the loop's
     expect(second.payload['loop']).toBeUndefined();
     viewer.resume(second.payload['pauseId'] as string, 'continue');
     await bp;

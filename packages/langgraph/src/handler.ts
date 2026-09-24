@@ -26,7 +26,13 @@
  * run's id and `abort` reaches that run's AbortController.
  */
 import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
-import { isAbortError, type NodeKind, type RunContext, type TokenUsage } from '@graphmind-ai/client';
+import {
+  isAbortError,
+  resultGateOptions,
+  type NodeKind,
+  type RunContext,
+  type TokenUsage,
+} from '@graphmind-ai/client';
 import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { isDeliberateAbort, markDeliberate } from './abort.js';
 import type { AdapterCore } from './core.js';
@@ -266,9 +272,14 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       const record = this.tree.take(runId);
       if (record === undefined || !record.emitted) return;
       const usage = usageFromLLMResult(output);
-      await this.inRoot(record.rootRunId, () =>
-        this.emitFinish(record, llmOutput(output), 'ok', { usage }),
-      );
+      const normalized = llmOutput(output);
+      await this.inRoot(record.rootRunId, async () => {
+        this.emitFinish(record, normalized, 'ok', { usage });
+        // The model has answered but the graph has not moved on (LangChain
+        // awaits this callback before the model call returns): a step cut off
+        // mid tool call is a smart hold here (`truncated-tool-call`).
+        await this.gateAfter(record, { result: normalized });
+      });
       await this.closeRoot(record);
     });
   }
@@ -333,9 +344,12 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
       const annotation = this.core.takeToolAnnotation(runId) as
         | Record<string, unknown>
         | undefined;
+      const result = unwrapToolOutput(output);
       await this.inRoot(record.rootRunId, async () => {
-        this.emitFinish(record, unwrapToolOutput(output), 'ok', { extra: annotation });
-        await this.gateAfter(record);
+        this.emitFinish(record, result, 'ok', { extra: annotation });
+        // An error-shaped result (`isError`, `success: false`, ...) is a
+        // smart hold here (`error-result`).
+        await this.gateAfter(record, { result });
       });
       await this.closeRoot(record);
     });
@@ -676,13 +690,18 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
 
   /**
    * The `after` gate: inspect a finished node before the graph moves on.
-   * Only fires on an explicit `after` breakpoint (step mode does not stop at
-   * `after` — see the client's gate engine), and is observe-only: the result
-   * has already been handed back to LangChain by the time we are told.
+   * Fires on an explicit `after` breakpoint (step mode does not stop at
+   * `after` — see the client's gate engine) or a smart hold, and is
+   * observe-only: the result has already been handed back to LangChain by the
+   * time we are told. Tool and LLM runs hand the session their recorded
+   * output (`result`: a tool's result, an LLM's normalized `{finishReason,
+   * toolCalls, …}`) for the smart holds — only while a debugger is attached;
+   * detached the gate is called with no options, as in 0.5.
    */
-  private async gateAfter(record: RunRecord): Promise<void> {
+  private async gateAfter(record: RunRecord, after?: { result: unknown }): Promise<void> {
     if (record.gatedByWrapper) return; // the wrapper owns a real `after` gate
-    const decision = await this.core.session.gate('after', gateNode(record));
+    const options = after === undefined ? undefined : resultGateOptions(this.core.session, after.result);
+    const decision = await this.core.session.gate('after', gateNode(record), options);
     if (decision.action === 'abort') {
       await this.performAbort(record, 'after-gate');
       return;

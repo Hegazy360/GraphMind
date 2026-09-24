@@ -23,6 +23,23 @@
  *     tools are observed without disturbing what the SDK consumes.
  *  3. The observer emits batched `node.token` deltas and `node.finished`
  *     with usage on the finish part.
+ *  4. The step's `after` gate hands the session the normalized output
+ *     (`{text, finishReason, toolCalls, …}` — what the smart hold
+ *     `truncated-tool-call` inspects) while a debugger is attached:
+ *       - `wrapGenerate`: post-response, pre-return — the SDK has not seen
+ *         the result yet. `continue` returns it; `retry` runs the step again
+ *         (the `before` gate fires again); `abort` throws the run's
+ *         AbortError; `inject` is not meaningful for a model step here (the
+ *         SDK needs a provider result) and continues with a warning.
+ *       - `wrapStream`: the SDK's copy of the stream is held at its `finish`
+ *         part until the gate is released (the observer gates when it reads
+ *         the same part), so the step cannot complete and the next step
+ *         cannot start. Tool calls that already streamed in full have been
+ *         handed to their tools (each has its own `before` gate). `abort`
+ *         errors the SDK's stream with the run's AbortError; `retry` and
+ *         `inject` cannot rewrite a stream the SDK has consumed and continue
+ *         with a warning. Detached, the SDK gets its branch untouched and no
+ *         `after` gate is consulted.
  *
  * What is recorded (contract C1): `node.started.input` is the prompt as the
  * provider receives it (bytes as `{type:'binary', bytes}`), the model, the
@@ -41,8 +58,10 @@ import {
   captureTools,
   isAbortError,
   pickParams,
+  resultGateOptions,
   toolCall,
   withBinaryPlaceholders,
+  type GateDecision,
   type GateNode,
   type RecordedToolCall,
 } from '@graphmind-ai/client';
@@ -253,12 +272,141 @@ async function instrumentStream<R extends StreamResultLike>(
   try {
     const { stream, ...rest } = result;
     const [forSdk, forObserver] = stream.tee();
-    void observeStream(core, forObserver, instanceId, startedAt);
-    return { ...rest, stream: forSdk } as R;
+    // Attached: the SDK's branch waits at its `finish` part for the step's
+    // `after` gate (see holdAtFinish). Detached: its branch, untouched.
+    const latch = core.session.attached ? new FinishLatch() : undefined;
+    void observeStream(core, forObserver, instanceId, startedAt, latch);
+    return { ...rest, stream: latch === undefined ? forSdk : holdAtFinish(forSdk, latch) } as R;
   } catch {
     // tee failed (exotic stream impl): hand the SDK the untouched result.
     return result;
   }
+}
+
+/** What the SDK's copy of a stream does at its `finish` part. */
+interface FinishVerdict {
+  /** Error the SDK's stream with this (the run's AbortError) instead of finishing. */
+  abort?: Error;
+}
+
+/**
+ * The step's `after` gate verdict, handed from the observer (which gates) to
+ * the SDK's copy of the stream (which waits at its `finish` part). Released
+ * once in effect: by the gate's decision, or — whatever happens to the
+ * observer — when the observer stops, so the SDK never waits on a dead one.
+ */
+class FinishLatch {
+  readonly verdict: Promise<FinishVerdict>;
+  /** The SDK cancelled its copy: nothing waits at the finish part any more, so do not hold. */
+  abandoned = false;
+  private resolve: (verdict: FinishVerdict) => void = () => undefined;
+
+  constructor() {
+    this.verdict = new Promise<FinishVerdict>((resolve) => {
+      this.resolve = resolve;
+    });
+  }
+
+  release(verdict: FinishVerdict = {}): void {
+    this.resolve(verdict); // later calls are no-ops: a promise settles once
+  }
+}
+
+function isFinishPart(value: unknown): boolean {
+  try {
+    return value !== null && typeof value === 'object' && (value as { type?: unknown }).type === 'finish';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The SDK's branch of the tee, re-read one part at a time: every part passes
+ * through unchanged and in order, except that a `finish` part waits for the
+ * latch — the step's `after` gate. Never throws; a stream it cannot wrap is
+ * handed back as it is (and the latch released).
+ */
+function holdAtFinish(source: ReadableStream<unknown>, latch: FinishLatch): ReadableStream<unknown> {
+  let reader: ReadableStreamDefaultReader<unknown>;
+  try {
+    reader = source.getReader();
+  } catch {
+    latch.release();
+    return source;
+  }
+  try {
+    return new ReadableStream<unknown>({
+      async pull(controller) {
+        try {
+          const next = await reader.read();
+          if (next.done) {
+            controller.close();
+            return;
+          }
+          if (isFinishPart(next.value)) {
+            const verdict = await latch.verdict;
+            if (verdict.abort !== undefined) {
+              controller.error(verdict.abort);
+              reader.cancel(verdict.abort).catch(() => undefined);
+              return;
+            }
+          }
+          controller.enqueue(next.value);
+        } catch (error) {
+          try {
+            controller.error(error); // the provider's own stream error, as before
+          } catch {
+            // the consumer already cancelled: nothing left to tell
+          }
+        }
+      },
+      cancel(reason) {
+        latch.abandoned = true;
+        latch.release();
+        return reader.cancel(reason);
+      },
+    });
+  } catch {
+    try {
+      reader.releaseLock();
+    } catch {
+      // best effort
+    }
+    latch.release();
+    return source;
+  }
+}
+
+/**
+ * The streamed step's `after` gate (attached only): hand the session the
+ * normalized output, then release the SDK's copy of the stream — errored with
+ * the run's AbortError on `abort`. Never throws.
+ */
+async function gateStreamedStep(
+  core: AdapterCore,
+  latch: FinishLatch,
+  output: Record<string, unknown>,
+): Promise<GateDecision['action']> {
+  let action: GateDecision['action'] = 'continue';
+  try {
+    action = (await core.session.gate('after', LLM_GATE_NODE, resultGateOptions(core.session, output))).action;
+    if (action === 'abort') {
+      latch.release({ abort: core.abortError(core.session.currentRun()) });
+      return action;
+    }
+    if (action === 'retry' || action === 'inject') {
+      core.warner.warn(
+        `stream-after-${action}`,
+        `the debugger asked to ${action} a streamed model step at its after gate, but the AI SDK ` +
+          "has already consumed that stream; the step continued with the model's real output " +
+          '(a generateText step can be retried there).',
+      );
+    }
+  } catch {
+    action = 'continue';
+  }
+  latch.release();
+  return action;
 }
 
 /** Consumes the observer branch of the tee. Never throws. */
@@ -267,15 +415,18 @@ async function observeStream(
   stream: ReadableStream<unknown>,
   instanceId: string,
   startedAt: number,
+  latch: FinishLatch | undefined,
 ): Promise<void> {
   let text = '';
   let usage: ReturnType<typeof mapUsage>;
   let finishReason: StreamPartLike['finishReason'];
   let errorPart: unknown;
   let sawError = false;
+  /** The step's `after` gate decision; undefined = not gated (detached, or no finish part). */
+  let afterAction: GateDecision['action'] | undefined;
   const calls = new ToolCallCollector();
-  const reader = stream.getReader();
   try {
+    const reader = stream.getReader();
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -311,6 +462,9 @@ async function observeStream(
         case 'finish':
           usage = mapUsage(part.usage);
           finishReason = part.finishReason;
+          if (latch !== undefined && !latch.abandoned && afterAction === undefined && !sawError) {
+            afterAction = await gateStreamedStep(core, latch, stepOutput(text, finishReason, calls.list()));
+          }
           break;
         case 'error':
           sawError = true;
@@ -335,13 +489,13 @@ async function observeStream(
         output: stepOutput(text, finishReason, calls.list()),
         usage,
         durationMs: elapsedMs(startedAt),
-        status: 'ok',
+        status: afterAction === 'abort' ? 'aborted' : 'ok',
         extra: { instanceId },
       });
     }
   } catch (error) {
     try {
-      const aborted = isAbortError(error);
+      const aborted = isAbortError(error) || afterAction === 'abort';
       if (!aborted) core.errorNode(LLM_NODE_ID, error);
       core.finishNode({
         nodeId: LLM_NODE_ID,
@@ -353,6 +507,9 @@ async function observeStream(
     } catch {
       // the observer must never throw (it runs detached from the host)
     }
+  } finally {
+    // Whatever happened to the observer, the SDK's copy never waits on it.
+    latch?.release();
   }
 }
 
@@ -371,35 +528,84 @@ async function instrumentGenerate<R extends GenerateResultLike>(
   if (begun === undefined) return await doGenerate();
   const { instanceId } = begun;
   const startedAt = monotonicNow();
+  // One doGenerate() call is ONE execution of the llm node even when the
+  // debugger retries it at the after gate; the attempt count rides along.
+  let attempt = 0;
+  const extra = (): Record<string, unknown> => (attempt > 1 ? { instanceId, attempts: attempt } : { instanceId });
 
-  const decision = await core.session.gate('before', LLM_GATE_NODE);
-  if (decision.action === 'abort') {
+  for (;;) {
+    attempt += 1;
+    const decision = await core.session.gate('before', LLM_GATE_NODE);
+    if (decision.action === 'abort') {
+      core.finishNode({
+        nodeId: LLM_NODE_ID,
+        output: undefined,
+        durationMs: elapsedMs(startedAt),
+        status: 'aborted',
+        extra: extra(),
+      });
+      throw core.abortError(core.session.currentRun());
+    }
+
+    let result: R;
+    try {
+      result = await doGenerate();
+    } catch (error) {
+      const aborted = isAbortError(error);
+      if (!aborted) core.errorNode(LLM_NODE_ID, error);
+      core.finishNode({
+        nodeId: LLM_NODE_ID,
+        output: undefined,
+        durationMs: elapsedMs(startedAt),
+        status: aborted ? 'aborted' : 'error',
+        extra: extra(),
+      });
+      throw error;
+    }
+
+    const step = summarizeGenerate(core, result);
+    // Post-response, pre-return: the SDK has not seen this result yet.
+    const post = await core.session.gate('after', LLM_GATE_NODE, resultGateOptions(core.session, step?.output));
+    if (post.action === 'retry') continue;
+    if (post.action === 'abort') {
+      core.finishNode({
+        nodeId: LLM_NODE_ID,
+        output: step?.output,
+        usage: step?.usage,
+        durationMs: elapsedMs(startedAt),
+        status: 'aborted',
+        extra: extra(),
+      });
+      throw core.abortError(core.session.currentRun());
+    }
+    if (post.action === 'inject') {
+      core.warner.warn(
+        'generate-after-inject',
+        'the debugger asked to inject at a model step, but the AI SDK needs the provider\'s own ' +
+          "result there; the step continued with the model's real output.",
+      );
+    }
     core.finishNode({
       nodeId: LLM_NODE_ID,
-      output: undefined,
+      output: step?.output,
+      usage: step?.usage,
       durationMs: elapsedMs(startedAt),
-      status: 'aborted',
-      extra: { instanceId },
+      status: 'ok',
+      extra: extra(),
     });
-    throw core.abortError(core.session.currentRun());
+    return result;
   }
+}
 
-  let result: R;
-  try {
-    result = await doGenerate();
-  } catch (error) {
-    const aborted = isAbortError(error);
-    if (!aborted) core.errorNode(LLM_NODE_ID, error);
-    core.finishNode({
-      nodeId: LLM_NODE_ID,
-      output: undefined,
-      durationMs: elapsedMs(startedAt),
-      status: aborted ? 'aborted' : 'error',
-      extra: { instanceId },
-    });
-    throw error;
-  }
-
+/**
+ * A generated step's normalized output and usage; provider-executed tools in
+ * its content are reported as their own (ungated) nodes on the way. Undefined
+ * when the result cannot be read — reporting never affects the host's result.
+ */
+function summarizeGenerate(
+  core: AdapterCore,
+  result: GenerateResultLike,
+): { output: Record<string, unknown>; usage: ReturnType<typeof mapUsage> } | undefined {
   try {
     let text = '';
     const calls = new ToolCallCollector();
@@ -410,16 +616,8 @@ async function instrumentGenerate<R extends GenerateResultLike>(
       } else if (part.type === 'tool-call') calls.onCall(part);
       else if (part.type === 'tool-result') core.providerToolFinished(part);
     }
-    core.finishNode({
-      nodeId: LLM_NODE_ID,
-      output: stepOutput(text, result.finishReason, calls.list()),
-      usage: mapUsage(result.usage),
-      durationMs: elapsedMs(startedAt),
-      status: 'ok',
-      extra: { instanceId },
-    });
+    return { output: stepOutput(text, result.finishReason, calls.list()), usage: mapUsage(result.usage) };
   } catch {
-    // reporting failures never affect the host's result
+    return undefined;
   }
-  return result;
 }

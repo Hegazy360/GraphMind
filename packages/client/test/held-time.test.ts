@@ -312,7 +312,8 @@ describe('heldMs on node.finished', () => {
     viewer.resume(paused.payload['pauseId'] as string, 'continue');
     await gate;
     const resumed = await viewer.waitForType('exec.resumed');
-    expect(Object.keys(paused.payload).sort()).toEqual(['nodeId', 'pauseId', 'point']);
+    // + `reason` (0.6.0: every hold carries one), never anything held-time related.
+    expect(Object.keys(paused.payload).sort()).toEqual(['nodeId', 'pauseId', 'point', 'reason']);
     expect(Object.keys(resumed.payload).sort()).toEqual(['action', 'pauseId']);
   });
 

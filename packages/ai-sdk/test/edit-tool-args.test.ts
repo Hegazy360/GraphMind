@@ -279,7 +279,13 @@ describe('nothing changes without edit support', () => {
     const tools = gm.wrapTools({ convertCurrency: currencyTool(calls) });
     const promise = tools.convertCurrency.execute?.({ amount: 100, from: 'EUR', to: 'USD' }, toolExecutionOptions('c1'));
     const paused = await pausedAt(viewer, 'tool:convertCurrency', 'before');
-    expect(paused.payload).toEqual({ pauseId: pauseIdOf(paused), nodeId: 'tool:convertCurrency', point: 'before' });
+    // No `editable`; `reason` is on every hold since 0.6.0 (a 0.5 hub accepts all four values).
+    expect(paused.payload).toEqual({
+      pauseId: pauseIdOf(paused),
+      nodeId: 'tool:convertCurrency',
+      point: 'before',
+      reason: 'breakpoint',
+    });
     viewer.resumeWith({ pauseId: pauseIdOf(paused), action: 'continue', input: { amount: 5 } });
     await waitUntil(() => refusalsFor(viewer, pauseIdOf(paused)).length === 1, 8000, 'refusal');
     expect(refusalsFor(viewer, pauseIdOf(paused))[0]?.payload['code']).toBe('disabled');

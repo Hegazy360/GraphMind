@@ -48,6 +48,12 @@ async function softfail(v: FakeViewer, r: ProxyRig): Promise<string> {
   r.request(1, 'initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 't', version: '1' } });
   await r.response(1);
   r.callTool(2, 'softfail', {});
+  // An isError result is the error-result smart hold (0.6.0): its detail is
+  // the rule's own words (dropped under a HIDE switch), never the result.
+  const held = await v.waitForPause('tool:softfail', 'error');
+  expect(held.payload['smart']).toMatchObject({ rule: 'error-result' });
+  expect(JSON.stringify(held)).not.toContain(RESULT_TEXT);
+  v.resume(held.payload['pauseId'] as string, 'continue');
   const answer = await r.response(2);
   // The MCP client always gets the real result: redaction is about the recording.
   expect(JSON.stringify(answer)).toContain(RESULT_TEXT);

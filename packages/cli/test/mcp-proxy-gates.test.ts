@@ -144,7 +144,13 @@ describe('mcp-proxy: the graph', () => {
     r.callTool(1, 'boom');
     await r.response(1);
     r.callTool(2, 'softfail');
+    // The isError result is the error-result smart hold (0.6.0); the JSON-RPC
+    // error above was not held (no pause-on-error breakpoint armed here).
+    const held = await v.waitForPause('tool:softfail', 'error');
+    expect(held.payload).toMatchObject({ reason: 'breakpoint', smart: { rule: 'error-result' } });
+    v.resume(held.payload['pauseId'] as string, 'continue');
     await r.response(2);
+    expect(v.ofType('exec.paused')).toHaveLength(1);
 
     const boom = await v.waitFor((f) => f.type === 'node.error' && f.payload['nodeId'] === 'tool:boom');
     expect((boom.payload['error'] as { name: string }).name).toBe('JsonRpcError(-32603)');

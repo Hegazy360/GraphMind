@@ -20,13 +20,15 @@ import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
 import {
   isAbortError,
   normalizeFinishReason,
+  resultGateOptions,
   toolCall,
+  type GateNode,
   type RecordedToolCall,
   type RunContext,
   type RunStatus,
 } from '@graphmind-ai/client';
 import type { AdapterCore } from './core.js';
-import { LLM_NODE_ID, toolNodeId } from './ids.js';
+import { LLM_NODE_ID, LLM_NODE_NAME, toolNodeId } from './ids.js';
 import {
   SERVER_TOOL_USE_BLOCK,
   isServerToolResultBlock,
@@ -39,6 +41,8 @@ import {
   type StreamEventLike,
   type UsageLike,
 } from './sdk-types.js';
+
+const LLM_GATE_NODE: GateNode = { nodeId: LLM_NODE_ID, kind: 'llm', name: LLM_NODE_NAME };
 
 /** Per-step reporting state; `node.finished` is emitted at most once. */
 export class StepReporter {
@@ -88,6 +92,34 @@ export class StepReporter {
       status,
       ...(extra !== undefined ? { extra } : {}),
     });
+  }
+
+  /**
+   * The step's `after` gate: post-response, before the host has the whole
+   * message (a `Message` not yet returned, a stream not yet past its last
+   * event). While a debugger is attached it hands the session the normalized
+   * output — what the smart hold `truncated-tool-call` inspects; detached it
+   * is called with no options, like every other gate. Resolves true when the
+   * debugger aborted the run there (the caller finishes the step `aborted`
+   * and throws the run's AbortError). `retry` / `inject` cannot re-run or
+   * substitute a model call the SDK already made and continue, with a
+   * warning. Never rejects.
+   */
+  async gateAfter(output: unknown): Promise<boolean> {
+    try {
+      const decision = await this.core.session.gate('after', LLM_GATE_NODE, resultGateOptions(this.core.session, output));
+      if (decision.action === 'abort') return true;
+      if (decision.action === 'retry' || decision.action === 'inject') {
+        this.core.warner.warn(
+          `llm-after-${decision.action}`,
+          `the debugger asked to ${decision.action} a model step at its after gate, but the Anthropic ` +
+            "SDK's call has already been made; the step continued with the model's real output.",
+        );
+      }
+    } catch {
+      // a gate never rejects; belt and braces
+    }
+    return false;
   }
 
   /** Report a failed step. Aborts are terminal, not errors. */
@@ -184,20 +216,29 @@ function messageToolCalls(message: MessageLike): RecordedToolCall[] {
   return calls;
 }
 
-/** Report a completed non-streaming `messages.create`. */
-export function observeMessage(reporter: StepReporter, message: MessageLike): void {
+/**
+ * Report a completed non-streaming `messages.create`, through the step's
+ * `after` gate before the host receives it. Rejects only with the run's
+ * AbortError, when the debugger aborted there.
+ */
+export async function observeMessage(reporter: StepReporter, message: MessageLike): Promise<void> {
+  let output: Record<string, unknown>;
+  let usage: UsageLike | undefined;
   try {
     for (const block of message.content ?? []) reporter.observeBlock(block);
     const text = collectText(message);
     if (text.length > 0) reporter.core.pushToken(LLM_NODE_ID, 'text', text);
-    reporter.finish(
-      stepOutput(text, message.stop_reason ?? undefined, message.model, messageToolCalls(message)),
-      message.usage,
-      'ok',
-    );
+    output = stepOutput(text, message.stop_reason ?? undefined, message.model, messageToolCalls(message));
+    usage = message.usage;
   } catch (error) {
     reporter.fail(error);
+    return;
   }
+  if (await reporter.gateAfter(output)) {
+    reporter.finish(output, usage, 'aborted');
+    throw reporter.core.abortError(reporter.ctx);
+  }
+  reporter.finish(output, usage, 'ok');
 }
 
 function collectText(message: MessageLike): string {
@@ -273,12 +314,29 @@ async function* teeIterator(
       return { text, stopReason, model }; // reporting must never throw
     }
   };
+  /** The step's `after` gate already ran (it runs once per stream). */
+  let gated = false;
+  /**
+   * The step's `after` gate, before the host gets the message's last event:
+   * on `abort`, finish the step aborted and throw the run's AbortError (the
+   * host's iteration rejects with it). Not after a stream `error` event.
+   */
+  const gateOnce = async (): Promise<void> => {
+    if (gated || streamError !== undefined) return;
+    gated = true;
+    const snapshot = output();
+    if (await reporter.gateAfter(snapshot)) {
+      reporter.finish(snapshot, usage, 'aborted');
+      throw reporter.core.abortError(reporter.ctx);
+    }
+  };
 
   try {
     for (;;) {
       const next = await inner.next();
       if (next.done === true) break;
       const event = next.value;
+      let stopping = false;
       try {
         switch (event.type) {
           case 'message_start': {
@@ -347,14 +405,22 @@ async function* teeIterator(
             streamError = event.error ?? new Error('anthropic stream error');
             break;
           }
+          case 'message_stop': {
+            stopping = true;
+            break;
+          }
           default:
             break;
         }
       } catch {
         // never let observation disturb the host's stream
       }
+      // Held before `message_stop`: once the host has it, the SDK's
+      // MessageStream hands over the final message (and tools run).
+      if (stopping) await gateOnce();
       yield event;
     }
+    await gateOnce(); // a stream that ended without `message_stop`
     if (streamError !== undefined) reporter.fail(streamError, output());
     else reporter.finish(output(), usage, reporter.endStatus());
   } catch (error) {

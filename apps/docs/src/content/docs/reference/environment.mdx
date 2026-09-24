@@ -1,6 +1,6 @@
 ---
 title: Environment variables
-description: Every variable GraphMind reads — the CLI's and the instrumented app's — plus kill-switch precedence, the GRAPHMIND_HIDE_* switches, and the loop hold.
+description: Every variable GraphMind reads — the CLI's and the instrumented app's — plus kill-switch precedence, the GRAPHMIND_HIDE_* switches, the loop hold and the smart holds.
 sidebar:
   order: 2
 ---
@@ -37,14 +37,18 @@ import { Aside } from '@astrojs/starlight/components';
 | `GRAPHMIND_HIDE_OUTPUTS` | On: every node's `output`, and the text of every streamed token, is recorded as hidden |
 | `GRAPHMIND_HIDE_TOOL_ARGS` | On: tool nodes' `input` only |
 | `GRAPHMIND_HIDE_TOOL_RESULTS` | On: tool nodes' `output` only |
-| `GRAPHMIND_LOOP_THRESHOLD` | How many identical calls in a row count as a loop. Default `3`; `0` turns the loop hold off; anything that is not a whole number ≥ 0 falls back to `3`. See [loop hold](#loop-hold). |
+| `GRAPHMIND_LOOP_THRESHOLD` | How many identical calls in a row count as a loop. Default `3`; `0` turns the loop hold off (every loop kind); anything that is not a whole number ≥ 0 falls back to `3`. See [loop hold](#loop-hold). |
 | `GRAPHMIND_ON_LOOP` | `pause` (default: hold when a debugger is attached, warn when not), `warn` (never hold, warn once per streak), or `off`. `0`, `false` and `none` also mean `off`; any other value falls back to `pause`. |
 | `GRAPHMIND_LOOP_ALLOW` | Comma-separated node ids or tool names that are never held as a loop, e.g. `pollJob,tool:heartbeat` |
+| `GRAPHMIND_BREAK_ON_ERROR_RESULT` | Since 0.6.0. While a debugger is attached, hold a tool call that returned an error-shaped result instead of throwing: `isError: true`, `success: false`, a non-zero numeric `exit_code` / `exitCode` / `exitStatus`, or an object whose only key is `error`. On by default; `0`, `false`, `off` and `no` (any case) turn it off, and any other value leaves it on. The session option `breakOnErrorResult` beats it. See [smart holds](#smart-holds). |
+| `GRAPHMIND_BREAK_ON_TRUNCATED` | Since 0.6.0. While a debugger is attached, hold an LLM step that the token limit or a content filter stopped while it was requesting a tool call. Same values as above; the session option `breakOnTruncated` beats it. |
 
 The `GRAPHMIND_HIDE_*` and loop variables are read by the TypeScript client (so by every TS
 adapter and by `graphmind mcp-proxy`), by the Python SDK and by the Ruby gem, with the same
-names and meanings. Set them in the environment of the **instrumented app**, or of
-`graphmind mcp-proxy`. Setting them on `graphmind serve` does nothing.
+names and meanings. In 0.6.0 the two `GRAPHMIND_BREAK_ON_*` switches, and the `cycle` and
+`error-repeat` loop kinds, are TypeScript only. Set them in the environment of the
+**instrumented app**, or of `graphmind mcp-proxy`. Setting them on `graphmind serve` does
+nothing.
 
 ## Kill-switch precedence
 
@@ -125,7 +129,9 @@ GRAPHMIND_HIDE_TOOL_RESULTS=true
   that still contains the placeholder. See [the viewer](/reference/viewer/#hidden-values).
 - **The loop fingerprint follows `hideInputs`.** When inputs are hidden, `exec.paused.loop.fingerprint` is
   also `"__REDACTED__"` (under `GRAPHMIND_HIDE_TOOL_ARGS`, for tool nodes). A digest of a
-  low-entropy input can be reversed by guessing.
+  low-entropy input can be reversed by guessing. The fingerprint of a `cycle` or `error-repeat`
+  hold is derived from results and errors too, so any switch that covers the node's input or
+  output hides it, and a smart hold's `detail` is left out under the same switches.
 
 For exports, a separate mechanism removes values under secret-looking keys by default:
 [`graphmind record`](/reference/cli/#graphmind-record-runid).
@@ -198,6 +204,59 @@ Costs and limits:
 see the [wire protocol](/reference/wire-protocol/#events-app--viewer). To try it:
 `pnpm --filter demo-agent start -- --loop` from a checkout, with `npx graphmind-ai` running.
 
+### Cycles and repeated errors (0.6.0)
+
+Two more loop kinds hold at a `before` gate, with `reason: 'loop'` and `loop.kind` (TypeScript
+client only in 0.6.0):
+
+- **`cycle`**: 2 to 4 calls repeated in 3 identical rounds. Identical means the same tool, the
+  same arguments **and** the same result at each position, with at least two different calls
+  per round. The first call of round 4 is held. A poll whose answer changes never looks like a
+  cycle.
+- **`error-repeat`**: one tool failed 3 times in a row with the same error, while its
+  arguments may differ. A failure is a thrown error (compared by name and message, whitespace
+  collapsed, first 512 characters) or an error-shaped result (see [smart holds](#smart-holds)).
+  Calls of other tools in between do not matter; a success of that tool ends the streak. The
+  4th call is held.
+
+Both fill `repeats`, `firstSeq`, `lastSeq` and `fingerprint`, so a 0.5 viewer still shows them,
+plus `period` and `laps` for a cycle. Their fingerprint is a digest salted per process (it
+proves "same as that other call" and nothing else) and becomes `"__REDACTED__"` under any HIDE
+switch that covers the node. `GRAPHMIND_ON_LOOP`, `GRAPHMIND_LOOP_ALLOW` and `loopGuard` apply
+to them. `GRAPHMIND_LOOP_THRESHOLD` sets only the identical-call count: a cycle needs 3 rounds
+and an error-repeat 3 failures, fixed in 0.6.0, and `0` turns every kind off. Detached, they
+print a rate-limited warning that names the tool and nothing else.
+
+## Smart holds
+
+Since 0.6.0, while a debugger is attached, GraphMind also holds on two failures that do not
+throw. Both hold at an `after` gate (the proxy is the one exception, below) with
+`reason: 'breakpoint'` and `smart: { rule, detail }`, so a 0.5 server shows them as ordinary
+breakpoint holds.
+
+| Rule | Switch | Holds when |
+| --- | --- | --- |
+| `error-result` | `GRAPHMIND_BREAK_ON_ERROR_RESULT` | A tool returned an error-shaped result: `isError === true`, `success === false`, a non-zero numeric `exit_code` / `exitCode` / `exitStatus`, or a plain object whose only key is `error`. Nothing else counts; text is never searched for words like "error". |
+| `truncated-tool-call` | `GRAPHMIND_BREAK_ON_TRUNCATED` | An LLM step's normalized finish reason is `length` or `content-filter` and the step requested at least one tool call, whose arguments are then very likely cut off. |
+
+- **`detail`** is a short sentence in GraphMind's own words, such as `the tool returned a
+  result with isError: true`. It never quotes the result, and it is left out under any HIDE
+  switch that covers the node.
+- **Under `graphmind mcp-proxy`** an `isError: true` result is still gated at the tool's
+  `error` point, and that one hold carries the `error-result` rule. A JSON-RPC error stays an
+  ordinary error hold.
+- **Where an LLM step is held:** before your code gets the result for AI SDK `generateText`
+  steps, non-streaming OpenAI requests and Anthropic `messages.create`. For AI SDK `streamText`
+  the SDK's copy of the stream waits at its `finish` part, so the step does not complete and the
+  next step does not start (a tool call that already streamed in full has been handed to its
+  tool). Anthropic streams, `messages.stream()` included, wait before the `message_stop` event.
+  LangChain and LangGraph hold at the end of the model run, as an observe-only callback gate. A
+  streamed OpenAI response is recorded but not held.
+- **Resume actions:** Continue hands the result on and Abort stops the run. On an LLM step,
+  Retry runs the step again for AI SDK `generateText` and non-streaming OpenAI requests (where
+  Inject also replaces the completion). Elsewhere Retry and Inject continue with the real result
+  and log one warning. On a tool they work as at any other gate of that tool.
+
 ## Non-standard ports
 
 Two sides have to agree. If you move the server, tell the app:
@@ -265,3 +324,5 @@ Options passed to `graphmind({ … })` take precedence over the variables:
 | `pauseTimeoutMs` | hold forever | — |
 | `hideInputs` / `hideOutputs` / `hideToolArgs` / `hideToolResults` | `false` | `GRAPHMIND_HIDE_*`. Not shadowed: either one turning a switch on wins. |
 | `loopGuard` | `{ threshold: 3, mode: 'pause', … }` | `GRAPHMIND_LOOP_THRESHOLD`, `GRAPHMIND_ON_LOOP`, `GRAPHMIND_LOOP_ALLOW`, field by field |
+| `breakOnErrorResult` | `true` | `GRAPHMIND_BREAK_ON_ERROR_RESULT`. A boolean option beats the variable. |
+| `breakOnTruncated` | `true` | `GRAPHMIND_BREAK_ON_TRUNCATED`. A boolean option beats the variable. |

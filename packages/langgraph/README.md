@@ -60,6 +60,16 @@ never *change* it.
 | `after` gate (inspect a finished node) | ✅ observe-only | — | ✅ | ❌ | ❌ |
 | `after` gate on a wrapped tool | ✅ | — | ✅ | **✅** | **✅** |
 
+**Smart holds (0.6.0).** A chat model / LLM run now has an `after` gate at its
+end (`handleLLMEnd`, which LangChain awaits before the model call returns), and
+it and a callback-only tool's `after` gate hand the session the recorded output
+while a debugger is attached: a model stopped by the token limit or a content
+filter while writing a tool call holds with `smart.rule: 'truncated-tool-call'`,
+and a tool result shaped like an error (`isError: true`, `success: false`, a
+non-zero exit code, or only an `error` key) holds with `'error-result'`. They
+are observe-only like every callback gate (continue or abort); a wrapped tool's
+own `after` gate does the same with retry and inject.
+
 **Why pause works.** `CallbackManager` **awaits** handler methods when the
 handler asks it to (`_awaitHandler: true`, which this handler sets), and it
 awaits them *before* the announced work runs — `StructuredTool.call` awaits

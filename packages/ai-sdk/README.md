@@ -81,7 +81,20 @@ and later calls never wait. Disabled sessions skip the wait entirely.
   node per ~34ms, i.e. ~30/sec) without disturbing what the SDK consumes,
 - emits `node.finished` with token usage from the finish part,
 - emits `graph.hint` from `params.tools` on an invocation's first step so the
-  viewer can render the full tool roster grey before anything runs.
+  viewer can render the full tool roster grey before anything runs,
+- (0.6.0) runs the step's `after` gate with its normalized output
+  (`{text, finishReason, toolCalls}`), so a step the token limit or a content
+  filter cut off in the middle of a tool call is a smart hold
+  (`truncated-tool-call`; `GRAPHMIND_BREAK_ON_TRUNCATED=0` turns it off).
+  `wrapGenerate` holds before the SDK sees the result: `continue` returns it,
+  `retry` runs the step again, `abort` throws the run's `AbortError`.
+  `wrapStream`, while a debugger is attached, holds the SDK's copy of the
+  stream at its `finish` part: the step cannot complete and the next one
+  cannot start (a tool call that already streamed in full has been handed to
+  its tool); `abort` errors that stream with the `AbortError`. `inject` (and
+  `retry` on a stream) cannot replace what the SDK needs there and continue
+  with a warning. Detached, the stream the SDK reads is the tee's own branch,
+  untouched.
 
 **wrapTools** (per tool call; parallel calls gate independently):
 

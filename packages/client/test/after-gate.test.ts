@@ -1,7 +1,9 @@
 /**
  * The after-gate plumbing W4's smart holds build on: `gate('after', node,
- * {result})` hands the result to the session's detectors (an internal list,
- * empty in 0.6's W0), a hit holds the gate with `reason: 'breakpoint'` and
+ * {result})` hands the result to the session's detectors (an internal list;
+ * W4 registers `error-result` and `truncated-tool-call` by default — these
+ * tests switch both off to drive the list by hand, see smart-holds.test.ts
+ * for the rules), a hit holds the gate with `reason: 'breakpoint'` and
  * `smart`, and a detector can never break a gate. With no detector, `after`
  * gates behave exactly as in 0.5.
  */
@@ -32,14 +34,28 @@ function detectorsOf(session: Session): GateDetector[] {
 async function setup(sessionOptions: SessionOptions = {}, viewerOptions: Parameters<typeof FakeViewer.start>[0] = {}) {
   const viewer = await FakeViewer.start(viewerOptions);
   cleanups.push(() => viewer.close());
-  const session = createSession({ url: viewer.url, enabled: true, retryIntervalMs: 60_000, env: {}, ...sessionOptions });
+  const session = createSession({
+    url: viewer.url,
+    enabled: true,
+    retryIntervalMs: 60_000,
+    env: {},
+    breakOnErrorResult: false,
+    breakOnTruncated: false,
+    ...sessionOptions,
+  });
   cleanups.push(() => session.dispose());
   expect(await session.ready()).toBe(true);
   return { viewer, session };
 }
 
 describe('after-gate detectors', () => {
-  it('the list is empty by default: after gates are unchanged', async () => {
+  it('W4 registers its two smart detectors by default; with both off the list is empty', async () => {
+    const defaults = createSession({ enabled: true, env: {}, webSocket: undefined, logger: () => {} });
+    cleanups.push(() => defaults.dispose());
+    expect(detectorsOf(defaults)).toHaveLength(2);
+  });
+
+  it('with the list empty, after gates are unchanged', async () => {
     const { viewer, session } = await setup();
     expect(detectorsOf(session)).toEqual([]);
     expect(await session.gate('after', TOOL, { result: { isError: true } })).toEqual({ action: 'continue' });

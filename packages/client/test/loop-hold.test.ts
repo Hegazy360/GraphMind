@@ -506,9 +506,12 @@ describe('loop hold v3 — back-to-back only', () => {
     expect(warnings.filter((w) => w.includes('possible loop'))).toHaveLength(0);
   });
 
-  it('a model alternating between two tools (search, read, search, read) is not held — the accepted v3 limit', async () => {
+  it('a model alternating between two tools (search, read, search, read) is not held by the v3 rule', async () => {
     // v2 held the third `search` here. v3 does not: another watched call
-    // between two identical calls makes them not back-to-back.
+    // between two identical calls makes them not back-to-back. (0.6.0's
+    // `cycle` kind holds this pattern only once the calls COMPLETE with
+    // identical results — none of these calls ever finishes; see
+    // loop-kinds-session.test.ts.)
     const viewer = await startViewer();
     const session = await attachedSession(viewer);
     for (let i = 0; i < 6; i += 1) {

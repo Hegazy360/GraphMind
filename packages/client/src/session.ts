@@ -52,6 +52,7 @@ import { GraphMindAbortError, isAbortError, toErrorInfo } from './errors.js';
 import {
   CONTINUE_DECISION,
   GateEngine,
+  matcherMatches,
   type GateDecision,
   type GateNode,
   type HeldGateView,
@@ -70,6 +71,12 @@ import { makeCounterIds, newId } from './ids.js';
 import { REDACTED, Redactor, resolveRedaction } from './redaction.js';
 import { RingBuffer } from './ring-buffer.js';
 import { RateLimitedWarner, type WarnSink } from './safe.js';
+import {
+  defaultDetectors,
+  errorResultAtErrorGate,
+  resolveSmartBreakpoints,
+  type ResolvedSmartBreakpoints,
+} from './smart.js';
 import { Transport, type WebSocketConstructor } from './transport.js';
 import { CLIENT_VERSION } from './version.js';
 
@@ -94,6 +101,9 @@ const VALIDATION_TIMED_OUT: InputValidation = Object.freeze({
 
 /** Smart-hold details (`exec.paused.smart`, with `reason: 'breakpoint'`). */
 export type SmartInfo = NonNullable<EventPayloadMap['exec.paused']['smart']>;
+
+/** Why a gate holds (`exec.paused.reason`); every hold carries one (0.6.0). */
+type PauseReason = NonNullable<EventPayloadMap['exec.paused']['reason']>;
 
 /**
  * What an after-gate detector sees (W4's smart holds): the gated call and its
@@ -146,6 +156,8 @@ export interface GateOptions {
 
 /** What `gate()` hands the hold it is about to open (see `pendingPause`). */
 interface PendingPause {
+  /** `loop` / `breakpoint` (smart or matched) / `step` / `error`. */
+  reason: PauseReason;
   loop: LoopInfo | undefined;
   smart: SmartInfo | undefined;
   /** Every edit condition held when the pause opened: `exec.paused.editable`. */
@@ -226,9 +238,29 @@ export interface SessionOptions {
    * a debugger is attached (see loop-guard.ts, rule v3).
    * Default `{threshold: 3, mode: 'pause', kinds: ['tool']}`, overridable per
    * field here or via `GRAPHMIND_LOOP_THRESHOLD` / `GRAPHMIND_ON_LOOP`.
-   * `false` switches it off.
+   * `false` switches it off. The same guard holds the 0.6.0 loop kinds —
+   * a cycle of 2-4 calls repeated in 3 identical laps, and one tool failing 3
+   * times in a row with the same error (see loop-guard.ts).
    */
   loopGuard?: LoopGuardOptions | false;
+  /**
+   * Smart breakpoint `error-result` (0.6.0): hold a tool's `after` gate when
+   * the result the adapter passed is error-shaped (`isError: true`,
+   * `success: false`, a non-zero `exit_code`/`exitCode`/`exitStatus`, or an
+   * object whose only field is `error`; see smart.ts). At a tool's `error`
+   * gate that was handed a result (mcp-proxy's `isError` gate) the same rule
+   * names the hold. Only while a debugger is attached. Default on; env
+   * GRAPHMIND_BREAK_ON_ERROR_RESULT (`0`, `false`, `off`, `no` turn it off).
+   * A boolean here beats the env.
+   */
+  breakOnErrorResult?: boolean;
+  /**
+   * Smart breakpoint `truncated-tool-call` (0.6.0): hold an LLM step's
+   * `after` gate when its normalized output stopped at the token limit or
+   * the content filter while requesting a tool call. Default on; env
+   * GRAPHMIND_BREAK_ON_TRUNCATED. A boolean here beats the env.
+   */
+  breakOnTruncated?: boolean;
   // -- Coarse redaction (W7; see redaction.ts). Each defaults to its env switch;
   // either source turning one on turns it on (env is a floor code cannot lower).
   /** Replace `node.started.input` with "__REDACTED__" on every node. Env: GRAPHMIND_HIDE_INPUTS. */
@@ -408,8 +440,14 @@ class SessionImpl implements Session {
    * Undefined for a 0.5 debugger, which sends none, and while detached.
    */
   private hubCapabilities: ReadonlySet<string> | undefined;
-  /** After-gate detectors (W4's smart holds). Empty: `after` gates are unchanged. */
+  /**
+   * After-gate detectors (W4's smart holds): `error-result` and
+   * `truncated-tool-call` unless switched off (see smart.ts). Empty: `after`
+   * gates are unchanged.
+   */
   private readonly detectors: GateDetector[] = [];
+  /** Which smart breakpoints are on (option > env > on); see smart.ts. */
+  private readonly smartBreakpoints: ResolvedSmartBreakpoints;
   private readonly als = new AsyncLocalStorage<RunContext>();
   private readonly newPauseId = makeCounterIds('pause');
 
@@ -468,6 +506,8 @@ class SessionImpl implements Session {
       (key, message) => this.warner.warn(key, message),
     );
     this.loopGuard = new LoopGuard(resolveLoopGuard(options.loopGuard, env));
+    this.smartBreakpoints = resolveSmartBreakpoints(options, env);
+    this.detectors.push(...defaultDetectors(this.smartBreakpoints));
     this.engine = new GateEngine(
       {
         newPauseId: this.newPauseId,
@@ -607,6 +647,24 @@ class SessionImpl implements Session {
     this.guard('emit', () => {
       this.ensureStarted();
       const runId = this.resolveRunId();
+      if ((type === 'node.finished' || type === 'node.error') && this.loopGuard.enabled) {
+        // Loop kinds v4: a watched call's error and completion feed its kind's
+        // history, from the adapter's own (pre-redaction) payload, once the
+        // frame exists — a completion that never reached the wire equals
+        // nothing.
+        let seq: number | undefined;
+        try {
+          seq = this.emitInternal(type, payload, runId);
+        } finally {
+          this.noteNodeEnded(
+            type,
+            payload as EventPayloadMap['node.finished'] | EventPayloadMap['node.error'],
+            runId,
+            seq,
+          );
+        }
+        return;
+      }
       if (type !== 'node.started') {
         this.emitInternal(type, payload, runId);
         return;
@@ -636,14 +694,20 @@ class SessionImpl implements Session {
       // 'before', only in mode 'pause' — detached, the fast path is untouched.
       // The after-gate detectors likewise run only when attached, only at
       // 'after', only when the adapter passed options and a detector exists.
+      // At an 'error' gate that was handed a result (mcp-proxy's isError
+      // gate) only the built-in error-result rule runs: one gate, one hold.
       const loop =
         point === 'before' && this.transport.attached && this.loopGuard.mode === 'pause'
           ? this.loopGuard.consult(this.resolveRunId(), node.kind, node.nodeId, node.name)
           : undefined;
       const smart =
-        point === 'after' && options !== undefined && this.detectors.length > 0 && this.transport.attached
-          ? this.detect(node, options)
-          : undefined;
+        options === undefined || !this.transport.attached
+          ? undefined
+          : point === 'after' && this.detectors.length > 0
+            ? this.detect(node, options)
+            : point === 'error' && this.smartBreakpoints.errorResult
+              ? this.detectAtError(node, options)
+              : undefined;
       if (
         loop === undefined &&
         smart === undefined &&
@@ -653,7 +717,9 @@ class SessionImpl implements Session {
       }
       const ctx = this.currentRun();
       const runId = this.resolveRunId();
-      this.pendingPause = { loop, smart, ...this.editabilityOf(options) };
+      const reason: PauseReason =
+        loop !== undefined ? 'loop' : smart !== undefined ? 'breakpoint' : this.matchedReason(point, node);
+      this.pendingPause = { reason, loop, smart, ...this.editabilityOf(options) };
       return this.engine.hold(point, node, runId).then(
         (decision) => {
           if (decision.action === 'abort') {
@@ -763,6 +829,7 @@ class SessionImpl implements Session {
         name = '';
       }
       let input: unknown = UNREADABLE_INPUT;
+      let instanceId: string | undefined;
       if (seq !== undefined) {
         try {
           input = payload.input;
@@ -770,17 +837,30 @@ class SessionImpl implements Session {
           input = UNREADABLE_INPUT;
         }
       }
+      try {
+        const id: unknown = payload.instanceId;
+        instanceId = typeof id === 'string' ? id : undefined;
+      } catch {
+        instanceId = undefined;
+      }
       // Never emitted: UNREADABLE_INPUT clears the streak before `seq` is used.
-      const record = guard.record(runId, kind, nodeId, name, input, seq ?? -1);
-      if (record === undefined || !record.atThreshold) return;
+      const record = guard.record(runId, kind, nodeId, name, input, seq ?? -1, instanceId);
+      if (record === undefined) return;
       const willHold = guard.mode === 'pause' && this.transport.attached;
       if (willHold) return;
-      if (!guard.claimWarning(runId, nodeId, kind)) return;
-      const times = `${record.repeats}×`;
       const because =
         guard.mode === 'warn'
           ? 'GRAPHMIND_ON_LOOP=warn, so it is not being held'
           : 'no debugger is attached to hold it (start `npx graphmind-ai` to pause it there)';
+      const hint =
+        'Polling on purpose? add it to loopGuard.allowNodes (GRAPHMIND_LOOP_ALLOW); ' +
+        'GRAPHMIND_ON_LOOP=off silences this';
+      if (!record.atThreshold) {
+        if (record.detected !== undefined) this.warnLoopKind(record.detected, nodeId, name, because, hint);
+        return;
+      }
+      if (!guard.claimWarning(runId, nodeId, kind)) return;
+      const times = `${record.repeats}×`;
       this.warner.warn(
         `loop:${nodeId}`,
         `possible loop: ${name} (${nodeId}) was called ${times} in a row with ` +
@@ -793,10 +873,108 @@ class SessionImpl implements Session {
   }
 
   /**
-   * `exec.paused`: the 0.5 fields in their 0.5 order, then why a built-in
-   * breakpoint held (loop hold at `before`, smart hold at `after`), then
-   * `editable` — present only when true, so a pause nobody can edit, and
-   * every pause under a 0.5 debugger, is byte-identical to 0.5.
+   * One rate-limited warning (per node and kind) for a cycle or an
+   * error-repeat nobody will hold. Names the node and counts — never an
+   * argument, a result or an error message.
+   */
+  private warnLoopKind(loop: LoopInfo, nodeId: string, name: string, because: string, hint: string): void {
+    if (loop.kind === 'cycle') {
+      this.warner.warn(
+        `loop-cycle:${nodeId}`,
+        `possible loop: ${name} (${nodeId}) starts round ${loop.repeats + 1} of a cycle of ` +
+          `${loop.period ?? 0} calls that repeated ${loop.repeats}× with identical arguments and ` +
+          `identical results; ${because}. ${hint}`,
+      );
+    } else if (loop.kind === 'error-repeat') {
+      this.warner.warn(
+        `loop-error:${nodeId}`,
+        `possible loop: ${name} (${nodeId}) failed ${loop.repeats}× in a row with the same error ` +
+          `and is being called again; ${because}. ${hint}`,
+      );
+    }
+  }
+
+  /**
+   * Loop kinds v4, the completion half: a `node.error` notes a watched call's
+   * error, a `node.finished` completes it into its kind's history (see
+   * loop-guard.ts). Each field is read once; an output whose read throws
+   * completes the call as one that equals nothing, and so does a completion
+   * that never reached the wire (`seq` undefined). Unwatched nodes cost one
+   * lookup. Pure bookkeeping: never throws.
+   */
+  private noteNodeEnded(
+    type: 'node.finished' | 'node.error',
+    payload: EventPayloadMap['node.finished'] | EventPayloadMap['node.error'],
+    runId: string,
+    seq: number | undefined,
+  ): void {
+    try {
+      let nodeId: unknown;
+      let instanceId: unknown;
+      try {
+        nodeId = payload.nodeId;
+        instanceId = payload.instanceId;
+      } catch {
+        return; // nothing to correlate with
+      }
+      if (typeof nodeId !== 'string') return;
+      const instance = typeof instanceId === 'string' ? instanceId : undefined;
+      if (type === 'node.error') {
+        let name: unknown;
+        let message: unknown;
+        try {
+          const error = (payload as EventPayloadMap['node.error']).error;
+          name = error.name;
+          message = error.message;
+        } catch {
+          name = undefined;
+          message = undefined;
+        }
+        this.loopGuard.noteError(runId, nodeId, instance, name, message);
+        return;
+      }
+      const finished = payload as EventPayloadMap['node.finished'];
+      let status: unknown;
+      let output: unknown;
+      try {
+        status = finished.status;
+      } catch {
+        status = undefined;
+      }
+      try {
+        output = finished.output;
+      } catch {
+        output = UNREADABLE_INPUT;
+      }
+      this.loopGuard.complete(runId, nodeId, instance, status, output, seq !== undefined);
+    } catch {
+      // never throw into the host
+    }
+  }
+
+  /**
+   * Why a hold that no built-in breakpoint raised holds: at an `error` point,
+   * `error` (the pause-on-error breakpoint, or step mode stopping on an
+   * error); elsewhere `breakpoint` when one of the debugger's breakpoints
+   * matches, else `step`. Only on the hold path.
+   */
+  private matchedReason(point: PausePoint, node: GateNode): PauseReason {
+    if (point === 'error') return 'error';
+    try {
+      const { breakpoints } = this.engine.snapshot();
+      if (breakpoints.some((matcher) => matcherMatches(matcher, point, node))) return 'breakpoint';
+    } catch {
+      return 'breakpoint';
+    }
+    return 'step';
+  }
+
+  /**
+   * `exec.paused`: the 0.5 fields in their 0.5 order, then `reason` — on
+   * every hold (0.6.0): `loop` with `loop`, `breakpoint` with `smart` for a
+   * smart hold, else `breakpoint` / `step` / `error` from what the debugger
+   * armed (0.5 hubs accept all four) — then `editable`, present only when
+   * true.
    */
   private pausedPayload(
     pauseId: string,
@@ -811,6 +989,8 @@ class SessionImpl implements Session {
     } else if (pending?.smart !== undefined) {
       payload.reason = 'breakpoint';
       payload.smart = this.smartOnWire(pending.smart, node);
+    } else if (pending !== undefined) {
+      payload.reason = pending.reason;
     }
     if (pending?.editable === true) payload.editable = true;
     return payload;
@@ -838,6 +1018,21 @@ class SessionImpl implements Session {
       }
     }
     return undefined;
+  }
+
+  /**
+   * The error-result rule at an `error` gate that was handed a result (see
+   * smart.ts errorResultAtErrorGate), or undefined. Reads the result once;
+   * never throws.
+   */
+  private detectAtError(node: GateNode, options: GateOptions): SmartInfo | undefined {
+    try {
+      if (!('result' in options)) return undefined;
+      const result = options.result;
+      return errorResultAtErrorGate(Object.freeze({ runId: this.resolveRunId(), node, result }));
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -1094,13 +1289,22 @@ class SessionImpl implements Session {
    * low-entropy argument — an email, a zip code, an id — would be a
    * dictionary attack away from the digest, so the digest is hidden with it.
    * The hold, `repeats`, `firstSeq` and `lastSeq` are unaffected.
+   *
+   * The 0.6.0 kinds (`cycle`, `error-repeat`) report a digest salted per
+   * process — useless against a dictionary — but still derived from the
+   * node's arguments, results or error: under ANY switch covering this node's
+   * input or output it is hidden too, so nothing beyond counts and seqs
+   * leaves the process (contract C4).
    */
   private loopOnWire(
     loop: LoopInfo,
     node: GateNode,
   ): NonNullable<EventPayloadMap['exec.paused']['loop']> {
     const s = this.redactor.switches;
-    const hidden = s.hideInputs || (s.hideToolArgs && node.kind === 'tool');
+    const tool = node.kind === 'tool';
+    const inputHidden = s.hideInputs || (s.hideToolArgs && tool);
+    const hidden =
+      loop.kind === undefined ? inputHidden : inputHidden || s.hideOutputs || (s.hideToolResults && tool);
     return hidden ? { ...loop, fingerprint: REDACTED } : { ...loop };
   }
 

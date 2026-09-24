@@ -13,6 +13,14 @@
  *     `APIPromise` (see api-promise.ts) rather than the real one.
  *  3. The result is observed: a `Message` is reported directly; a
  *     `Stream` is returned as a delegating Proxy that tees token deltas.
+ *  4. The step's `after` gate (observe.ts `StepReporter.gateAfter`) runs
+ *     before the host has the whole message — before a `Message` is returned,
+ *     before a stream's `message_stop` event is handed over — and, while a
+ *     debugger is attached, hands the session the normalized output, so a
+ *     step the token limit cut off mid tool call is a smart hold
+ *     (`truncated-tool-call`). `abort` there rejects the call / the host's
+ *     iteration with the run's AbortError; `retry` / `inject` cannot re-run a
+ *     call the SDK already made and continue.
  *
  * `messages.stream()` (the `MessageStream` helper) is not instrumented
  * directly. It is invoked with the INSTRUMENTED `messages` object as its
@@ -166,8 +174,9 @@ function instrumentedCreate(
     onValue: (value) => {
       if (reporter === undefined || value === null || typeof value !== 'object') return value;
       if (streaming) return observeStream(reporter, value as object);
-      observeMessage(reporter, value as MessageLike);
-      return value;
+      // Through the step's `after` gate before the host has it; rejects only
+      // with the run's AbortError when the debugger aborted there.
+      return observeMessage(reporter, value as MessageLike).then(() => value);
     },
 
     onError: (error) => {

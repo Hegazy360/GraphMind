@@ -213,6 +213,51 @@ checker that refuses only what the schema clearly forbids and never evaluates
 `pattern`. Refusal messages come from `describeIssues`: the field and the
 problem, never the value (a validator's own message is never used).
 
+### Smart holds and loop kinds (0.6.0)
+
+While a debugger is attached, the session holds on failures that do not throw.
+Every hold carries a `reason`: `loop`, `breakpoint` (with `smart` for a smart
+hold), `step`, or `error`.
+
+| hold | where | fires when |
+|---|---|---|
+| `smart.rule: 'error-result'` | tool `after` gate with `{ result }` (and a tool `error` gate with `{ result }`, which is how `graphmind mcp-proxy` gates `isError`: there only a RETURNED shape counts, and an `{error}`-only result — the proxy's JSON-RPC error — stays `reason: 'error'`; one gate, one hold) | strict shape only: `isError === true`, `success === false`, a non-zero numeric `exit_code`/`exitCode`/`exitStatus`, or a plain object whose **only** key is `error` (not `null`/`false`). No substring matching. |
+| `smart.rule: 'truncated-tool-call'` | LLM `after` gate with `{ result }` | the normalized output's `finishReason` is `length` or `content-filter` and it requested at least one tool call (or a call's arguments did not parse: `inputText`). |
+| `loop.kind: 'cycle'` | `before` gate | 2–4 calls repeated in 3 identical laps: same node, same arguments **and** same result at each position, at least 2 distinct calls per lap. Holds the first call of lap 4. |
+| `loop.kind: 'error-repeat'` | `before` gate | the same tool's last 3 calls failed with the same error (arguments may vary; other tools' calls between them do not matter). A failure is a thrown error (name + message, whitespace collapsed, first 512 chars) or an error-shaped result. A success of that tool ends the streak. Holds the 4th call. |
+
+Smart holds travel as `reason: 'breakpoint'` and loop kinds fill the four 0.5
+loop fields (`repeats`, `firstSeq`, `lastSeq`, `fingerprint`), so 0.5 hubs and
+viewers still show them. `smart.detail` never quotes a value and is dropped
+under any HIDE switch that covers the node. Loop-kind fingerprints are HMAC
+digests keyed with a random per-process salt that never leaves the process.
+Output digests are computed locally before redaction and are never sent.
+Under any HIDE switch covering the node, the fingerprint becomes
+`"__REDACTED__"`. The v3 identical-repeat rule keeps its behaviour and wins
+when both apply. For a cycle `firstSeq` is the start of the first identical
+lap's first call (`period`, `laps` say how long and how many), for an
+error-repeat the first counted failure's start; `lastSeq` is always the held
+call's start.
+
+The AI SDK, Anthropic, OpenAI and LangChain/LangGraph adapters' LLM `after`
+gates pass `resultGateOptions(session, normalizedOutput)` — `{result}` while
+attached, nothing while detached — so a detached gate call is exactly a 0.5
+one. See each adapter's README for where that gate sits (a streamed AI SDK
+step is held at its `finish` part, an Anthropic stream before `message_stop`;
+a streamed OpenAI response is not held).
+
+Switches: `GRAPHMIND_BREAK_ON_ERROR_RESULT` and `GRAPHMIND_BREAK_ON_TRUNCATED`
+are on by default. `0`, `false`, `off` and `no` turn them off, and the session
+options `breakOnErrorResult` / `breakOnTruncated` override the env.
+`GRAPHMIND_ON_LOOP`, `GRAPHMIND_LOOP_ALLOW` and `loopGuard` apply to the new
+loop kinds too. `GRAPHMIND_LOOP_THRESHOLD` governs only the identical-repeat
+rule: cycle laps and the error-repeat count are fixed at 3 in 0.6.0. Detached
+(or with `GRAPHMIND_ON_LOOP=warn`) a loop kind prints a rate-limited warning
+that names the tool and the counts — never an argument, a result or an error
+message. `GRAPHMIND_LOOP_THRESHOLD=0` (or `GRAPHMIND_ON_LOOP=off`) turns every
+loop kind off. Memory is bounded: the last 64 completed
+watched calls per run and kind, 256 open calls per run, 64 runs (LRU).
+
 ## Abort (why there is an AbortController)
 
 Spike RESULTS.md, risk #4: throwing a plain `Error` out of SDK middleware
@@ -241,6 +286,9 @@ createSession({
   bufferSize,          // 5000 events, drop-oldest
   maxBufferBytes,      // 8 MiB — second, byte-wise bound on the same buffer
   pauseTimeoutMs,      // auto-continue held gates after N ms (default: hold forever)
+  loopGuard,           // loop holds: { threshold, mode, allowNodes, kinds, ignoreKeys } | false
+  breakOnErrorResult,  // smart hold on an error-shaped tool result (default true)
+  breakOnTruncated,    // smart hold on a truncated tool call (default true)
   webSocket,           // WebSocket constructor override (default: global WebSocket, Node >= 22)
   logger, warnIntervalMs, env, // testing / embedding hooks
 })
