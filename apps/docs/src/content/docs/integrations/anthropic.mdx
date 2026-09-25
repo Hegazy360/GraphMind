@@ -178,7 +178,9 @@ Streaming and non-streaming, on both `client.messages` and `client.beta.messages
   in full, the sampling parameters under their Anthropic names (`max_tokens`, `temperature`,
   `stop_sequences`, `tool_choice`, `thinking`, …; fields such as `metadata` and `mcp_servers`
   are never read) and `tools` as `{name, schemaHash}` — each tool's full definition is sent once
-  per run as `toolSchemas`. Request options (signal, headers, timeout) are not recorded.
+  per run as `toolSchemas`, without any credential-like key outside its schema, and sent again
+  intact on the next step if the 512 KB event limit shrank it. Request options (signal, headers,
+  timeout) are not recorded.
 - `graph.hint` on the first call of an invocation, from the request's `tools` array, so the
   viewer pre-renders the whole roster in grey.
 

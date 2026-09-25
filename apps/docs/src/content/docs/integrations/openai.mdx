@@ -181,7 +181,9 @@ as `rawFinishReason` (Responses: the incomplete reason, else the status). `node.
 records the request as sent: every message / input in full, the sampling parameters under the
 API's names (`temperature`, `max_completion_tokens`, `top_p`, `stop`, `seed`, `tool_choice`,
 `reasoning`, …; `metadata`, `user` and request options are never read) and `tools` as `{name,
-schemaHash}` with each definition sent once per run as `toolSchemas`.
+schemaHash}` with each definition sent once per run as `toolSchemas` — without credential-like
+keys outside its schema (an `mcp` tool's headers and authorization, a URL's user:password and
+query), and again intact on the next step if the 512 KB event limit shrank it.
 
 <Aside type="note">
 Chat Completions only reports usage on a stream when you pass

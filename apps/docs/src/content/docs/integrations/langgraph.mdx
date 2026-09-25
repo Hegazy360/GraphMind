@@ -241,7 +241,8 @@ the 512 KB per-event budget every GraphMind client applies is the only bound. Se
 marker).
 
 LLM steps also record, since 0.6, the sampling parameters from LangChain's `invocation_params`
-and the bound tools as `{name, schemaHash}` (each definition once per run as `toolSchemas`) on
+and the bound tools as `{name, schemaHash}` (each definition once per run as `toolSchemas`,
+without credential-like keys outside its schema) on
 `node.started`, and on `node.finished` the requested `toolCalls` (LangChain's
 `invalid_tool_calls` keep their raw text as `inputText`), the normalized `finishReason` with the
 provider's own `rawFinishReason`, and **inclusive** usage — `usage_metadata` first (LangChain
