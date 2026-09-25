@@ -209,6 +209,17 @@ describe('callback-gated tools called with a ToolCall (ToolNode)', () => {
     );
   }
 
+  /**
+   * LangChain serializes an object tool result into the ToolMessage's content
+   * itself — compact in current @langchain/core, indented at the 0.3.40 floor.
+   * Either way the caller's content must be LangChain's own string, untouched:
+   * compare what it says, not how LangChain spaced it.
+   */
+  function jsonContent(content: unknown): unknown {
+    expect(typeof content).toBe('string');
+    return JSON.parse(content as string);
+  }
+
   function deployOutputs(viewer: FakeViewer): unknown[] {
     const starts = new Set(
       viewer
@@ -237,7 +248,7 @@ describe('callback-gated tools called with a ToolCall (ToolNode)', () => {
     });
     viewer.resume(paused.payload['pauseId'] as string, 'continue');
     // LangChain still hands the caller its ToolMessage, content untouched.
-    expect(((await promise) as { content?: unknown }).content).toBe(JSON.stringify(FAILURE));
+    expect(jsonContent(((await promise) as { content?: unknown }).content)).toEqual(FAILURE);
     expect(deployOutputs(viewer)).toEqual([FAILURE]);
   });
 
@@ -275,7 +286,7 @@ describe('callback-gated tools called with a ToolCall (ToolNode)', () => {
     expect(paused.payload).toMatchObject({ nodeId: 'tool:deploy', point: 'after', smart: { rule: 'error-result' } });
     viewer.resume(paused.payload['pauseId'] as string, 'continue');
     const state = await promise;
-    expect((state.messages.at(-1) as BaseMessage).content).toBe(JSON.stringify(FAILURE));
+    expect(jsonContent((state.messages.at(-1) as BaseMessage).content)).toEqual(FAILURE);
   });
 
   it('three identical returned failures through ToolNode hold the 4th call with error-repeat', async () => {
