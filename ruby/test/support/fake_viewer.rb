@@ -26,8 +26,13 @@ class FakeViewer
   #: it back as `resumeToken` on reconnect (the run-claim capability).
   SESSION_TOKEN = "fake-session-token"
 
+  # `hub_capabilities:` is sent as `hello.ack.hubCapabilities` (0.6.0+); nil
+  # leaves the field out, as a 0.5 debugger does. Read at every handshake.
+  attr_accessor :hub_capabilities
+
   def initialize(breakpoints: [], mode: "run", auto_ack: true, ack_protocol: PROTOCOL_VERSION,
-                 refuse_upgrade: false)
+                 refuse_upgrade: false, hub_capabilities: nil)
+    @hub_capabilities = hub_capabilities
     @breakpoints = breakpoints
     @mode = mode
     @auto_ack = auto_ack
@@ -75,6 +80,9 @@ class FakeViewer
     payload["output"] = output unless output.nil?
     send_control("exec.resume", payload)
   end
+
+  # An exec.resume with exactly these fields ("input", "requestId", ...).
+  def resume_with(payload) = send_control("exec.resume", payload)
 
   def set_breakpoint(matcher) = send_control("breakpoint.set", { "matcher" => matcher })
   def clear_breakpoint(matcher) = send_control("breakpoint.clear", { "matcher" => matcher })
@@ -185,14 +193,16 @@ class FakeViewer
       @mutex.synchronize { @received << frame }
       next unless frame["type"] == "hello" && @auto_ack
 
-      connection.send_text(JSON.generate(envelope("hello.ack", {
-                                                    "versions" => { "protocol" => @ack_protocol,
-                                                                    "viewer" => "fake-viewer/0.0.0" },
-                                                    "capabilities" => %w[pause step inject retry abort],
-                                                    "breakpoints" => @breakpoints,
-                                                    "mode" => @mode,
-                                                    "sessionToken" => @session_token
-                                                  }, "*")))
+      ack = {
+        "versions" => { "protocol" => @ack_protocol, "viewer" => "fake-viewer/0.0.0" },
+        "capabilities" => %w[pause step inject retry abort],
+        "breakpoints" => @breakpoints,
+        "mode" => @mode,
+        "sessionToken" => @session_token
+      }
+      hub = @hub_capabilities
+      ack["hubCapabilities"] = hub.dup unless hub.nil?
+      connection.send_text(JSON.generate(envelope("hello.ack", ack, "*")))
     end
   rescue StandardError
     nil

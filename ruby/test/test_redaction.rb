@@ -28,8 +28,8 @@ class TestRedaction < Minitest::Test
 
   # One event as the fixtures spell it: {type, payload}, or {type, dropped: true}
   # when the redactor failed closed and the event must not be emitted.
-  def produce(red, type, payload, run_id)
-    got = red.apply(type, payload, run_id)
+  def produce(red, type, payload, run_id, node_kind = nil)
+    got = red.apply(type, payload, run_id, node_kind)
     got.equal?(Graphmind::Redaction::DROP) ? { "type" => type, "dropped" => true } : { "type" => type, "payload" => got }
   end
 
@@ -47,7 +47,7 @@ class TestRedaction < Minitest::Test
     cases.each do |c|
       switches = c["switches"].to_h { |k, v| [OPTION_NAMES.fetch(k), v] }
       red = Graphmind::Redaction::Redactor.new(Graphmind::Redaction.resolve(switches, {}))
-      produced = c["in"].map { |e| produce(red, e["type"], e["payload"], "fixture-run") }
+      produced = c["in"].map { |e| produce(red, e["type"], e["payload"], "fixture-run", e["nodeKind"]) }
       assert_equal c["out"].length, produced.length, c["name"]
       produced.zip(c["out"]).each_with_index do |(got, want), index|
         assert_equal JSON.generate(want), JSON.generate(got), "#{c['name']} [#{index}]"
@@ -59,7 +59,7 @@ class TestRedaction < Minitest::Test
     read_json(FIXTURE)["cases"].each do |c|
       env = c["switches"].to_h { |k, v| ["GRAPHMIND_#{OPTION_NAMES.fetch(k).to_s.upcase}", v ? "TRUE" : "0"] }
       red = Graphmind::Redaction::Redactor.new(Graphmind::Redaction.resolve(nil, env))
-      produced = c["in"].map { |e| produce(red, e["type"], e["payload"], "r") }
+      produced = c["in"].map { |e| produce(red, e["type"], e["payload"], "r", e["nodeKind"]) }
       assert_equal JSON.generate(c["out"]), JSON.generate(produced), c["name"]
     end
   end
@@ -67,10 +67,12 @@ class TestRedaction < Minitest::Test
   def test_fixture_is_not_vacuous_and_inputs_are_never_mutated
     read_json(FIXTURE)["cases"].each do |c|
       any_on = c["switches"].values.any?
-      assert_equal any_on, JSON.generate(c["in"]) != JSON.generate(c["out"]), c["name"]
+      # Compared without `nodeKind`, which only `in` entries carry.
+      events = c["in"].map { |e| { "type" => e["type"], "payload" => e["payload"] } }
+      assert_equal any_on, JSON.generate(events) != JSON.generate(c["out"]), c["name"]
       before = JSON.generate(c["in"])
       red = redactor(hide_inputs: true, hide_outputs: true, hide_tool_args: true, hide_tool_results: true)
-      c["in"].each { |e| red.apply(e["type"], e["payload"], "r") }
+      c["in"].each { |e| red.apply(e["type"], e["payload"], "r", e["nodeKind"]) }
       assert_equal before, JSON.generate(c["in"])
     end
   end

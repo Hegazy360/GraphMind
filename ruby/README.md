@@ -166,6 +166,16 @@ into what the call site expects:
 
 An object works too and is passed through / built as-is.
 
+**Refused, whatever the debugger (0.6+):** a value that still holds
+`"__REDACTED__"` or a truncated preview — a hidden or shortened *recording*
+pasted back, not a result anyone meant to substitute — is never injected. The
+call stays paused and the debugger shows why (`exec.refused`; an older debugger
+that cannot show it gets a line in your log instead). Inject the full value, or
+continue, retry or abort. This gem does not run calls with **edited
+arguments** (the TypeScript and Python SDKs do): an edit sent to a Ruby app is
+refused the same way and the call stays paused. Every answer echoes the
+debugger's `requestId`.
+
 ---
 
 ## Capability matrix

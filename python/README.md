@@ -219,6 +219,44 @@ the name comes from the function it wraps; an instance of a class with
 therefore *one* node — same code location — which is usually what you want; pass
 `name=` (or a key in `wrap_tools({...})`) when you want them apart.
 
+#### Edit the arguments and run the real call (0.6)
+
+When a `@gm.tool` / `gm.wrap_tools` call is held, the debugger can **fix its
+arguments and run the real function** with them: *Edit arguments* in the viewer
+on a `before` pause (then `continue`), or on an `after` / `error` pause (then
+`retry`); or `graphmind resume <pauseId> --run <id> --action continue --input
+'{"limit": 5}'` from a terminal (the server needs `--allow-control=edit`).
+
+- The edit is an object whose **top-level keys replace** the call's arguments,
+  as the node records them (`{parameter: value}`, defaults applied); every key it
+  does not mention keeps its **live** value — the real object, not the recorded
+  copy (which may be a `repr` or truncated).
+- It is checked against the function's **signature**, on your own thread (or
+  task, for `async def`), before anything runs: every key must be a parameter,
+  every required parameter present, `*args` a list, `**kwargs` an object. A
+  refused edit comes back to the debugger as `exec.refused` (a short message that
+  never quotes values) and **the call stays paused** — fix it and try again.
+  Types are the function's business: if it raises, the `error` gate holds.
+- The accepted edit stays the call's arguments for later attempts: a plain
+  `retry` re-runs it. The node's recorded input (and the loop fingerprint) keep
+  what your code passed; `exec.resumed.edited.after` records what ran.
+- Refused whatever they look like: a value holding `"__REDACTED__"` or a
+  truncated preview (the shrink's marker, `…[truncated]`, `<N bytes>`,
+  `…[N more]` — what this SDK records for long or binary values), and
+  `__proto__` / `constructor.prototype` keys. The same guard applies to an
+  injected result, under every debugger version.
+- Under `GRAPHMIND_HIDE_INPUTS` (or `GRAPHMIND_HIDE_TOOL_ARGS`) the debugger
+  never saw the live arguments, so only a **full replacement** is accepted, and
+  the refusal message and the recorded edit are hidden too.
+- `GRAPHMIND_DISABLE_EDIT_INPUT=1` turns edits off in this app (any value but
+  empty, `0`, `false`, `off`, `no`). LLM calls are never editable.
+
+Your own gate can take edits too — `session.gate(point, node, editable=True,
+validate_input=lambda proposed, context: gm.merge_tool_input(live, proposed,
+context))` — the validator runs on the thread (or task) blocked in the gate,
+must answer within 4 s (synchronous work included), and gets
+`context.input_hidden`, which `merge_tool_input` honours.
+
 ### Anything else: spans
 
 ```python
@@ -237,17 +275,17 @@ node body, a hand-rolled planner loop, a retrieval step in your own framework.
 What each attachment point can actually do. This is measured, not aspirational:
 every ✅ below is covered by a test in `tests/`.
 
-| | observe | `before` hold | `error` hold | `after` hold | `inject` | `retry` | `abort` |
-|---|---|---|---|---|---|---|---|
-| `@gm.tool` / `gm.wrap_tools` (sync + async) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `gm.span` (sync + async) | ✅ | ✅ | — | — | as span output | — | ✅ |
-| OpenAI `chat.completions` / `responses` | ✅ | ✅ | ✅ | ✅ | ✅ typed | ✅ | ✅ |
-| OpenAI `with_raw_response` / `with_streaming_response` | ✅ | ✅ | ✅ | ✅ | ✅ typed, via `.parse()` | ✅ | ✅ |
-| …the same with `stream=True` | ✅ | ✅ | ✅ | — | ❌ | ✅ | ✅ |
-| Anthropic `messages.create` / `beta.messages.create` | ✅ | ✅ | ✅ | ✅ | ✅ typed | ✅ | ✅ |
-| Anthropic `messages.stream` / `beta.messages.stream` | ✅ | ✅ (in `__enter__`) | ❌ | — | ❌ | ❌ | ✅ |
-| LangChain sync handler | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
-| LangChain async handler | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
+| | observe | `before` hold | `error` hold | `after` hold | `inject` | `retry` | `abort` | edit arguments |
+|---|---|---|---|---|---|---|---|---|
+| `@gm.tool` / `gm.wrap_tools` (sync + async) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `gm.span` (sync + async) | ✅ | ✅ | — | — | as span output | — | ✅ | — |
+| OpenAI `chat.completions` / `responses` | ✅ | ✅ | ✅ | ✅ | ✅ typed | ✅ | ✅ | — |
+| OpenAI `with_raw_response` / `with_streaming_response` | ✅ | ✅ | ✅ | ✅ | ✅ typed, via `.parse()` | ✅ | ✅ | — |
+| …the same with `stream=True` | ✅ | ✅ | ✅ | — | ❌ | ✅ | ✅ | — |
+| Anthropic `messages.create` / `beta.messages.create` | ✅ | ✅ | ✅ | ✅ | ✅ typed | ✅ | ✅ | — |
+| Anthropic `messages.stream` / `beta.messages.stream` | ✅ | ✅ (in `__enter__`) | ❌ | — | ❌ | ❌ | ✅ | — |
+| LangChain sync handler | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ |
+| LangChain async handler | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ |
 
 **Why `inject`/`retry` are ❌ for callbacks.** LangChain callbacks are
 *observers*: the framework ignores their return value, so nothing in a callback
@@ -407,6 +445,7 @@ gm.configure(
 | `enabled=False` | Disabled for this instance. |
 | production-looking env | Disabled **unless** `GRAPHMIND=1`. |
 | `GRAPHMIND_URL` | Overrides the viewer endpoint. |
+| `GRAPHMIND_DISABLE_EDIT_INPUT=1` | [Edits](#edit-the-arguments-and-run-the-real-call-06) are not announced and every edit is refused (any value but empty, `0`, `false`, `off`, `no`). |
 
 "Production-looking" is a deliberately boring, documented rule: the **first**
 variable that is set out of `GRAPHMIND_ENV`, `ENVIRONMENT`, `APP_ENV`,

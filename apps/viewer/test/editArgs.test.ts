@@ -4,6 +4,7 @@
  * changed ones), which edits it will not send and why, how a refusal reads,
  * and how an answer is matched to the request that caused it.
  */
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRUNCATION_SUFFIX } from '@graphmind-ai/schema';
 import {
@@ -271,6 +272,20 @@ describe('markerIn', () => {
     expect(markerIn({ note: 'mentions __graphmind truncated in prose' })).toBeUndefined();
     expect(markerIn({ ok: 1 })).toBeUndefined();
   });
+
+  // The viewer flags exactly what the app (and the hub) would refuse, so it
+  // never sends an edit that comes back refused for a marker: the shared
+  // conformance fixture every SDK port consumes.
+  const fixture = JSON.parse(
+    readFileSync(new URL('../../../packages/client/test/fixtures/edit-input.json', import.meta.url), 'utf8'),
+  ) as { proposedValue: { name: string; value?: unknown; refusal: string | null }[] };
+
+  it.each(fixture.proposedValue.map((c) => [c.name, c] as const))(
+    'agrees with the client on the shared fixture: %s',
+    (_name, c) => {
+      expect(markerIn(c.value) ?? null).toBe(c.refusal);
+    },
+  );
 });
 
 describe('labels', () => {

@@ -1,0 +1,1264 @@
+{
+  "$comment": "Conformance fixture for edited input and the inject guard (contract C2, 0.6.0). Every implementation that honours `exec.resume.input` (TS @graphmind-ai/client edit-input.ts, Python graphmind/edit_input.py) must reproduce every section; an implementation that only guards injected values (Ruby graphmind/edit_guard.rb, which does not announce edit-input) must reproduce `proposedValue`. A missing `value` / `result` / `input` / `live` / `proposed` field means the value is absent (undefined in JS, None in Python, nil in Ruby). proposedValue: the refusal code for a proposed input or inject output — `placeholder` when its compact JSON text contains \"__REDACTED__\"; else `truncated` when it contains a truncation marker: the shrink's `__graphmindTruncated` key and \"…[graphmind: truncated]\" string suffix, LangGraph's `\"__graphmind\":\"truncated\"` / `\"__graphmind\":\"unserializable\"`, the MCP get_node preview's `\"note\":\"payload truncated: showing first `, and the Python SDK's recording bounds as regular expressions over the compact JSON text (ASCII digits): `…\\[truncated\\]\"`, `(?:^|[[:,])\"<[0-9]+ bytes>\"(?=[,\\]}]|$)`, `(?:^|[[:,])\"…\\[depth limit\\]\"(?=[,\\]}]|$)`, `[{,]\"…\":\"\\[[0-9]+ more keys\\]\"(?=[,}])`, `(?:^|[[:,])\"…\\[[0-9]+ more\\]\"(?=[,\\]}]|$)`; null when clean. The compact JSON text is JSON.stringify's: no whitespace, non-ASCII characters unescaped. prototypeKeys: whether an edit holds a deep-merge pollution path at any depth — an object with an own \"__proto__\" key, or a \"constructor\" key holding an object that has a \"prototype\" key (refusal code `shape`). normalizeValidation: a validator's result read into one of the two documented shapes; anything else is the generic shape refusal; `message` goes through sanitizeShortText. sanitizeShortText: C0/C1 controls and the bidi marks/overrides/isolates (U+200E, U+200F, U+202A-U+202E, U+2066-U+2069) become spaces, runs of JavaScript whitespace (\\s: tab, LF, VT, FF, CR, space, U+00A0, U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F, U+3000, U+FEFF) collapse to one space, the ends are trimmed, and text longer than 200 UTF-16 code units is cut to 199 (one fewer when that would split a surrogate pair) plus \"…\"; null when not a string or nothing is left. mergeToolInput: the default edit rule for tool arguments — the edit must be a JSON object; its top-level keys replace the live ones, in the live input's key order, new keys after; a live input that is not an object, or any live input when `inputHidden` is true, contributes no keys; refusals carry the exact `message` shown.",
+  "placeholder": "__REDACTED__",
+  "maxRefusalMessage": 200,
+  "proposedValue": [
+    {
+      "name": "the placeholder as a value",
+      "value": {
+        "q": "__REDACTED__"
+      },
+      "refusal": "placeholder"
+    },
+    {
+      "name": "the placeholder inside a longer string",
+      "value": {
+        "q": "abc __REDACTED__ def"
+      },
+      "refusal": "placeholder"
+    },
+    {
+      "name": "the placeholder as a key",
+      "value": {
+        "__REDACTED__": 1
+      },
+      "refusal": "placeholder"
+    },
+    {
+      "name": "the placeholder as a nested key",
+      "value": {
+        "a": {
+          "b": [
+            {
+              "__REDACTED__": true
+            }
+          ]
+        }
+      },
+      "refusal": "placeholder"
+    },
+    {
+      "name": "the placeholder deep in an array",
+      "value": {
+        "a": [
+          [
+            [
+              "x",
+              "__REDACTED__"
+            ]
+          ]
+        ]
+      },
+      "refusal": "placeholder"
+    },
+    {
+      "name": "the placeholder as the whole value",
+      "value": "__REDACTED__",
+      "refusal": "placeholder"
+    },
+    {
+      "name": "the placeholder wins when a truncation marker is there too",
+      "value": {
+        "a": "__REDACTED__",
+        "b": "…[graphmind: truncated]"
+      },
+      "refusal": "placeholder"
+    },
+    {
+      "name": "the shrink marker key",
+      "value": {
+        "a": {
+          "__graphmindTruncated": true,
+          "bytes": 9,
+          "preview": "x"
+        }
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "the shrink marker as a nested key",
+      "value": {
+        "a": [
+          {
+            "b": {
+              "__graphmindTruncated": true
+            }
+          }
+        ]
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "the shrink's string suffix",
+      "value": {
+        "q": "abc…[graphmind: truncated]"
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "the shrink's suffix in a key",
+      "value": {
+        "k…[graphmind: truncated]": 1
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "a LangGraph truncated preview",
+      "value": {
+        "state": {
+          "__graphmind": "truncated",
+          "preview": "x",
+          "chars": 9
+        }
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "a LangGraph unserializable marker",
+      "value": {
+        "state": {
+          "__graphmind": "unserializable",
+          "preview": "x"
+        }
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "the MCP get_node preview",
+      "value": {
+        "truncated": true,
+        "note": "payload truncated: showing first 4000 of 10012 JSON characters — open the deep link in the GraphMind viewer for the full payload",
+        "preview": "{\"content\":\"xxxx"
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "the MCP get_node preview nested in a value",
+      "value": {
+        "hits": [
+          {
+            "truncated": true,
+            "note": "payload truncated: showing first 4000 of 10012 JSON characters — open the deep link in the GraphMind viewer for the full payload",
+            "preview": "{\"content\":\"xxxx"
+          }
+        ]
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "a Python string cut at 20,000 characters",
+      "value": {
+        "q": "abcd…[truncated]"
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "a Python cut string nested in a list",
+      "value": {
+        "a": [
+          {
+            "b": "x…[truncated]"
+          }
+        ]
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "Python bytes recorded as <N bytes>",
+      "value": {
+        "blob": "<2048 bytes>"
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "Python bytes as a list item",
+      "value": {
+        "parts": [
+          "a",
+          "<3 bytes>"
+        ]
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "Python bytes as the whole value",
+      "value": "<0 bytes>",
+      "refusal": "truncated"
+    },
+    {
+      "name": "the Python depth limit",
+      "value": {
+        "a": {
+          "b": {
+            "c": "…[depth limit]"
+          }
+        }
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "the Python depth limit as a list item",
+      "value": {
+        "a": [
+          "…[depth limit]"
+        ]
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "a Python dict cut at 200 keys",
+      "value": {
+        "a": 1,
+        "…": "[57 more keys]"
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "a Python list cut at 200 items",
+      "value": {
+        "items": [
+          1,
+          2,
+          "…[1800 more]"
+        ]
+      },
+      "refusal": "truncated"
+    },
+    {
+      "name": "a Python list whose only item is the cut marker",
+      "value": [
+        "…[5 more]"
+      ],
+      "refusal": "truncated"
+    },
+    {
+      "name": "a plain object",
+      "value": {
+        "query": "LIS",
+        "limit": 3
+      },
+      "refusal": null
+    },
+    {
+      "name": "an empty object",
+      "value": {},
+      "refusal": null
+    },
+    {
+      "name": "null",
+      "value": null,
+      "refusal": null
+    },
+    {
+      "name": "a number",
+      "value": 7,
+      "refusal": null
+    },
+    {
+      "name": "a near miss of the placeholder",
+      "value": {
+        "q": "__REDACTED_"
+      },
+      "refusal": null
+    },
+    {
+      "name": "a string that merely mentions the LangGraph marker",
+      "value": {
+        "q": "\"__graphmind\":\"truncated\""
+      },
+      "refusal": null
+    },
+    {
+      "name": "a __graphmind key with another value",
+      "value": {
+        "__graphmind": "note"
+      },
+      "refusal": null
+    },
+    {
+      "name": "a legitimate truncated flag with its own note",
+      "value": {
+        "tree": [],
+        "truncated": true,
+        "note": "GitHub API capped the listing"
+      },
+      "refusal": null
+    },
+    {
+      "name": "a string that merely quotes the MCP note",
+      "value": {
+        "q": "\"note\":\"payload truncated: showing first 4000 of 9000\""
+      },
+      "refusal": null
+    },
+    {
+      "name": "the Python suffix in the middle of a string",
+      "value": {
+        "q": "see …[truncated] above"
+      },
+      "refusal": null
+    },
+    {
+      "name": "a string that quotes the bytes marker",
+      "value": {
+        "q": "the \"<3 bytes>\" marker"
+      },
+      "refusal": null
+    },
+    {
+      "name": "the bytes marker text as an object key",
+      "value": {
+        "<3 bytes>": 1
+      },
+      "refusal": null
+    },
+    {
+      "name": "a bytes marker with more text",
+      "value": {
+        "q": "<12 bytes>!"
+      },
+      "refusal": null
+    },
+    {
+      "name": "a bytes marker without a count",
+      "value": {
+        "q": "<bytes>"
+      },
+      "refusal": null
+    },
+    {
+      "name": "a depth-limit mention inside a string",
+      "value": {
+        "q": "hit the …[depth limit] again"
+      },
+      "refusal": null
+    },
+    {
+      "name": "a \"…\" key holding something else",
+      "value": {
+        "…": "etc"
+      },
+      "refusal": null
+    },
+    {
+      "name": "an ellipsis item that is not a count",
+      "value": [
+        "…[many more]"
+      ],
+      "refusal": null
+    },
+    {
+      "name": "a string quoting a list cut marker",
+      "value": {
+        "q": "[\"…[3 more]\"]"
+      },
+      "refusal": null
+    },
+    {
+      "name": "non-ASCII digits in a bytes marker",
+      "value": {
+        "q": "<\u0661\u0662 bytes>"
+      },
+      "refusal": null
+    }
+  ],
+  "prototypeKeys": [
+    {
+      "name": "a top-level own \"__proto__\" key",
+      "value": {
+        "__proto__": {
+          "isAdmin": true
+        },
+        "q": 1
+      },
+      "refused": true
+    },
+    {
+      "name": "a nested own \"__proto__\" key",
+      "value": {
+        "opts": {
+          "__proto__": {
+            "isAdmin": true
+          }
+        }
+      },
+      "refused": true
+    },
+    {
+      "name": "a \"__proto__\" key inside an array",
+      "value": [
+        {
+          "__proto__": {}
+        }
+      ],
+      "refused": true
+    },
+    {
+      "name": "a top-level constructor.prototype path",
+      "value": {
+        "constructor": {
+          "prototype": {
+            "polluted": true
+          }
+        }
+      },
+      "refused": true
+    },
+    {
+      "name": "a nested constructor.prototype path",
+      "value": {
+        "filter": {
+          "and": [
+            {
+              "constructor": {
+                "prototype": {}
+              }
+            }
+          ]
+        }
+      },
+      "refused": true
+    },
+    {
+      "name": "a constructor whose prototype is not an object",
+      "value": {
+        "constructor": {
+          "prototype": 1
+        }
+      },
+      "refused": true
+    },
+    {
+      "name": "a plain object",
+      "value": {
+        "query": "LIS"
+      },
+      "refused": false
+    },
+    {
+      "name": "a key named constructor holding a string",
+      "value": {
+        "constructor": "Point"
+      },
+      "refused": false
+    },
+    {
+      "name": "a key named prototype",
+      "value": {
+        "prototype": {
+          "x": 1
+        }
+      },
+      "refused": false
+    },
+    {
+      "name": "a constructor object without prototype",
+      "value": {
+        "constructor": {
+          "name": "Point"
+        }
+      },
+      "refused": false
+    },
+    {
+      "name": "a constructor array holding a prototype key",
+      "value": {
+        "constructor": [
+          {
+            "prototype": 1
+          }
+        ]
+      },
+      "refused": false
+    },
+    {
+      "name": "a string mentioning __proto__",
+      "value": {
+        "q": "__proto__"
+      },
+      "refused": false
+    },
+    {
+      "name": "a primitive",
+      "value": "text",
+      "refused": false
+    },
+    {
+      "name": "null",
+      "value": null,
+      "refused": false
+    }
+  ],
+  "normalizeValidation": [
+    {
+      "name": "ok with a value",
+      "result": {
+        "ok": true,
+        "value": {
+          "q": 1
+        }
+      },
+      "expected": {
+        "ok": true,
+        "value": {
+          "q": 1
+        }
+      }
+    },
+    {
+      "name": "ok with a null value",
+      "result": {
+        "ok": true,
+        "value": null
+      },
+      "expected": {
+        "ok": true,
+        "value": null
+      }
+    },
+    {
+      "name": "ok with extra fields (dropped)",
+      "result": {
+        "ok": true,
+        "value": 1,
+        "extra": 2
+      },
+      "expected": {
+        "ok": true,
+        "value": 1
+      }
+    },
+    {
+      "name": "a refusal with a message",
+      "result": {
+        "ok": false,
+        "code": "schema",
+        "message": "q must be a string"
+      },
+      "expected": {
+        "ok": false,
+        "code": "schema",
+        "message": "q must be a string"
+      }
+    },
+    {
+      "name": "a refusal without a message",
+      "result": {
+        "ok": false,
+        "code": "unsupported"
+      },
+      "expected": {
+        "ok": false,
+        "code": "unsupported"
+      }
+    },
+    {
+      "name": "code shape",
+      "result": {
+        "ok": false,
+        "code": "shape"
+      },
+      "expected": {
+        "ok": false,
+        "code": "shape"
+      }
+    },
+    {
+      "name": "code placeholder",
+      "result": {
+        "ok": false,
+        "code": "placeholder"
+      },
+      "expected": {
+        "ok": false,
+        "code": "placeholder"
+      }
+    },
+    {
+      "name": "code truncated",
+      "result": {
+        "ok": false,
+        "code": "truncated"
+      },
+      "expected": {
+        "ok": false,
+        "code": "truncated"
+      }
+    },
+    {
+      "name": "code disabled",
+      "result": {
+        "ok": false,
+        "code": "disabled"
+      },
+      "expected": {
+        "ok": false,
+        "code": "disabled"
+      }
+    },
+    {
+      "name": "no result at all",
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the input could not be validated"
+      }
+    },
+    {
+      "name": "null",
+      "result": null,
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the input could not be validated"
+      }
+    },
+    {
+      "name": "a string",
+      "result": "ok",
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the input could not be validated"
+      }
+    },
+    {
+      "name": "true",
+      "result": true,
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the input could not be validated"
+      }
+    },
+    {
+      "name": "ok as a string",
+      "result": {
+        "ok": "true",
+        "value": 1
+      },
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the input could not be validated"
+      }
+    },
+    {
+      "name": "ok as the number 1",
+      "result": {
+        "ok": 1,
+        "value": 1
+      },
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the input could not be validated"
+      }
+    },
+    {
+      "name": "ok true without a value",
+      "result": {
+        "ok": true
+      },
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the input could not be validated"
+      }
+    },
+    {
+      "name": "ok false without a code",
+      "result": {
+        "ok": false
+      },
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the input could not be validated"
+      }
+    },
+    {
+      "name": "an unknown code",
+      "result": {
+        "ok": false,
+        "code": "nope"
+      },
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the input could not be validated"
+      }
+    },
+    {
+      "name": "a code that is not a string",
+      "result": {
+        "ok": false,
+        "code": 3
+      },
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the input could not be validated"
+      }
+    },
+    {
+      "name": "a code outside the wire enum",
+      "result": {
+        "ok": false,
+        "code": "path-locked"
+      },
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the input could not be validated"
+      }
+    },
+    {
+      "name": "a message that is not a string (dropped)",
+      "result": {
+        "ok": false,
+        "code": "schema",
+        "message": {
+          "text": "x"
+        }
+      },
+      "expected": {
+        "ok": false,
+        "code": "schema"
+      }
+    },
+    {
+      "name": "a long message (cut)",
+      "result": {
+        "ok": false,
+        "code": "schema",
+        "message": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+      },
+      "expected": {
+        "ok": false,
+        "code": "schema",
+        "message": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…"
+      }
+    },
+    {
+      "name": "a message with control characters (sanitised)",
+      "result": {
+        "ok": false,
+        "code": "schema",
+        "message": "\u001b[31mbad\u0000value"
+      },
+      "expected": {
+        "ok": false,
+        "code": "schema",
+        "message": "[31mbad value"
+      }
+    },
+    {
+      "name": "a blank message (dropped)",
+      "result": {
+        "ok": false,
+        "code": "schema",
+        "message": "  \u001b  "
+      },
+      "expected": {
+        "ok": false,
+        "code": "schema"
+      }
+    },
+    {
+      "name": "an array",
+      "result": [
+        true,
+        1
+      ],
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the input could not be validated"
+      }
+    }
+  ],
+  "sanitizeShortText": [
+    {
+      "name": "plain text",
+      "input": "q must be a string",
+      "expected": "q must be a string"
+    },
+    {
+      "name": "control and bidi characters become spaces; whitespace collapses; trimmed",
+      "input": "  bad\u001b[31m  value\u0000\u202ehere\u009b\n\tend ",
+      "expected": "bad [31m value here end"
+    },
+    {
+      "name": "C1 NEL and the bidi isolates",
+      "input": "a\u0085b\u2066c\u2069d\u200ee",
+      "expected": "a b c d e"
+    },
+    {
+      "name": "the whitespace JavaScript's \\s knows (NBSP, em space, BOM, line/paragraph separators)",
+      "input": "a\u00a0\u2003b\ufeffc\u2028d\u2029e\u3000f",
+      "expected": "a b c d e f"
+    },
+    {
+      "name": "a zero-width space is not whitespace (kept)",
+      "input": "a\u200bb",
+      "expected": "a\u200bb"
+    },
+    {
+      "name": "300 characters are cut to 199 plus an ellipsis",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…"
+    },
+    {
+      "name": "exactly 200 characters are kept",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "201 characters are cut",
+      "input": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb…"
+    },
+    {
+      "name": "an astral character right before the cut is kept whole (UTF-16 length)",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ud83d\ude00…"
+    },
+    {
+      "name": "an astral character straddling the cut is dropped whole",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…"
+    },
+    {
+      "name": "astral characters count two each (UTF-16 code units)",
+      "input": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "expected": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00"
+    },
+    {
+      "name": "101 astral characters are cut",
+      "input": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "expected": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00…"
+    },
+    {
+      "name": "a number is not text",
+      "input": 12,
+      "expected": null
+    },
+    {
+      "name": "null is not text",
+      "input": null,
+      "expected": null
+    },
+    {
+      "name": "no value at all",
+      "expected": null
+    },
+    {
+      "name": "blank after sanitising",
+      "input": "  \u001b \u0000  ",
+      "expected": null
+    },
+    {
+      "name": "empty",
+      "input": "",
+      "expected": null
+    }
+  ],
+  "mergeToolInput": [
+    {
+      "name": "top-level keys replace live ones; unmentioned keys keep their live values; nested values are replaced whole",
+      "live": {
+        "query": "AMS",
+        "limit": 10,
+        "nested": {
+          "a": 1,
+          "b": 2
+        }
+      },
+      "proposed": {
+        "query": "LIS",
+        "nested": {
+          "a": 9
+        }
+      },
+      "expected": {
+        "ok": true,
+        "value": {
+          "query": "LIS",
+          "limit": 10,
+          "nested": {
+            "a": 9
+          }
+        }
+      }
+    },
+    {
+      "name": "falsy edited values are values",
+      "live": {
+        "a": "x",
+        "b": "y",
+        "c": "z"
+      },
+      "proposed": {
+        "a": null,
+        "b": 0,
+        "c": ""
+      },
+      "expected": {
+        "ok": true,
+        "value": {
+          "a": null,
+          "b": 0,
+          "c": ""
+        }
+      }
+    },
+    {
+      "name": "new keys are added after the live ones",
+      "live": {
+        "a": 1
+      },
+      "proposed": {
+        "b": 2
+      },
+      "expected": {
+        "ok": true,
+        "value": {
+          "a": 1,
+          "b": 2
+        }
+      }
+    },
+    {
+      "name": "an empty edit keeps the live arguments",
+      "live": {
+        "a": 1,
+        "b": [
+          2
+        ]
+      },
+      "proposed": {},
+      "expected": {
+        "ok": true,
+        "value": {
+          "a": 1,
+          "b": [
+            2
+          ]
+        }
+      }
+    },
+    {
+      "name": "arrays are ordinary values",
+      "live": {
+        "tags": [
+          "a"
+        ],
+        "keep": [
+          1
+        ]
+      },
+      "proposed": {
+        "tags": [
+          "b",
+          "c"
+        ]
+      },
+      "expected": {
+        "ok": true,
+        "value": {
+          "tags": [
+            "b",
+            "c"
+          ],
+          "keep": [
+            1
+          ]
+        }
+      }
+    },
+    {
+      "name": "no live input contributes no keys",
+      "proposed": {
+        "query": "LIS"
+      },
+      "expected": {
+        "ok": true,
+        "value": {
+          "query": "LIS"
+        }
+      }
+    },
+    {
+      "name": "a null live input contributes no keys",
+      "live": null,
+      "proposed": {
+        "query": "LIS"
+      },
+      "expected": {
+        "ok": true,
+        "value": {
+          "query": "LIS"
+        }
+      }
+    },
+    {
+      "name": "a string live input contributes no keys",
+      "live": "raw",
+      "proposed": {
+        "query": "LIS"
+      },
+      "expected": {
+        "ok": true,
+        "value": {
+          "query": "LIS"
+        }
+      }
+    },
+    {
+      "name": "an array live input contributes no keys",
+      "live": [
+        "x",
+        "y"
+      ],
+      "proposed": {
+        "query": "LIS"
+      },
+      "expected": {
+        "ok": true,
+        "value": {
+          "query": "LIS"
+        }
+      }
+    },
+    {
+      "name": "inputHidden: the live input contributes no keys (a hidden input takes only a full replacement)",
+      "live": {
+        "account": "ACC-7731",
+        "confirm": "ACC-7731",
+        "amount": 10
+      },
+      "proposed": {
+        "confirm": "ACC-7731"
+      },
+      "inputHidden": true,
+      "expected": {
+        "ok": true,
+        "value": {
+          "confirm": "ACC-7731"
+        }
+      }
+    },
+    {
+      "name": "inputHidden: a full replacement passes as it is",
+      "live": {
+        "account": "ACC-7731",
+        "amount": 10
+      },
+      "proposed": {
+        "account": "ACC-1",
+        "amount": 5
+      },
+      "inputHidden": true,
+      "expected": {
+        "ok": true,
+        "value": {
+          "account": "ACC-1",
+          "amount": 5
+        }
+      }
+    },
+    {
+      "name": "inputHidden false: the default merge",
+      "live": {
+        "query": "AMS",
+        "limit": 5
+      },
+      "proposed": {
+        "limit": 1
+      },
+      "inputHidden": false,
+      "expected": {
+        "ok": true,
+        "value": {
+          "query": "AMS",
+          "limit": 1
+        }
+      }
+    },
+    {
+      "name": "a key merely named constructor is an ordinary argument",
+      "live": {
+        "limit": 1
+      },
+      "proposed": {
+        "constructor": "Point"
+      },
+      "expected": {
+        "ok": true,
+        "value": {
+          "limit": 1,
+          "constructor": "Point"
+        }
+      }
+    },
+    {
+      "name": "null is not an arguments object",
+      "live": {
+        "query": "AMS"
+      },
+      "proposed": null,
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the edited arguments must be a JSON object"
+      }
+    },
+    {
+      "name": "no edit at all is not an arguments object",
+      "live": {
+        "query": "AMS"
+      },
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the edited arguments must be a JSON object"
+      }
+    },
+    {
+      "name": "a string is not an arguments object",
+      "live": {
+        "query": "AMS"
+      },
+      "proposed": "query=LIS",
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the edited arguments must be a JSON object"
+      }
+    },
+    {
+      "name": "a number is not an arguments object",
+      "live": {
+        "query": "AMS"
+      },
+      "proposed": 42,
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the edited arguments must be a JSON object"
+      }
+    },
+    {
+      "name": "a boolean is not an arguments object",
+      "live": {
+        "query": "AMS"
+      },
+      "proposed": true,
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the edited arguments must be a JSON object"
+      }
+    },
+    {
+      "name": "an empty array is not an arguments object",
+      "live": {
+        "query": "AMS"
+      },
+      "proposed": [],
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the edited arguments must be a JSON object"
+      }
+    },
+    {
+      "name": "an array of objects is not an arguments object",
+      "live": {
+        "query": "AMS"
+      },
+      "proposed": [
+        {
+          "query": "LIS"
+        }
+      ],
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the edited arguments must be a JSON object"
+      }
+    },
+    {
+      "name": "a top-level \"__proto__\" key is refused",
+      "live": {
+        "query": "AMS"
+      },
+      "proposed": {
+        "__proto__": {
+          "polluted": true
+        },
+        "query": "LIS"
+      },
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the edited arguments may not contain a \"__proto__\" key"
+      }
+    },
+    {
+      "name": "a \"__proto__\" key at any depth is refused",
+      "live": {},
+      "proposed": {
+        "filter": {
+          "and": [
+            {
+              "__proto__": {
+                "isAdmin": true
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the edited arguments may not contain a \"__proto__\" key"
+      }
+    },
+    {
+      "name": "a constructor.prototype path is refused",
+      "live": {
+        "query": "AMS"
+      },
+      "proposed": {
+        "query": "LIS",
+        "constructor": {
+          "prototype": {
+            "x": true
+          }
+        }
+      },
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the edited arguments may not contain a \"constructor.prototype\" path"
+      }
+    },
+    {
+      "name": "a pollution path is refused under inputHidden too",
+      "live": {
+        "a": 1
+      },
+      "proposed": {
+        "__proto__": {}
+      },
+      "inputHidden": true,
+      "expected": {
+        "ok": false,
+        "code": "shape",
+        "message": "the edited arguments may not contain a \"__proto__\" key"
+      }
+    }
+  ]
+}

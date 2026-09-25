@@ -42,6 +42,7 @@ import { Aside } from '@astrojs/starlight/components';
 | `GRAPHMIND_LOOP_ALLOW` | Comma-separated node ids or tool names that are never held as a loop, e.g. `pollJob,tool:heartbeat` |
 | `GRAPHMIND_BREAK_ON_ERROR_RESULT` | Since 0.6.0. While a debugger is attached, hold a tool call that returned an error-shaped result instead of throwing: `isError: true`, `success: false`, a non-zero numeric `exit_code` / `exitCode` / `exitStatus`, or an object whose only key is `error`. On by default; `0`, `false`, `off` and `no` (any case) turn it off, and any other value leaves it on. The session option `breakOnErrorResult` beats it. See [smart holds](#smart-holds). |
 | `GRAPHMIND_BREAK_ON_TRUNCATED` | Since 0.6.0. While a debugger is attached, hold an LLM step that the token limit or a content filter stopped while it was requesting a tool call. Same values as above; the session option `breakOnTruncated` beats it. |
+| `GRAPHMIND_DISABLE_EDIT_INPUT` | On (any value except empty, `0`, `false`, `off`, `no`): the app does not offer editable pauses and refuses every edited input (TypeScript client and Python SDK; the Ruby gem never offers edits). See [edit arguments](/debugging/edit-arguments/). |
 
 The `GRAPHMIND_HIDE_*` and loop variables are read by the TypeScript client (so by every TS
 adapter and by `graphmind mcp-proxy`), by the Python SDK and by the Ruby gem, with the same

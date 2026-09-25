@@ -89,6 +89,20 @@ module Graphmind
     # Event types the redactor inspects; every other type passes through.
     REDACTED_TYPES = %w[node.started node.finished node.token].freeze
 
+    # The debugger's answers to a pause (0.6.0, contract C2), covered exactly
+    # when the paused node's input is — hide_inputs, or hide_tool_args when the
+    # paused node is a tool (an unknown kind counts as a tool):
+    #   exec.resumed.edited   -> {"after" => "__REDACTED__"}, counted as "edited"
+    #   exec.refused.message  -> omitted, counted as "message"
+    # Their failed forms keep pauseId, action / code and requestId, hide
+    # `edited` and drop `message`, with redaction.failed. This gem never edits
+    # an input (it does not announce edit-input), but its refusals and the
+    # shared fixture follow the same rule as every other port.
+    PAUSE_ANSWER_TYPES = %w[exec.resumed exec.refused].freeze
+
+    # `RefusalCode` (schema events.ts).
+    REFUSAL_CODES = %w[schema shape placeholder truncated disabled unsupported].freeze
+
     # Payload fields the failed form may copy (identity and timing only).
     IDENTITY_FIELDS = %w[nodeId parentId kind name instanceId durationMs heldMs status usage].freeze
 
@@ -356,14 +370,29 @@ module Graphmind
 
       def tracked_instances = @mutex.synchronize { @instances.size }
 
+      # Does a switch hide the input of a paused node of this kind? hide_inputs,
+      # or hide_tool_args on a tool — an unknown kind (nil, or anything that is
+      # neither a String nor a Symbol) counts as a tool.
+      def covers_pause_input?(node_kind)
+        return true if @switches.hide_inputs
+        return false unless @switches.hide_tool_args
+
+        kind = Symbol === node_kind ? node_kind.name : node_kind
+        # The literal's own String#==, never a #== the kind object defines.
+        !(String === kind) || "tool" == kind
+      end
+
       # Redact one event. Every switch off, or a type other than node.started /
-      # node.finished / node.token: the very same object. Otherwise a plain
-      # Hash (see the module comment) — redacted, unchanged, or the failed form
-      # — or DROP, meaning the event must NOT be emitted. Never raises.
-      def apply(type, payload, run_id)
+      # node.finished / node.token / exec.resumed / exec.refused: the very same
+      # object. Otherwise a plain Hash (see the module comment) — redacted,
+      # unchanged, or the failed form — or DROP, meaning the event must NOT be
+      # emitted. `node_kind` is the paused node's kind, for exec.resumed /
+      # exec.refused (which do not name their node). Never raises.
+      def apply(type, payload, run_id, node_kind = nil)
         return payload unless @switches.any?
 
         type = type.name if Symbol === type # JSON writes :"node.started" as "node.started"
+        return on_pause_answer(type, payload, node_kind) if String === type && PAUSE_ANSWER_TYPES.include?(type)
         return payload unless String === type && REDACTED_TYPES.include?(type)
 
         begin
@@ -383,6 +412,112 @@ module Graphmind
       end
 
       private
+
+      # -- exec.resumed / exec.refused ------------------------------------------
+
+      # The input-shaped parts of a pause's answer, hidden exactly when the
+      # paused node's input is. Not covered: the very same object. Covered: a
+      # snapshot copy, or the failed form.
+      def on_pause_answer(type, payload, node_kind)
+        return payload unless covers_pause_input?(node_kind)
+
+        begin
+          raise Uninspectable, "payload is not a Hash" unless Hash === payload
+
+          snap = Redaction.snapshot(payload)
+          Redaction.identity(snap, "pauseId")
+          if type == "exec.resumed"
+            keys = Redaction.keys_of(snap, "edited")
+            return snap if keys.empty?
+            # Already the placeholder: left alone, not counted.
+            return snap if keys.length == 1 && hidden_edit?(snap[keys.first])
+
+            keys.each { |key| snap[key] = { "after" => REDACTED } }
+            with_summary(snap, 1, "edited")
+          else
+            keys = Redaction.keys_of(snap, "message")
+            return snap if keys.empty?
+
+            keys.each { |key| snap.delete(key) }
+            with_summary(snap, 1, "message")
+          end
+        rescue StandardError, SystemStackError
+          fail_closed_answer(type, payload)
+        end
+      end
+
+      # `edited` is exactly {after: placeholder}.
+      def hidden_edit?(edited)
+        return false unless Hash === edited
+
+        copy = Redaction.snapshot(edited)
+        copy.size == 1 && Redaction.placeholder?(Redaction.fetch(copy, "after"))
+      end
+
+      def fail_closed_answer(type, payload)
+        out = begin
+          failed_answer_form(type, payload)
+        rescue StandardError, SystemStackError
+          nil
+        end
+        if out.nil?
+          report("redaction:dropped",
+                 "a #{type} event could not be redacted and its identity fields could not be read; " \
+                 "dropped it rather than send data a GRAPHMIND_HIDE_* switch hides")
+          return DROP
+        end
+        report("redaction:failed",
+               "redaction failed on a #{type} event (unreadable or malformed payload); " \
+               "sent it with the edited input / refusal message hidden and redaction.failed set")
+        out
+      end
+
+      ANSWER_FIELDS = %w[pauseId action code requestId].freeze
+
+      # The failed form of a pause answer, or nil when pauseId and action / code
+      # cannot be read as valid values (the event is then dropped).
+      def failed_answer_form(type, payload)
+        return nil unless Hash === payload
+
+        fields = Redaction.identity_fields(payload, ANSWER_FIELDS)
+        pause_id = Redaction.string_field(fields["pauseId"])
+        return nil if pause_id.nil?
+
+        request_id = Redaction.string_field(fields["requestId"])
+        echo = request_id.nil? ? {} : { "requestId" => request_id }
+        if type == "exec.resumed"
+          action = Redaction.string_field(fields["action"])
+          return nil unless action && Protocol::RESUME_ACTIONS.include?(action)
+
+          out = { "pauseId" => pause_id, "action" => action }
+          # Unreadable counts as present: an edit the record cannot rule out.
+          out["edited"] = { "after" => REDACTED } if may_have_edit?(payload)
+          return out.merge(echo).merge("redaction" => { "count" => 0, "keys" => ["edited"], "failed" => true })
+        end
+        code = Redaction.string_field(fields["code"])
+        return nil unless code && REFUSAL_CODES.include?(code)
+
+        { "pauseId" => pause_id, "code" => code }
+          .merge(echo)
+          .merge("redaction" => { "count" => 0, "keys" => ["message"], "failed" => true })
+      end
+
+      def may_have_edit?(payload)
+        found = false
+        HASH_EACH_PAIR.bind_call(payload) do |key, _value|
+          name = begin
+            Redaction.json_key(key)
+          rescue StandardError
+            found = true
+            next
+          end
+          name = name.name if Symbol === name
+          found = true if name == "edited"
+        end
+        found
+      rescue StandardError
+        true
+      end
 
       # -- fail closed ----------------------------------------------------------
 

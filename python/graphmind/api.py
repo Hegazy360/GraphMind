@@ -161,11 +161,13 @@ class GraphMind:
     def emit(self, type: str, payload: dict[str, Any]) -> None:
         self.session.emit(type, payload)
 
-    def gate(self, point: str, node: GateNode) -> GateDecision:
-        return self.session.gate(point, node)
+    def gate(self, point: str, node: GateNode, **options: Any) -> GateDecision:
+        """``Session.gate``: ``result=``, ``editable=``, ``validate_input=`` (0.6.0)."""
+        return self.session.gate(point, node, **options)
 
-    async def gate_async(self, point: str, node: GateNode) -> GateDecision:
-        return await self.session.gate_async(point, node)
+    async def gate_async(self, point: str, node: GateNode, **options: Any) -> GateDecision:
+        """``Session.gate_async``: the same options as :meth:`gate`."""
+        return await self.session.gate_async(point, node, **options)
 
     def graph_hint(self, nodes: Iterable[dict[str, Any]]) -> None:
         """Pre-announce static graph structure so the viewer renders it grey."""

@@ -26,6 +26,7 @@ def test_hello_carries_protocol_capabilities_and_sdk(attached: Any) -> None:
         "retry",
         "abort",
         "run-claim",
+        "edit-input",
     }
     # First connection: nothing to prove continuity with yet.
     assert "resumeToken" not in payload

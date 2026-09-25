@@ -8,7 +8,7 @@
  * Python and Ruby ports are held to.
  */
 import { readFileSync } from 'node:fs';
-import type { EventPayloadMap, EventType } from '@graphmind-ai/schema';
+import type { EventPayloadMap, EventType, NodeKind } from '@graphmind-ai/schema';
 import { describe, expect, it } from 'vitest';
 import {
   REDACTED,
@@ -455,6 +455,8 @@ interface FixtureEvent {
   type: EventType;
   payload?: Record<string, unknown>;
   dropped?: true;
+  /** exec.resumed / exec.refused: the paused node's kind (absent: unknown). */
+  nodeKind?: NodeKind;
 }
 interface FixtureCase {
   name: string;
@@ -481,7 +483,12 @@ describe('conformance fixture (shared with the Python and Ruby ports)', () => {
     const red = new RealRedactor(on(c.switches));
     expect(c.in.length).toBe(c.out.length);
     const produced = c.in.map((event) => {
-      const out = red.apply(event.type, event.payload as EventPayloadMap[typeof event.type], 'fixture-run');
+      const out = red.apply(
+        event.type,
+        event.payload as EventPayloadMap[typeof event.type],
+        'fixture-run',
+        event.nodeKind,
+      );
       // A dropped event is `{type, dropped: true}` in the fixture.
       if (out === undefined) return { type: event.type, dropped: true };
       return {
@@ -497,7 +504,9 @@ describe('conformance fixture (shared with the Python and Ruby ports)', () => {
   it('is not vacuous: every case with a switch on changes at least one event', () => {
     for (const c of fixture.cases) {
       const anyOn = Object.values(c.switches).some(Boolean);
-      const changed = JSON.stringify(c.in) !== JSON.stringify(c.out);
+      // Compared without `nodeKind`, which only `in` entries carry.
+      const events = c.in.map((event) => ({ type: event.type, payload: event.payload }));
+      const changed = JSON.stringify(events) !== JSON.stringify(c.out);
       expect(changed, c.name).toBe(anyOn);
     }
   });

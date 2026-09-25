@@ -1,5 +1,5 @@
 {
-  "$comment": "Conformance fixture for the coarse redaction kill switches (Phase 6 W7). Every implementation (TS @graphmind-ai/client, Python graphmind, Ruby graphmind) must turn each case's `in` events into exactly its `out` events when the given switches are on. Events are `{type, payload}` in emit order within ONE run; a fresh redactor per case (kind tracking starts empty). Switch names are the option names; the env names are GRAPHMIND_HIDE_INPUTS / _OUTPUTS / _TOOL_ARGS / _TOOL_RESULTS (on for any value except empty, 0, false, off and no, case-insensitive — a privacy switch fails closed on spelling). Rules: node.started.input -> placeholder under hideInputs, or under hideToolArgs when kind is tool; node.finished.output -> placeholder under hideOutputs, or under hideToolResults when the instance's kind is tool (kind comes from the matching node.started; without an instanceId the node's latest kind; unknown node -> a `tool:` nodeId prefix); node.token deltas keep `t` and gain `chars` (the text length) with `v` emptied — all deltas under hideOutputs, deltas of tool nodes under hideToolResults, `tool-args` deltas under hideToolArgs and hideInputs; node.error is never redacted; a field that is absent, or already the placeholder, is left alone and not counted; `redaction.count` is the number of values replaced and `redaction.keys` the payload fields touched; an existing `redaction` on the payload is merged (counts add, keys union). Names, kinds, ids, timings, usage and every other field survive untouched. Fail closed (decisions.md \"Redaction fails closed on internal error\"): with any switch on, a node.started/node.finished/node.token event the redactor cannot inspect (the payload is not an object, a property read throws, token `deltas` that is not an array while a hiding switch could cover it, a covered delta that is neither null nor an object, a covered delta whose `v` is present and not a string) is replaced by its failed form, built WITHOUT reading input/output/deltas: node.started {nodeId, parentId?, kind, name, instanceId, input: placeholder}, node.finished {nodeId, instanceId?, durationMs, heldMs?, status, usage?, output: placeholder}, node.token {nodeId, instanceId?, deltas: []}, each with redaction {count: 0, keys: [\"input\",\"output\",\"deltas\"], failed: true}; every other field is omitted; an optional field whose read throws or whose value is not schema-valid is omitted; when a required field cannot be read or is not schema-valid (nodeId/name/instanceId strings, kind a NodeKind, durationMs a finite number >= 0, status ok|error|aborted) the event is dropped, shown in `out` as {type, dropped: true}. `chars` is the UTF-16 code unit count (JS string length: an astral character counts 2). Tool calls (0.6.0+): under hideToolArgs or hideInputs (the switches that hide `tool-args` deltas), and when the output is not already hidden whole, the arguments of each entry of an object output's own `toolCalls` array — the fields `input`, `inputText`, and the older spellings `arguments` and `args`, wherever present and not undefined or already the placeholder — become the placeholder, counted one per value under the key \"output.toolCalls\"; a `toolCalls` that is not an array, or an entry that is neither null nor an object, is replaced whole (counted 1); names, ids and every other field survive; this applies to every node kind. hideOutputs (and hideToolResults on a tool instance) replace the whole output first, so its toolCalls are never counted separately. Usage in the failed form (0.6.0+): `usage` keeps inputTokens and outputTokens (both required, non-negative safe integers, else no usage), `inclusive` when it is a boolean, and cacheReadTokens / cacheWriteTokens / reasoningTokens when each is a non-negative safe integer; every other usage field is dropped.",
+  "$comment": "Conformance fixture for the coarse redaction kill switches (Phase 6 W7). Every implementation (TS @graphmind-ai/client, Python graphmind, Ruby graphmind) must turn each case's `in` events into exactly its `out` events when the given switches are on. Events are `{type, payload}` in emit order within ONE run; a fresh redactor per case (kind tracking starts empty). Switch names are the option names; the env names are GRAPHMIND_HIDE_INPUTS / _OUTPUTS / _TOOL_ARGS / _TOOL_RESULTS (on for any value except empty, 0, false, off and no, case-insensitive — a privacy switch fails closed on spelling). Rules: node.started.input -> placeholder under hideInputs, or under hideToolArgs when kind is tool; node.finished.output -> placeholder under hideOutputs, or under hideToolResults when the instance's kind is tool (kind comes from the matching node.started; without an instanceId the node's latest kind; unknown node -> a `tool:` nodeId prefix); node.token deltas keep `t` and gain `chars` (the text length) with `v` emptied — all deltas under hideOutputs, deltas of tool nodes under hideToolResults, `tool-args` deltas under hideToolArgs and hideInputs; node.error is never redacted; a field that is absent, or already the placeholder, is left alone and not counted; `redaction.count` is the number of values replaced and `redaction.keys` the payload fields touched; an existing `redaction` on the payload is merged (counts add, keys union). Names, kinds, ids, timings, usage and every other field survive untouched. Fail closed (decisions.md \"Redaction fails closed on internal error\"): with any switch on, a node.started/node.finished/node.token event the redactor cannot inspect (the payload is not an object, a property read throws, token `deltas` that is not an array while a hiding switch could cover it, a covered delta that is neither null nor an object, a covered delta whose `v` is present and not a string) is replaced by its failed form, built WITHOUT reading input/output/deltas: node.started {nodeId, parentId?, kind, name, instanceId, input: placeholder}, node.finished {nodeId, instanceId?, durationMs, heldMs?, status, usage?, output: placeholder}, node.token {nodeId, instanceId?, deltas: []}, each with redaction {count: 0, keys: [\"input\",\"output\",\"deltas\"], failed: true}; every other field is omitted; an optional field whose read throws or whose value is not schema-valid is omitted; when a required field cannot be read or is not schema-valid (nodeId/name/instanceId strings, kind a NodeKind, durationMs a finite number >= 0, status ok|error|aborted) the event is dropped, shown in `out` as {type, dropped: true}. `chars` is the UTF-16 code unit count (JS string length: an astral character counts 2). Tool calls (0.6.0+): under hideToolArgs or hideInputs (the switches that hide `tool-args` deltas), and when the output is not already hidden whole, the arguments of each entry of an object output's own `toolCalls` array — the fields `input`, `inputText`, and the older spellings `arguments` and `args`, wherever present and not undefined or already the placeholder — become the placeholder, counted one per value under the key \"output.toolCalls\"; a `toolCalls` that is not an array, or an entry that is neither null nor an object, is replaced whole (counted 1); names, ids and every other field survive; this applies to every node kind. hideOutputs (and hideToolResults on a tool instance) replace the whole output first, so its toolCalls are never counted separately. Usage in the failed form (0.6.0+): `usage` keeps inputTokens and outputTokens (both required, non-negative safe integers, else no usage), `inclusive` when it is a boolean, and cacheReadTokens / cacheWriteTokens / reasoningTokens when each is a non-negative safe integer; every other usage field is dropped. Pause answers (0.6.0+, contract C2): an exec.resumed / exec.refused event in `in` may carry `nodeKind`, the paused node's kind as the session passes it to the redactor (absent: unknown, which counts as a tool); `out` entries never carry it. A pause answer is covered exactly when the paused node's input is — hideInputs, or hideToolArgs when the kind is tool or unknown: exec.resumed.edited becomes {after: placeholder} (left alone and not counted when it is already exactly that; absent: nothing to hide), counted under the key \"edited\", and exec.refused.message is omitted (present, even null: counted under \"message\"); every other field survives and an existing summary is merged. Not covered (another switch, or another kind under hideToolArgs): the payload is returned as it is, whatever it holds. Covered but not inspectable (the payload is not an object, or `pauseId` is present, not null and not a string): the failed form — {pauseId, action, edited?: {after: placeholder}, requestId?} or {pauseId, code, requestId?}, with redaction {count: 0, keys: [\"edited\"] or [\"message\"], failed: true} — needs a string pauseId and a valid action / code, so from JSON alone such an event is dropped; the failed form itself (a payload whose fields cannot be read) is pinned by each port's unit tests.",
   "placeholder": "__REDACTED__",
   "cases": [
     {
@@ -136,12 +136,16 @@
       "in": [
         { "type": "node.started", "payload": { "nodeId": "tool:a", "kind": "tool", "name": "a", "instanceId": "1", "input": { "secret": "x" } } },
         { "type": "node.token", "payload": { "nodeId": "tool:a", "deltas": [{ "t": "text", "v": "y" }] } },
-        { "type": "node.finished", "payload": { "nodeId": "tool:a", "instanceId": "1", "output": { "z": 1 }, "durationMs": 1, "status": "ok" } }
+        { "type": "node.finished", "payload": { "nodeId": "tool:a", "instanceId": "1", "output": { "z": 1 }, "durationMs": 1, "status": "ok" } },
+        { "type": "exec.resumed", "nodeKind": "tool", "payload": { "pauseId": "pause_1", "action": "continue", "edited": { "after": { "q": "visible" } }, "requestId": "req-1" } },
+        { "type": "exec.refused", "payload": { "pauseId": "pause_1", "code": "schema", "message": "visible message" } }
       ],
       "out": [
         { "type": "node.started", "payload": { "nodeId": "tool:a", "kind": "tool", "name": "a", "instanceId": "1", "input": { "secret": "x" } } },
         { "type": "node.token", "payload": { "nodeId": "tool:a", "deltas": [{ "t": "text", "v": "y" }] } },
-        { "type": "node.finished", "payload": { "nodeId": "tool:a", "instanceId": "1", "output": { "z": 1 }, "durationMs": 1, "status": "ok" } }
+        { "type": "node.finished", "payload": { "nodeId": "tool:a", "instanceId": "1", "output": { "z": 1 }, "durationMs": 1, "status": "ok" } },
+        { "type": "exec.resumed", "payload": { "pauseId": "pause_1", "action": "continue", "edited": { "after": { "q": "visible" } }, "requestId": "req-1" } },
+        { "type": "exec.refused", "payload": { "pauseId": "pause_1", "code": "schema", "message": "visible message" } }
       ]
     },
     {
@@ -308,6 +312,104 @@
         { "type": "node.finished", "payload": { "nodeId": "llm:step", "durationMs": 1, "status": "ok", "usage": { "inputTokens": 10, "outputTokens": 2, "reasoningTokens": 3 }, "output": "__REDACTED__", "redaction": { "count": 0, "keys": ["input", "output", "deltas"], "failed": true } } },
         { "type": "node.finished", "payload": { "nodeId": "llm:step", "durationMs": 1, "status": "ok", "output": "__REDACTED__", "redaction": { "count": 0, "keys": ["input", "output", "deltas"], "failed": true } } },
         { "type": "node.finished", "payload": { "nodeId": "llm:step", "durationMs": 1, "status": "ok", "usage": { "inputTokens": 5, "outputTokens": 1, "inclusive": false }, "output": "__REDACTED__", "redaction": { "count": 0, "keys": ["input", "output", "deltas"], "failed": true } } }
+      ]
+    },
+    {
+      "name": "pause answers (0.6.0+): hideInputs hides exec.resumed.edited and omits exec.refused.message on every paused kind (tool, llm, unknown); ids, actions, codes and requestId survive; an answer with nothing to hide is left alone",
+      "switches": { "hideInputs": true },
+      "in": [
+        { "type": "exec.resumed", "nodeKind": "tool", "payload": { "pauseId": "pause_1", "action": "continue", "edited": { "after": { "q": "SECRET-EDIT" } }, "requestId": "req-1" } },
+        { "type": "exec.refused", "nodeKind": "llm", "payload": { "pauseId": "pause_2", "code": "schema", "message": "q must not be SECRET-EDIT", "requestId": "req-2" } },
+        { "type": "exec.refused", "payload": { "pauseId": "pause_3", "code": "shape", "message": "SECRET-MESSAGE" } },
+        { "type": "exec.resumed", "nodeKind": "llm", "payload": { "pauseId": "pause_4", "action": "retry", "edited": { "after": "SECRET-EDIT" } } },
+        { "type": "exec.resumed", "nodeKind": "tool", "payload": { "pauseId": "pause_5", "action": "abort" } },
+        { "type": "exec.refused", "nodeKind": "tool", "payload": { "pauseId": "pause_6", "code": "disabled" } }
+      ],
+      "out": [
+        { "type": "exec.resumed", "payload": { "pauseId": "pause_1", "action": "continue", "edited": { "after": "__REDACTED__" }, "requestId": "req-1", "redaction": { "count": 1, "keys": ["edited"] } } },
+        { "type": "exec.refused", "payload": { "pauseId": "pause_2", "code": "schema", "requestId": "req-2", "redaction": { "count": 1, "keys": ["message"] } } },
+        { "type": "exec.refused", "payload": { "pauseId": "pause_3", "code": "shape", "redaction": { "count": 1, "keys": ["message"] } } },
+        { "type": "exec.resumed", "payload": { "pauseId": "pause_4", "action": "retry", "edited": { "after": "__REDACTED__" }, "redaction": { "count": 1, "keys": ["edited"] } } },
+        { "type": "exec.resumed", "payload": { "pauseId": "pause_5", "action": "abort" } },
+        { "type": "exec.refused", "payload": { "pauseId": "pause_6", "code": "disabled" } }
+      ]
+    },
+    {
+      "name": "pause answers: hideToolArgs covers the answers of a paused tool and of an unknown kind (it counts as a tool) only; an llm or custom node's answers are left alone",
+      "switches": { "hideToolArgs": true },
+      "in": [
+        { "type": "exec.resumed", "nodeKind": "tool", "payload": { "pauseId": "pause_1", "action": "continue", "edited": { "after": { "q": "SECRET-EDIT" } } } },
+        { "type": "exec.resumed", "nodeKind": "llm", "payload": { "pauseId": "pause_2", "action": "continue", "edited": { "after": { "q": "visible" } } } },
+        { "type": "exec.refused", "nodeKind": "llm", "payload": { "pauseId": "pause_3", "code": "schema", "message": "visible message" } },
+        { "type": "exec.refused", "nodeKind": "custom", "payload": { "pauseId": "pause_4", "code": "schema", "message": "visible message" } },
+        { "type": "exec.refused", "payload": { "pauseId": "pause_5", "code": "schema", "message": "SECRET-MESSAGE", "requestId": "r5" } },
+        { "type": "exec.resumed", "payload": { "pauseId": "pause_6", "action": "retry", "edited": { "after": ["SECRET-EDIT"] }, "requestId": "r6" } }
+      ],
+      "out": [
+        { "type": "exec.resumed", "payload": { "pauseId": "pause_1", "action": "continue", "edited": { "after": "__REDACTED__" }, "redaction": { "count": 1, "keys": ["edited"] } } },
+        { "type": "exec.resumed", "payload": { "pauseId": "pause_2", "action": "continue", "edited": { "after": { "q": "visible" } } } },
+        { "type": "exec.refused", "payload": { "pauseId": "pause_3", "code": "schema", "message": "visible message" } },
+        { "type": "exec.refused", "payload": { "pauseId": "pause_4", "code": "schema", "message": "visible message" } },
+        { "type": "exec.refused", "payload": { "pauseId": "pause_5", "code": "schema", "requestId": "r5", "redaction": { "count": 1, "keys": ["message"] } } },
+        { "type": "exec.resumed", "payload": { "pauseId": "pause_6", "action": "retry", "edited": { "after": "__REDACTED__" }, "requestId": "r6", "redaction": { "count": 1, "keys": ["edited"] } } }
+      ]
+    },
+    {
+      "name": "pause answers: hideOutputs and hideToolResults never cover them (an edit is an input); the node's output is still hidden",
+      "switches": { "hideOutputs": true, "hideToolResults": true },
+      "in": [
+        { "type": "exec.resumed", "nodeKind": "tool", "payload": { "pauseId": "pause_1", "action": "continue", "edited": { "after": { "q": "visible" } } } },
+        { "type": "exec.refused", "nodeKind": "tool", "payload": { "pauseId": "pause_2", "code": "schema", "message": "visible message" } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:search", "instanceId": "t1", "output": "SECRET-RESULT", "durationMs": 3, "status": "ok" } }
+      ],
+      "out": [
+        { "type": "exec.resumed", "payload": { "pauseId": "pause_1", "action": "continue", "edited": { "after": { "q": "visible" } } } },
+        { "type": "exec.refused", "payload": { "pauseId": "pause_2", "code": "schema", "message": "visible message" } },
+        { "type": "node.finished", "payload": { "nodeId": "tool:search", "instanceId": "t1", "output": "__REDACTED__", "durationMs": 3, "status": "ok", "redaction": { "count": 1, "keys": ["output"] } } }
+      ]
+    },
+    {
+      "name": "pause answers: an edit that is already exactly {after: placeholder} is left alone and not counted; any other `edited` (extra fields, a non-object, null, empty) becomes {after: placeholder}; a present null message counts as a value; an existing summary is merged",
+      "switches": { "hideInputs": true },
+      "in": [
+        { "type": "exec.resumed", "nodeKind": "tool", "payload": { "pauseId": "p1", "action": "continue", "edited": { "after": "__REDACTED__" } } },
+        { "type": "exec.resumed", "nodeKind": "tool", "payload": { "pauseId": "p2", "action": "continue", "edited": { "after": 1, "before": "SECRET-BEFORE" } } },
+        { "type": "exec.resumed", "nodeKind": "tool", "payload": { "pauseId": "p3", "action": "retry", "edited": "SECRET-RAW" } },
+        { "type": "exec.resumed", "nodeKind": "tool", "payload": { "pauseId": "p4", "action": "continue", "edited": null } },
+        { "type": "exec.resumed", "nodeKind": "tool", "payload": { "pauseId": "p5", "action": "continue", "edited": {} } },
+        { "type": "exec.resumed", "nodeKind": "tool", "payload": { "pauseId": "p6", "action": "continue", "edited": { "after": { "q": "SECRET-EDIT" } }, "redaction": { "count": 2, "keys": ["other"] } } },
+        { "type": "exec.refused", "nodeKind": "tool", "payload": { "pauseId": "p7", "code": "schema", "message": null } },
+        { "type": "exec.refused", "nodeKind": "tool", "payload": { "pauseId": "p8", "code": "schema", "message": "SECRET-MESSAGE", "redaction": { "count": 1, "keys": ["message"] } } }
+      ],
+      "out": [
+        { "type": "exec.resumed", "payload": { "pauseId": "p1", "action": "continue", "edited": { "after": "__REDACTED__" } } },
+        { "type": "exec.resumed", "payload": { "pauseId": "p2", "action": "continue", "edited": { "after": "__REDACTED__" }, "redaction": { "count": 1, "keys": ["edited"] } } },
+        { "type": "exec.resumed", "payload": { "pauseId": "p3", "action": "retry", "edited": { "after": "__REDACTED__" }, "redaction": { "count": 1, "keys": ["edited"] } } },
+        { "type": "exec.resumed", "payload": { "pauseId": "p4", "action": "continue", "edited": { "after": "__REDACTED__" }, "redaction": { "count": 1, "keys": ["edited"] } } },
+        { "type": "exec.resumed", "payload": { "pauseId": "p5", "action": "continue", "edited": { "after": "__REDACTED__" }, "redaction": { "count": 1, "keys": ["edited"] } } },
+        { "type": "exec.resumed", "payload": { "pauseId": "p6", "action": "continue", "edited": { "after": "__REDACTED__" }, "redaction": { "count": 3, "keys": ["other", "edited"] } } },
+        { "type": "exec.refused", "payload": { "pauseId": "p7", "code": "schema", "redaction": { "count": 1, "keys": ["message"] } } },
+        { "type": "exec.refused", "payload": { "pauseId": "p8", "code": "schema", "redaction": { "count": 2, "keys": ["message"] } } }
+      ]
+    },
+    {
+      "name": "pause answers fail closed: under a covering switch, a payload that is not an object, or whose pauseId is present, not null and not a string, is dropped (its failed form needs a string pauseId); a null pauseId is absent; a switch that does not cover the paused kind leaves even a malformed answer alone",
+      "switches": { "hideToolArgs": true },
+      "in": [
+        { "type": "exec.resumed", "nodeKind": "tool", "payload": "SECRET-STRING" },
+        { "type": "exec.refused", "nodeKind": "tool", "payload": ["SECRET-ARRAY"] },
+        { "type": "exec.resumed", "nodeKind": "tool", "payload": { "pauseId": 7, "action": "continue", "edited": { "after": "SECRET-EDIT" } } },
+        { "type": "exec.refused", "payload": { "pauseId": { "id": "p" }, "code": "schema", "message": "SECRET-MESSAGE" } },
+        { "type": "exec.refused", "nodeKind": "llm", "payload": "visible string" },
+        { "type": "exec.resumed", "nodeKind": "tool", "payload": { "pauseId": null, "action": "continue", "edited": { "after": "SECRET-EDIT" } } }
+      ],
+      "out": [
+        { "type": "exec.resumed", "dropped": true },
+        { "type": "exec.refused", "dropped": true },
+        { "type": "exec.resumed", "dropped": true },
+        { "type": "exec.refused", "dropped": true },
+        { "type": "exec.refused", "payload": "visible string" },
+        { "type": "exec.resumed", "payload": { "pauseId": null, "action": "continue", "edited": { "after": "__REDACTED__" }, "redaction": { "count": 1, "keys": ["edited"] } } }
       ]
     }
   ]

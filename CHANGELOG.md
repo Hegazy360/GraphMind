@@ -98,6 +98,32 @@ rather than records. If you set one of these to an unusual value meaning
   providers. The frameworks themselves are not in the test suite; the client
   calls they make are.
 
+### Added — Python and Ruby speak the 0.6.0 pause protocol
+
+- **Python: edit a held tool call's arguments.** `@gm.tool` / `gm.wrap_tools`
+  offer every gate of a call whose arguments bind to the signature as
+  editable; `continue` + input at `before`, `retry` + input at `after` /
+  `error` run the real function with the edit merged into the live arguments
+  and checked against the signature — on the host's own thread or task, never
+  the transport's, within 4 s (synchronous work included). A refused edit
+  (`exec.refused`) keeps the call held under the same pause id; a disconnect or
+  pause timeout during validation continues with the original input. Hidden
+  inputs take only full replacements; `GRAPHMIND_DISABLE_EDIT_INPUT` turns it
+  off; the redactor covers `exec.resumed.edited` and `exec.refused.message`.
+  `session.gate()` / `gate_async()` take `editable=`, `validate_input=` and
+  `result=`; `gm.merge_tool_input` is the default rule.
+- **Python and Ruby** echo `requestId`, read `hello.ack.hubCapabilities`, and
+  refuse an injected value that still holds `__REDACTED__` or a truncated
+  preview under every debugger (the gate stays held; a 0.5 debugger also gets a
+  log line). Ruby does not announce `edit-input`; an edit sent to it is refused
+  (`disabled`) rather than dropped.
+- The marker list gained the Python SDK's own recording bounds (`…[truncated]`,
+  `<N bytes>`, `…[depth limit]`, `…[N more]`, `[N more keys]`), in the client
+  and the server alike. New shared conformance fixture
+  `packages/client/test/fixtures/edit-input.json` (markers, pollution keys,
+  validator results, message sanitising, the merge rule), consumed by the
+  TypeScript, Python and Ruby suites; `redaction.json` gained the pause answers.
+
 ### Wire protocol (additive — every 0.5 peer accepts or ignores these)
 
 - `exec.paused.editable`, `exec.paused.smart {rule, detail?}`,

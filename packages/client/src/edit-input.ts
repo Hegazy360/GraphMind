@@ -10,8 +10,9 @@
  * `error`). This module holds what it checks the edit itself with:
  *
  *   - `proposedValueRefusal`: an input carrying the redaction placeholder or a
- *     truncation marker (the shrink's, LangGraph's, or the MCP server's
- *     `get_node` preview) is a pre-filled copy of a value its sender never
+ *     truncation marker (the shrink's, LangGraph's, the MCP server's
+ *     `get_node` preview, or the Python SDK's recording bounds) is a
+ *     pre-filled copy of a value its sender never
  *     saw in full, not an argument anyone meant to run with. Refused
  *     (`placeholder` / `truncated`) wherever it appears — a value, a key, or
  *     inside a string — by the same blunt JSON-substring test the debugger's
@@ -109,10 +110,43 @@ const TRUNCATION_MARKERS: readonly string[] = [
 ];
 
 /**
+ * The Python SDK's own recording bounds (`safe_value` in
+ * python/graphmind/integrations/_common.py, which records tool arguments and
+ * results and LLM output text, and `record_value`'s depth limit), as they
+ * appear in compact JSON text:
+ *
+ *   - a string cut at 20,000 characters ends with `…[truncated]`;
+ *   - bytes are recorded as `"<N bytes>"`;
+ *   - a value nested past the depth limit is `"…[depth limit]"`;
+ *   - a dict cut at 200 keys ends with the key `"…"` holding `"[N more keys]"`;
+ *   - a list cut at 200 items ends with the item `"…[N more]"`.
+ *
+ * Each pattern is anchored on JSON punctuation: a raw `"` can only open or
+ * close a string in JSON text (inside one it is escaped as `\"`), so the text
+ * of a string that merely quotes a marker never matches. The whole-value
+ * markers must open a value (after `[`, `:`, `,` or at the very start) and
+ * close one (before `,`, `]`, `}` or at the very end), so an object KEY with
+ * the same text is an ordinary key. Digits are ASCII (`[0-9]`, never `\d`,
+ * which is Unicode-aware in Python). The same list serves the hub
+ * (control-auth.ts `contentRefusal`) and every SDK port — Python
+ * (graphmind/edit_input.py) and Ruby (graphmind/edit_guard.rb) implement it
+ * verbatim, pinned by the shared fixture
+ * packages/client/test/fixtures/edit-input.json.
+ */
+const PYTHON_PREVIEW_MARKERS: readonly RegExp[] = [
+  /…\[truncated\]"/,
+  /(?:^|[[:,])"<[0-9]+ bytes>"(?=[,\]}]|$)/,
+  /(?:^|[[:,])"…\[depth limit\]"(?=[,\]}]|$)/,
+  /[{,]"…":"\[[0-9]+ more keys\]"(?=[,}])/,
+  /(?:^|[[:,])"…\[[0-9]+ more\]"(?=[,\]}]|$)/,
+];
+
+/**
  * Refusal for a proposed input (or inject output) that must never run:
  * `placeholder` when it contains "__REDACTED__", `truncated` when it contains
- * a truncation marker, `shape` when it cannot be serialised to be checked.
- * Undefined when it is clean.
+ * a truncation marker (the shrink's, LangGraph's, the MCP server's preview,
+ * or one of the Python SDK's recording bounds), `shape` when it cannot be
+ * serialised to be checked. Undefined when it is clean.
  */
 export function proposedValueRefusal(value: unknown): Refusal | undefined {
   let json: string | undefined;
@@ -128,7 +162,10 @@ export function proposedValueRefusal(value: unknown): Refusal | undefined {
       message: 'the value contains redacted content ("__REDACTED__"); replace it before running',
     };
   }
-  if (TRUNCATION_MARKERS.some((marker) => json.includes(marker))) {
+  if (
+    TRUNCATION_MARKERS.some((marker) => json.includes(marker)) ||
+    PYTHON_PREVIEW_MARKERS.some((marker) => marker.test(json))
+  ) {
     return {
       code: 'truncated',
       message: 'the value contains a truncated preview, not the full value; replace it before running',

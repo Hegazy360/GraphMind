@@ -88,7 +88,9 @@ class TestConformanceFixture:
         switches = {_OPTION_NAMES[k]: v for k, v in case["switches"].items()}
         redactor = Redactor(resolve_redaction(switches, {}))
         produced = [
-            as_out(e["type"], redactor.apply(e["type"], e["payload"], "fixture-run"))
+            as_out(
+                e["type"], redactor.apply(e["type"], e["payload"], "fixture-run", e.get("nodeKind"))
+            )
             for e in case["in"]
         ]
         assert len(produced) == len(case["out"])
@@ -103,14 +105,17 @@ class TestConformanceFixture:
         }
         redactor = Redactor(resolve_redaction(None, env))
         produced = [
-            as_out(e["type"], redactor.apply(e["type"], e["payload"], "r")) for e in case["in"]
+            as_out(e["type"], redactor.apply(e["type"], e["payload"], "r", e.get("nodeKind")))
+            for e in case["in"]
         ]
         assert dumps(produced) == dumps(case["out"])
 
     def test_is_not_vacuous(self) -> None:
         for case in _fixture()["cases"]:
             any_on = any(case["switches"].values())
-            assert (dumps(case["in"]) != dumps(case["out"])) is any_on, case["name"]
+            # Compared without `nodeKind`, which only `in` entries carry.
+            events = [{"type": e["type"], "payload": e["payload"]} for e in case["in"]]
+            assert (dumps(events) != dumps(case["out"])) is any_on, case["name"]
 
     def test_fixture_inputs_are_never_mutated(self) -> None:
         for case in _fixture()["cases"]:
@@ -120,7 +125,7 @@ class TestConformanceFixture:
                 hide_inputs=True, hide_outputs=True, hide_tool_args=True, hide_tool_results=True
             )
             for e in events:
-                redactor.apply(e["type"], e["payload"], "r")
+                redactor.apply(e["type"], e["payload"], "r", e.get("nodeKind"))
             assert dumps(events) == before
 
 
@@ -869,7 +874,9 @@ class TestFailsClosed:
 
     def test_other_event_types_are_never_inspected_even_with_a_switch_on(self) -> None:
         red = on(**ALL_ON)
-        for type_ in ("node.error", "run.started", "run.finished", "exec.paused", "exec.resumed"):
+        # exec.resumed / exec.refused are inspected since 0.6.0 (edited input,
+        # contract C2): see TestPauseAnswers.
+        for type_ in ("node.error", "run.started", "run.finished", "exec.paused", "graph.hint"):
             hostile = Hostile({"nodeId": "x"}, {"*", "nodeId"})
             assert red.apply(type_, hostile, RUN) is hostile and hostile.reads == []
         assert red.apply("node.error", "raw", RUN) == "raw"
@@ -1089,3 +1096,168 @@ class TestFailsClosedOnIdentityFieldsThatAreNotStrings:
         assert canary not in "\n".join(logs)
         assert len([m for m in logs if "dropped it" in m]) == 1
         assert len([m for m in logs if "redaction failed" in m]) == 1
+
+
+# -- exec.resumed / exec.refused (edited input, contract C2) ---------------------
+
+EDIT_CANARY = "EDIT-CANARY-5e1f0"
+RESUMED = {
+    "pauseId": "pause_1",
+    "action": "continue",
+    "edited": {"after": {"q": EDIT_CANARY}},
+    "requestId": "req-1",
+}
+REFUSED = {
+    "pauseId": "pause_1",
+    "code": "schema",
+    "message": f"q must not be {EDIT_CANARY}",
+    "requestId": "req-1",
+}
+
+
+class TestPauseAnswers:
+    """Parity with ``packages/client/test/redaction-edit.test.ts`` (Redactor part);
+    the live-session half is in test_edit_input_session.py."""
+
+    @pytest.mark.parametrize(
+        ("switches", "kind", "covered"),
+        [
+            ({"hide_inputs": True}, "tool", True),
+            ({"hide_inputs": True}, "llm", True),
+            ({"hide_tool_args": True}, "tool", True),
+            ({"hide_tool_args": True}, "llm", False),
+            ({"hide_tool_args": True}, None, True),
+            ({"hide_tool_args": True}, 7, True),  # not a string: unknown, counts as a tool
+            ({"hide_outputs": True}, "tool", False),
+            ({"hide_tool_results": True}, "tool", False),
+            ({}, "tool", False),
+        ],
+    )
+    def test_coverage_matrix(self, switches: dict[str, bool], kind: Any, covered: bool) -> None:
+        red = on(**switches)
+        resumed = red.apply("exec.resumed", RESUMED, RUN, kind)
+        refused = red.apply("exec.refused", REFUSED, RUN, kind)
+        assert red.covers_pause_input(kind) is covered
+        if not covered:
+            # Not covered: the very same objects, nothing copied.
+            assert resumed is RESUMED and refused is REFUSED
+            return
+        assert dumps(resumed) == dumps(
+            {
+                "pauseId": "pause_1",
+                "action": "continue",
+                "edited": {"after": REDACTED},
+                "requestId": "req-1",
+                "redaction": {"count": 1, "keys": ["edited"]},
+            }
+        )
+        assert dumps(refused) == dumps(
+            {
+                "pauseId": "pause_1",
+                "code": "schema",
+                "requestId": "req-1",
+                "redaction": {"count": 1, "keys": ["message"]},
+            }
+        )
+        # The integration's objects are never modified.
+        assert RESUMED["edited"] == {"after": {"q": EDIT_CANARY}}
+        assert EDIT_CANARY in REFUSED["message"]
+
+    def test_a_str_subclass_kind_is_judged_by_its_plain_value(self) -> None:
+        class Lying(str):
+            def __eq__(self, other: object) -> bool:
+                return False
+
+            __hash__ = str.__hash__
+
+        assert on(hide_tool_args=True).covers_pause_input(Lying("tool")) is True
+
+    def test_other_types_ignore_the_kind(self) -> None:
+        red = on(hide_tool_args=True)
+        payload = {"pauseId": "p", "nodeId": "tool:x", "point": "before"}
+        assert red.apply("exec.paused", payload, RUN, "tool") is payload
+
+    def test_resumed_whose_edited_read_raises_gets_the_failed_form(self) -> None:
+        warnings: list[str] = []
+        red = Redactor(
+            RedactionSwitches(hide_tool_args=True), warn=lambda key, _m: warnings.append(key)
+        )
+        hostile = Hostile(
+            {"pauseId": "pause_9", "action": "retry", "requestId": "rq", "edited": {"after": SECRET}},
+            {"*", "edited"},
+        )
+        out = red.apply("exec.resumed", hostile, RUN, "tool")
+        assert dumps(out) == dumps(
+            {
+                "pauseId": "pause_9",
+                "action": "retry",
+                "edited": {"after": REDACTED},
+                "requestId": "rq",
+                "redaction": {"count": 0, "keys": ["edited"], "failed": True},
+            }
+        )
+        assert warnings == ["redaction:failed"]
+        assert "edited" in hostile.reads  # read only to learn it may be there
+
+    def test_resumed_without_edited_keeps_no_edit_in_its_failed_form(self) -> None:
+        red = on(hide_inputs=True)
+        hostile = Hostile({"pauseId": "p", "action": "abort"}, {"*"})
+        out = red.apply("exec.resumed", hostile, RUN, "llm")
+        assert dumps(out) == dumps(
+            {
+                "pauseId": "p",
+                "action": "abort",
+                "redaction": {"count": 0, "keys": ["edited"], "failed": True},
+            }
+        )
+
+    def test_refused_whose_message_read_raises_gets_the_failed_form(self) -> None:
+        red = on(hide_inputs=True)
+        hostile = Hostile({"pauseId": "pause_2", "code": "schema", "message": SECRET}, {"*"})
+        out = red.apply("exec.refused", hostile, RUN, "tool")
+        assert dumps(out) == dumps(
+            {
+                "pauseId": "pause_2",
+                "code": "schema",
+                "redaction": {"count": 0, "keys": ["message"], "failed": True},
+            }
+        )
+        assert "message" not in hostile.reads
+
+    @pytest.mark.parametrize(
+        ("type_", "fields"),
+        [
+            ("exec.resumed", {"pauseId": "p", "action": "explode"}),
+            ("exec.resumed", {"pauseId": b"p", "action": "continue"}),
+            ("exec.refused", {"pauseId": "p", "code": "nope"}),
+            ("exec.refused", {"pauseId": "p"}),
+        ],
+    )
+    def test_an_invalid_identity_in_a_hostile_payload_is_dropped(
+        self, type_: str, fields: dict[str, Any]
+    ) -> None:
+        warnings: list[str] = []
+        red = Redactor(
+            RedactionSwitches(hide_inputs=True), warn=lambda key, _m: warnings.append(key)
+        )
+        assert red.apply(type_, Hostile(fields, {"*"}), RUN, "tool") is DROP
+        assert warnings == ["redaction:dropped"]
+
+    def test_a_bytes_pause_id_is_not_inspectable(self) -> None:
+        red = on(hide_inputs=True)
+        assert red.apply("exec.refused", {**REFUSED, "pauseId": b"pause_1"}, RUN, "tool") is DROP
+
+    def test_never_raises(self) -> None:
+        class Evil(Mapping[str, Any]):
+            def __getitem__(self, key: str) -> Any:
+                raise RuntimeError(SECRET)
+
+            def __iter__(self) -> Any:
+                raise RuntimeError(SECRET)
+
+            def __len__(self) -> int:
+                raise RuntimeError(SECRET)
+
+        red = on(hide_inputs=True, hide_tool_args=True)
+        for type_ in ("exec.resumed", "exec.refused"):
+            assert red.apply(type_, Evil(), RUN, "tool") is DROP

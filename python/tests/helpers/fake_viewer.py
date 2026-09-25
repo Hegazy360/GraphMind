@@ -33,6 +33,8 @@ class FakeViewer:
         mode: str = "run",
         auto_ack: bool = True,
         ack_protocol: int = PROTOCOL_VERSION,
+        hub_capabilities: list[str] | None = None,
+        echo_capabilities: bool = False,
     ) -> None:
         self.received: list[dict[str, Any]] = []
         self.connection_count = 0
@@ -40,6 +42,12 @@ class FakeViewer:
         self.mode = mode
         self.auto_ack = auto_ack
         self.ack_protocol = ack_protocol
+        #: ``hello.ack.hubCapabilities`` (0.6.0+); None omits the field, as a
+        #: 0.5 debugger does. Read at every handshake, so a test can change it.
+        self.hub_capabilities = hub_capabilities
+        #: Echo the app's own ``hello.capabilities`` as ``hello.ack.capabilities``
+        #: (what the real hub does) instead of the fixed 0.4 list.
+        self.echo_capabilities = echo_capabilities
 
         self._lock = threading.Lock()
         self._conns: set = set()
@@ -88,21 +96,22 @@ class FakeViewer:
                 with self._lock:
                     self.received.append(frame)
                 if frame.get("type") == "hello" and self.auto_ack:
-                    await connection.send(
-                        self._envelope(
-                            "hello.ack",
-                            {
-                                "versions": {
-                                    "protocol": self.ack_protocol,
-                                    "viewer": "fake-viewer/0.0.0",
-                                },
-                                "capabilities": ["pause", "step", "inject", "retry", "abort"],
-                                "breakpoints": self.breakpoints,
-                                "mode": self.mode,
-                                "sessionToken": SESSION_TOKEN,
-                            },
-                        )
-                    )
+                    capabilities = ["pause", "step", "inject", "retry", "abort"]
+                    if self.echo_capabilities:
+                        capabilities = list(frame.get("payload", {}).get("capabilities", []))
+                    ack: dict[str, Any] = {
+                        "versions": {
+                            "protocol": self.ack_protocol,
+                            "viewer": "fake-viewer/0.0.0",
+                        },
+                        "capabilities": capabilities,
+                        "breakpoints": self.breakpoints,
+                        "mode": self.mode,
+                        "sessionToken": SESSION_TOKEN,
+                    }
+                    if self.hub_capabilities is not None:
+                        ack["hubCapabilities"] = list(self.hub_capabilities)
+                    await connection.send(self._envelope("hello.ack", ack))
         except Exception:
             pass
         finally:
@@ -250,6 +259,26 @@ class FakeViewer:
         if output is not None:
             payload["output"] = output
         self.send_control("exec.resume", payload)
+
+    def resume_with(self, **payload: Any) -> None:
+        """An ``exec.resume`` with exactly these fields (``input``, ``requestId``...)."""
+        self.send_control("exec.resume", payload)
+
+    def drop_connections(self) -> None:
+        """Close every app connection (the server keeps listening): the app
+        reconnects and handshakes again."""
+        loop = self._loop
+        if loop is None:
+            return
+
+        async def drop() -> None:
+            for connection in list(self._conns):
+                try:
+                    await connection.close()
+                except Exception:
+                    pass
+
+        asyncio.run_coroutine_threadsafe(drop(), loop).result(timeout=5)
 
     def set_breakpoint(self, matcher: dict[str, Any]) -> None:
         self.send_control("breakpoint.set", {"matcher": matcher})

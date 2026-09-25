@@ -21,7 +21,7 @@
  * refusal reads in plain words, and how an answer is matched to its request.
  * Nothing here throws.
  */
-import { TRUNCATION_SUFFIX } from '@graphmind-ai/schema';
+import { MCP_PREVIEW_NOTE_PREFIX, TRUNCATION_SUFFIX } from '@graphmind-ai/schema';
 import type { NodeExecution, NodeState, Pause, RefusalRecord } from '../store/types.js';
 
 /** The redaction placeholder (@graphmind-ai/client `REDACTED`). */
@@ -29,14 +29,28 @@ export const REDACTED = '__REDACTED__';
 
 /**
  * Truncation markers as they appear in JSON text — the same list the client
- * refuses an edit for (packages/client/src/edit-input.ts): the shrink's marker
- * key and string suffix, and LangGraph's payload previews.
+ * refuses an edit for (packages/client/src/edit-input.ts `proposedValueRefusal`,
+ * pinned for every port by packages/client/test/fixtures/edit-input.json): the
+ * shrink's marker key and string suffix, LangGraph's payload previews, the
+ * read-only MCP server's `get_node` preview note, and the Python SDK's own
+ * recording bounds (`…[truncated]"`, `"<N bytes>"`, `"…[depth limit]"`, the
+ * `"…"` key holding `"[N more keys]"`, `"…[N more]"`).
  */
 const TRUNCATION_MARKERS: readonly string[] = [
   '__graphmindTruncated',
   TRUNCATION_SUFFIX,
   '"__graphmind":"truncated"',
   '"__graphmind":"unserializable"',
+  `"note":"${MCP_PREVIEW_NOTE_PREFIX}`,
+];
+
+/** `PYTHON_PREVIEW_MARKERS` in packages/client/src/edit-input.ts, verbatim. */
+const PYTHON_PREVIEW_MARKERS: readonly RegExp[] = [
+  /…\[truncated\]"/,
+  /(?:^|[[:,])"<[0-9]+ bytes>"(?=[,\]}]|$)/,
+  /(?:^|[[:,])"…\[depth limit\]"(?=[,\]}]|$)/,
+  /[{,]"…":"\[[0-9]+ more keys\]"(?=[,}])/,
+  /(?:^|[[:,])"…\[[0-9]+ more\]"(?=[,\]}]|$)/,
 ];
 
 /** Keys the shrink adds to an object it cut. They describe the record, never the call. */
@@ -69,7 +83,12 @@ export function markerIn(value: unknown): Marker | undefined {
   const json = jsonOf(value);
   if (json === undefined) return undefined;
   if (json.includes(REDACTED)) return 'placeholder';
-  if (TRUNCATION_MARKERS.some((marker) => json.includes(marker))) return 'truncated';
+  if (
+    TRUNCATION_MARKERS.some((marker) => json.includes(marker)) ||
+    PYTHON_PREVIEW_MARKERS.some((marker) => marker.test(json))
+  ) {
+    return 'truncated';
+  }
   return undefined;
 }
 

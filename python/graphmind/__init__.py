@@ -34,6 +34,7 @@ from typing import Any
 
 from ._version import __version__
 from .api import GraphMind, Span, configure, init, instance, is_configured, reset
+from .edit_input import ValidateInputContext, merge_tool_input
 from .env import DEFAULT_URL
 from .errors import GraphMindAbortError, is_abort_error
 from .gate import GateDecision, GateNode
@@ -54,6 +55,7 @@ __all__ = [
     "Session",
     "SessionStats",
     "Span",
+    "ValidateInputContext",
     "__version__",
     "async_callback_handler",
     "async_handler",
@@ -69,6 +71,7 @@ __all__ = [
     "instrument_openai",
     "is_abort_error",
     "is_configured",
+    "merge_tool_input",
     "ready",
     "ready_async",
     "reset",

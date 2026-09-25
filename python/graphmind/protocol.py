@@ -33,7 +33,12 @@ WILDCARD_RUN_ID = "*"
 #: refuse writes to this app's runs from any other local process — including
 #: across a disconnect, which is otherwise the one window a claim cannot be
 #: proven in.
-KNOWN_CAPABILITIES = ("pause", "step", "inject", "retry", "abort", "run-claim")
+#:
+#: ``edit-input`` (0.6.0): this client can run a held call with an edited
+#: input where its ``exec.paused`` says ``editable`` — tool gates of
+#: ``gm.tool`` / ``gm.wrap_tools``. Left out of ``hello`` when
+#: ``GRAPHMIND_DISABLE_EDIT_INPUT`` is on.
+KNOWN_CAPABILITIES = ("pause", "step", "inject", "retry", "abort", "run-claim", "edit-input")
 
 #: Messages the instrumented app sends.
 EVENT_TYPES = frozenset(

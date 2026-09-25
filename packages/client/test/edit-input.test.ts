@@ -2,8 +2,10 @@
  * The pure pieces of edited input (contract C2): the default merge for tool
  * arguments, the placeholder / truncation guard, the validator-result
  * normaliser, the wire-text sanitiser and the wire copy of an accepted edit.
- * The session-level state machine is in edit-input-session.test.ts.
+ * The session-level state machine is in edit-input-session.test.ts. The
+ * shared conformance fixture (fixtures/edit-input.json) closes the file.
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { MCP_PREVIEW_NOTE_PREFIX, TRUNCATION_SUFFIX, serializePayload } from '@graphmind-ai/schema';
 import {
@@ -430,5 +432,57 @@ describe('wireCopy — what exec.resumed.edited.after records', () => {
     for (const value of [undefined, () => 1, 1n, cyclic, throwing, { n: 2n }]) {
       expect(wireCopy(value)).toBeUndefined();
     }
+  });
+});
+
+// ── the cross-language conformance fixture ──────────────────────────────────
+// fixtures/edit-input.json: the Python port consumes every section
+// (graphmind/edit_input.py), the Ruby port `proposedValue` (graphmind/
+// edit_guard.rb, its inject guard). A missing field means undefined.
+
+interface EditFixture {
+  placeholder: string;
+  maxRefusalMessage: number;
+  proposedValue: { name: string; value?: unknown; refusal: 'placeholder' | 'truncated' | null }[];
+  prototypeKeys: { name: string; value?: unknown; refused: boolean }[];
+  normalizeValidation: { name: string; result?: unknown; expected: unknown }[];
+  sanitizeShortText: { name: string; input?: unknown; expected: string | null }[];
+  mergeToolInput: { name: string; live?: unknown; proposed?: unknown; inputHidden?: boolean; expected: unknown }[];
+}
+
+const editFixture = JSON.parse(
+  readFileSync(new URL('./fixtures/edit-input.json', import.meta.url), 'utf8'),
+) as EditFixture;
+
+describe('conformance fixture edit-input.json (shared with the Python and Ruby ports)', () => {
+  it('uses the shared constants and exercises every outcome', () => {
+    expect(editFixture.placeholder).toBe(REDACTED);
+    expect(editFixture.maxRefusalMessage).toBe(MAX_REFUSAL_MESSAGE);
+    expect(new Set(editFixture.proposedValue.map((c) => c.refusal))).toEqual(new Set(['placeholder', 'truncated', null]));
+    // Every Python recording bound (safe_value) has cases of its own.
+    expect(editFixture.proposedValue.filter((c) => c.name.includes('Python')).length).toBeGreaterThanOrEqual(10);
+  });
+
+  it.each(editFixture.proposedValue.map((c) => [c.name, c] as const))('proposedValue: %s', (_name, c) => {
+    expect(proposedValueRefusal(c.value)?.code ?? null).toBe(c.refusal);
+  });
+
+  it.each(editFixture.prototypeKeys.map((c) => [c.name, c] as const))('prototypeKeys: %s', (_name, c) => {
+    const refusal = prototypeKeyRefusal(c.value);
+    expect(refusal === undefined ? false : refusal.code === 'shape').toBe(c.refused);
+  });
+
+  it.each(editFixture.normalizeValidation.map((c) => [c.name, c] as const))('normalizeValidation: %s', (_name, c) => {
+    expect(normalizeValidation(c.result)).toEqual(c.expected);
+  });
+
+  it.each(editFixture.sanitizeShortText.map((c) => [c.name, c] as const))('sanitizeShortText: %s', (_name, c) => {
+    expect(sanitizeShortText(c.input) ?? null).toBe(c.expected);
+  });
+
+  it.each(editFixture.mergeToolInput.map((c) => [c.name, c] as const))('mergeToolInput: %s', (_name, c) => {
+    const context = c.inputHidden === undefined ? undefined : { inputHidden: c.inputHidden };
+    // Key order is part of the contract: the ports compare JSON text.
+    expect(JSON.stringify(mergeToolInput(c.live, c.proposed, context))).toBe(JSON.stringify(c.expected));
   });
 });

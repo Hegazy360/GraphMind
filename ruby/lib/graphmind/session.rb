@@ -129,6 +129,11 @@ module Graphmind
       @attached_mirror = false
       @implicit_run = nil
       @lost = 0
+      # What the attached debugger implements (hello.ack.hubCapabilities,
+      # 0.6.0+); nil for a 0.5 debugger, which sends none, and while detached.
+      # This gem announces no `edit-input`, so it only decides whether a
+      # refused inject is also worth a line in the app's log.
+      @hub_capabilities = nil
 
       @ready_mutex = Mutex.new
       @ready_cv = ConditionVariable.new
@@ -511,7 +516,7 @@ module Graphmind
     # small head spliced with that text, byte-identical to JSON.generate of the
     # whole envelope (`payload` is its last key and the generator writes no
     # whitespace).
-    def emit_internal(type, payload, run_id, raw_input = NO_RAW_INPUT)
+    def emit_internal(type, payload, run_id, raw_input = NO_RAW_INPUT, node_kind: nil)
       original = payload
       # Loop hold (W5 port): fingerprint a watched node's input exactly as the
       # caller handed it over — before redaction can replace it — and outside
@@ -523,7 +528,8 @@ module Graphmind
       # DROP means the payload could not be redacted nor replaced by a valid
       # failed form, so the event is not emitted (the redactor already warned;
       # no seq is taken, so there is no hole).
-      payload = @redactor.apply(type, payload, run_id)
+      # `node_kind`: the paused node's kind, for exec.resumed / exec.refused.
+      payload = @redactor.apply(type, payload, run_id, node_kind)
       if payload.equal?(Redaction::DROP)
         # The call happened but nothing of it reached the wire: it is not
         # provably the call right before the next one (loop rule 3), and a
@@ -884,6 +890,9 @@ module Graphmind
     end
 
     def handle_attached(ack)
+      # What THIS debugger implements (0.6.0+). Not the echoed `capabilities`.
+      hub = ack["hubCapabilities"]
+      @hub_capabilities = hub.is_a?(Array) ? hub.select { |entry| entry.is_a?(String) }.freeze : nil
       @engine.arm(ack["breakpoints"], ack["mode"])
       @mutex.synchronize do
         @attached_mirror = true
@@ -906,8 +915,9 @@ module Graphmind
 
     def handle_detached
       @mutex.synchronize { @attached_mirror = false }
-      # FAIL-OPEN: no debugger, no holds. Forget its breakpoints and mode too;
-      # the next hello.ack re-arms them.
+      # FAIL-OPEN: no debugger, no holds. Forget its breakpoints, mode and
+      # capabilities too; the next hello.ack re-arms them.
+      @hub_capabilities = nil
       @engine.disarm
       @engine.release_all
       nil
@@ -919,9 +929,7 @@ module Graphmind
       payload = envelope["payload"] || {}
       case envelope["type"]
       when "exec.resume"
-        pause_id = payload["pauseId"]
-        action = payload["action"]
-        @engine.resume(pause_id, action, payload["output"]) if pause_id.is_a?(String) && action.is_a?(String)
+        handle_resume(payload) if payload.is_a?(Hash)
       when "breakpoint.set"
         @engine.add_breakpoint(payload["matcher"])
       when "breakpoint.clear"
@@ -939,6 +947,57 @@ module Graphmind
       @ready_mutex.synchronize { @ready_cv.broadcast }
     end
 
+    # An exec.resume for a held gate (0.6.0 rules, W1 scope: this gem does not
+    # announce `edit-input`):
+    #   * `requestId` (any String) is echoed on the exec.resumed / exec.refused
+    #     it causes, so the debugger can correlate its answer;
+    #   * an edited `input` is refused (`disabled`) and the gate stays held — it
+    #     is never run as a plain resume, which would silently drop the edit;
+    #   * the inject guard: an output holding the redaction placeholder or a
+    #     truncated preview (EditGuard) is refused and the gate stays held,
+    #     under every debugger; a 0.5 debugger does not show exec.refused, so
+    #     the app's log says why too.
+    # Unknown pauses and unknown actions are ignored.
+    def handle_resume(payload)
+      pause_id = payload["pauseId"]
+      action = payload["action"]
+      return unless pause_id.is_a?(String) && action.is_a?(String) && Protocol::RESUME_ACTIONS.include?(action)
+
+      gate = @engine.peek(pause_id)
+      return if gate.nil?
+
+      raw = payload["requestId"]
+      request_id = raw.is_a?(String) ? raw : nil
+      if payload.key?("input")
+        emit_refused(gate, "disabled",
+                     "this app cannot run a call with an edited input (the Ruby SDK does not support input edits)",
+                     request_id)
+        return
+      end
+      if action == "inject"
+        refusal = EditGuard.proposed_value_refusal(payload["output"])
+        unless refusal.nil?
+          emit_refused(gate, refusal.code, refusal.message, request_id)
+          if @hub_capabilities.nil?
+            @warner.warn("inject-refused",
+                         "refused an injected value: #{refusal.message}. The call is still paused " \
+                         "(inject the full value, or continue, retry or abort); this debugger does not " \
+                         "show refusals — upgrade it to see them there")
+          end
+          return
+        end
+      end
+      @engine.resume(pause_id, action, payload["output"], request_id: request_id)
+    end
+
+    # exec.refused, redacted by the paused node's kind.
+    def emit_refused(gate, code, message, request_id)
+      payload = { "pauseId" => gate[:pause_id], "code" => code }
+      payload["message"] = message unless message.nil?
+      payload["requestId"] = request_id unless request_id.nil?
+      emit_or_warn("exec.refused", payload, gate[:run_id], gate[:node].kind)
+    end
+
     def on_paused(pause_id, node, point, run_id, reason = nil)
       swallow { @ledger.hold_opened(pause_id, run_id, node.node_id, point) }
       payload = { "pauseId" => pause_id, "nodeId" => node.node_id, "point" => point }
@@ -952,15 +1011,17 @@ module Graphmind
       emit_or_warn("exec.paused", payload, run_id)
     end
 
-    def on_resumed(pause_id, _node, action, run_id)
+    def on_resumed(pause_id, node, action, run_id, request_id = nil)
       swallow { @ledger.hold_closed(pause_id) }
-      emit_or_warn("exec.resumed", { "pauseId" => pause_id, "action" => action }, run_id)
+      payload = { "pauseId" => pause_id, "action" => action }
+      payload["requestId"] = request_id unless request_id.nil?
+      emit_or_warn("exec.resumed", payload, run_id, node.kind)
     end
 
-    def emit_or_warn(type, payload, run_id)
+    def emit_or_warn(type, payload, run_id, node_kind = nil)
       return unless active?
 
-      emit_internal(type, payload, run_id)
+      emit_internal(type, payload, run_id, node_kind: node_kind)
     rescue StandardError => e
       @warner.warn("emit", "internal error emitting a gate event", e)
     end

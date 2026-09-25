@@ -36,6 +36,20 @@ arguments and results also travel through the LLM node (the model's tool
 calls are its output; the tool results are the next request's input), and
 those are recorded unless ``hide_inputs`` / ``hide_outputs`` are on as well.
 
+Two debugger events carry values that belong to a node's input (0.6.0,
+contract C2), and are covered by the same switches as that input —
+``hide_inputs``, or ``hide_tool_args`` when the paused node is a tool (the
+session passes the pause's kind; an unknown kind counts as a tool):
+
+* ``exec.resumed.edited`` becomes ``{"after": "__REDACTED__"}`` — the edited
+  input the call ran with;
+* ``exec.refused.message`` is omitted — it comes from the integration's
+  validator and may describe the input it refused;
+
+with ``redaction: {count, keys: ["edited"] | ["message"]}``. Their failed
+forms keep ``pauseId``, ``action`` / ``code`` and ``requestId``, hide
+``edited`` and drop ``message``, with ``redaction.failed``.
+
 The session applies this inside ``_emit_internal`` BEFORE the ring buffer, so
 replay-on-attach, the socket and everything downstream see only the redacted
 event. Never raises, never mutates the caller's dict, zero cost when every
@@ -79,7 +93,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .env import kill_switch_on
-from .protocol import NODE_KINDS, RUN_STATUSES
+from .protocol import NODE_KINDS, RESUME_ACTIONS, RUN_STATUSES
 
 REDACTED = "__REDACTED__"
 """The placeholder every hidden value becomes. Shared by every language port."""
@@ -102,6 +116,12 @@ DROP: Any = _Drop()
 RedactionWarn = Callable[[str, str], None]
 
 _NODE_EVENTS = frozenset({"node.started", "node.finished", "node.token"})
+#: The pause answers that may carry input-shaped values (see the module docstring).
+_PAUSE_ANSWERS = frozenset({"exec.resumed", "exec.refused"})
+#: ``RefusalCode`` (schema ``events.ts``).
+_REFUSAL_CODES = frozenset(
+    {"schema", "shape", "placeholder", "truncated", "disabled", "unsupported"}
+)
 _MISSING = object()
 
 
@@ -335,13 +355,34 @@ class Redactor:
     def tracked_instances(self) -> int:
         return len(self._instances)
 
-    def apply(self, type: str, payload: Any, run_id: str) -> Any:
+    def covers_pause_input(self, node_kind: Any) -> bool:
+        """Does a switch hide the input of a paused node of this kind?
+        ``hide_inputs``, or ``hide_tool_args`` on a tool — an unknown kind
+        (``None``, or anything that is not a string) counts as a tool. It
+        decides what an edit's answer may show (``exec.resumed.edited``,
+        ``exec.refused.message``) and that a hidden input takes only a full
+        replacement (``ValidateInputContext.input_hidden``)."""
+        s = self.switches
+        if s.hide_inputs:
+            return True
+        if not s.hide_tool_args:
+            return False
+        kind = _plain_str(node_kind)
+        return kind is None or kind == "tool"
+
+    def apply(self, type: str, payload: Any, run_id: str, node_kind: Any = None) -> Any:
         """Redact one event. Every switch off, or a type other than
-        node.started / node.finished / node.token: the very same object.
-        Otherwise a plain dict (see the module docstring) — redacted,
-        unchanged, or the failed form — or :data:`DROP`, meaning the event must
-        NOT be emitted. Never raises."""
-        if not self.switches.any or type not in _NODE_EVENTS:
+        node.started / node.finished / node.token / exec.resumed /
+        exec.refused: the very same object. Otherwise a plain dict (see the
+        module docstring) — redacted, unchanged, or the failed form — or
+        :data:`DROP`, meaning the event must NOT be emitted. ``node_kind`` is
+        the paused node's kind, for exec.resumed / exec.refused (which do not
+        name their node). Never raises."""
+        if not self.switches.any:
+            return payload
+        if type in _PAUSE_ANSWERS:
+            return self._on_pause_answer(type, payload, node_kind)
+        if type not in _NODE_EVENTS:
             return payload
         try:
             if not isinstance(payload, Mapping):
@@ -354,6 +395,105 @@ class Redactor:
             return self._on_token(p, run_id)
         except Exception:
             return self._fail_closed(type, payload, run_id)
+
+    # -- exec.resumed / exec.refused (edited input) -------------------------------
+
+    def _on_pause_answer(self, type: str, payload: Any, node_kind: Any) -> Any:
+        """The input-shaped parts of a pause's answer, hidden exactly when the
+        paused node's input is (module docstring). Not covered: the very same
+        object. Covered: a copy from a one-read snapshot, or the failed form."""
+        try:
+            if not self.covers_pause_input(node_kind):
+                return payload
+        except Exception:  # pragma: no cover - switches are plain booleans
+            pass
+        try:
+            if not isinstance(payload, Mapping):
+                raise _Uninspectable("payload is not a mapping")
+            p = _snapshot(payload)
+            _identity(p, "pauseId")
+            if type == "exec.resumed":
+                if "edited" not in p:
+                    return p
+                edited = p["edited"]
+                if (
+                    isinstance(edited, Mapping)
+                    and len(edited) == 1
+                    and _is_placeholder(_read(edited, "after"))
+                ):
+                    return p  # already the placeholder: left alone, not counted
+                return {
+                    **p,
+                    "edited": {"after": REDACTED},
+                    "redaction": _merge_summary(p.get("redaction"), 1, "edited"),
+                }
+            if "message" not in p:
+                return p
+            out = {**p, "redaction": _merge_summary(p.get("redaction"), 1, "message")}
+            del out["message"]
+            return out
+        except Exception:
+            return self._fail_closed_answer(type, payload)
+
+    def _fail_closed_answer(self, type: str, payload: Any) -> Any:
+        try:
+            out = self._failed_answer_form(type, payload)
+        except Exception:
+            out = None
+        if out is None:
+            self._report(
+                "redaction:dropped",
+                f"a {type} event could not be redacted and its identity fields could not be "
+                "read; dropped it rather than send data a GRAPHMIND_HIDE_* switch hides",
+            )
+            return DROP
+        self._report(
+            "redaction:failed",
+            f"redaction failed on a {type} event (unreadable or malformed payload); "
+            "sent it with the edited input / refusal message hidden and redaction.failed set",
+        )
+        return out
+
+    def _failed_answer_form(self, type: str, payload: Any) -> dict[str, Any] | None:
+        """Failed form of a pause answer: identity copied best-effort, ``edited``
+        hidden (kept as the placeholder when it may have been there),
+        ``message`` dropped. ``None`` when ``pauseId`` and ``action`` / ``code``
+        cannot be read as valid values — the event is then dropped."""
+        if not isinstance(payload, Mapping):
+            return None
+        pause_id = _plain_str(_read(payload, "pauseId"))
+        if pause_id is None:
+            return None
+        request_id = _plain_str(_read(payload, "requestId"))
+        echo = {} if request_id is None else {"requestId": request_id}
+        if type == "exec.resumed":
+            action = _plain_str(_read(payload, "action"))
+            if action is None or action not in RESUME_ACTIONS:
+                return None
+            # Unreadable counts as present: an edit the record cannot rule out.
+            try:
+                payload["edited"]
+                may_have_edit = True
+            except KeyError:
+                may_have_edit = False
+            except Exception:
+                may_have_edit = True
+            return {
+                "pauseId": pause_id,
+                "action": action,
+                **({"edited": {"after": REDACTED}} if may_have_edit else {}),
+                **echo,
+                "redaction": {"count": 0, "keys": ["edited"], "failed": True},
+            }
+        code = _plain_str(_read(payload, "code"))
+        if code is None or code not in _REFUSAL_CODES:
+            return None
+        return {
+            "pauseId": pause_id,
+            "code": code,
+            **echo,
+            "redaction": {"count": 0, "keys": ["message"], "failed": True},
+        }
 
     # -- fail closed -------------------------------------------------------------
 

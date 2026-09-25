@@ -15,6 +15,21 @@ is the sharp end of the debugger:
 Sync functions gate on the calling thread; ``async def`` functions gate on the
 calling task. Nothing here may raise into the host except the host's own error
 (or a deliberate abort).
+
+Edited arguments (0.6.0, contract C2): a call whose arguments bind to the
+function's signature is offered as ``editable`` at every gate (the session
+shows it only when the app and the debugger both enabled edits). ``continue``
++ input at ``before``, or ``retry`` + input at ``after`` / ``error``, calls the
+REAL function with the edit merged into the live arguments — the recorded
+``{parameter: value}`` shape: top-level keys replace, the rest keep their LIVE
+values (the recorded copy may be a ``repr``) — checked against the signature
+(every key a parameter, every required one present; see
+:func:`graphmind.tool_edit.signature_check`). Under a ``GRAPHMIND_HIDE_*``
+switch that hides the input, only a full replacement is accepted. The latest
+accepted edit stays the call's arguments for later attempts, so a plain retry
+re-runs it. ``node.started`` (and so the loop fingerprint) keeps what the
+caller passed; ``exec.resumed.edited`` records what ran. The ``after`` gate
+also hands the result to the session's after-gate detectors.
 """
 
 from __future__ import annotations
@@ -26,9 +41,18 @@ from typing import Any, TypeVar, Union
 
 from .clock import elapsed_ms, monotonic_ms
 from .errors import is_abort_error
-from .gate import GateNode
+from .gate import GateDecision, GateNode
 from .ids import next_id, tool_node_id
 from .session import Session
+from .tool_edit import (
+    SchemaCheck,
+    ToolEdit,
+    bind_arguments,
+    call_arguments,
+    edited_args,
+    signature_check,
+    tool_gate_options,
+)
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -160,7 +184,7 @@ def _copy_metadata(
 class _Wrapper:
     """Shared state between the sync and async gate loops."""
 
-    __slots__ = ("kind", "name", "node_id", "parent_id", "session_of", "signature")
+    __slots__ = ("check", "kind", "name", "node_id", "parent_id", "session_of", "signature")
 
     def __init__(
         self,
@@ -177,9 +201,49 @@ class _Wrapper:
         self.node_id = node_id
         self.parent_id = parent_id
         self.signature = signature
+        #: The signature as the schema of an edit (None: no edits possible).
+        self.check: SchemaCheck | None = None if signature is None else signature_check(signature)
 
     def node(self) -> GateNode:
         return GateNode(self.node_id, self.kind, self.name)
+
+
+class _CallArgs:
+    """What one invocation calls the function with: the host's arguments until
+    an edit is accepted, then the latest accepted edit (so a plain retry
+    re-runs it)."""
+
+    __slots__ = ("_bound", "_live", "args", "kwargs", "state")
+
+    def __init__(self, state: _Wrapper, args: Any, kwargs: Any) -> None:
+        self.state = state
+        self.args = args
+        self.kwargs = kwargs
+        #: ``{parameter: value}`` as the edit rule sees them; None: not editable.
+        self._live: dict[str, Any] | None = None
+        self._bound = False
+
+    def edit(self) -> ToolEdit | None:
+        """The live arguments and their check — evaluated only while attached
+        (``tool_gate_options`` calls it then), so a detached call binds nothing."""
+        if self.state.check is None:
+            return None
+        if not self._bound:
+            self._bound = True
+            self._live = bind_arguments(self.state.signature, self.args, self.kwargs)
+        return None if self._live is None else ToolEdit(self._live, self.state.check)
+
+    def apply(self, decision: GateDecision) -> None:
+        """Adopt the accepted edit a decision carries, if any."""
+        ok, edited = edited_args(decision)
+        if not ok or self.state.signature is None or not isinstance(edited, dict):
+            return
+        try:
+            self.args, self.kwargs = call_arguments(self.state.signature, edited)
+        except Exception:
+            return  # the check already built this call; never raise into the host
+        self._live = edited
+        self._bound = True
 
 
 def gate_callable(
@@ -266,8 +330,9 @@ def _run_sync(
             extra=extra,
         )
 
+    call = _CallArgs(state, args, kwargs)
     while True:
-        pre = session.gate("before", node)
+        pre = session.gate("before", node, **tool_gate_options(session, call.edit))
         if pre.action == "abort":
             finish(None, "aborted")
             raise session.abort_error(ctx)
@@ -275,22 +340,24 @@ def _run_sync(
             finish(pre.output, "ok", {"injected": True})
             return pre.output
         # 'retry' before execution is equivalent to continue.
+        call.apply(pre)
 
         try:
-            result = fn(*args, **kwargs)
+            result = fn(*call.args, **call.kwargs)
         except BaseException as exc:
-            decision = _handle_error(session, node, instance_id, ctx, exc, finish)
+            decision = _handle_error(session, node, instance_id, ctx, exc, finish, call)
             if decision is _RETRY:
                 continue
             if decision is _RERAISE:
                 raise
             return decision.output  # type: ignore[union-attr]
 
-        post = session.gate("after", node)
+        post = session.gate("after", node, **tool_gate_options(session, call.edit, result))
         if post.action == "inject":
             finish(post.output, "ok", {"injected": True})
             return post.output
         if post.action == "retry":
+            call.apply(post)
             continue
         if post.action == "abort":
             finish(result, "aborted")
@@ -325,30 +392,35 @@ async def _run_async(
             extra=extra,
         )
 
+    call = _CallArgs(state, args, kwargs)
     while True:
-        pre = await session.gate_async("before", node)
+        pre = await session.gate_async("before", node, **tool_gate_options(session, call.edit))
         if pre.action == "abort":
             finish(None, "aborted")
             raise session.abort_error(ctx)
         if pre.action == "inject":
             finish(pre.output, "ok", {"injected": True})
             return pre.output
+        call.apply(pre)
 
         try:
-            result = await fn(*args, **kwargs)
+            result = await fn(*call.args, **call.kwargs)
         except BaseException as exc:
-            decision = await _handle_error_async(session, node, instance_id, ctx, exc, finish)
+            decision = await _handle_error_async(session, node, instance_id, ctx, exc, finish, call)
             if decision is _RETRY:
                 continue
             if decision is _RERAISE:
                 raise
             return decision.output  # type: ignore[union-attr]
 
-        post = await session.gate_async("after", node)
+        post = await session.gate_async(
+            "after", node, **tool_gate_options(session, call.edit, result)
+        )
         if post.action == "inject":
             finish(post.output, "ok", {"injected": True})
             return post.output
         if post.action == "retry":
+            call.apply(post)
             continue
         if post.action == "abort":
             finish(result, "aborted")
@@ -386,13 +458,14 @@ def _handle_error(
     ctx: Any,
     exc: BaseException,
     finish: Callable[..., None],
+    call: _CallArgs,
 ) -> Any:
     if not _should_gate_error(ctx, exc):
         finish(None, "aborted" if is_abort_error(exc) else "error")
         return _RERAISE
     session.error_node(node.node_id, instance_id, exc)
-    decision = session.gate("error", node)
-    return _apply_error_decision(session, ctx, decision, exc, finish)
+    decision = session.gate("error", node, **tool_gate_options(session, call.edit))
+    return _apply_error_decision(session, ctx, decision, exc, finish, call)
 
 
 async def _handle_error_async(
@@ -402,22 +475,29 @@ async def _handle_error_async(
     ctx: Any,
     exc: BaseException,
     finish: Callable[..., None],
+    call: _CallArgs,
 ) -> Any:
     if not _should_gate_error(ctx, exc):
         finish(None, "aborted" if is_abort_error(exc) else "error")
         return _RERAISE
     session.error_node(node.node_id, instance_id, exc)
-    decision = await session.gate_async("error", node)
-    return _apply_error_decision(session, ctx, decision, exc, finish)
+    decision = await session.gate_async("error", node, **tool_gate_options(session, call.edit))
+    return _apply_error_decision(session, ctx, decision, exc, finish, call)
 
 
 def _apply_error_decision(
-    session: Session, ctx: Any, decision: Any, exc: BaseException, finish: Callable[..., None]
+    session: Session,
+    ctx: Any,
+    decision: Any,
+    exc: BaseException,
+    finish: Callable[..., None],
+    call: _CallArgs,
 ) -> Any:
     if decision.action == "inject":
         finish(decision.output, "ok", {"injected": True, "recoveredFromError": True})
         return decision
     if decision.action == "retry":
+        call.apply(decision)
         return _RETRY
     if decision.action == "abort":
         finish(None, "aborted")

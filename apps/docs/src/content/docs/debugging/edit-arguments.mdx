@@ -73,6 +73,8 @@ The same works from a terminal or a coding agent — see [driving it from the CL
 | LangGraph (`@graphmind-ai/langgraph`) | Tools wrapped with `wrapStructuredTool` or `gm.tool`. |
 | MCP servers (`@graphmind-ai/mcp`) | Tools registered with an input schema. |
 | `graphmind mcp-proxy` | Every `tools/call`. Only `arguments` can change; `name` and `_meta` are locked. |
+| Python (`graphmind-ai`) | Functions wrapped with `@gm.tool` / `gm.wrap_tools`, sync and async, checked against the function's signature ([details](/integrations/python/#edit-arguments-06)). LangChain callbacks observe and cannot take an edit. |
+| Ruby (`graphmind` gem) | Not in 0.6.0: an edit sent to a Ruby app is refused (`disabled`) and the call stays held. |
 
 **LLM steps are not editable in 0.6.0.** An edited prompt would last for one step — the
 framework rebuilds the next request from its own history — which is not a fix you could trust.

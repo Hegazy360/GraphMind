@@ -15,12 +15,18 @@ Guarantees:
 * **Kill switches.** ``GRAPHMIND_DISABLED=1`` always disables; a
   production-looking environment disables unless ``GRAPHMIND=1`` (see
   :mod:`graphmind.env`). Disabled sessions never touch the network.
+* **Edited input** (0.6.0, contract C2): honoured only where every condition
+  holds — see :meth:`Session._handle_resume`. A refused edit leaves the gate
+  held. The integration's validator runs on the host thread / task blocked in
+  :meth:`Session.gate` / :meth:`Session.gate_async`, never on the transport's.
 """
 
 from __future__ import annotations
 
+import asyncio
 import concurrent.futures
 import contextvars
+import inspect
 import json
 import os
 import threading
@@ -30,9 +36,30 @@ from typing import Any
 
 from ._version import __version__
 from .clock import elapsed_ms, monotonic_ms, normalize_duration_ms
-from .env import EnvLike, resolve_enabled, resolve_url
+from .edit_input import (
+    InputValidation,
+    Refusal,
+    ValidateInputContext,
+    accept,
+    normalize_validation,
+    proposed_value_refusal,
+    prototype_key_refusal,
+    refuse,
+    validator_failed,
+    wire_copy,
+)
+from .env import EnvLike, kill_switch_on, resolve_enabled, resolve_url
 from .errors import GraphMindAbortError, is_abort_error, to_error_info
-from .gate import CONTINUE, GateDecision, GateEngine, GateNode
+from .gate import (
+    CONTINUE,
+    GateDecision,
+    GateEngine,
+    GateNode,
+    HeldGateView,
+    Hold,
+    ResumeInfo,
+    ValidationRequest,
+)
 from .held import HeldLedger
 from .ids import agent_node_id, new_id, next_id
 from .llm_capture import release_tool_schemas
@@ -41,6 +68,7 @@ from .protocol import (
     EVENT_TYPES,
     KNOWN_CAPABILITIES,
     PROTOCOL_VERSION,
+    RESUME_ACTIONS,
     WILDCARD_RUN_ID,
     create_envelope,
     now_ms,
@@ -74,6 +102,55 @@ DEFAULT_TOKEN_INTERVAL = 0.034
 #: exists so a blocked thread stays interruptible by Ctrl-C and can never
 #: outlive the debugger even if a callback is missed.
 _GATE_POLL = 0.25
+
+#: How long an integration's validator may take before the edit is refused
+#: (code ``shape``) and the gate reopened, measured from the moment the resume
+#: is handled. Below the debugger's 5 s wait for an answer to a resume, so a
+#: slow validator's verdict is never applied after the request it answers has
+#: timed out. Synchronous work cannot be interrupted, but a verdict it reaches
+#: after the limit is refused just the same. (``VALIDATION_TIMEOUT_MS`` in the
+#: TypeScript client.)
+VALIDATION_TIMEOUT_MS = 4000
+
+#: How long a host whose gate was discarded waits for that gate's final decision.
+_DISCARD_GRACE = 1.0
+
+_UNSET: Any = object()
+
+
+def _validation_timed_out() -> InputValidation:
+    return refuse("shape", f"the input was not validated within {VALIDATION_TIMEOUT_MS / 1000:g} s")
+
+
+def _close_awaitable(awaitable: Any) -> None:
+    """Close a coroutine that will never be awaited (no "never awaited" warning)."""
+    close = getattr(awaitable, "close", None)
+    if inspect.iscoroutine(awaitable) and callable(close):
+        try:
+            close()
+        except Exception:
+            pass
+
+
+def _consume_outcome(task: Any) -> None:
+    """Done callback: read an abandoned validator task's outcome, so a late
+    failure is never reported as "exception was never retrieved"."""
+    try:
+        if not task.cancelled():
+            task.exception()
+    except BaseException:
+        pass
+
+
+class _PendingPause:
+    """What :meth:`Session.gate` hands the hold it opens: why it holds (a loop
+    hold) and, for an editable pause, the validator that will check an edit."""
+
+    __slots__ = ("loop", "validate")
+
+    def __init__(self, loop: LoopInfo | None, validate: Any) -> None:
+        self.loop = loop
+        self.validate = validate
 
 
 class RunContext:
@@ -232,7 +309,22 @@ class Session:
         #: Pins gate holds to node instances so node.finished can carry ``heldMs``.
         #: ``clock`` is a monotonic millisecond clock, injectable for tests.
         self._ledger = HeldLedger(clock=clock)
+        #: Monotonic ms for validation time limits and the pause deadline.
+        self._clock: Callable[[], float] = clock if clock is not None else monotonic_ms
         env_source = os.environ if env is None else env
+        #: GRAPHMIND_DISABLE_EDIT_INPUT is off: ``edit-input`` is announced in
+        #: ``hello`` (C2 condition d). Unreadable: off (fails closed).
+        try:
+            self._edit_input_enabled = not kill_switch_on(
+                env_source.get("GRAPHMIND_DISABLE_EDIT_INPUT")
+            )
+        except Exception:
+            self._edit_input_enabled = False
+        #: What the attached debugger implements (``hello.ack.hubCapabilities``);
+        #: None for a 0.5 debugger, which sends none, and while detached.
+        self._hub_capabilities: frozenset[str] | None = None
+        #: Held pauses offered as ``editable``: pause id -> validator (or None).
+        self._editable_pauses: dict[str, Any] = {}
         #: Coarse redaction (W7 port): the GRAPHMIND_HIDE_* kill switches, applied
         #: in _emit_internal before the ring buffer. Either the option or the
         #: environment turning a switch on turns it on (env is a floor).
@@ -261,6 +353,7 @@ class Session:
             on_resumed=self._on_resumed,
             new_pause_id=lambda: next_id("pause"),
             pause_timeout=pause_timeout,
+            clock=self._clock,
         )
         self._batcher = TokenBatcher(
             lambda node_id, deltas: self.emit("node.token", {"nodeId": node_id, "deltas": deltas}),
@@ -499,14 +592,46 @@ class Session:
 
     # -- gates ----------------------------------------------------------------
 
-    def gate(self, point: str, node: GateNode) -> GateDecision:
+    def gate(
+        self,
+        point: str,
+        node: GateNode,
+        *,
+        result: Any = _UNSET,
+        editable: bool = False,
+        validate_input: Any = None,
+    ) -> GateDecision:
         """Hold the **calling thread** until the debugger resumes.
 
         Fast path (detached, or attached with nothing matching) returns the
         shared ``CONTINUE`` without allocating.
+
+        Options (0.6.0; omitted, the 0.5 behaviour exactly):
+
+        * ``result`` — the call's result at an ``after`` gate, for the
+          after-gate detectors (smart holds). Never sent or stored through
+          this option: ``node.finished`` records the output, as before.
+        * ``editable`` — this integration can run the call with an edited input
+          at this gate (0.6.0: tool arguments). The pause is offered as
+          ``editable`` only when the app announced ``edit-input``
+          (``GRAPHMIND_DISABLE_EDIT_INPUT`` off) and the debugger listed it in
+          ``hello.ack.hubCapabilities``. An accepted edit comes back as
+          ``decision.input`` (``decision.has_input``): ``continue`` at
+          ``before``, ``retry`` at ``after`` / ``error`` — run the call with it.
+        * ``validate_input`` — ``(proposed, context) -> verdict`` checks and
+          completes a proposed input before the call runs with it; for tool
+          arguments :func:`graphmind.edit_input.merge_tool_input` (pass the
+          context on: ``context.input_hidden`` means only a full replacement
+          may pass) followed by the tool's own schema. It runs on THIS thread,
+          with this thread's context variables. Omitted: the proposed input is
+          used as it is. A raise, a malformed verdict or no verdict within
+          :data:`VALIDATION_TIMEOUT_MS` refuses the edit (``exec.refused``) and
+          the gate stays held. Present but not callable: the pause is not
+          offered as editable (fails closed).
         """
         if not self.enabled or self._disposed:
             return CONTINUE
+        hold: Hold | None = None
         try:
             self._ensure_started()
             if not self._transport.attached:
@@ -514,35 +639,50 @@ class Session:
             loop = self._consult_loop(point, node)
             if loop is None and not self._engine.should_pause(point, node):
                 return CONTINUE
-            hold = self._engine.hold(point, node, self._resolve_run_id(), loop)
+            pending = self._pending_pause(loop, editable, validate_input)
+            hold = self._engine.hold(point, node, self._resolve_run_id(), pending)
+            handled: ValidationRequest | None = None
             while True:
-                try:
-                    decision = hold.future.result(timeout=_GATE_POLL)
-                    break
-                except concurrent.futures.TimeoutError:
-                    if self._disposed or not self._transport.attached:
-                        # Belt and braces: the disconnect callback normally
-                        # releases held gates within a millisecond.
+                message = self._next_message_sync(hold)
+                if isinstance(message, ValidationRequest):
+                    if message is handled:
+                        # The verdict could not move the gate on: never spin.
                         self._engine.discard(hold.pause_id)
-                        return CONTINUE
-                except BaseException:
-                    self._engine.discard(hold.pause_id)
-                    raise
+                        message = CONTINUE
+                        break
+                    handled = message
+                    self._validate_sync(message)
+                    continue
+                break
+            hold = None
+            decision = message if isinstance(message, GateDecision) else CONTINUE
             return self._apply_decision(decision)
         except GraphMindAbortError:
             raise
         except BaseException as exc:
+            if hold is not None:
+                # Never leave a gate registered that nobody waits on.
+                self._engine.discard(hold.pause_id)
             if isinstance(exc, KeyboardInterrupt):
                 raise
             self._warner.warn("gate", "internal gate error; continuing", exc)
             return CONTINUE
 
-    async def gate_async(self, point: str, node: GateNode) -> GateDecision:
-        """Hold the **calling task** until the debugger resumes."""
+    async def gate_async(
+        self,
+        point: str,
+        node: GateNode,
+        *,
+        result: Any = _UNSET,
+        editable: bool = False,
+        validate_input: Any = None,
+    ) -> GateDecision:
+        """Hold the **calling task** until the debugger resumes. Options as in
+        :meth:`gate`; ``validate_input`` runs in this task (an awaitable it
+        returns is awaited here, bounded by :data:`VALIDATION_TIMEOUT_MS`)."""
         if not self.enabled or self._disposed:
             return CONTINUE
-        import asyncio
-
+        hold: Hold | None = None
         try:
             self._ensure_started()
             if not self._transport.attached:
@@ -550,18 +690,59 @@ class Session:
             loop = self._consult_loop(point, node)
             if loop is None and not self._engine.should_pause(point, node):
                 return CONTINUE
-            hold = self._engine.hold(point, node, self._resolve_run_id(), loop)
-            try:
-                decision = await asyncio.wrap_future(hold.future)
-            except asyncio.CancelledError:
-                self._engine.discard(hold.pause_id)
-                raise
+            pending = self._pending_pause(loop, editable, validate_input)
+            hold = self._engine.hold(point, node, self._resolve_run_id(), pending)
+            handled: ValidationRequest | None = None
+            while True:
+                message = await asyncio.wrap_future(self._engine.mailbox(hold))
+                if isinstance(message, ValidationRequest):
+                    if message is handled:
+                        # The verdict could not move the gate on: never spin.
+                        self._engine.discard(hold.pause_id)
+                        message = CONTINUE
+                        break
+                    handled = message
+                    await self._validate_async(message)
+                    continue
+                break
+            hold = None
+            decision = message if isinstance(message, GateDecision) else CONTINUE
             return self._apply_decision(decision)
         except asyncio.CancelledError:
+            if hold is not None:
+                self._engine.discard(hold.pause_id)
             raise
         except Exception as exc:
+            if hold is not None:
+                self._engine.discard(hold.pause_id)
             self._warner.warn("gate", "internal gate error; continuing", exc)
             return CONTINUE
+
+    def _next_message_sync(self, hold: Hold) -> Any:
+        """Block until the held gate's mailbox has something: a
+        :class:`ValidationRequest` to run here, or the final decision."""
+        while True:
+            future = self._engine.mailbox(hold)
+            try:
+                return future.result(timeout=_GATE_POLL)
+            except concurrent.futures.TimeoutError:
+                if self._disposed or not self._transport.attached:
+                    # Belt and braces: the disconnect callback normally
+                    # releases held gates within a millisecond.
+                    self._engine.discard(hold.pause_id)
+                    return self._final_decision(hold)
+            except concurrent.futures.CancelledError:
+                self._engine.discard(hold.pause_id)
+                return self._final_decision(hold)
+
+    def _final_decision(self, hold: Hold) -> GateDecision:
+        """The decision a discarded gate was released with (``continue``, or
+        whatever release raced the discard)."""
+        try:
+            message = self._engine.mailbox(hold).result(timeout=_DISCARD_GRACE)
+        except BaseException:
+            return CONTINUE
+        return message if isinstance(message, GateDecision) else CONTINUE
 
     def _apply_decision(self, decision: GateDecision) -> GateDecision:
         if decision.action == "abort":
@@ -580,6 +761,281 @@ class Session:
         if ctx is not None and ctx.reason is not None:
             return ctx.reason
         return GraphMindAbortError()
+
+    # -- edited input (contract C2) -------------------------------------------
+
+    def _edits_honoured(self) -> bool:
+        """The debugger enabled edits and this app did not turn them off."""
+        hub = self._hub_capabilities
+        return self._edit_input_enabled and hub is not None and "edit-input" in hub
+
+    def _pending_pause(self, loop: LoopInfo | None, editable: Any, validate_input: Any) -> Any:
+        """What the hold about to open carries to ``_on_paused``: the loop
+        details alone (the 0.5 shape), or a :class:`_PendingPause` when the
+        pause is offered as editable. A ``validate_input`` that is present but
+        not callable is a misconfigured safety check, not "no validator": the
+        pause is not editable."""
+        if editable is not True or not self._edits_honoured():
+            return loop
+        if validate_input is not None and not callable(validate_input):
+            self._warner.warn(
+                "edit-input-validator",
+                "gate(): validate_input is not callable, so the pause is not offered as "
+                "editable (pass a function returning {'ok': True, 'value': ...} or "
+                "{'ok': False, 'code': ...}, e.g. one calling merge_tool_input)",
+            )
+            return loop
+        return _PendingPause(loop, validate_input)
+
+    def _handle_resume(self, payload: Mapping[str, Any]) -> None:
+        """An ``exec.resume`` for a held gate. Without ``input``: released as in
+        0.5 (the inject guard aside). With ``input``, the edit is refused — the
+        gate stays held, ``exec.refused`` says why — unless, in this order:
+
+        1. this app announced ``edit-input``            else ``disabled``
+        2. the debugger listed it in hubCapabilities    else ``disabled``
+        3. the pause was offered as ``editable``        else ``unsupported``
+        4. ``continue`` at ``before``, or ``retry`` at ``after`` / ``error``
+                                                        else ``shape``
+        5. the input holds no placeholder / truncation marker
+                                                        else ``placeholder`` / ``truncated``
+           and no ``__proto__`` key / ``constructor.prototype`` path
+                                                        else ``shape``
+        6. the integration's validator accepts it       else its code, or ``shape``
+
+        An accepted edit releases the gate with ``decision.input``, and
+        ``exec.resumed.edited.after`` records it. Unknown pauses, and a gate
+        that is validating an edit, ignore the resume. ``requestId`` is echoed
+        as it came. Runs on the transport thread: the validator itself is
+        handed to the host waiting on the gate."""
+        pause_id = payload.get("pauseId")
+        action = payload.get("action")
+        if not isinstance(pause_id, str) or not isinstance(action, str):
+            return
+        action = str.__str__(action)
+        if action not in RESUME_ACTIONS:
+            return
+        view = self._engine.peek(str.__str__(pause_id))
+        if view is None or view.state != "held":
+            return
+        raw_request_id = payload.get("requestId")
+        request_id = str.__str__(raw_request_id) if isinstance(raw_request_id, str) else None
+        if "input" not in payload:
+            output = payload.get("output")
+            if action == "inject":
+                # Inject guard, client side (C2, refute-security C2.3 / S5): the
+                # placeholder or a truncated preview is never substituted for a
+                # result, whatever the debugger's version — a 0.5 hub guards only
+                # the placeholder. Fail-safe: the gate stays held.
+                refusal = proposed_value_refusal(output)
+                if refusal is not None:
+                    self._emit_refused(view, refusal, request_id)
+                    if self._hub_capabilities is None:
+                        # A 0.5 viewer does not show exec.refused: say why here.
+                        self._warner.warn(
+                            "inject-refused",
+                            f"refused an injected value: {refusal.message or refusal.code}. "
+                            "The call is still paused (inject the full value, or continue, "
+                            "retry or abort); this debugger does not show refusals — upgrade "
+                            "it to see them there",
+                        )
+                    return
+            info = None if request_id is None else ResumeInfo(request_id)
+            self._engine.resume(view.pause_id, action, output, info)
+            return
+        proposed = payload.get("input")
+        refusal = (
+            self._edit_refusal(view, action)
+            or proposed_value_refusal(proposed)
+            or prototype_key_refusal(proposed)
+        )
+        if refusal is not None:
+            self._emit_refused(view, refusal, request_id)
+            return
+        try:
+            started_at: float | None = float(self._clock())
+        except Exception:
+            started_at = None  # an unreadable clock leaves the limit to the timer
+        request = ValidationRequest(
+            view,
+            action,
+            proposed,
+            request_id,
+            started_at,
+            self._editable_pauses.get(view.pause_id),
+        )
+        self._engine.begin_validation(view.pause_id, request)
+
+    def _edit_refusal(self, gate: HeldGateView, action: str) -> Refusal | None:
+        """Conditions 1-4 of :meth:`_handle_resume`."""
+        if not self._edit_input_enabled:
+            return Refusal(
+                "disabled",
+                "input edits are turned off in this app (GRAPHMIND_DISABLE_EDIT_INPUT)",
+            )
+        hub = self._hub_capabilities
+        if hub is None or "edit-input" not in hub:
+            return Refusal("disabled", "this debugger has not enabled input edits")
+        if gate.pause_id not in self._editable_pauses:
+            return Refusal("unsupported", "this pause cannot run with an edited input")
+        fits = (action == "continue" and gate.point == "before") or (
+            action == "retry" and gate.point in ("after", "error")
+        )
+        if not fits:
+            return Refusal(
+                "shape",
+                "an edited input needs continue at a before gate, or retry at an after or "
+                "error gate",
+            )
+        return None
+
+    def _call_validator(self, request: ValidationRequest) -> Any:
+        """The integration's validator on the proposed input, on the calling
+        (host) thread. A raise is a refusal (never re-raised: it is host code
+        judging a value from the debugger)."""
+        validate = request.validate
+        if validate is None:
+            return accept(request.input)
+        # Under a switch that hides this input, the edit may only be a full
+        # replacement (refute-security S4 / C2.5; see ValidateInputContext).
+        context = ValidateInputContext(self._redactor.covers_pause_input(request.gate.node.kind))
+        try:
+            return validate(request.input, context)
+        except Exception:
+            return validator_failed()
+
+    def _remaining(self, request: ValidationRequest) -> float:
+        """Seconds left of :data:`VALIDATION_TIMEOUT_MS` for this edit."""
+        if request.started_at is None:
+            return VALIDATION_TIMEOUT_MS / 1000.0
+        try:
+            return (VALIDATION_TIMEOUT_MS - (float(self._clock()) - request.started_at)) / 1000.0
+        except Exception:
+            return VALIDATION_TIMEOUT_MS / 1000.0
+
+    def _outlived(self, request: ValidationRequest) -> bool:
+        if request.started_at is None:
+            return False
+        try:
+            return float(self._clock()) - request.started_at >= VALIDATION_TIMEOUT_MS
+        except Exception:
+            return False
+
+    def _validate_sync(self, request: ValidationRequest) -> None:
+        """Validate an edit on the thread blocked in :meth:`gate`. An awaitable
+        the validator returns is run to completion here (bounded), on a fresh
+        event loop — or refused when this thread is already running one."""
+        outcome = self._call_validator(request)
+        if inspect.isawaitable(outcome):
+            outcome = self._await_on_fresh_loop(outcome, request)
+        self._finish_validation(request, outcome)
+
+    def _await_on_fresh_loop(self, awaitable: Any, request: ValidationRequest) -> Any:
+        remaining = self._remaining(request)
+        if remaining <= 0:
+            _close_awaitable(awaitable)
+            return _validation_timed_out()
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            # A sync gate on a thread that runs an event loop: nothing can
+            # drive the awaitable without re-entering that loop.
+            _close_awaitable(awaitable)
+            return validator_failed()
+
+        async def bounded() -> Any:
+            return await asyncio.wait_for(asyncio.ensure_future(awaitable), remaining)
+
+        try:
+            return asyncio.run(bounded())
+        except (asyncio.TimeoutError, TimeoutError):
+            return _validation_timed_out()
+        except Exception:
+            return validator_failed()
+
+    async def _validate_async(self, request: ValidationRequest) -> None:
+        """Validate an edit in the task awaiting :meth:`gate_async`. An
+        awaitable is awaited here, bounded by the time left; on timeout it is
+        cancelled and the edit refused."""
+        outcome = self._call_validator(request)
+        if inspect.isawaitable(outcome):
+            remaining = self._remaining(request)
+            if remaining <= 0:
+                _close_awaitable(outcome)
+                outcome = _validation_timed_out()
+            else:
+                try:
+                    task = asyncio.ensure_future(outcome)
+                except Exception:
+                    task = None
+                    outcome = validator_failed()
+                if task is not None:
+                    task.add_done_callback(_consume_outcome)
+                    try:
+                        done, _ = await asyncio.wait({task}, timeout=remaining)
+                    except asyncio.CancelledError:
+                        task.cancel()
+                        raise
+                    if task not in done:
+                        task.cancel()
+                        outcome = _validation_timed_out()
+                    elif task.cancelled() or task.exception() is not None:
+                        outcome = validator_failed()
+                    else:
+                        outcome = task.result()
+        self._finish_validation(request, outcome)
+
+    def _finish_validation(self, request: ValidationRequest, outcome: Any) -> None:
+        """Exactly one verdict per validation, refused when it came too late."""
+        verdict = (
+            _validation_timed_out() if self._outlived(request) else normalize_validation(outcome)
+        )
+        try:
+            self._apply_verdict(request, verdict)
+        except Exception as exc:
+            self._warner.warn("edit-input", "internal error applying an edit verdict", exc)
+            ticket = request.ticket
+            if ticket is not None:
+                try:
+                    self._engine.reopen(ticket)  # never leave the gate validating
+                except Exception:
+                    pass
+
+    def _apply_verdict(self, request: ValidationRequest, verdict: InputValidation) -> None:
+        """Accepted: release the gate with the edit, recorded as its JSON wire
+        copy (an edit with no JSON form is refused rather than run unrecorded).
+        Refused: reopen the gate — same pause id, timer and held interval — and
+        say why. Stale tickets change nothing."""
+        ticket = request.ticket
+        if ticket is None:
+            return
+        if verdict.get("ok") is True:
+            value = verdict.get("value")
+            ok, copy = wire_copy(value)
+            if ok:
+                info = ResumeInfo(request.request_id, {"after": copy})
+                self._engine.complete_validation(
+                    ticket, GateDecision(request.action, input=value), info
+                )
+                return
+            refusal = Refusal(
+                "shape", "the validated input has no JSON form, so it cannot be recorded"
+            )
+        else:
+            refusal = Refusal(str(verdict.get("code")), verdict.get("message"))
+        if self._engine.reopen(ticket):
+            self._emit_refused(request.gate, refusal, request.request_id)
+
+    def _emit_refused(self, gate: HeldGateView, refusal: Refusal, request_id: str | None) -> None:
+        """``exec.refused``, redacted by the paused node's kind."""
+        payload: dict[str, Any] = {"pauseId": gate.pause_id, "code": refusal.code}
+        if refusal.message is not None:
+            payload["message"] = refusal.message
+        if request_id is not None:
+            payload["requestId"] = request_id
+        self._emit_or_warn("exec.refused", payload, gate.run_id, gate.node.kind)
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -638,7 +1094,9 @@ class Session:
             self._started = True
         self._transport.start()
 
-    def _emit_internal(self, type: str, payload: dict[str, Any], run_id: str) -> None:
+    def _emit_internal(
+        self, type: str, payload: dict[str, Any], run_id: str, node_kind: Any = None
+    ) -> None:
         original = payload
         # Loop hold (W5 port): fingerprint a watched node's input exactly as the
         # integration handed it over — before redaction can replace it with the
@@ -652,7 +1110,8 @@ class Session:
         # already warned) and NO seq is taken, so emitted seqs stay contiguous
         # (decisions.md "A dropped event takes no seq and clears its kind's loop
         # streak"; TypeScript and Ruby do the same).
-        payload = self._redactor.apply(type, payload, run_id)
+        # ``node_kind``: the paused node's kind, for exec.resumed / exec.refused.
+        payload = self._redactor.apply(type, payload, run_id, node_kind)
         dropped = payload is DROP
         if dropped:
             if type == "node.started":
@@ -938,7 +1397,12 @@ class Session:
             token = self._session_token
         payload: dict[str, Any] = {
             "versions": {"protocol": PROTOCOL_VERSION, "client": CLIENT_VERSION},
-            "capabilities": list(KNOWN_CAPABILITIES),
+            # `edit-input` unless GRAPHMIND_DISABLE_EDIT_INPUT is on (C2 condition a).
+            "capabilities": [
+                capability
+                for capability in KNOWN_CAPABILITIES
+                if capability != "edit-input" or self._edit_input_enabled
+            ],
             "app": self.app_name,
             "sdk": self.sdk,
         }
@@ -947,9 +1411,7 @@ class Session:
         # to our runs from any other local process. Absent on first connect.
         if token is not None:
             payload["resumeToken"] = token
-        return serialize_envelope(
-            create_envelope("hello", payload, seq, WILDCARD_RUN_ID)
-        )
+        return serialize_envelope(create_envelope("hello", payload, seq, WILDCARD_RUN_ID))
 
     def _handle_attached(self, ack: dict[str, Any]) -> None:
         try:
@@ -959,6 +1421,14 @@ class Session:
             if isinstance(token, str) and token:
                 with self._lock:
                     self._session_token = token
+            # What THIS debugger implements (0.6.0+); a 0.5 debugger sends none
+            # and is never offered an editable pause. Not the echoed `capabilities`.
+            hub = ack.get("hubCapabilities")
+            self._hub_capabilities = (
+                frozenset(str.__str__(entry) for entry in hub if isinstance(entry, str))
+                if isinstance(hub, list)
+                else None
+            )
             breakpoints = ack.get("breakpoints")
             mode = ack.get("mode")
             self._engine.arm(
@@ -980,8 +1450,10 @@ class Session:
         with self._lock:
             self._attached_mirror = False
         try:
-            # FAIL-OPEN: no debugger, no holds. Forget its breakpoints/mode too;
-            # the next hello.ack re-arms them.
+            # FAIL-OPEN: no debugger, no holds. Forget its breakpoints/mode and
+            # capabilities too; the next hello.ack re-arms them. A gate
+            # validating an edit continues with its ORIGINAL input.
+            self._hub_capabilities = None
             self._engine.disarm()
             self._engine.release_all()
         except Exception as exc:
@@ -992,10 +1464,8 @@ class Session:
             type_ = envelope.get("type")
             payload = envelope.get("payload") or {}
             if type_ == "exec.resume":
-                pause_id = payload.get("pauseId")
-                action = payload.get("action")
-                if isinstance(pause_id, str) and isinstance(action, str):
-                    self._engine.resume(pause_id, action, payload.get("output"))
+                if isinstance(payload, Mapping):
+                    self._handle_resume(payload)
             elif type_ == "breakpoint.set":
                 matcher = payload.get("matcher")
                 if isinstance(matcher, dict):
@@ -1015,32 +1485,57 @@ class Session:
     def _on_paused(
         self, pause_id: str, node: GateNode, point: str, run_id: str, reason: Any = None
     ) -> None:
+        """``exec.paused``: the 0.5 fields in their 0.5 order, then why a loop
+        hold held, then ``editable`` — present only when true, so a pause nobody
+        can edit, and every pause under a 0.5 debugger, is byte-identical to 0.5."""
+        editable = isinstance(reason, _PendingPause)
+        loop_info = reason.loop if editable else reason
+        if editable:
+            # Registered FIRST: the debugger may answer the frame at once.
+            self._editable_pauses[pause_id] = reason.validate
         try:
             self._ledger.hold_opened(pause_id, run_id, node.node_id, point)
         except Exception:
             pass
         payload: dict[str, Any] = {"pauseId": pause_id, "nodeId": node.node_id, "point": point}
-        if isinstance(reason, LoopInfo):
+        if isinstance(loop_info, LoopInfo):
             try:
-                loop = self._loop_on_wire(reason, node)
+                loop = self._loop_on_wire(loop_info, node)
                 payload["reason"] = "loop"
                 payload["loop"] = loop
             except Exception:
                 pass
+        if editable:
+            payload["editable"] = True
         self._emit_or_warn("exec.paused", payload, run_id)
 
-    def _on_resumed(self, pause_id: str, node: GateNode, action: str, run_id: str) -> None:
+    def _on_resumed(
+        self,
+        pause_id: str,
+        node: GateNode,
+        action: str,
+        run_id: str,
+        info: ResumeInfo | None = None,
+    ) -> None:
+        self._editable_pauses.pop(pause_id, None)
         try:
             self._ledger.hold_closed(pause_id)
         except Exception:
             pass
-        self._emit_or_warn("exec.resumed", {"pauseId": pause_id, "action": action}, run_id)
+        payload: dict[str, Any] = {"pauseId": pause_id, "action": action}
+        if info is not None and info.edited is not None:
+            payload["edited"] = info.edited
+        if info is not None and info.request_id is not None:
+            payload["requestId"] = info.request_id
+        self._emit_or_warn("exec.resumed", payload, run_id, node.kind)
 
-    def _emit_or_warn(self, type: str, payload: dict[str, Any], run_id: str) -> None:
+    def _emit_or_warn(
+        self, type: str, payload: dict[str, Any], run_id: str, node_kind: Any = None
+    ) -> None:
         if not self.enabled or self._disposed:
             return
         try:
-            self._emit_internal(type, payload, run_id)
+            self._emit_internal(type, payload, run_id, node_kind)
         except Exception as exc:
             self._warner.warn("emit", "internal error emitting a gate event", exc)
 

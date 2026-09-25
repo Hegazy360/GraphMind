@@ -194,11 +194,23 @@ module Graphmind
     end
 
     # Route a viewer exec.resume to its held gate. Unknown ids are ignored.
-    def resume(pause_id, action, output = nil)
+    # `request_id` (0.6.0) is echoed on the exec.resumed this release emits.
+    def resume(pause_id, action, output = nil, request_id: nil)
       return false unless Protocol::RESUME_ACTIONS.include?(action)
 
       decision = action == "inject" ? GateDecision.new("inject", output) : GateDecision.new(action)
-      settle(pause_id, decision, action)
+      settle(pause_id, decision, action, request_id)
+    end
+
+    # A held gate as the session may inspect it — {pause_id:, node:, point:,
+    # run_id:}, a frozen copy — or nil when no gate has this id.
+    def peek(pause_id)
+      @mutex.synchronize do
+        entry = @held[pause_id]
+        next nil if entry.nil?
+
+        { pause_id: pause_id, node: entry[:node], point: entry[:point], run_id: entry[:run_id] }.freeze
+      end
     end
 
     # FAIL-OPEN: release every held gate with `continue`. Returns the count.
@@ -244,7 +256,7 @@ module Graphmind
       out
     end
 
-    def settle(pause_id, decision, action)
+    def settle(pause_id, decision, action, request_id = nil)
       entry = @mutex.synchronize { @held.delete(pause_id) }
       return false if entry.nil?
 
@@ -253,7 +265,7 @@ module Graphmind
       # The callback and the wake-up happen OUTSIDE the lock: the waiting
       # thread must never contend with the transport to get moving again.
       released = entry[:hold].settle(decision)
-      safely { @on_resumed.call(pause_id, entry[:node], action, entry[:run_id]) }
+      safely { @on_resumed.call(pause_id, entry[:node], action, entry[:run_id], request_id) }
       released
     end
 
