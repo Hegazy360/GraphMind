@@ -217,7 +217,7 @@ function makeExecute(
           finish(undefined, 'aborted');
           throw error;
         }
-        core.errorNode(node.nodeId, error);
+        core.errorNode(node.nodeId, instanceId, error);
         const dec = await core.session.gate('error', node, toolGateOptions(core.session, edit));
         if (dec.action === 'inject') {
           finish(dec.output, 'ok', { injected: true });
@@ -328,7 +328,7 @@ function makeStreamingExecute(
       } catch (error) {
         // No mid-stream gates (decisions.md #4): observe and rethrow.
         const aborted = isAbortError(error) || ctx?.signal.aborted === true;
-        if (!aborted) core.errorNode(node.nodeId, error);
+        if (!aborted) core.errorNode(node.nodeId, instanceId, error);
         finish(undefined, aborted ? 'aborted' : 'error');
         throw error;
       }

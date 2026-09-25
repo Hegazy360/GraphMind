@@ -111,6 +111,21 @@ def test_an_openai_mcp_tool_never_records_its_token() -> None:
     assert "sk_live_HEADER_SECRET_2" not in recorded
 
 
+def test_a_url_password_holding_at_is_removed_whole() -> None:
+    # urlsplit ends the userinfo at the LAST "@": all of P@ssw0rd is the password.
+    from urllib.parse import unquote, urlsplit
+
+    url = "https://svc:P@ssw0rd@mcp.example.com/sse"
+    assert unquote(urlsplit(url).password or "") == "P@ssw0rd"
+    tool = {"type": "mcp", "server_label": "svc", "server_url": url}
+    assert sanitize_tool_definition(tool)["server_url"] == "https://mcp.example.com/sse"
+    assert urlsplit("//u:hunter2@host.example/p").password == "hunter2"
+    relative = {"type": "mcp", "server_label": "svc", "server_url": "//u:hunter2@host.example/p"}
+    assert sanitize_tool_definition(relative)["server_url"] == "//host.example/p"
+    captured = capture_tools(object.__new__(_Owner), "run-1", [tool])
+    assert "ssw0rd" not in json.dumps(captured)
+
+
 class _Owner:
     """A weakly referenceable stand-in for a session."""
 

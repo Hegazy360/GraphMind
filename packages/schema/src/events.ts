@@ -63,7 +63,11 @@ export const SmartInfoSchema = z.looseObject({
   detail: z.string().optional(),
 });
 
-/** Why a proposed input edit was refused (the gate stays held). 0.6.0+. */
+/**
+ * Why a resume was refused (the gate stays held). 0.6.0+. Mostly a proposed
+ * input edit; `unsupported` also answers an action the gate cannot carry out
+ * (`retry` / `inject` at a streamed model step or a callback-only gate).
+ */
 export const RefusalCodeSchema = z.enum([
   'schema',
   'shape',

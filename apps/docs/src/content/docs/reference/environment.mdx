@@ -255,8 +255,11 @@ breakpoint holds.
   streamed OpenAI response is recorded but not held.
 - **Resume actions:** Continue hands the result on and Abort stops the run. On an LLM step,
   Retry runs the step again for AI SDK `generateText` and non-streaming OpenAI requests (where
-  Inject also replaces the completion). Elsewhere Retry and Inject continue with the real result
-  and log one warning. On a tool they work as at any other gate of that tool.
+  Inject also replaces the completion). Elsewhere the app refuses Retry and Inject
+  (`exec.refused`, code `unsupported`) and the step stays held for Continue or Abort, so the
+  debugger never reports a retry or an inject that did not happen. Retry resends the same
+  request: the token limit cannot be raised from the debugger. On a tool they work as at any
+  other gate of that tool.
 
 ## Non-standard ports
 

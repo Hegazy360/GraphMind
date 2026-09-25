@@ -70,7 +70,11 @@ module Graphmind
       # credential or transport configuration: never recorded.
       TOOL_SECRET_KEY_RE = /authori[sz]ation|header|token|secret|passw(?:or)?d|key|cookie|credential|bearer/i
       TOOL_URL_KEY_RE = /url\z/i
-      URL_USERINFO_RE = %r{\A([A-Za-z][A-Za-z0-9+.-]*://)[^/?#@]*@}
+      # A URL's userinfo: after its "//" (a backslash may stand for a slash, a
+      # tab or newline may sit between them; whatever precedes them is kept) up
+      # to the LAST "@" before the path, where URL parsers end it, so a password
+      # holding "@" goes whole. Same pattern as TypeScript.
+      URL_USERINFO_RE = %r{\A([^/\\]*[/\\][\t\n\r]*[/\\])[^/]*@}
       MAX_TOOL_DEFINITION_DEPTH = 16
 
       # What an owner (the session) was sent lives on the owner itself, so it is

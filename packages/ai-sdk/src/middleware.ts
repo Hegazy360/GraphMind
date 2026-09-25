@@ -60,6 +60,7 @@ import {
   pickParams,
   resultGateOptions,
   toolCall,
+  unsupportedGateOptions,
   withBinaryPlaceholders,
   withInstanceId,
   type GateDecision,
@@ -252,7 +253,9 @@ async function instrumentStream<R extends StreamResultLike>(
   // exec.paused names this step's execution (parallel steps stay apart).
   const gateNode = withInstanceId(LLM_GATE_NODE, instanceId);
 
-  const decision = await core.session.gate('before', gateNode);
+  // No value can stand in for a streamed step: `inject` is refused (the gate
+  // stays held); `retry` before the request runs it, as continue does.
+  const decision = await core.session.gate('before', gateNode, unsupportedGateOptions(core.session, ['inject']));
   if (decision.action === 'abort') {
     core.finishNode({
       nodeId: LLM_NODE_ID,
@@ -263,14 +266,13 @@ async function instrumentStream<R extends StreamResultLike>(
     });
     throw core.abortError(core.session.currentRun());
   }
-  // 'inject'/'retry' are not meaningful before a model step: continue.
 
   let result: R;
   try {
     result = await doStream();
   } catch (error) {
     const aborted = isAbortError(error);
-    if (!aborted) core.errorNode(LLM_NODE_ID, error);
+    if (!aborted) core.errorNode(LLM_NODE_ID, instanceId, error);
     core.finishNode({
       nodeId: LLM_NODE_ID,
       output: undefined,
@@ -311,6 +313,13 @@ class FinishLatch {
   readonly verdict: Promise<FinishVerdict>;
   /** The SDK cancelled its copy: nothing waits at the finish part any more, so do not hold. */
   abandoned = false;
+  /**
+   * Aborted when the SDK cancels its copy: handed to the after gate as its
+   * `signal`, so a hold the observer ALREADY opened is released too (with
+   * continue) — the node then finishes instead of waiting on a stream nobody
+   * reads.
+   */
+  private readonly abandonedController = new AbortController();
   private resolve: (verdict: FinishVerdict) => void = () => undefined;
 
   constructor() {
@@ -319,8 +328,23 @@ class FinishLatch {
     });
   }
 
+  get signal(): AbortSignal {
+    return this.abandonedController.signal;
+  }
+
   release(verdict: FinishVerdict = {}): void {
     this.resolve(verdict); // later calls are no-ops: a promise settles once
+  }
+
+  /** The SDK cancelled its copy of the stream. Never throws. */
+  abandon(): void {
+    this.abandoned = true;
+    this.release();
+    try {
+      this.abandonedController.abort();
+    } catch {
+      // an abort listener threw: the session guards its own
+    }
   }
 }
 
@@ -373,8 +397,7 @@ function holdAtFinish(source: ReadableStream<unknown>, latch: FinishLatch): Read
         }
       },
       cancel(reason) {
-        latch.abandoned = true;
-        latch.release();
+        latch.abandon();
         return reader.cancel(reason);
       },
     });
@@ -392,7 +415,10 @@ function holdAtFinish(source: ReadableStream<unknown>, latch: FinishLatch): Read
 /**
  * The streamed step's `after` gate (attached only): hand the session the
  * normalized output, then release the SDK's copy of the stream — errored with
- * the run's AbortError on `abort`. Never throws.
+ * the run's AbortError on `abort`. The SDK has already consumed the stream,
+ * so `retry` and `inject` are refused there (`exec.refused` `unsupported`,
+ * the gate stays held) rather than quietly continued; if the SDK cancels its
+ * copy meanwhile, the hold is released with `continue`. Never throws.
  */
 async function gateStreamedStep(
   core: AdapterCore,
@@ -403,18 +429,13 @@ async function gateStreamedStep(
   let action: GateDecision['action'] = 'continue';
   try {
     const gateNode = withInstanceId(LLM_GATE_NODE, instanceId);
-    action = (await core.session.gate('after', gateNode, resultGateOptions(core.session, output))).action;
+    const options = resultGateOptions(core.session, output, ['retry', 'inject']);
+    // The SDK cancelling its copy releases a hold opened here (see FinishLatch).
+    const gated = options === undefined ? undefined : { ...options, signal: latch.signal };
+    action = (await core.session.gate('after', gateNode, gated)).action;
     if (action === 'abort') {
       latch.release({ abort: core.abortError(core.session.currentRun()) });
       return action;
-    }
-    if (action === 'retry' || action === 'inject') {
-      core.warner.warn(
-        `stream-after-${action}`,
-        `the debugger asked to ${action} a streamed model step at its after gate, but the AI SDK ` +
-          "has already consumed that stream; the step continued with the model's real output " +
-          '(a generateText step can be retried there).',
-      );
     }
   } catch {
     action = 'continue';
@@ -489,7 +510,7 @@ async function observeStream(
       }
     }
     if (sawError) {
-      core.errorNode(LLM_NODE_ID, errorPart);
+      core.errorNode(LLM_NODE_ID, instanceId, errorPart);
       // What the step reported before (or despite) the error is kept: the
       // usage already billed and the tool calls it requested.
       const requested = calls.list();
@@ -514,7 +535,7 @@ async function observeStream(
   } catch (error) {
     try {
       const aborted = isAbortError(error) || afterAction === 'abort';
-      if (!aborted) core.errorNode(LLM_NODE_ID, error);
+      if (!aborted) core.errorNode(LLM_NODE_ID, instanceId, error);
       const requested = calls.list();
       core.finishNode({
         nodeId: LLM_NODE_ID,
@@ -557,7 +578,9 @@ async function instrumentGenerate<R extends GenerateResultLike>(
 
   for (;;) {
     attempt += 1;
-    const decision = await core.session.gate('before', gateNode);
+    // `inject` is refused before a generated step (the SDK needs the
+    // provider's own result); `retry` before the request runs it.
+    const decision = await core.session.gate('before', gateNode, unsupportedGateOptions(core.session, ['inject']));
     if (decision.action === 'abort') {
       core.finishNode({
         nodeId: LLM_NODE_ID,
@@ -574,7 +597,7 @@ async function instrumentGenerate<R extends GenerateResultLike>(
       result = await doGenerate();
     } catch (error) {
       const aborted = isAbortError(error);
-      if (!aborted) core.errorNode(LLM_NODE_ID, error);
+      if (!aborted) core.errorNode(LLM_NODE_ID, instanceId, error);
       core.finishNode({
         nodeId: LLM_NODE_ID,
         output: undefined,
@@ -586,8 +609,10 @@ async function instrumentGenerate<R extends GenerateResultLike>(
     }
 
     const step = summarizeGenerate(core, result);
-    // Post-response, pre-return: the SDK has not seen this result yet.
-    const post = await core.session.gate('after', gateNode, resultGateOptions(core.session, step?.output));
+    // Post-response, pre-return: the SDK has not seen this result yet, so
+    // `retry` re-runs the request; `inject` is refused (no value can stand in
+    // for the provider's result).
+    const post = await core.session.gate('after', gateNode, resultGateOptions(core.session, step?.output, ['inject']));
     if (post.action === 'retry') continue;
     if (post.action === 'abort') {
       core.finishNode({
@@ -599,13 +624,6 @@ async function instrumentGenerate<R extends GenerateResultLike>(
         extra: extra(),
       });
       throw core.abortError(core.session.currentRun());
-    }
-    if (post.action === 'inject') {
-      core.warner.warn(
-        'generate-after-inject',
-        'the debugger asked to inject at a model step, but the AI SDK needs the provider\'s own ' +
-          "result there; the step continued with the model's real output.",
-      );
     }
     core.finishNode({
       nodeId: LLM_NODE_ID,

@@ -265,8 +265,8 @@ describe('gm.tool / gm.wrapTools (plain functions)', () => {
 });
 
 describe('callback-only gate limits', () => {
-  it('warns and continues when the debugger injects at a NON-wrapped tool', async () => {
-    const { viewer, gm, warnings } = await setup({
+  it('refuses inject at a NON-wrapped tool and stays held; continue runs the real tool', async () => {
+    const { viewer, gm } = await setup({
       breakpoints: [{ kind: 'tool', name: 'searchFlights' }],
     });
     await attach(gm);
@@ -275,14 +275,23 @@ describe('callback-only gate limits', () => {
     const { graph, marks } = buildGraph(gm, { wrapTools: false });
     const promise = graph.invoke({ topic: 'LIS' }, { callbacks: [gm.handler()] });
     const paused = await viewer.waitFor((f) => f.type === 'exec.paused');
-    viewer.resume(paused.payload['pauseId'] as string, 'inject', 'nope');
+    const pauseId = paused.payload['pauseId'] as string;
+    viewer.resume(pauseId, 'inject', 'nope');
 
+    // A callback cannot substitute a result: refused, not quietly continued.
+    expect((await viewer.waitForType('exec.refused')).payload).toMatchObject({
+      pauseId,
+      code: 'unsupported',
+      message: 'this pause cannot substitute a value for the call; continue or abort',
+    });
+    await tick(100);
+    expect(bodyCount(marks, 'searchFlights')).toBe(0);
+    expect(viewer.ofType('exec.resumed')).toHaveLength(0);
+
+    viewer.resume(pauseId, 'continue');
     const result = await promise;
-    // Execution continued with the REAL result; nothing was substituted.
     expect(result.findings.join()).toContain('TP1234');
     expect(bodyCount(marks, 'searchFlights')).toBe(1);
-    expect(warnings.some((w) => w.includes('no return channel'))).toBe(true);
-    expect(warnings.some((w) => w.includes('wrapStructuredTool'))).toBe(true);
   });
 });
 
@@ -380,14 +389,14 @@ describe('error cascade through the run tree', () => {
 });
 
 /**
- * A callback-only gate cannot inject or retry. It has always said so at
- * `before` and `after`; at `error` — the gate a user is most likely to be
- * sitting at, since pause-on-error is armed by default — it said nothing and
- * simply continued, which reads as a broken button.
+ * A callback-only gate cannot inject or retry. At `error` — the gate a user
+ * is most likely to be sitting at, since pause-on-error is armed by default —
+ * quietly continuing reads as a broken button, and the debugger would report
+ * an action that never happened: the app refuses it and the gate stays held.
  */
 describe('inject / retry at a callback-only ERROR gate', () => {
-  it('warns and names the wrapper instead of silently continuing', async () => {
-    const { viewer, gm, warnings } = await setup({ breakpoints: [{ point: 'error' }] });
+  it('refuses inject and stays held; continue lets the error propagate', async () => {
+    const { viewer, gm } = await setup({ breakpoints: [{ point: 'error' }] });
     await attach(gm);
 
     // wrapTools: false -> only the callback handler gates this failure.
@@ -398,22 +407,21 @@ describe('inject / retry at a callback-only ERROR gate', () => {
 
     const paused = await viewer.waitFor((f) => f.type === 'exec.paused');
     expect(paused.payload['point']).toBe('error');
-    viewer.resume(paused.payload['pauseId'] as string, 'inject', '{"verdict":"grounded"}');
+    const pauseId = paused.payload['pauseId'] as string;
+    viewer.resume(pauseId, 'inject', '{"verdict":"grounded"}');
+    expect((await viewer.waitForType('exec.refused')).payload).toMatchObject({ pauseId, code: 'unsupported' });
+    await tick(100);
+    expect(gm.session.stats().heldGates).toBe(1);
 
+    viewer.resume(pauseId, 'continue');
     const result = (await promise) as { failed?: unknown };
     // Nothing was substituted: the error still propagated out of the graph.
     expect(result.failed).toBeInstanceOf(Error);
     expect((result.failed as Error).message).toContain('contradictory');
-
-    const warning = warnings.find((w) => w.includes('error gate'));
-    expect(warning).toBeDefined();
-    expect(warning).toContain('no return channel');
-    expect(warning).toContain('wrapStructuredTool');
-    expect(warning).toContain('the error kept propagating');
   });
 
-  it('warns for retry at an error gate too', async () => {
-    const { viewer, gm, warnings } = await setup({ breakpoints: [{ point: 'error' }] });
+  it('refuses retry at an error gate too', async () => {
+    const { viewer, gm } = await setup({ breakpoints: [{ point: 'error' }] });
     await attach(gm);
 
     const { graph, marks } = buildFailingGraph(gm, { wrapTools: false });
@@ -422,16 +430,23 @@ describe('inject / retry at a callback-only ERROR gate', () => {
       .catch(() => undefined);
 
     const paused = await viewer.waitFor((f) => f.type === 'exec.paused');
-    viewer.resume(paused.payload['pauseId'] as string, 'retry');
+    const pauseId = paused.payload['pauseId'] as string;
+    viewer.resume(pauseId, 'retry');
+    expect((await viewer.waitForType('exec.refused')).payload).toMatchObject({
+      pauseId,
+      code: 'unsupported',
+      message: 'this pause cannot run the call again; continue or abort',
+    });
+    viewer.resume(pauseId, 'continue');
     await promise;
 
     // The body ran once: a callback cannot re-run what it observed.
     expect(bodyCount(marks, 'gradeChunks')).toBe(1);
-    expect(warnings.some((w) => w.includes('retry') && w.includes('error gate'))).toBe(true);
+    expect(viewer.ofType('exec.resumed').map((f) => f.payload['action'])).not.toContain('retry');
   });
 
-  it('warns separately at the before gate and the error gate', async () => {
-    const { viewer, gm, warnings } = await setup({
+  it('refuses at the before gate and the error gate alike', async () => {
+    const { viewer, gm } = await setup({
       breakpoints: [{ kind: 'tool', name: 'gradeChunks' }, { point: 'error' }],
     });
     await attach(gm);
@@ -445,15 +460,19 @@ describe('inject / retry at a callback-only ERROR gate', () => {
       (f) => f.type === 'exec.paused' && f.payload['point'] === 'before',
     );
     viewer.resume(before.payload['pauseId'] as string, 'inject', 'nope');
+    await waitUntil(() => viewer.ofType('exec.refused').length === 1, 3000, 'before refusal');
+    viewer.resume(before.payload['pauseId'] as string, 'continue');
     const onError = await viewer.waitFor(
       (f) => f.type === 'exec.paused' && f.payload['point'] === 'error',
     );
     viewer.resume(onError.payload['pauseId'] as string, 'inject', 'nope');
+    await waitUntil(() => viewer.ofType('exec.refused').length === 2, 3000, 'error refusal');
+    viewer.resume(onError.payload['pauseId'] as string, 'continue');
     await promise;
 
-    // An earlier `before` warning must not spend the error gate's budget:
-    // they are different situations and the second is the one that matters.
-    expect(warnings.filter((w) => w.includes('before gate')).length).toBe(1);
-    expect(warnings.filter((w) => w.includes('error gate')).length).toBe(1);
+    expect(viewer.ofType('exec.refused').map((f) => [f.payload['pauseId'], f.payload['code']])).toEqual([
+      [before.payload['pauseId'], 'unsupported'],
+      [onError.payload['pauseId'], 'unsupported'],
+    ]);
   });
 });

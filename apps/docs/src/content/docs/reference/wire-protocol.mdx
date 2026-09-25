@@ -123,7 +123,7 @@ Optional fields added in 0.6.0, for [editing a held call's arguments](/debugging
 | `exec.resumed.edited` | `{ after }`: the input the call actually ran with (redacted like the node's own input). No `before` — that is the node's recorded input. |
 | `exec.resumed.requestId` / `exec.refused.requestId` | The `exec.resume.requestId` this answers, echoed as received. Absent when the client released the gate on its own. |
 | `exec.resumed.principal` | Who won the pause (`viewer`, `agent`, `anonymous`), stamped by the server from the resumer's credential — never by the app. |
-| `exec.refused.code` | `schema` (the tool's schema rejected it), `shape` (not an object, wrong action for the gate, or a locked key), `placeholder` / `truncated` (it still carries `"__REDACTED__"` or a preview marker), `disabled` (switched off), `unsupported` (this client cannot apply it). `message` is at most 200 characters, never quotes values, and is omitted under a covering `GRAPHMIND_HIDE_*` switch. |
+| `exec.refused.code` | `schema` (the tool's schema rejected it), `shape` (not an object, wrong action for the gate, or a locked key), `placeholder` / `truncated` (it still carries `"__REDACTED__"` or a preview marker), `disabled` (switched off), `unsupported` (this client cannot apply it — also the answer to a `retry` or `inject` the gate cannot carry out, such as at a streamed model step or a callback-only gate; the pause stays held for `continue` or `abort`). `message` is at most 200 characters, never quotes values, and is omitted under a covering `GRAPHMIND_HIDE_*` switch. |
 
 A client honours `exec.resume.input` only when it announced `edit-input`, the server listed
 `edit-input` in `hello.ack.hubCapabilities`, the pause said `editable`, and

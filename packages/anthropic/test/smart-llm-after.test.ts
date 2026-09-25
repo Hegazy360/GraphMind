@@ -161,15 +161,55 @@ describe('messages.create: held before the Message is returned', () => {
     expect(done.payload['status']).toBe('aborted');
   });
 
-  it('retry cannot re-run the call there: it continues, with one warning', async () => {
-    const { viewer, gm, warnings } = await setup();
+  it('retry and inject cannot re-run or replace the call there: both are refused and the step stays held', async () => {
+    const { viewer, gm } = await setup();
+    const { client, transport } = makeClient(gm, () => ({ message: TRUNCATED_MESSAGE }));
+    let settled = false;
+    const promise = client.messages
+      .create({ model: 'claude-sonnet-4-5', max_tokens: 64, messages: [] })
+      .finally(() => {
+        settled = true;
+      });
+    const paused = await llmPause(viewer);
+    const pauseId = paused.payload['pauseId'] as string;
+    viewer.resume(pauseId, 'retry');
+    await waitUntil(() => viewer.ofType('exec.refused').length === 1, 3000, 'retry refused');
+    viewer.resume(pauseId, 'inject', { id: 'forged' });
+    await waitUntil(() => viewer.ofType('exec.refused').length === 2, 3000, 'inject refused');
+    expect(viewer.ofType('exec.refused').map((f) => f.payload['code'])).toEqual(['unsupported', 'unsupported']);
+    await tick(100);
+    expect(settled).toBe(false);
+    expect(gm.session.stats().heldGates).toBe(1);
+    viewer.resume(pauseId, 'continue');
+    expect(await promise).toMatchObject({ id: 'm1' });
+    expect(transport.requests).toHaveLength(1);
+  });
+
+  it('inject at the before gate is refused too (no value stands in for the call)', async () => {
+    const viewer = await FakeViewer.start({ breakpoints: [{ kind: 'llm' }] });
+    const gm = graphmind({
+      url: viewer.url,
+      enabled: true,
+      retryIntervalMs: 60_000,
+      env: {},
+      breakOnTruncated: false,
+      logger: () => {},
+    });
+    cleanups.push(async () => {
+      await gm.dispose();
+      await viewer.close();
+    });
+    await attach(gm);
     const { client, transport } = makeClient(gm, () => ({ message: TRUNCATED_MESSAGE }));
     const promise = client.messages.create({ model: 'claude-sonnet-4-5', max_tokens: 64, messages: [] });
     const paused = await llmPause(viewer);
-    viewer.resume(paused.payload['pauseId'] as string, 'retry');
+    expect(paused.payload['point']).toBe('before');
+    viewer.resume(paused.payload['pauseId'] as string, 'inject', { id: 'forged' });
+    expect((await viewer.waitForType('exec.refused')).payload).toMatchObject({ code: 'unsupported' });
+    expect(gm.session.stats().heldGates).toBe(1);
+    viewer.resume(paused.payload['pauseId'] as string, 'continue');
     expect(await promise).toMatchObject({ id: 'm1' });
     expect(transport.requests).toHaveLength(1);
-    expect(warnings.filter((w) => w.includes('model step at its after gate'))).toHaveLength(1);
   });
 });
 

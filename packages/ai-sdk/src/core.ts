@@ -148,8 +148,13 @@ export class AdapterCore {
     });
   }
 
-  errorNode(nodeId: string, error: unknown): void {
-    this.session.emit('node.error', { nodeId, error: toErrorInfo(error) });
+  /**
+   * `node.error` naming the failed execution: the AI SDK runs one step's tool
+   * calls concurrently, and an error that names no instance is pinned on the
+   * node's newest open call (loop guard, held-time ledger, viewer).
+   */
+  errorNode(nodeId: string, instanceId: string, error: unknown): void {
+    this.session.emit('node.error', { nodeId, instanceId, error: toErrorInfo(error) });
   }
 
   pushToken(nodeId: string, channel: TokenDelta['t'], value: string): void {

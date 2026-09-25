@@ -4,9 +4,12 @@
  * WebSocket server. Re-proves the spike's scenarios at this layer.
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { simulateReadableStream, stepCountIs, streamText, tool } from 'ai';
+import { z } from 'zod';
 import { graphmind, type Graphmind, type GraphmindOptions } from '../src/index.js';
-import { FakeViewer, tick, waitUntil, type FakeViewerOptions } from './helpers/fake-viewer.js';
+import { FakeViewer, tick, waitUntil, type FakeViewerOptions, type ReceivedFrame } from './helpers/fake-viewer.js';
 import { attach, runScenario, Marks, type ScenarioFlags } from './helpers/scenario.js';
+import { MockLanguageModel, type StreamPart, type Usage } from './helpers/sdk-compat.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -144,6 +147,146 @@ describe('parallel tool calls', () => {
     expect(result.stepCount).toBe(3);
     expect(result.text).toContain('sunny');
     expect(result.text).toContain('91.3');
+  });
+});
+
+/*
+ * The AI SDK runs every tool call of one step at the same time. A failing
+ * call's node.error must name that call: without an instanceId the loop guard
+ * pins every error on the node's newest open call, the others finish as
+ * failures with no error digest, and error-repeat (C4: the same tool failed
+ * 3 times in a row with one error -> hold before the 4th call) never fires.
+ */
+describe('parallel tool failures', () => {
+  const usage: Usage = {
+    inputTokens: { total: 20, noCache: 20, cacheRead: undefined, cacheWrite: undefined },
+    outputTokens: { total: 10, text: 10, reasoning: undefined },
+  };
+
+  const fetchCall = (id: string, path: string): StreamPart => ({
+    type: 'tool-call',
+    toolCallId: id,
+    toolName: 'fetchUrl',
+    input: JSON.stringify({ url: `https://api.example.test/${path}` }),
+  });
+
+  /** One entry per model step: the tool calls that step requests ([] = final text). */
+  function scriptedModel(steps: StreamPart[][]) {
+    let index = 0;
+    return new MockLanguageModel({
+      doStream: async () => {
+        const calls = steps[index++] ?? [];
+        const parts: StreamPart[] =
+          calls.length > 0
+            ? [
+                { type: 'stream-start', warnings: [] },
+                ...calls,
+                { type: 'finish', usage, finishReason: { unified: 'tool-calls', raw: 'tool-calls' } },
+              ]
+            : [
+                { type: 'stream-start', warnings: [] },
+                { type: 'text-start', id: 't' },
+                { type: 'text-delta', id: 't', delta: 'giving up' },
+                { type: 'text-end', id: 't' },
+                { type: 'finish', usage, finishReason: { unified: 'stop', raw: 'stop' } },
+              ];
+        return {
+          stream: simulateReadableStream<StreamPart>({ chunks: parts, initialDelayInMs: 2, chunkDelayInMs: 2 }),
+        };
+      },
+    });
+  }
+
+  /** Run the agent, continuing every hold; returns every exec.paused seen. */
+  async function runFailingAgent(viewer: FakeViewer, gm: Graphmind, steps: StreamPart[][]): Promise<ReceivedFrame[]> {
+    const tools = gm.wrapTools({
+      fetchUrl: tool({
+        description: 'GET a URL',
+        inputSchema: z.object({ url: z.string() }),
+        // The 404 takes a moment, so the calls of one step overlap.
+        execute: async (): Promise<string> => {
+          await tick(30);
+          throw new Error('HTTP 404 Not Found');
+        },
+      }),
+    });
+    let done = false;
+    const run = gm
+      .run('parallel-failures', async () => {
+        const result = streamText({
+          model: gm.wrapModel(scriptedModel(steps)),
+          tools,
+          prompt: 'fetch the thing',
+          stopWhen: stepCountIs(steps.length + 1),
+          onError: () => {},
+        });
+        await result.consumeStream();
+      })
+      .finally(() => {
+        done = true;
+      });
+    const resumed = new Set<string>();
+    while (!done) {
+      for (const frame of viewer.ofType('exec.paused')) {
+        const pauseId = frame.payload['pauseId'] as string;
+        if (resumed.has(pauseId)) continue;
+        resumed.add(pauseId);
+        viewer.resume(pauseId, 'continue');
+      }
+      await tick(5);
+    }
+    await run;
+    await tick(50);
+    return viewer.ofType('exec.paused');
+  }
+
+  const errorRepeatHolds = (paused: ReceivedFrame[]): ReceivedFrame[] =>
+    paused.filter(
+      (f) =>
+        f.payload['nodeId'] === 'tool:fetchUrl' &&
+        f.payload['reason'] === 'loop' &&
+        (f.payload['loop'] as { kind?: string } | undefined)?.kind === 'error-repeat',
+    );
+
+  it('three failures one after another hold the 4th call (error-repeat)', async () => {
+    const { viewer, gm } = await setup();
+    await attach(gm);
+    const paused = await runFailingAgent(viewer, gm, [
+      [fetchCall('c1', 'a')],
+      [fetchCall('c2', 'b')],
+      [fetchCall('c3', 'c')],
+      [fetchCall('c4', 'd')],
+      [],
+    ]);
+    const holds = errorRepeatHolds(paused);
+    expect(holds).toHaveLength(1);
+    expect(holds[0]?.payload['instanceId']).toBe('c4');
+    expect(holds[0]?.payload['point']).toBe('before');
+  });
+
+  it('three failures fanned out in one step hold the 4th call too, and each node.error names its call', async () => {
+    const { viewer, gm } = await setup();
+    await attach(gm);
+    const paused = await runFailingAgent(viewer, gm, [
+      [fetchCall('c1', 'a'), fetchCall('c2', 'b'), fetchCall('c3', 'c')],
+      [fetchCall('c4', 'd')],
+      [],
+    ]);
+
+    // c1..c3 really ran at once (the first finish comes after c3 started).
+    const started = viewer.ofType('node.started').filter((f) => f.payload['nodeId'] === 'tool:fetchUrl');
+    expect(started.map((f) => f.payload['instanceId'])).toEqual(['c1', 'c2', 'c3', 'c4']);
+    const finished = viewer.ofType('node.finished').filter((f) => f.payload['nodeId'] === 'tool:fetchUrl');
+    expect(finished[0]!.seq).toBeGreaterThan(started[2]!.seq);
+    expect(finished.map((f) => f.payload['status'])).toEqual(['error', 'error', 'error', 'error']);
+
+    const errors = viewer.ofType('node.error').filter((f) => f.payload['nodeId'] === 'tool:fetchUrl');
+    expect(errors.map((f) => f.payload['instanceId'])).toEqual(['c1', 'c2', 'c3', 'c4']);
+
+    const holds = errorRepeatHolds(paused);
+    expect(holds).toHaveLength(1);
+    expect(holds[0]?.payload['instanceId']).toBe('c4');
+    expect(holds[0]?.payload['point']).toBe('before');
   });
 });
 

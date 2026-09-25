@@ -406,6 +406,15 @@ describe('smart banners', () => {
       'GRAPHMIND_BREAK_ON_TRUNCATED=0',
     );
   });
+
+  it('the truncated-tool-call tooltip promises nothing the debugger cannot do', () => {
+    const base = { pauseId: 'p', nodeId: 'n', point: 'after' as const, ts: 0, active: true };
+    const hint = holdHint({ ...base, reason: 'breakpoint', smart: { rule: 'truncated-tool-call' } }) ?? '';
+    // The token limit is the app's request, which the debugger cannot edit.
+    expect(hint).not.toMatch(/raise the token limit/i);
+    expect(hint).toContain('Abort stops the run');
+    expect(hint).toContain('same token limit');
+  });
 });
 
 describe('heldLapNodeIds — what the canvas outlines', () => {

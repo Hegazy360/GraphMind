@@ -4,6 +4,8 @@
  * shapes (positive and negative), the default-on env switches and the session
  * option, detached no-op, value-free details and their redaction.
  */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parseEnvelope } from '@graphmind-ai/schema';
 import { createSession, type GateNode, type Session, type SessionOptions } from '../src/index.js';
@@ -142,6 +144,9 @@ describe('truncated-tool-call', () => {
     ['length, calls an object', { finishReason: 'length', toolCalls: { 0: call() } }],
     ['stop + calls', { finishReason: 'stop', toolCalls: [call()] }],
     ['tool-calls + unparsed', { finishReason: 'tool-calls', toolCalls: [call({ inputText: '{' })] }],
+    ['stop + unparsed', { finishReason: 'stop', toolCalls: [call({ inputText: '{' })] }],
+    ['error + unparsed (Gemini MALFORMED_FUNCTION_CALL)', { finishReason: 'error', toolCalls: [call({ inputText: '{' })] }],
+    ['other + unparsed', { finishReason: 'other', toolCalls: [call({ inputText: '{' })] }],
     ['error', { finishReason: 'error', toolCalls: [call()] }],
     ['other', { finishReason: 'other', toolCalls: [call()] }],
     ['raw only', { rawFinishReason: 'length', toolCalls: [call()] }],
@@ -176,6 +181,25 @@ describe('truncated-tool-call', () => {
     expect(truncatedDetail({ finishReason: 'content-filter', toolCalls: 3, unparsed: 0 })).toBe(
       'the model was stopped by the content filter with 3 tool calls requested',
     );
+  });
+});
+
+// The rule is the finish reason AND a tool call (contract C4, the loop-kinds
+// fixture): a call whose arguments did not parse under any other finish reason
+// is not a truncation. The docs once also promised an `inputText`-alone branch
+// the code never had.
+describe('truncated-tool-call: what the docs say', () => {
+  const doc = (path: string): string => readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8');
+
+  it('the client README and the smart.ts header describe the AND form only', () => {
+    const row = doc('../README.md')
+      .split('\n')
+      .find((line) => line.startsWith("| `smart.rule: 'truncated-tool-call'`"));
+    expect(row).toBeDefined();
+    expect(row).toMatch(/`length` or `content-filter` and it requested at least one tool call/);
+    expect(row).not.toMatch(/\(or a call's arguments did not parse/);
+    const header = doc('../src/smart.ts').slice(0, doc('../src/smart.ts').indexOf('import '));
+    expect(header).not.toMatch(/or a tool\s+\*?\s*call's arguments did not parse/);
   });
 });
 

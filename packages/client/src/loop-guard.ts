@@ -1045,8 +1045,8 @@ export class LoopGuard {
   /**
    * The open call a `node.error` / `node.finished` belongs to: the one with
    * this instanceId; when no open call carries it, the node's most recent
-   * open call that has none; for an event that names no instanceId (the AI
-   * SDK's `node.error`), simply the node's most recent open call.
+   * open call that has none; for an event that names no instanceId (a raw
+   * `emit` — every adapter names it), simply the node's most recent open call.
    */
   private findOpenIndex(state: RunState, nodeId: string, instanceId: string | undefined): number {
     if (typeof nodeId !== 'string') return -1;

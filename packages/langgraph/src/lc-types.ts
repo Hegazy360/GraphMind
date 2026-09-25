@@ -446,12 +446,37 @@ export function parseToolInput(input: unknown): unknown {
   }
 }
 
-/** A `ToolMessage` output unwrapped to its content (plus artifact if present). */
+/**
+ * A `ToolMessage` output unwrapped to its content (plus artifact if present).
+ *
+ * A tool invoked with a ToolCall (LangGraph's ToolNode, createReactAgent) has
+ * its non-string result wrapped by @langchain/core in a ToolMessage whose
+ * content is `JSON.stringify(result)`. That content is decoded back to the
+ * tool's own object, so the record, the `error-result` rule and the loop
+ * guard read what the tool returned — as they do for a plain `invoke` —
+ * rather than a string no rule can inspect. Text that is not a JSON object
+ * stays text.
+ */
 export function unwrapToolOutput(output: unknown): unknown {
   if (output === null || typeof output !== 'object') return output;
   const record = output as Record<string, unknown>;
   if (!('content' in record)) return output;
+  const content = record['content'];
   const artifact = record['artifact'];
-  if (artifact !== undefined) return { content: record['content'], artifact };
-  return record['content'];
+  if (artifact !== undefined) return { content, artifact };
+  if (typeof record['tool_call_id'] === 'string') return decodeObjectContent(content);
+  return content;
+}
+
+/** A string that is a JSON object, decoded; anything else unchanged. Never throws. */
+function decodeObjectContent(content: unknown): unknown {
+  if (typeof content !== 'string') return content;
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('{')) return content;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : content;
+  } catch {
+    return content;
+  }
 }

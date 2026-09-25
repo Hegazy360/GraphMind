@@ -63,6 +63,15 @@ class TestLlmCapture < Minitest::Test
     end
   end
 
+  def test_a_url_password_holding_at_is_removed_whole
+    # URL parsers end the userinfo at the LAST "@": all of P@ssw0rd is the password.
+    tool = { "type" => "mcp", "server_label" => "svc", "server_url" => "https://svc:P@ssw0rd@mcp.example.com/sse" }
+    assert_equal "https://mcp.example.com/sse", S.sanitize_tool_definition(tool)["server_url"]
+    relative = tool.merge("server_url" => "//u:hunter2@host.example/p")
+    assert_equal "//host.example/p", S.sanitize_tool_definition(relative)["server_url"]
+    refute_includes JSON.generate(S.capture_tools(Object.new, "run-1", [tool])), "ssw0rd"
+  end
+
   def test_an_openai_mcp_tool_never_records_its_token
     stripe = { type: "mcp", server_label: "stripe", server_url: "https://mcp.stripe.com",
                authorization: "sk_live_OAUTH_TOKEN_SECRET_2",

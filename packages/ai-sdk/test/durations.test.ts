@@ -2,10 +2,13 @@
  * Durations through the real adapter: sub-millisecond, monotonic, and with
  * the debugger's hold time reported separately from the node's own time.
  */
+import { tool } from 'ai';
+import { z } from 'zod';
 import { afterEach, describe, expect, it } from 'vitest';
 import { graphmind, type Graphmind } from '../src/index.js';
 import { FakeViewer, tick, type FakeViewerOptions, type ReceivedFrame } from './helpers/fake-viewer.js';
 import { attach, runScenario, Marks } from './helpers/scenario.js';
+import { toolExecutionOptions } from './helpers/sdk-compat.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -91,5 +94,50 @@ describe('durationMs', () => {
       if (!String(frame.payload['nodeId']).startsWith('tool:')) continue;
       expect(frame.payload['heldMs']).toBe(0);
     }
+  });
+
+  it("charges a failed call's error-gate hold to that call, not to a parallel sibling", async () => {
+    const HOLD_MS = 600;
+    const RUN_B_MS = 400;
+    const { viewer, gm } = await setup({ breakpoints: [{ name: 'convertCurrency', point: 'error' }] });
+    const tools = gm.wrapTools({
+      convertCurrency: tool({
+        description: 'convert',
+        inputSchema: z.object({ which: z.string() }),
+        execute: async ({ which }: { which: string }) => {
+          if (which === 'a') throw new Error('rate api down');
+          await tick(RUN_B_MS);
+          return { rate: 1.08 };
+        },
+      }),
+    });
+    const execute = tools.convertCurrency.execute as (input: unknown, options: unknown) => Promise<unknown>;
+
+    // call-a starts first and fails at once; call-b (the newest open instance) just runs.
+    const runPromise = gm.run('parallel-tools', async () =>
+      Promise.all([
+        execute({ which: 'a' }, toolExecutionOptions('call-a')).catch(() => undefined),
+        execute({ which: 'b' }, toolExecutionOptions('call-b')),
+      ]),
+    );
+    const paused = await viewer.waitFor(
+      (f) => f.type === 'exec.paused' && f.payload['nodeId'] === 'tool:convertCurrency' && f.payload['point'] === 'error',
+    );
+    expect(paused.payload['instanceId']).toBe('call-a');
+    await tick(HOLD_MS);
+    viewer.resume(paused.payload['pauseId'] as string, 'continue');
+    await runPromise;
+    await viewer.waitForType('run.finished');
+
+    const error = viewer.ofType('node.error').find((f) => f.payload['nodeId'] === 'tool:convertCurrency');
+    expect(error?.payload['instanceId']).toBe('call-a');
+    const finished = finishedFrames(viewer).filter((f) => f.payload['nodeId'] === 'tool:convertCurrency');
+    const a = finished.find((f) => f.payload['instanceId'] === 'call-a');
+    const b = finished.find((f) => f.payload['instanceId'] === 'call-b');
+    expect(a?.payload['status']).toBe('error');
+    expect(b?.payload['status']).toBe('ok');
+    expect(b?.payload['heldMs'], 'call-b was never held').toBe(0);
+    expect(a?.payload['heldMs'] as number, 'call-a was held').toBeGreaterThanOrEqual(HOLD_MS - 50);
+    expect(a?.payload['heldMs'] as number).toBeLessThanOrEqual(a?.payload['durationMs'] as number);
   });
 });

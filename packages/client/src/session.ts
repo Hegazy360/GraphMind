@@ -153,7 +153,28 @@ export interface GateOptions {
    * pause is not offered as editable (fails closed).
    */
   validateInput?: ValidateInput;
+  /**
+   * Resume actions this adapter cannot carry out at this gate (0.6.0): `retry`
+   * where the call cannot run again (a stream the SDK already consumed, a
+   * LangChain callback that only observes), `inject` where no value can
+   * stand in for the call's own. Such an `exec.resume` is refused
+   * (`exec.refused`, code `unsupported`) and the gate stays held, so the
+   * debugger never reports an action that did not happen; `continue` and
+   * `abort` always work. Anything else in the list is ignored.
+   */
+  unsupportedActions?: readonly UnsupportedAction[];
+  /**
+   * The adapter's own release (0.6.0): nobody waits for this gate's decision
+   * any more once it aborts — the host cancelled the stream a held step was
+   * about to hand over. A hold this gate opened is released with `continue`
+   * (`exec.resumed` with no requestId, as for a pause timeout), and a signal
+   * that is already aborted never holds at all.
+   */
+  signal?: AbortSignal;
 }
+
+/** A resume action a gate may declare it cannot carry out (see `GateOptions.unsupportedActions`). */
+export type UnsupportedAction = 'retry' | 'inject';
 
 /** What `gate()` hands the hold it is about to open (see `pendingPause`). */
 interface PendingPause {
@@ -165,6 +186,10 @@ interface PendingPause {
   editable: boolean;
   /** The adapter's validator, bound to the gated call's async context. */
   validate: ValidateInput | undefined;
+  /** What this gate cannot carry out (`GateOptions.unsupportedActions`); undefined: everything works. */
+  unsupported: ReadonlySet<UnsupportedAction> | undefined;
+  /** `GateOptions.signal`: releases the hold with `continue` when it aborts. */
+  signal: AbortSignal | undefined;
 }
 
 /** An editable pause, for as long as it is held. */
@@ -383,6 +408,49 @@ const DEFAULTS = {
  */
 const MAX_TRACKED_GAP_RUNS = 64;
 
+/**
+ * `GateOptions.unsupportedActions` read once, defensively: the `retry` /
+ * `inject` entries of an array, or undefined for none (or an unreadable
+ * option — a gate never fails on its options). Never throws.
+ */
+function unsupportedOf(options: GateOptions | undefined): ReadonlySet<UnsupportedAction> | undefined {
+  if (options === undefined) return undefined;
+  try {
+    const list: unknown = options.unsupportedActions;
+    if (!Array.isArray(list)) return undefined;
+    const set = new Set<UnsupportedAction>();
+    for (const action of list as unknown[]) {
+      if (action === 'retry' || action === 'inject') set.add(action);
+    }
+    return set.size === 0 ? undefined : set;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `GateOptions.signal` read once, defensively: an AbortSignal-like, or undefined. Never throws. */
+function signalOf(options: GateOptions | undefined): AbortSignal | undefined {
+  if (options === undefined) return undefined;
+  try {
+    const signal: unknown = options.signal;
+    if (signal === null || typeof signal !== 'object') return undefined;
+    const candidate = signal as AbortSignal;
+    return typeof candidate.aborted === 'boolean' && typeof candidate.addEventListener === 'function'
+      ? candidate
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Why a gate refused an action it cannot carry out, naming what still works. */
+function unsupportedActionRefusal(action: UnsupportedAction, unsupported: ReadonlySet<UnsupportedAction>): Refusal {
+  const works = ['continue', ...(['retry', 'inject'] as const).filter((a) => !unsupported.has(a)), 'abort'];
+  const choices = `${works.slice(0, -1).join(', ')} or ${works[works.length - 1] ?? 'abort'}`;
+  const what = action === 'retry' ? 'cannot run the call again' : 'cannot substitute a value for the call';
+  return { code: 'unsupported', message: `this pause ${what}; ${choices}` };
+}
+
 function defaultWebSocket(): WebSocketConstructor | undefined {
   return (globalThis as { WebSocket?: WebSocketConstructor }).WebSocket;
 }
@@ -434,6 +502,10 @@ class SessionImpl implements Session {
   private pendingPause: PendingPause | undefined;
   /** Held pauses offered as `editable`, by pauseId; removed on release. */
   private readonly editablePauses = new Map<string, EditablePause>();
+  /** Held pauses whose adapter cannot carry out some actions, by pauseId; removed on release. */
+  private readonly unsupportedPauses = new Map<string, ReadonlySet<UnsupportedAction>>();
+  /** Held pauses that listen to their gate's `signal`: the listener's removal, by pauseId. */
+  private readonly pauseSignals = new Map<string, () => void>();
   /** GRAPHMIND_DISABLE_EDIT_INPUT is off: `edit-input` is announced in `hello`. */
   private readonly editInputEnabled: boolean;
   /**
@@ -523,11 +595,19 @@ class SessionImpl implements Session {
           if (pending?.editable === true) {
             this.editablePauses.set(pauseId, { validate: pending.validate });
           }
-          this.ledger.holdOpened(pauseId, runId, node.nodeId, point);
+          if (pending?.unsupported !== undefined) this.unsupportedPauses.set(pauseId, pending.unsupported);
+          if (pending?.signal !== undefined) this.listenForRelease(pauseId, pending.signal);
+          this.ledger.holdOpened(pauseId, runId, node.nodeId, point, node.instanceId);
           this.emitInternal('exec.paused', this.pausedPayload(pauseId, node, point, pending), runId);
         },
         onResumed: (pauseId, node, action, runId, _heldMs, info) => {
           this.editablePauses.delete(pauseId);
+          this.unsupportedPauses.delete(pauseId);
+          const unlisten = this.pauseSignals.get(pauseId);
+          if (unlisten !== undefined) {
+            this.pauseSignals.delete(pauseId);
+            this.guard('gate-signal', unlisten);
+          }
           // Its own guard: held-time bookkeeping (an injected clock) never
           // keeps the release from being recorded.
           this.guard('held-time', () => this.ledger.holdClosed(pauseId));
@@ -723,11 +803,20 @@ class SessionImpl implements Session {
       ) {
         return CONTINUE_PROMISE;
       }
+      const signal = signalOf(options);
+      if (signal?.aborted === true) return CONTINUE_PROMISE; // nobody waits for this decision
       const ctx = this.currentRun();
       const runId = this.resolveRunId();
       const reason: PauseReason =
         loop !== undefined ? 'loop' : smart !== undefined ? 'breakpoint' : this.matchedReason(point, node);
-      this.pendingPause = { reason, loop, smart, ...this.editabilityOf(options) };
+      this.pendingPause = {
+        reason,
+        loop,
+        smart,
+        ...this.editabilityOf(options),
+        unsupported: unsupportedOf(options),
+        signal,
+      };
       return this.engine.hold(point, node, runId).then(
         (decision) => {
           if (decision.action === 'abort') {
@@ -1059,6 +1148,21 @@ class SessionImpl implements Session {
     return detail === undefined ? { rule: smart.rule } : { rule: smart.rule, detail };
   }
 
+  /**
+   * `GateOptions.signal`: release this hold with `continue` when the adapter's
+   * signal aborts (fail-open, like a pause timeout). The listener is removed
+   * when the gate is released, whoever releases it. Never throws.
+   */
+  private listenForRelease(pauseId: string, signal: AbortSignal): void {
+    this.guard('gate-signal', () => {
+      const onAbort = (): void => {
+        this.guard('gate-signal', () => this.engine.release(pauseId));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.pauseSignals.set(pauseId, () => signal.removeEventListener('abort', onAbort));
+    });
+  }
+
   // -- edited input (contract C2) --------------------------------------------
 
   /** The debugger enabled edits and this app did not turn them off. */
@@ -1099,7 +1203,9 @@ class SessionImpl implements Session {
   }
 
   /**
-   * An `exec.resume` for a held gate. Without `input`: released as in 0.5
+   * An `exec.resume` for a held gate. An action the gate declared it cannot
+   * carry out (`GateOptions.unsupportedActions`) is refused first
+   * (`unsupported`; the gate stays held). Without `input`: released as in 0.5
    * (the inject guard aside). With `input`, the edit is refused — the gate
    * stays held, `exec.refused` says why — unless, in this order:
    *   1. this app announced `edit-input`           else `disabled`
@@ -1119,6 +1225,22 @@ class SessionImpl implements Session {
     const gate = this.engine.peek(pauseId);
     if (gate === undefined || gate.state !== 'held') return;
     const requestId = typeof payload.requestId === 'string' ? payload.requestId : undefined;
+    const unsupported = this.unsupportedPauses.get(pauseId);
+    if (unsupported !== undefined && (action === 'retry' || action === 'inject') && unsupported.has(action)) {
+      // The adapter would turn it into a continue: refuse it instead, so
+      // neither the debugger nor the record claims what did not happen.
+      const refusal = unsupportedActionRefusal(action, unsupported);
+      this.emitRefused(gate, refusal, requestId);
+      if (this.hubCapabilities === undefined) {
+        // A 0.5 viewer does not show exec.refused: say why in the app's log.
+        this.warner.warn(
+          `${action}-unsupported`,
+          `refused ${action}: ${refusal.message ?? refusal.code}. The call is still paused; this debugger ` +
+            'does not show refusals — upgrade it to see them there',
+        );
+      }
+      return;
+    }
     if (input === undefined) {
       // Inject guard, client side (C2, refute-security C2.3 / S5): the
       // placeholder or a truncated preview is never substituted for a result,

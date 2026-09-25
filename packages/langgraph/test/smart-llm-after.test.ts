@@ -14,6 +14,8 @@ import { AIMessage, HumanMessage, type BaseMessage } from '@langchain/core/messa
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { ChatResult } from '@langchain/core/outputs';
 import { tool } from '@langchain/core/tools';
+import { Annotation, END, MessagesAnnotation, START, StateGraph } from '@langchain/langgraph';
+import { ToolNode } from '@langchain/langgraph/prebuilt';
 import { z } from 'zod';
 import type { AfterGateContext, GateDetector, Session } from '@graphmind-ai/client';
 import { graphmind, type Graphmind, type GraphmindOptions } from '../src/index.js';
@@ -125,6 +127,27 @@ describe('LLM runs: truncated-tool-call at the handler after gate', () => {
     await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
   });
 
+  it('retry and inject are refused at the hold (a callback cannot re-run or replace the call)', async () => {
+    const { viewer, gm } = await setup();
+    let settled = false;
+    const promise = new ScriptedChatModel(truncated)
+      .invoke([new HumanMessage('write')], { callbacks: [gm.handler()] })
+      .finally(() => {
+        settled = true;
+      });
+    const paused = await pausedFor(viewer, 'llm');
+    const pauseId = paused.payload['pauseId'] as string;
+    viewer.resume(pauseId, 'retry');
+    await waitUntil(() => viewer.ofType('exec.refused').length === 1, 3000, 'retry refused');
+    viewer.resume(pauseId, 'inject', { content: 'forged' });
+    await waitUntil(() => viewer.ofType('exec.refused').length === 2, 3000, 'inject refused');
+    expect(viewer.ofType('exec.refused').map((f) => f.payload['code'])).toEqual(['unsupported', 'unsupported']);
+    await tick(100);
+    expect(settled).toBe(false);
+    viewer.resume(pauseId, 'continue');
+    expect((await promise).content).toBe('Writing.');
+  });
+
   it('a normal answer, or GRAPHMIND_BREAK_ON_TRUNCATED=0, is not held', async () => {
     const { viewer, gm } = await setup({ env: { GRAPHMIND_BREAK_ON_TRUNCATED: '0' } });
     await new ScriptedChatModel(truncated).invoke([new HumanMessage('write')], { callbacks: [gm.handler()] });
@@ -163,6 +186,138 @@ describe('callback-gated tools: error-result at the handler after gate', () => {
     });
     viewer.resume(paused.payload['pauseId'] as string, 'continue');
     expect(await promise).toEqual({ success: false, reason: 'quota' });
+  });
+});
+
+/*
+ * LangGraph's ToolNode (and createReactAgent) invokes a tool with a ToolCall;
+ * @langchain/core then hands handleToolEnd a ToolMessage whose content is
+ * JSON.stringify(result). The tool's own object must still reach the
+ * error-result rule, the record and the loop guard.
+ */
+describe('callback-gated tools called with a ToolCall (ToolNode)', () => {
+  const FAILURE = { success: false, reason: 'quota' };
+
+  function makeDeploy() {
+    return tool(
+      async ({ ok }: { ok: boolean; attempt?: number }) => (ok ? { deployed: true } : { ...FAILURE }),
+      {
+        name: 'deploy',
+        description: 'Deploy',
+        schema: z.object({ ok: z.boolean(), attempt: z.number().optional() }),
+      },
+    );
+  }
+
+  function deployOutputs(viewer: FakeViewer): unknown[] {
+    const starts = new Set(
+      viewer
+        .ofType('node.started')
+        .filter((f) => f.payload['nodeId'] === 'tool:deploy')
+        .map((f) => f.payload['instanceId']),
+    );
+    return viewer
+      .ofType('node.finished')
+      .filter((f) => starts.has(f.payload['instanceId']))
+      .map((f) => f.payload['output']);
+  }
+
+  it('an error-shaped result invoked with a ToolCall holds with error-result and is recorded as the object', async () => {
+    const { viewer, gm } = await setup();
+    const deploy = makeDeploy();
+    const promise = deploy.invoke(
+      { name: 'deploy', args: { ok: false }, id: 'call_1', type: 'tool_call' },
+      { callbacks: [gm.handler()] },
+    );
+    const paused = await pausedFor(viewer, 'tool');
+    expect(paused.payload).toMatchObject({
+      point: 'after',
+      reason: 'breakpoint',
+      smart: { rule: 'error-result', detail: 'the tool returned a result with success: false' },
+    });
+    viewer.resume(paused.payload['pauseId'] as string, 'continue');
+    // LangChain still hands the caller its ToolMessage, content untouched.
+    expect(((await promise) as { content?: unknown }).content).toBe(JSON.stringify(FAILURE));
+    expect(deployOutputs(viewer)).toEqual([FAILURE]);
+  });
+
+  it('a real ToolNode in a StateGraph holds the error-shaped result; a normal one and a text one do not', async () => {
+    const { viewer, gm } = await setup();
+    const note = tool(async () => 'noted', { name: 'note', description: 'Note', schema: z.object({}) });
+    const graph = new StateGraph(MessagesAnnotation)
+      .addNode('tools', new ToolNode([makeDeploy(), note]))
+      .addEdge(START, 'tools')
+      .addEdge('tools', END)
+      .compile();
+    const ask = (calls: { name: string; args: Record<string, unknown> }[]) =>
+      graph.invoke(
+        {
+          messages: [
+            new AIMessage({
+              content: '',
+              tool_calls: calls.map((c, i) => ({ ...c, id: `call_${i}`, type: 'tool_call' as const })),
+            }),
+          ],
+        },
+        { callbacks: [gm.handler()] },
+      );
+
+    await ask([{ name: 'deploy', args: { ok: true } }, { name: 'note', args: {} }]);
+    await waitUntil(() => viewer.ofType('run.finished').length >= 1, 8000, 'first run');
+    expect(viewer.ofType('exec.paused')).toHaveLength(0);
+    expect(deployOutputs(viewer)).toEqual([{ deployed: true }]);
+    const noteRun = viewer.ofType('node.started').find((f) => f.payload['nodeId'] === 'tool:note')?.payload['instanceId'];
+    const noteFinished = viewer.ofType('node.finished').find((f) => f.payload['instanceId'] === noteRun);
+    expect(noteFinished?.payload['output']).toBe('noted'); // plain text stays text
+
+    const promise = ask([{ name: 'deploy', args: { ok: false } }]);
+    const paused = await pausedFor(viewer, 'tool');
+    expect(paused.payload).toMatchObject({ nodeId: 'tool:deploy', point: 'after', smart: { rule: 'error-result' } });
+    viewer.resume(paused.payload['pauseId'] as string, 'continue');
+    const state = await promise;
+    expect((state.messages.at(-1) as BaseMessage).content).toBe(JSON.stringify(FAILURE));
+  });
+
+  it('three identical returned failures through ToolNode hold the 4th call with error-repeat', async () => {
+    // Smart error-result holds off, so only the loop hold can pause.
+    const { viewer, gm } = await setup({ env: { GRAPHMIND_BREAK_ON_ERROR_RESULT: '0' } });
+    const LoopState = Annotation.Root({
+      ...MessagesAnnotation.spec,
+      attempt: Annotation<number>({ reducer: (_a, b) => b, default: () => 0 }),
+    });
+    // agent -> tools -> agent ... four times in one run; distinct args per
+    // attempt (the identical-call rule stays out of it), one failure each time.
+    const graph = new StateGraph(LoopState)
+      .addNode('agent', (state: typeof LoopState.State) => {
+        const attempt = state.attempt + 1;
+        return {
+          attempt,
+          messages: [
+            new AIMessage({
+              content: '',
+              tool_calls: [{ name: 'deploy', args: { ok: false, attempt }, id: `call_${attempt}`, type: 'tool_call' }],
+            }),
+          ],
+        };
+      })
+      .addNode('tools', new ToolNode([makeDeploy()]))
+      .addEdge(START, 'agent')
+      .addEdge('agent', 'tools')
+      .addConditionalEdges('tools', (state: typeof LoopState.State) => (state.attempt >= 4 ? END : 'agent'), {
+        agent: 'agent',
+        [END]: END,
+      })
+      .compile();
+    const release = viewer.releaseEveryPause('continue');
+    cleanups.push(() => release.stop());
+    await graph.invoke({ messages: [] }, { callbacks: [gm.handler()], recursionLimit: 50 });
+    await waitUntil(() => viewer.ofType('run.finished').length >= 1, 8000, 'run');
+    expect(deployOutputs(viewer)).toEqual([FAILURE, FAILURE, FAILURE, FAILURE]);
+    const loop = viewer
+      .ofType('exec.paused')
+      .filter((f) => f.payload['nodeId'] === 'tool:deploy' && f.payload['reason'] === 'loop');
+    expect(loop).toHaveLength(1);
+    expect(loop[0]?.payload).toMatchObject({ point: 'before', loop: { kind: 'error-repeat', repeats: 3 } });
   });
 });
 

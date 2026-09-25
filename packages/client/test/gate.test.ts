@@ -3,7 +3,7 @@
  * parallel independence, step mode, breakpoint management, pause timeout.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { createSession, type Session } from '../src/index.js';
+import { createSession, resultGateOptions, unsupportedGateOptions, type GateNode, type Session } from '../src/index.js';
 import { FakeViewer, tick, waitUntil } from './helpers/fake-viewer.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -243,5 +243,168 @@ describe('gate', () => {
     const paused = viewer.ofType('exec.paused')[0];
     viewer.resume(paused?.payload['pauseId'] as string, 'continue');
     expect(await gatePromise).toEqual({ action: 'continue' });
+  });
+});
+
+/*
+ * A gate whose adapter cannot carry out an action (a streamed model step's
+ * after gate cannot retry or inject, a LangChain callback gate only observes)
+ * refuses it instead of quietly continuing: exec.refused 'unsupported', the
+ * gate stays held, and no exec.resumed claims the action.
+ */
+describe('actions a gate cannot carry out (unsupportedActions)', () => {
+  const LLM: GateNode = { nodeId: 'llm:step', kind: 'llm', name: 'step' };
+
+  async function heldLlmGate(
+    unsupportedActions: unknown,
+    viewerExtra: Parameters<typeof FakeViewer.start>[0] = {},
+    sessionExtra: Parameters<typeof createSession>[0] = {},
+  ) {
+    const viewer = await FakeViewer.start({ breakpoints: [{ kind: 'llm', point: 'after' }], ...viewerExtra });
+    cleanups.push(() => viewer.close());
+    const session = await attachedSession(viewer, sessionExtra);
+    const gate = session.gate('after', LLM, { result: {}, unsupportedActions } as never);
+    const paused = await viewer.waitForType('exec.paused');
+    return { viewer, session, gate, pauseId: paused.payload['pauseId'] as string };
+  }
+
+  it('refuses retry and inject with unsupported and stays held; continue then releases it', async () => {
+    const { viewer, session, gate, pauseId } = await heldLlmGate(['retry', 'inject'], { hubCapabilities: [] });
+    viewer.resumeWith({ pauseId, action: 'retry', requestId: 'r1' });
+    const first = await viewer.waitForType('exec.refused');
+    expect(first.payload).toEqual({
+      pauseId,
+      code: 'unsupported',
+      message: 'this pause cannot run the call again; continue or abort',
+      requestId: 'r1',
+    });
+    viewer.resume(pauseId, 'inject', { text: 'nope' });
+    await waitUntil(() => viewer.ofType('exec.refused').length === 2, 3000, 'second refusal');
+    expect(viewer.ofType('exec.refused')[1]?.payload).toMatchObject({
+      pauseId,
+      code: 'unsupported',
+      message: 'this pause cannot substitute a value for the call; continue or abort',
+    });
+    await tick(50);
+    expect(session.stats().heldGates).toBe(1);
+    expect(viewer.ofType('exec.resumed')).toHaveLength(0);
+
+    viewer.resume(pauseId, 'continue');
+    expect(await gate).toEqual({ action: 'continue' });
+    expect((await viewer.waitForType('exec.resumed')).payload).toMatchObject({ pauseId, action: 'continue' });
+  });
+
+  it('an action the gate did not list works as before (retry where only inject is unsupported)', async () => {
+    const { viewer, gate, pauseId } = await heldLlmGate(['inject'], { hubCapabilities: [] });
+    viewer.resume(pauseId, 'inject', { text: 'nope' });
+    expect((await viewer.waitForType('exec.refused')).payload).toMatchObject({
+      code: 'unsupported',
+      message: 'this pause cannot substitute a value for the call; continue, retry or abort',
+    });
+    viewer.resume(pauseId, 'retry');
+    expect(await gate).toEqual({ action: 'retry' });
+  });
+
+  it('abort always works', async () => {
+    const { viewer, gate, pauseId } = await heldLlmGate(['retry', 'inject']);
+    viewer.resume(pauseId, 'abort');
+    expect(await gate).toEqual({ action: 'abort' });
+  });
+
+  it('a 0.5 debugger (no hubCapabilities) cannot show the refusal: the app log says it', async () => {
+    const warnings: string[] = [];
+    const { viewer, session, gate, pauseId } = await heldLlmGate(['retry'], {}, { logger: (m) => warnings.push(m) });
+    viewer.resume(pauseId, 'retry');
+    await viewer.waitForType('exec.refused');
+    expect(warnings.some((w) => w.includes('refused retry') && w.includes('still paused'))).toBe(true);
+    expect(session.stats().heldGates).toBe(1);
+    viewer.resume(pauseId, 'continue');
+    expect(await gate).toEqual({ action: 'continue' });
+  });
+
+  it.each([
+    ['a string', 'retry'],
+    ['unknown actions', ['continue', 'abort', 'jump']],
+    [
+      'an array that throws when read',
+      new Proxy([], {
+        get() {
+          throw new Error('boom');
+        },
+      }),
+    ],
+  ])('a malformed list (%s) refuses nothing and never breaks the gate', async (_label, list) => {
+    const { viewer, gate, pauseId } = await heldLlmGate(list);
+    viewer.resume(pauseId, 'retry');
+    expect(await gate).toEqual({ action: 'retry' });
+    expect(viewer.ofType('exec.refused')).toHaveLength(0);
+  });
+
+  it('detached, the helpers hand the gate no options at all', () => {
+    const detached = { attached: false };
+    expect(resultGateOptions(detached, { a: 1 }, ['retry'])).toBeUndefined();
+    expect(unsupportedGateOptions(detached, ['inject'])).toBeUndefined();
+    const attached = { attached: true };
+    expect(resultGateOptions(attached, { a: 1 })).toEqual({ result: { a: 1 } });
+    expect(resultGateOptions(attached, { a: 1 }, ['retry'])).toEqual({ result: { a: 1 }, unsupportedActions: ['retry'] });
+    expect(unsupportedGateOptions(attached, ['inject'])).toEqual({ unsupportedActions: ['inject'] });
+  });
+});
+
+/*
+ * The adapter's own release: once nobody waits for a gate's decision (the host
+ * cancelled the stream a held model step was about to hand over), the hold is
+ * released with continue — fail-open, like a pause timeout.
+ */
+describe('a gate released by its own signal (GateOptions.signal)', () => {
+  const LLM: GateNode = { nodeId: 'llm:step', kind: 'llm', name: 'step' };
+
+  async function llmAfterViewer() {
+    const viewer = await FakeViewer.start({ breakpoints: [{ kind: 'llm', point: 'after' }] });
+    cleanups.push(() => viewer.close());
+    return { viewer, session: await attachedSession(viewer) };
+  }
+
+  it('an abort while held releases the gate with continue (no requestId)', async () => {
+    const { viewer, session } = await llmAfterViewer();
+    const controller = new AbortController();
+    const gate = session.gate('after', LLM, { result: {}, signal: controller.signal });
+    const paused = await viewer.waitForType('exec.paused');
+    expect(session.stats().heldGates).toBe(1);
+    controller.abort();
+    expect(await gate).toEqual({ action: 'continue' });
+    expect(session.stats().heldGates).toBe(0);
+    const resumed = await viewer.waitForType('exec.resumed');
+    expect(resumed.payload).toMatchObject({ pauseId: paused.payload['pauseId'], action: 'continue' });
+    expect(resumed.payload['requestId']).toBeUndefined();
+  });
+
+  it('an already-aborted signal never holds', async () => {
+    const { viewer, session } = await llmAfterViewer();
+    const controller = new AbortController();
+    controller.abort();
+    expect(await session.gate('after', LLM, { result: {}, signal: controller.signal })).toEqual({ action: 'continue' });
+    await tick(50);
+    expect(viewer.ofType('exec.paused')).toHaveLength(0);
+  });
+
+  it('after a normal resume the signal is let go: a later abort changes nothing', async () => {
+    const { viewer, session } = await llmAfterViewer();
+    const controller = new AbortController();
+    const gate = session.gate('after', LLM, { result: {}, signal: controller.signal });
+    const paused = await viewer.waitForType('exec.paused');
+    viewer.resume(paused.payload['pauseId'] as string, 'abort');
+    expect(await gate).toEqual({ action: 'abort' });
+    controller.abort();
+    await tick(50);
+    expect(viewer.ofType('exec.resumed').map((f) => f.payload['action'])).toEqual(['abort']);
+  });
+
+  it('a value that is not an AbortSignal is ignored (the gate holds as usual)', async () => {
+    const { viewer, session } = await llmAfterViewer();
+    const gate = session.gate('after', LLM, { result: {}, signal: { aborted: 'no' } as never });
+    const paused = await viewer.waitForType('exec.paused');
+    viewer.resume(paused.payload['pauseId'] as string, 'continue');
+    expect(await gate).toEqual({ action: 'continue' });
   });
 });

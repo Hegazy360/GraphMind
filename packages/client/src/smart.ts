@@ -29,8 +29,10 @@
  *                        inputText?}]}`) says the model stopped at the token
  *                        limit (`length`) or the content filter
  *                        (`content-filter`) while requesting at least one tool
- *                        call — or a tool call's arguments did not parse
- *                        (`inputText`). Its arguments are very likely cut off.
+ *                        call: its arguments are very likely cut off. The
+ *                        detail counts the calls whose arguments did not
+ *                        parse (`inputText`); such a call under any other
+ *                        finish reason does not fire the rule.
  *                        Env GRAPHMIND_BREAK_ON_TRUNCATED, default on.
  *
  * `detail` is short and NEVER quotes a value from the result: it names the
@@ -47,19 +49,44 @@
  * reads a property twice.
  */
 import type { EnvLike } from './env.js';
-import type { AfterGateContext, GateDetector, GateOptions, SmartInfo } from './session.js';
+import type { AfterGateContext, GateDetector, GateOptions, SmartInfo, UnsupportedAction } from './session.js';
 
 /**
  * The options for an `after` gate that hands the session a call's result for
  * the smart holds — an LLM step's normalized output (`{finishReason,
  * toolCalls, …}`), or a tool's result — or `undefined` while no debugger is
  * attached, so the detached gate call stays option-free: the fast path is
- * exactly what it was. (Tool wrappers that also offer edits use
- * `toolGateOptions`, which does the same.) Never throws.
+ * exactly what it was. `unsupportedActions`: what the adapter cannot carry
+ * out at this gate (see `GateOptions.unsupportedActions`). (Tool wrappers
+ * that also offer edits use `toolGateOptions`, which does the same.) Never
+ * throws.
  */
-export function resultGateOptions(session: { readonly attached: boolean }, result: unknown): GateOptions | undefined {
+export function resultGateOptions(
+  session: { readonly attached: boolean },
+  result: unknown,
+  unsupportedActions?: readonly UnsupportedAction[],
+): GateOptions | undefined {
   try {
-    return session.attached ? { result } : undefined;
+    if (!session.attached) return undefined;
+    return unsupportedActions === undefined ? { result } : { result, unsupportedActions };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The options for a gate with no result to inspect whose adapter cannot
+ * carry out `unsupportedActions` there (an LLM step's `before` gate cannot
+ * `inject`; a LangChain callback gate cannot `retry` or `inject`) — or
+ * `undefined` while no debugger is attached, so the detached gate call stays
+ * option-free. Never throws.
+ */
+export function unsupportedGateOptions(
+  session: { readonly attached: boolean },
+  unsupportedActions: readonly UnsupportedAction[],
+): GateOptions | undefined {
+  try {
+    return session.attached ? { unsupportedActions } : undefined;
   } catch {
     return undefined;
   }
@@ -236,6 +263,7 @@ export function truncatedToolCall(result: unknown): TruncatedToolCall | undefine
     const calls = record['toolCalls'];
     if (!Array.isArray(calls)) return undefined;
     const toolCalls = calls.length;
+    if (toolCalls < 1) return undefined;
     let unparsed = 0;
     const inspect = Math.min(toolCalls, MAX_INSPECTED_TOOL_CALLS);
     for (let i = 0; i < inspect; i += 1) {
@@ -244,7 +272,6 @@ export function truncatedToolCall(result: unknown): TruncatedToolCall | undefine
         unparsed += 1;
       }
     }
-    if (toolCalls < 1 && unparsed < 1) return undefined;
     return { finishReason, toolCalls, unparsed };
   } catch {
     return undefined;

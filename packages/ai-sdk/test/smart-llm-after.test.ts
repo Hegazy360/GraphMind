@@ -246,15 +246,72 @@ describe('streamed step: truncated-tool-call holds the SDK at the finish part', 
     expect(viewer.ofType('exec.paused')).toHaveLength(0);
   });
 
-  it('retry cannot rewrite a consumed stream: it continues, with one warning', async () => {
-    const { viewer, gm, warnings } = await setup();
-    const result = streamText({ model: gm.wrapModel(streamingModel()), prompt: 'write a.txt' });
-    const consumed = result.consumeStream();
+  it('an SDK that cancels its copy while the observer is already holding at the finish part releases the hold', async () => {
+    const { viewer, gm } = await setup();
+    // No chunk delay: the observer runs ahead, reaches `finish` and holds...
+    const res = await gm.wrapModel(streamingModel()).doStream({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'write' }] }],
+    } as CallOptions);
+    const reader = res.stream.getReader();
+    await reader.read();
     const paused = await llmPause(viewer);
-    viewer.resume(paused.payload['pauseId'] as string, 'retry');
+    expect(paused.payload['point']).toBe('after');
+    expect(gm.session.stats().heldGates).toBe(1);
+    expect(llmFrames(viewer, 'node.finished')).toHaveLength(0);
+    // ...then the host goes away: nobody waits for that decision any more.
+    await reader.cancel('the host stopped reading');
+    const done = await viewer.waitFor((f) => f.type === 'node.finished' && f.payload['nodeId'] === 'llm:step', 3000);
+    expect(done.payload['status']).toBe('ok');
+    expect(gm.session.stats().heldGates).toBe(0);
+    // The pause is closed on the wire too (released by the app, no requestId).
+    const resumed = await viewer.waitForType('exec.resumed');
+    expect(resumed.payload).toMatchObject({ pauseId: paused.payload['pauseId'], action: 'continue' });
+    expect(resumed.payload['requestId']).toBeUndefined();
+  });
+
+  it('retry and inject cannot rewrite a consumed stream: both are refused and the step stays held', async () => {
+    const viewer = await FakeViewer.start({ hubCapabilities: [] });
+    const gm = graphmind({ url: viewer.url, enabled: true, retryIntervalMs: 60_000, env: {}, logger: () => {} });
+    cleanups.push(async () => {
+      await gm.dispose();
+      await viewer.close();
+    });
+    await attach(gm);
+    let doStreamCalls = 0;
+    const model = new MockLanguageModel({
+      doStream: async () => {
+        doStreamCalls += 1;
+        return { stream: simulateReadableStream<StreamPart>({ chunks: TRUNCATED_PARTS }) };
+      },
+    });
+    const result = streamText({ model: gm.wrapModel(model), prompt: 'write a.txt' });
+    let settled = false;
+    const consumed = result.consumeStream().then(() => {
+      settled = true;
+    });
+    const paused = await llmPause(viewer);
+    const pauseId = paused.payload['pauseId'] as string;
+
+    viewer.resume(pauseId, 'retry');
+    await waitUntil(() => viewer.ofType('exec.refused').length === 1, 3000, 'retry refused');
+    viewer.resume(pauseId, 'inject', { text: 'nope' });
+    await waitUntil(() => viewer.ofType('exec.refused').length === 2, 3000, 'inject refused');
+    expect(viewer.ofType('exec.refused').map((f) => [f.payload['pauseId'], f.payload['code']])).toEqual([
+      [pauseId, 'unsupported'],
+      [pauseId, 'unsupported'],
+    ]);
+    await tick(100);
+    // Still held: the SDK's copy waits at `finish`, nothing claims a retry or an inject.
+    expect(settled).toBe(false);
+    expect(gm.session.stats().heldGates).toBe(1);
+    expect(viewer.ofType('exec.resumed')).toHaveLength(0);
+
+    viewer.resume(pauseId, 'continue');
     await consumed;
     expect(await result.finishReason).toBe('length');
-    expect(warnings.filter((w) => w.includes('streamed model step'))).toHaveLength(1);
+    expect(doStreamCalls).toBe(1);
+    await viewer.waitForType('exec.resumed');
+    expect(viewer.ofType('exec.resumed').map((f) => f.payload['action'])).toEqual(['continue']);
   });
 
   it('a normal step (finish reason tool-calls) passes the after gate without holding', async () => {
@@ -374,17 +431,55 @@ describe('generated step: truncated-tool-call holds before the SDK sees the resu
     expect(done.payload['status']).toBe('aborted');
   });
 
-  it('inject is not meaningful there: the real result is returned, with one warning', async () => {
-    const { viewer, gm, warnings } = await setup();
+  it('inject is not possible there: it is refused and the step stays held (retry still works)', async () => {
+    const { viewer, gm } = await setup();
     const calls = { count: 0 };
     const promise = gm.wrapModel(generatingModel(calls)).doGenerate({
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'write' }] }],
     } as CallOptions);
     const paused = await llmPause(viewer);
-    viewer.resume(paused.payload['pauseId'] as string, 'inject', { text: 'nope' });
+    const pauseId = paused.payload['pauseId'] as string;
+    viewer.resume(pauseId, 'inject', { text: 'nope' });
+    expect((await viewer.waitForType('exec.refused')).payload).toMatchObject({
+      pauseId,
+      code: 'unsupported',
+      message: 'this pause cannot substitute a value for the call; continue, retry or abort',
+    });
+    await tick(100);
+    expect(gm.session.stats().heldGates).toBe(1);
+    viewer.resume(pauseId, 'continue');
     const result = (await promise) as unknown as { finishReason: unknown };
     expect(result.finishReason).toEqual({ unified: 'length', raw: 'max_tokens' });
-    expect(warnings.filter((w) => w.includes('inject at a model step'))).toHaveLength(1);
+    expect(calls.count).toBe(1);
+  });
+
+  it.each(['stream', 'generate'] as const)('inject at a %s step\'s before gate is refused too', async (how) => {
+    const viewer = await FakeViewer.start({ breakpoints: [{ kind: 'llm' }] });
+    const gm = graphmind({
+      url: viewer.url,
+      enabled: true,
+      retryIntervalMs: 60_000,
+      env: {},
+      breakOnTruncated: false, // only the before hold
+      logger: () => {},
+    });
+    cleanups.push(async () => {
+      await gm.dispose();
+      await viewer.close();
+    });
+    await attach(gm);
+    const calls = { count: 0 };
+    const model = gm.wrapModel(how === 'stream' ? streamingModel() : generatingModel(calls));
+    const prompt = { prompt: [{ role: 'user', content: [{ type: 'text', text: 'write' }] }] } as CallOptions;
+    const promise = how === 'stream' ? model.doStream(prompt) : model.doGenerate(prompt);
+    const paused = await llmPause(viewer);
+    expect(paused.payload['point']).toBe('before');
+    viewer.resume(paused.payload['pauseId'] as string, 'inject', { text: 'nope' });
+    expect((await viewer.waitForType('exec.refused')).payload).toMatchObject({ code: 'unsupported' });
+    expect(gm.session.stats().heldGates).toBe(1);
+    viewer.resume(paused.payload['pauseId'] as string, 'continue');
+    await promise;
+    expect((await viewer.waitForType('exec.resumed')).payload['action']).toBe('continue');
   });
 });
 

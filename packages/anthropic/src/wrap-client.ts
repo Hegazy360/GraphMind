@@ -29,7 +29,14 @@
  * (events, `finalMessage()`, `abort()`), and its request is still held at the
  * gate before anything reaches the network.
  */
-import { captureTools, pickParams, withInstanceId, type GateNode, type RunContext } from '@graphmind-ai/client';
+import {
+  captureTools,
+  pickParams,
+  unsupportedGateOptions,
+  withInstanceId,
+  type GateNode,
+  type RunContext,
+} from '@graphmind-ai/client';
 import { gatedApiPromise } from './api-promise.js';
 import type { AdapterCore } from './core.js';
 import { LLM_NODE_ID, LLM_NODE_NAME, agentNodeId } from './ids.js';
@@ -162,12 +169,17 @@ function instrumentedCreate(
       reporter = beginStep(core, params, ctx, scopeId, streaming);
 
       // exec.paused names this step's execution (parallel steps stay apart).
-      const decision = await core.session.gate('before', withInstanceId(LLM_GATE_NODE, reporter?.instanceId));
+      // `inject` is refused (no value stands in for the SDK's call); `retry`
+      // before the request runs it, as continue does.
+      const decision = await core.session.gate(
+        'before',
+        withInstanceId(LLM_GATE_NODE, reporter?.instanceId),
+        unsupportedGateOptions(core.session, ['inject']),
+      );
       if (decision.action === 'abort') {
         reporter?.finish(undefined, undefined, 'aborted');
         throw core.abortError(ctx);
       }
-      // 'inject'/'retry' are not meaningful before a model call: continue.
 
       return { api: original.call(target, params, prepareOptions(core, options, ctx)) };
     },

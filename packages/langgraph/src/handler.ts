@@ -14,7 +14,9 @@
  * WHAT CALLBACKS CANNOT DO. A handler has no return channel into the thing it
  * announced, so `inject` (substitute a result) and `retry` (run it again) are
  * impossible through callbacks alone; they need the tool wrappers in
- * wrap-tools.ts. `abort` works, because a handler that throws while
+ * wrap-tools.ts. Every callback gate declares both unsupported, so the
+ * session refuses them and keeps the gate held (see CALLBACK_UNSUPPORTED).
+ * `abort` works, because a handler that throws while
  * `raiseError` is set propagates into the host run.
  *
  * NEVER THROW. Since a throw does propagate, every handler body runs inside
@@ -29,6 +31,7 @@ import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
 import {
   isAbortError,
   resultGateOptions,
+  unsupportedGateOptions,
   type NodeKind,
   type RunContext,
   type TokenUsage,
@@ -668,24 +671,21 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
     // releasing a wrapped tool's error gate does not stop the user again at
     // every chain above it.
     if (!this.core.claimError(error)) return;
-    const decision = await this.core.session.gate('error', gateNode(record));
-    if (decision.action === 'abort') {
-      await this.performAbort(record, 'error-gate');
-      return;
-    }
-    // `inject`/`retry` are as impossible here as at `before`/`after` — a
-    // callback cannot swallow the failure or re-run what threw. Saying so is
-    // the whole difference between "unsupported" and "broken".
-    this.warnUnsupported(decision.action, record, 'error');
+    const decision = await this.core.session.gate(
+      'error',
+      gateNode(record),
+      unsupportedGateOptions(this.core.session, CALLBACK_UNSUPPORTED),
+    );
+    if (decision.action === 'abort') await this.performAbort(record, 'error-gate');
   }
 
   private async gateBefore(record: RunRecord): Promise<void> {
-    const decision = await this.core.session.gate('before', gateNode(record));
-    if (decision.action === 'abort') {
-      await this.performAbort(record, 'before-gate');
-      return;
-    }
-    this.warnUnsupported(decision.action, record, 'before');
+    const decision = await this.core.session.gate(
+      'before',
+      gateNode(record),
+      unsupportedGateOptions(this.core.session, CALLBACK_UNSUPPORTED),
+    );
+    if (decision.action === 'abort') await this.performAbort(record, 'before-gate');
   }
 
   /**
@@ -700,38 +700,12 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
    */
   private async gateAfter(record: RunRecord, after?: { result: unknown }): Promise<void> {
     if (record.gatedByWrapper) return; // the wrapper owns a real `after` gate
-    const options = after === undefined ? undefined : resultGateOptions(this.core.session, after.result);
+    const options =
+      after === undefined
+        ? unsupportedGateOptions(this.core.session, CALLBACK_UNSUPPORTED)
+        : resultGateOptions(this.core.session, after.result, CALLBACK_UNSUPPORTED);
     const decision = await this.core.session.gate('after', gateNode(record), options);
-    if (decision.action === 'abort') {
-      await this.performAbort(record, 'after-gate');
-      return;
-    }
-    this.warnUnsupported(decision.action, record, 'after');
-  }
-
-  /**
-   * Say out loud that a callback-only gate cannot honour `inject` / `retry`.
-   * Once per (action, gate point) per `graphmind()` instance: the error gate
-   * is the one a user is most likely to be sitting at, and it needs its own
-   * budget rather than being silenced by an earlier `before`-gate warning.
-   */
-  private warnUnsupported(
-    action: string,
-    record: RunRecord,
-    point: 'before' | 'after' | 'error',
-  ): void {
-    if (action !== 'inject' && action !== 'retry') return;
-    const consequence =
-      point === 'error'
-        ? 'the error kept propagating'
-        : 'execution continued with the real result';
-    this.core.warner.warn(
-      `callback-${action}-${point}`,
-      `the debugger asked to ${action} at the ${point} gate of "${record.name}", but LangChain ` +
-        'callbacks have no return channel — a handler cannot substitute or re-run what it ' +
-        `observes, so ${consequence}. Wrap that tool with gm.wrapStructuredTool() / gm.tool() ` +
-        'to get inject and retry.',
-    );
+    if (decision.action === 'abort') await this.performAbort(record, 'after-gate');
   }
 
   /**
@@ -763,6 +737,16 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
     );
   }
 }
+
+/**
+ * What no callback gate can carry out: LangChain callbacks have no return
+ * channel, so a handler can neither substitute a value nor re-run what it
+ * observes. The session refuses both (`exec.refused` `unsupported`, the gate
+ * stays held for continue or abort) instead of quietly continuing; a tool
+ * wrapped with gm.wrapStructuredTool() / gm.tool() gates in its wrapper, where
+ * both work.
+ */
+const CALLBACK_UNSUPPORTED = ['retry', 'inject'] as const;
 
 /**
  * The gate's node. It names the held execution (`exec.paused.instanceId`) when

@@ -285,6 +285,16 @@ export class GateEngine {
     return this.settle(ticket.pauseId, decision, decision.action, info);
   }
 
+  /**
+   * FAIL-OPEN for one gate: release it with `continue` whatever its state
+   * (held, or validating an edit — the edit is dropped, the original input
+   * runs). For an adapter whose caller no longer waits for the decision.
+   * False when the gate is unknown (already released).
+   */
+  release(pauseId: string): boolean {
+    return this.settle(pauseId, CONTINUE_DECISION, 'continue');
+  }
+
   /** FAIL-OPEN: release every held gate with `continue`. Returns count. */
   releaseAll(): number {
     const ids = [...this.held.keys()];

@@ -66,7 +66,9 @@ it and a callback-only tool's `after` gate hand the session the recorded output
 while a debugger is attached: a model stopped by the token limit or a content
 filter while writing a tool call holds with `smart.rule: 'truncated-tool-call'`,
 and a tool result shaped like an error (`isError: true`, `success: false`, a
-non-zero exit code, or only an `error` key) holds with `'error-result'`. They
+non-zero exit code, or only an `error` key) holds with `'error-result'` — also
+under ToolNode / createReactAgent, whose ToolMessage carries the result as JSON
+text: it is recorded and checked as the object the tool returned. They
 are observe-only like every callback gate (continue or abort); a wrapped tool's
 own `after` gate does the same with retry and inject.
 
@@ -83,9 +85,10 @@ the tests hold a tool for a full second and assert its body had not started.
 happened; it has no return channel into the thing it observed. It cannot hand
 back a different tool result or ask for the call to be made again. If the
 debugger sends `inject` or `retry` at a callback-only gate — `before`, `after`
-or `error` — the adapter warns once per gate point (naming the wrapper you
-need) and continues; at an `error` gate "continues" means the error keeps
-propagating. It never silently pretends to have substituted something.
+or `error` — the app refuses it (`exec.refused`, code `unsupported`) and the
+gate stays held for `continue` or `abort`, so neither the debugger nor the
+recorded run claims a substitution or a re-run that never happened. Wrap the
+tool with `gm.wrapStructuredTool()` / `gm.tool()` to get both.
 
 **One pause per failure.** A LangGraph failure surfaces at every level it
 climbs (`tool:gradeChunks` → `chain:grade` → the root run). The gate fires at

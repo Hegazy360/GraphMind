@@ -278,6 +278,21 @@ describe('LangChain shape helpers', () => {
     expect(unwrapToolOutput('plain')).toBe('plain');
   });
 
+  it("decodes a ToolMessage's JSON-object content back to the tool's object (ToolNode's ToolCall path)", () => {
+    const message = (content: unknown) => ({ content, tool_call_id: 'call_1', status: 'success' });
+    expect(unwrapToolOutput(message('{"success":false,"reason":"quota"}'))).toEqual({ success: false, reason: 'quota' });
+    expect(unwrapToolOutput(message(' {"a":1} '))).toEqual({ a: 1 });
+    // Anything that is not a JSON object stays exactly as LangChain sent it.
+    expect(unwrapToolOutput(message('[1,2]'))).toBe('[1,2]');
+    expect(unwrapToolOutput(message('{not json'))).toBe('{not json');
+    expect(unwrapToolOutput(message('null'))).toBe('null');
+    const blocks = [{ type: 'text', text: '{"a":1}' }];
+    expect(unwrapToolOutput(message(blocks))).toBe(blocks);
+    // Only a real ToolMessage (tool_call_id) is decoded, and never with an artifact.
+    expect(unwrapToolOutput({ content: '{"a":1}' })).toBe('{"a":1}');
+    expect(unwrapToolOutput({ content: '{"a":1}', tool_call_id: 'c', artifact: 1 })).toEqual({ content: '{"a":1}', artifact: 1 });
+  });
+
   it('compacts message groups to {role, content}', () => {
     const message = { _getType: () => 'human', content: 'hello', extra: 'dropped' };
     expect(compactMessages([[message]])).toEqual([[{ role: 'human', content: 'hello' }]]);

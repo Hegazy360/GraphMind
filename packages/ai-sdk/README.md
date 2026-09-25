@@ -92,9 +92,10 @@ and later calls never wait. Disabled sessions skip the wait entirely.
   stream at its `finish` part: the step cannot complete and the next one
   cannot start (a tool call that already streamed in full has been handed to
   its tool); `abort` errors that stream with the `AbortError`. `inject` (and
-  `retry` on a stream) cannot replace what the SDK needs there and continue
-  with a warning. Detached, the stream the SDK reads is the tee's own branch,
-  untouched.
+  `retry` on a stream) cannot replace what the SDK needs there, so they are
+  refused (`exec.refused` code `unsupported`) and the step stays held for
+  `continue` or `abort`; the same goes for `inject` at a step's `before` gate.
+  Detached, the stream the SDK reads is the tee's own branch, untouched.
 
 **wrapTools** (per tool call; parallel calls gate independently):
 

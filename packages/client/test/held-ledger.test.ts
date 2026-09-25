@@ -401,6 +401,50 @@ describe('HeldLedger — overlapping instances of one node (heuristic)', () => {
   });
 });
 
+describe('HeldLedger — a gate that names its execution (exec.paused.instanceId)', () => {
+  it('pins the hold to the named instance, whatever node.error marked or the start order says', () => {
+    // An adapter whose node.error named no call marks the NEWEST open instance
+    // (B); the error gate itself names A, the call that failed.
+    const { ledger, advance } = make();
+    ledger.started(RUN, 'tool:t', 'A');
+    ledger.started(RUN, 'tool:t', 'B');
+    ledger.errored(RUN, 'tool:t', undefined);
+    ledger.holdOpened('p1', RUN, 'tool:t', 'error', 'A');
+    advance(900);
+    ledger.holdClosed('p1');
+    expect(ledger.finished(RUN, 'tool:t', 'B')).toBe(0);
+    expect(ledger.finished(RUN, 'tool:t', 'A')).toBe(900);
+  });
+
+  it('pins before and after holds to the named instance too', () => {
+    const { ledger, advance } = make();
+    ledger.started(RUN, 'tool:t', 'A');
+    ledger.started(RUN, 'tool:t', 'B');
+    ledger.holdOpened('p1', RUN, 'tool:t', 'before', 'A'); // unnamed: newest (B)
+    advance(100);
+    ledger.holdClosed('p1');
+    ledger.holdOpened('p2', RUN, 'tool:t', 'after', 'B'); // unnamed: oldest (A)
+    advance(30);
+    ledger.holdClosed('p2');
+    expect(ledger.finished(RUN, 'tool:t', 'A')).toBe(100);
+    expect(ledger.finished(RUN, 'tool:t', 'B')).toBe(30);
+  });
+
+  it('a named execution that is no longer open charges no sibling (still the ancestors)', () => {
+    const { ledger, advance } = make();
+    ledger.started(RUN, 'agent:x', RUN);
+    ledger.started(RUN, 'tool:t', 'A', 'agent:x');
+    ledger.started(RUN, 'tool:t', 'B', 'agent:x');
+    expect(ledger.finished(RUN, 'tool:t', 'A')).toBe(0);
+    // LangGraph: A's after gate fires after A's node.finished, while B still runs.
+    ledger.holdOpened('p1', RUN, 'tool:t', 'after', 'A');
+    advance(500);
+    ledger.holdClosed('p1');
+    expect(ledger.finished(RUN, 'tool:t', 'B')).toBe(0);
+    expect(ledger.finished(RUN, 'agent:x', RUN)).toBe(500);
+  });
+});
+
 describe('HeldLedger — bounds', () => {
   it('evicts the oldest tracked instance past the cap and never grows unbounded', () => {
     const { ledger, advance } = make(3);

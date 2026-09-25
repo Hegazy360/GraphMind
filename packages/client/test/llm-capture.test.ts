@@ -235,6 +235,46 @@ describe('captureTools', () => {
   });
 });
 
+// A `*url` value loses its WHOLE userinfo: URL parsers (WHATWG `new URL`,
+// Python `urlsplit`) end it at the LAST '@' before the path, so a password
+// holding a raw '@' must not leave its tail behind.
+describe('sanitizeToolDefinition: *url userinfo', () => {
+  const mcp = (serverUrl: string) =>
+    (sanitizeToolDefinition({ type: 'mcp', server_label: 'svc', server_url: serverUrl }) as { server_url: string })
+      .server_url;
+
+  it('a password containing @ is removed whole (the parser reads all of it)', () => {
+    const url = 'https://svc:P@ssw0rd@mcp.example.com/sse';
+    expect(decodeURIComponent(new URL(url).password)).toBe('P@ssw0rd');
+    expect(mcp(url)).toBe('https://mcp.example.com/sse');
+    expect(mcp('https://a@b:c@d@host.example:8443/p?q=1')).toBe('https://host.example:8443/p');
+  });
+
+  it('captureTools records no part of such a password in toolSchemas', () => {
+    const captured = captureTools(
+      {},
+      'run-url',
+      [{ type: 'mcp', server_label: 'svc', server_url: 'https://svc:P@ssw0rd@mcp.example.com/sse?api_key=q' }],
+      (d) => (d as { server_label: string }).server_label,
+    );
+    expect(JSON.stringify(captured?.toolSchemas)).not.toContain('ssw0rd');
+  });
+
+  it('a protocol-relative //user:pass@host value and surrounding whitespace are stripped too', () => {
+    expect(new URL('//u:hunter2@host.example/p', 'https://base.example').password).toBe('hunter2');
+    expect(mcp('//u:hunter2@host.example/p')).toBe('//host.example/p');
+    expect(new URL('  https://u:hunter2@host.example/p').password).toBe('hunter2');
+    expect(mcp('  https://u:hunter2@host.example/p')).not.toContain('hunter2');
+    expect(mcp('https:\\\\u:hunter2@host.example/p')).not.toContain('hunter2');
+  });
+
+  it("an '@' after the authority is path, not userinfo: kept", () => {
+    expect(mcp('https://cdn.example.com/img@2x.png')).toBe('https://cdn.example.com/img@2x.png');
+    expect(mcp('https://u:p@cdn.example.com/img@2x.png')).toBe('https://cdn.example.com/img@2x.png');
+    expect(mcp('relative/path@2x.png')).toBe('relative/path@2x.png');
+  });
+});
+
 describe('pickParams', () => {
   it('copies allow-listed keys only, in allow-list order, skipping undefined', () => {
     const body = {

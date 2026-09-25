@@ -9,9 +9,12 @@
  * heldMs` (clamped >= 0). Without it a developer who thinks for 40 s at a
  * breakpoint sees a 40 s tool call, and the slow filter agrees.
  *
- * Attribution. A gate is registered against a LOGICAL node (`nodeId`), not
- * an instance, so a hold has to be pinned to one of the node's open
- * instances when it opens:
+ * Attribution. A gate is registered against a LOGICAL node (`nodeId`); when
+ * the gate names its execution (`GateNode.instanceId`, sent on every
+ * `exec.paused` since 0.6.0) the hold is pinned to exactly that instance while
+ * it is open, and to no instance of the node when it is not (it opened after
+ * that execution finished). A gate that names nothing is pinned to one of the
+ * node's open instances when it opens:
  *   - `before` / `error` gates: the most recently started open instance
  *     (every adapter opens its `before` gate immediately after `node.started`,
  *     and its `error` gate immediately after `node.error` — for `error` an
@@ -31,10 +34,11 @@
  * pinned to it was open, so two children held at the same time do not count
  * twice in their parent.
  *
- * This is exact whenever executions of one logical node do not overlap,
- * which is every sequential agent loop. For overlapping instances of the
- * SAME node (parallel calls of one tool) the pin is a heuristic; the
- * run-level total is still right, the split between siblings may not be.
+ * This is exact whenever the gate names its execution, or executions of one
+ * logical node do not overlap (every sequential agent loop). For overlapping
+ * instances of the SAME node whose gates name nothing the pin is a
+ * heuristic; the run-level total is still right, the split between siblings
+ * may not be.
  *
  * Bookkeeping only: never throws, never keeps a reference to host objects,
  * bounded so an instance that never finishes cannot grow memory forever.
@@ -120,13 +124,20 @@ export class HeldLedger {
   /**
    * A gate opened. Pins the hold to an open instance of the held node (when
    * there is one), to that node's open ancestors and to the run root — or to
-   * nothing at all.
+   * nothing at all. `instanceId` is the execution the gate names, when it
+   * names one: that instance, never a guess among its parallel siblings.
    */
-  holdOpened(pauseId: string, runId: string, nodeId: string, point: PausePoint): void {
+  holdOpened(pauseId: string, runId: string, nodeId: string, point: PausePoint, instanceId?: string): void {
     const nodeKey = runId + SEP + nodeId;
     const list = this.byNode.get(nodeKey);
     let target: OpenInstance | undefined;
-    if (list !== undefined && list.length > 0) {
+    if (typeof instanceId === 'string' && instanceId !== '') {
+      // Named: exactly that execution while it is open. Not open (a gate that
+      // fires after node.finished): the hold is outside every instance of
+      // this node, like the unnamed case with nothing open below.
+      target = this.instances.get(nodeKey + SEP + instanceId);
+      if (target !== undefined && point === 'error') target.errored = false;
+    } else if (list !== undefined && list.length > 0) {
       if (point === 'after') {
         target = list[0];
       } else {

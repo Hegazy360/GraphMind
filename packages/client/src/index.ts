@@ -15,6 +15,7 @@ export {
   type SmartInfo,
   type ReadyOptions,
   type RunContext,
+  type UnsupportedAction,
 } from './session.js';
 
 export { CLIENT_VERSION } from './version.js';
@@ -147,12 +148,15 @@ export {
 // `truncated-tool-call` (session options breakOnErrorResult / breakOnTruncated,
 // env GRAPHMIND_BREAK_ON_ERROR_RESULT / GRAPHMIND_BREAK_ON_TRUNCATED), exported
 // so adapters, ports and tests share one definition, and the options every
-// adapter's LLM `after` gate passes (`{result}` while attached, else none).
+// adapter's LLM `after` gate passes (`{result}` while attached, else none),
+// plus the actions a gate cannot carry out (`unsupportedActions`: refused and
+// kept held rather than quietly continued).
 export {
   errorResultShape,
   parseBreakOn,
   resultGateOptions,
   truncatedToolCall,
+  unsupportedGateOptions,
   type ErrorResultShape,
 } from './smart.js';
 

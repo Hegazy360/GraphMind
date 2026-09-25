@@ -81,8 +81,9 @@ const ERROR_RESULT_HINT =
 
 const TRUNCATED_HINT =
   'The model’s reply was cut off (finish reason: length or content filter) while it was writing ' +
-  'a tool call, so that call’s arguments are incomplete. Raise the token limit and Retry, or ' +
-  'Abort. GRAPHMIND_BREAK_ON_TRUNCATED=0 turns this off.';
+  'a tool call, so that call’s arguments are incomplete. Continue hands the cut-off reply on as it ' +
+  'is; Abort stops the run. Retry sends the same request again (same token limit), and only where ' +
+  'the step can be re-run: a streamed step refuses it. GRAPHMIND_BREAK_ON_TRUNCATED=0 turns this off.';
 
 /** What each verb does at this hold — the banner's tooltip. `undefined` for an ordinary gate. */
 export function holdHint(pause: Pause): string | undefined {

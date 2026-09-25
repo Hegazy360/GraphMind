@@ -103,24 +103,18 @@ export class StepReporter {
    * is called with no options, like every other gate. Resolves true when the
    * debugger aborted the run there (the caller finishes the step `aborted`
    * and throws the run's AbortError). `retry` / `inject` cannot re-run or
-   * substitute a model call the SDK already made and continue, with a
-   * warning. Never rejects.
+   * substitute a model call the SDK already made: they are refused
+   * (`exec.refused` `unsupported`, the gate stays held) rather than quietly
+   * continued. Never rejects.
    */
   async gateAfter(output: unknown): Promise<boolean> {
     try {
       const decision = await this.core.session.gate(
         'after',
         withInstanceId(LLM_GATE_NODE, this.instanceId),
-        resultGateOptions(this.core.session, output),
+        resultGateOptions(this.core.session, output, ['retry', 'inject']),
       );
       if (decision.action === 'abort') return true;
-      if (decision.action === 'retry' || decision.action === 'inject') {
-        this.core.warner.warn(
-          `llm-after-${decision.action}`,
-          `the debugger asked to ${decision.action} a model step at its after gate, but the Anthropic ` +
-            "SDK's call has already been made; the step continued with the model's real output.",
-        );
-      }
     } catch {
       // a gate never rejects; belt and braces
     }

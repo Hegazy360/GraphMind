@@ -164,6 +164,19 @@ auto-continue, disconnect fail-open, dispose) it emits `exec.resumed`.
 Parallel gates are independent: two concurrent tool calls hold two pauses,
 each resumable on its own (spike assertions b.1–b.4).
 
+A gate whose adapter cannot carry out `retry` or `inject` says so (0.6.0):
+`gate(point, node, { unsupportedActions: ['retry', 'inject'] })` — a streamed
+model step the SDK already consumed, a LangChain callback that only observes,
+`inject` before a model call. Such a resume is refused (`exec.refused`, code
+`unsupported`) and the gate stays held, so the debugger never reports an
+action that did not happen; `continue` and `abort` always work.
+`resultGateOptions(session, result, unsupported?)` and
+`unsupportedGateOptions(session, unsupported)` build these options while
+attached and return `undefined` detached (the fast path stays option-free).
+`{ signal }` (an `AbortSignal`) is the adapter's own release: when it aborts —
+the host cancelled the stream a held step was about to hand over — the hold is
+released with `continue`, like a pause timeout.
+
 ### Edited input (0.6.0)
 
 An adapter that can run a call with different arguments says so per gate:
@@ -239,7 +252,7 @@ hold), `step`, or `error`.
 | hold | where | fires when |
 |---|---|---|
 | `smart.rule: 'error-result'` | tool `after` gate with `{ result }` (and a tool `error` gate with `{ result }`, which is how `graphmind mcp-proxy` gates `isError`: there only a RETURNED shape counts, and an `{error}`-only result — the proxy's JSON-RPC error — stays `reason: 'error'`; one gate, one hold) | strict shape only: `isError === true`, `success === false`, a non-zero numeric `exit_code`/`exitCode`/`exitStatus`, or a plain object whose **only** key is `error` (not `null`/`false`). No substring matching. |
-| `smart.rule: 'truncated-tool-call'` | LLM `after` gate with `{ result }` | the normalized output's `finishReason` is `length` or `content-filter` and it requested at least one tool call (or a call's arguments did not parse: `inputText`). |
+| `smart.rule: 'truncated-tool-call'` | LLM `after` gate with `{ result }` | the normalized output's `finishReason` is `length` or `content-filter` and it requested at least one tool call. The detail counts the calls whose arguments did not parse (`inputText`); such a call under another finish reason does not hold. |
 | `loop.kind: 'cycle'` | `before` gate | 2–4 calls repeated in 3 identical laps: same node, same arguments **and** same result at each position, at least 2 distinct calls per lap. Holds the first call of lap 4. |
 | `loop.kind: 'error-repeat'` | `before` gate | the same tool's last 3 calls failed with the same error (arguments may vary; other tools' calls between them do not matter). A failure is a thrown error (name + message, whitespace collapsed, first 512 chars) or an error-shaped result. A success of that tool ends the streak. Holds the 4th call. |
 

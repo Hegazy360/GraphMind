@@ -185,6 +185,19 @@ const toolDefinitionInputs = [
       password: 'pw',
     },
   },
+  {
+    name: "url userinfo is cut at its LAST '@' (a password holding '@'), also protocol-relative, padded or backslashed; an '@' in the path stays",
+    in: {
+      type: 'mcp',
+      server_label: 'svc',
+      server_url: 'https://svc:P@ssw0rd@mcp.example.com/sse?api_key=q',
+      mirror_url: '//u:hunter2@mirror.example/p',
+      padded_url: '  https://u:hunter2@host.example/p',
+      backslash_url: 'https:\\\\u:hunter2@host.example/p',
+      icon_url: 'https://cdn.example.com/img@2x.png',
+      relative_url: 'relative/path@2x.png',
+    },
+  },
 ];
 const toolDefinitions = toolDefinitionInputs.map(({ name, in: input }) => {
   const out = client.sanitizeToolDefinition(input);
@@ -483,7 +496,7 @@ const usage = [
 
 const fixture = {
   $comment:
-    'Conformance fixture for LLM-step capture (contract C1, 0.6.0). Shared by the TypeScript adapters, the Python integrations and the Ruby integrations; each runs the parts for the providers it supports. finishReasons: [raw, hasToolCalls, normalized-or-null] — normalizeFinishReason lower-cases, trims and folds `-`/spaces to `_`, maps known provider spellings, anything else is "other", a non-string or empty value is null, and "stop" on a step that requested tool calls is "tool-calls". toolCalls: one requested call {id, name, args} -> {id?, name, input, inputText?} or null (no name): an id is kept only when a non-empty string; args that are a string are JSON-parsed, an empty/blank string or a missing/null value is {}, text that does not parse gives input null plus inputText (the raw text); args that are not a string are the input as they are. schemaHashes: sha256 of the canonical JSON (the loop guard canon: sorted keys by UTF-16 code units, JS number and escape rules) of a tool definition, first 16 hex chars. toolDefinitions: a tool definition as captureTools records and hashes it (out, hash = the schema hash of out): the schema keys (parameters, input_schema, inputSchema, output_schema, outputSchema, schema, format) are kept verbatim; outside them, at any depth (objects and arrays walked, at most 16 levels), a key matching /authori[sz]ation|header|token|secret|passw(or)?d|key|cookie|credential|bearer/i is dropped and a string under a key ending in "url" (any case) is cut before its first "?" or "#" and loses its "user:pass@" part; everything else is kept as it is. usage: provider-reported usage -> the wire TokenUsage (without the legacy aliases a sender may add: cacheCreationTokens, cachedInputTokens, totalTokens). inputTokens is the TOTAL prompt (cached reads and cache writes included), inclusive is always true, cacheReadTokens / cacheWriteTokens / reasoningTokens appear only when the provider reported them (a reported 0 stays 0), a count is a finite number >= 0 rounded to an integer (strings and booleans are not counts), and when neither input nor output was reported the result is null; when only one was, the other is 0 (the wire requires both). samplingParams: the allow-list of request parameters recorded on node.started.input under the SDK\'s own names.',
+    'Conformance fixture for LLM-step capture (contract C1, 0.6.0). Shared by the TypeScript adapters, the Python integrations and the Ruby integrations; each runs the parts for the providers it supports. finishReasons: [raw, hasToolCalls, normalized-or-null] — normalizeFinishReason lower-cases, trims and folds `-`/spaces to `_`, maps known provider spellings, anything else is "other", a non-string or empty value is null, and "stop" on a step that requested tool calls is "tool-calls". toolCalls: one requested call {id, name, args} -> {id?, name, input, inputText?} or null (no name): an id is kept only when a non-empty string; args that are a string are JSON-parsed, an empty/blank string or a missing/null value is {}, text that does not parse gives input null plus inputText (the raw text); args that are not a string are the input as they are. schemaHashes: sha256 of the canonical JSON (the loop guard canon: sorted keys by UTF-16 code units, JS number and escape rules) of a tool definition, first 16 hex chars. toolDefinitions: a tool definition as captureTools records and hashes it (out, hash = the schema hash of out): the schema keys (parameters, input_schema, inputSchema, output_schema, outputSchema, schema, format) are kept verbatim; outside them, at any depth (objects and arrays walked, at most 16 levels), a key matching /authori[sz]ation|header|token|secret|passw(or)?d|key|cookie|credential|bearer/i is dropped and a string under a key ending in "url" (any case) is cut before its first "?" or "#" and loses its userinfo: when its first "/" or "\\" is followed (tabs and newlines aside) by another, everything after that pair up to the LAST "@" before the next "/" is dropped, so a password holding "@" goes whole (what comes before the pair, a scheme or nothing, is kept); everything else is kept as it is. usage: provider-reported usage -> the wire TokenUsage (without the legacy aliases a sender may add: cacheCreationTokens, cachedInputTokens, totalTokens). inputTokens is the TOTAL prompt (cached reads and cache writes included), inclusive is always true, cacheReadTokens / cacheWriteTokens / reasoningTokens appear only when the provider reported them (a reported 0 stays 0), a count is a finite number >= 0 rounded to an integer (strings and booleans are not counts), and when neither input nor output was reported the result is null; when only one was, the other is 0 (the wire requires both). samplingParams: the allow-list of request parameters recorded on node.started.input under the SDK\'s own names.',
   finishReasons,
   toolCalls,
   schemaHashes,

@@ -521,7 +521,11 @@ TOOL_SECRET_KEY_RE = re.compile(
     re.IGNORECASE,
 )
 _TOOL_URL_KEY_RE = re.compile(r"url$", re.IGNORECASE)
-_URL_USERINFO_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/?#@]*@")
+#: A URL's userinfo: after its ``//`` (a backslash may stand for a slash, a tab
+#: or newline may sit between them; whatever precedes them is kept) up to the
+#: LAST ``@`` before the path, where ``urlsplit`` and WHATWG end it, so a
+#: password holding ``@`` goes whole. Same pattern as TypeScript.
+_URL_USERINFO_RE = re.compile(r"^([^/\\]*[/\\][\t\n\r]*[/\\])[^/]*@")
 _MAX_TOOL_DEFINITION_DEPTH = 16
 
 

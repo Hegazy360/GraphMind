@@ -294,7 +294,16 @@ const TOOL_URL_KEY_RE = /url$/i;
 /** Deeper than this (outside a schema), a tool definition's value is not recorded. */
 const MAX_TOOL_DEFINITION_DEPTH = 16;
 
-const URL_USERINFO_RE = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/?#@]*@/;
+/**
+ * The userinfo of a URL: everything after its `//` up to the LAST `@` before
+ * the path — where URL parsers (WHATWG `new URL`, Python `urlsplit`) end it,
+ * so a password holding a raw `@` goes whole. Whatever precedes the `//`
+ * (a scheme, none for `//host`, surrounding whitespace), a backslash for a
+ * slash (WHATWG reads `https:\\host` as `https://host`) and a tab or newline
+ * between the two (WHATWG drops them) do not hide it. Run after the query and
+ * fragment are cut. Linear: the first class stops at the first slash.
+ */
+const URL_USERINFO_RE = /^([^/\\]*[/\\][\t\n\r]*[/\\])[^/]*@/;
 
 /** `scheme://user:pass@host/path?query#fragment` -> `scheme://host/path`. */
 function withoutUrlSecrets(url: string): string {

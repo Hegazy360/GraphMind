@@ -137,12 +137,10 @@ body had not started.
 
 **Why inject and retry cannot work through callbacks.** A handler is told what happened; it has
 no return channel into the thing it observed. If the debugger sends `inject` or `retry` at a
-callback-only gate, the adapter degrades it to `continue` and warns, naming the wrapper you need.
-That happens at all three gate points — `before`, `after` and `error` — and each gets its own
-warning budget, so a warning at `before` earlier in the run does not silence the one at `error`,
-which is the gate you are most likely to be sitting at. It never pretends to have substituted
-something, which is why the answer is always to wrap the tool rather than to keep clicking
-`Inject` on the node.
+callback-only gate — `before`, `after` or `error` — the app refuses it (`exec.refused`, code
+`unsupported`) and the gate stays held for `continue` or `abort`. It never pretends to have
+substituted or re-run something, which is why the answer is always to wrap the tool rather than
+to keep clicking `Inject` on the node.
 
 **Parallel branches gate independently.** LangGraph runs fan-out nodes concurrently and each
 holds its own gate; pausing one branch does not freeze the others.

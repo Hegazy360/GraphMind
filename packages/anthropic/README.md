@@ -131,8 +131,10 @@ const final = await helper.finalMessage();
   `max_tokens` cut off in the middle of a tool call is a smart hold
   (`truncated-tool-call`; `GRAPHMIND_BREAK_ON_TRUNCATED=0` turns it off).
   `continue` hands the result over; `abort` rejects the call (or your stream
-  iteration) with the run's `AbortError`; `retry` / `inject` cannot re-run a
-  call the SDK already made and continue with a warning.
+  iteration) with the run's `AbortError`; `retry` / `inject` cannot re-run or
+  replace a call the SDK already made, so they are refused (`exec.refused`
+  code `unsupported`) and the step stays held for `continue` or `abort` — as
+  `inject` is at the `before` gate.
 
 **Per wrapped tool call** (parallel calls gate independently — each invocation
 is its own async frame, so `await Promise.all([...])` holds each separately):
