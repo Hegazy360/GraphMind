@@ -216,14 +216,18 @@ export function usageFromRecord(record: unknown): TokenUsage | undefined {
     const inDetails = asRecord(source['input_token_details']);
     const outDetails = asRecord(source['output_token_details']);
     const cacheRead = tokenCount(inDetails?.['cache_read']);
-    const cacheWrite =
-      tokenCount(inDetails?.['cache_creation']) ??
-      (inDetails !== undefined
+    const creation = tokenCount(inDetails?.['cache_creation']);
+    // langchain-anthropic reports the writes as the 5m/1h split and zeroes
+    // `cache_creation` ("to avoid double counting").
+    const split =
+      inDetails !== undefined
         ? sumReported(
             tokenCount(inDetails['ephemeral_5m_input_tokens']),
             tokenCount(inDetails['ephemeral_1h_input_tokens']),
           )
-        : undefined);
+        : undefined;
+    const cacheWrite =
+      split !== undefined && (creation === undefined || split > creation) ? split : creation;
     let input = tokenCount(source['input_tokens']);
     const cached = sumReported(cacheRead, cacheWrite);
     if (input !== undefined && cached !== undefined && cached > input) input += cached;

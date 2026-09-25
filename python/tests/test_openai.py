@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import threading
 import time
 from typing import Any
@@ -17,9 +18,11 @@ from .helpers.providers import (
     CHAT_COMPLETION,
     CHAT_STREAM_CHUNKS,
     CHAT_TOOL_CALL,
+    RESPONSES_USAGE,
     failing_then,
     json_responder,
     make_openai,
+    responses_sse,
     sse,
     stream_responder,
 )
@@ -220,6 +223,124 @@ def test_a_provider_error_propagates_untouched_on_continue(attached: Any) -> Non
         lambda f: f.get("type") == "node.finished" and f["payload"]["status"] == "error"
     )
     assert finished["payload"]["nodeId"] == "llm:step"
+
+
+IBAN = "DE89370400440532013000"
+TRANSFER_ARGUMENTS = json.dumps({"iban": IBAN, "amount": 5000})
+TRANSFER_TOOLS = [{"type": "function", "name": "transfer", "parameters": {"type": "object"}}]
+
+
+def _transfer_call(
+    arguments: str = TRANSFER_ARGUMENTS, status: str = "completed"
+) -> dict[str, Any]:
+    return {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_1",
+        "name": "transfer",
+        "arguments": arguments,
+        "status": status,
+    }
+
+
+def _transfer_response(status: str, output: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "id": "resp_test",
+        "object": "response",
+        "created_at": 0,
+        "model": "gpt-test",
+        "output": output,
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "status": status,
+        "usage": RESPONSES_USAGE,
+    }
+
+
+TRANSFER_RESPONSE = _transfer_response("completed", [_transfer_call()])
+TRANSFER_STREAM = [
+    {
+        "type": "response.created",
+        "sequence_number": 0,
+        "response": _transfer_response("in_progress", []),
+    },
+    {
+        "type": "response.output_item.added",
+        "sequence_number": 1,
+        "output_index": 0,
+        "item": _transfer_call("", "in_progress"),
+    },
+    {
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": 2,
+        "item_id": "fc_1",
+        "output_index": 0,
+        "delta": TRANSFER_ARGUMENTS,
+    },
+    {
+        "type": "response.function_call_arguments.done",
+        "sequence_number": 3,
+        "item_id": "fc_1",
+        "output_index": 0,
+        "arguments": TRANSFER_ARGUMENTS,
+    },
+    {
+        "type": "response.output_item.done",
+        "sequence_number": 4,
+        "output_index": 0,
+        "item": _transfer_call(),
+    },
+    {"type": "response.completed", "sequence_number": 5, "response": TRANSFER_RESPONSE},
+]
+
+
+def _responses_transfer_output(attached: Any, gm_options: dict[str, Any], streamed: bool) -> Any:
+    instance, viewer = attached(gm_options=gm_options)
+    responder = (
+        stream_responder(responses_sse(TRANSFER_STREAM))
+        if streamed
+        else json_responder(TRANSFER_RESPONSE)
+    )
+    client, _ = make_openai(responder)
+    instance.instrument_openai(client)
+    with instance.run("agent"):
+        kwargs: dict[str, Any] = {"model": "gpt-test", "input": "pay", "tools": TRANSFER_TOOLS}
+        if streamed:
+            for _event in client.responses.create(**kwargs, stream=True):
+                pass
+        else:
+            client.responses.create(**kwargs)
+    wait_until(lambda: len(viewer.of_type("run.finished")) == 1, label="run.finished")
+    return viewer.wait_for(
+        lambda f: f.get("type") == "node.finished" and f["payload"]["nodeId"] == "llm:step"
+    )["payload"]["output"]
+
+
+@pytest.mark.parametrize("switch", ["hide_tool_args", "hide_inputs"])
+@pytest.mark.parametrize("streamed", [False, True], ids=["create", "stream"])
+def test_responses_function_call_arguments_are_hidden_everywhere_in_the_llm_output(
+    attached: Any, switch: str, streamed: bool
+) -> None:
+    # The switches cover the arguments of output.toolCalls[]; the same values
+    # must not ship one key over (the raw Response items once did).
+    output = _responses_transfer_output(attached, {switch: True}, streamed)
+    assert output["toolCalls"] == [{"id": "call_1", "name": "transfer", "input": "__REDACTED__"}]
+    assert IBAN not in json.dumps(output), f"{switch}: the hidden arguments are on the wire"
+
+
+@pytest.mark.parametrize("streamed", [False, True], ids=["create", "stream"])
+def test_responses_function_calls_are_recorded_once_as_tool_calls(
+    attached: Any, streamed: bool
+) -> None:
+    output = _responses_transfer_output(attached, {}, streamed)
+    assert output["toolCalls"] == [
+        {"id": "call_1", "name": "transfer", "input": {"iban": IBAN, "amount": 5000}}
+    ]
+    assert output["finishReason"] == "tool-calls"
+    assert output["status"] == "completed"
+    # TS parity: the normalized calls, not the raw Response items as well.
+    assert "output" not in output
 
 
 def test_disabled_graphmind_leaves_the_client_untouched(make_gm: Any) -> None:

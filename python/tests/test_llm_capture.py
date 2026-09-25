@@ -550,6 +550,81 @@ def test_a_step_shrunk_by_the_budget_does_not_use_up_the_runs_intact_tool_defini
     _all_valid(viewer, validate_frame)
 
 
+#: The SDK's ``messages.stream()`` snapshot parses tool input with
+#: ``from_json(buf, partial_mode=True)``: ``{}`` for the first (the whole string
+#: value dropped), ``{"limit": 5}`` for the second (a complete-looking call).
+CUT_TOOL_INPUTS = [
+    '{"sql": "DELETE FROM users WHERE id = 1',
+    '{"limit": 5, "sql": "DELETE FROM users WHERE',
+]
+
+
+def _cut_sql_stream(partial_json: str, is_async: bool) -> Any:
+    events = [
+        {"type": "message_start", "message": {
+            "id": "m", "type": "message", "role": "assistant", "model": "claude-test",
+            "content": [], "stop_reason": None, "stop_sequence": None,
+            "usage": {"input_tokens": 12, "output_tokens": 1}}},
+        {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "tool_use", "id": "toolu_cut", "name": "run_sql", "input": {}}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "input_json_delta", "partial_json": partial_json[:10]}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "input_json_delta", "partial_json": partial_json[10:]}},
+        # Cut off by max_tokens: no content_block_stop for the tool_use block.
+        {"type": "message_delta", "delta": {"stop_reason": "max_tokens", "stop_sequence": None},
+         "usage": {"output_tokens": 64}},
+        {"type": "message_stop"},
+    ]
+    body = anthropic_sse(events)
+    client, _ = make_anthropic(
+        lambda request, recorder: ANTHROPIC_HTTPX.Response(
+            200, headers={"content-type": "text/event-stream"}, content=body
+        ),
+        is_async=is_async,
+    )
+    return client
+
+
+@pytest.mark.parametrize("partial_json", CUT_TOOL_INPUTS)
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_anthropic_messages_stream_keeps_the_text_of_a_cut_tool_use(
+    attached: Any, validate_frame: Any, partial_json: str, is_async: bool
+) -> None:
+    # The event tee builds {input: None, inputText}; the SDK's final-message
+    # snapshot (partial-mode parse) must not replace it with a call whose
+    # arguments are silently missing.
+    instance, viewer = attached()
+    client = _cut_sql_stream(partial_json, is_async)
+    instance.instrument_anthropic(client)
+    kwargs: dict[str, Any] = {
+        "model": "claude-test",
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": "clean up user 1"}],
+        "tools": [{"name": "run_sql", "input_schema": {"type": "object"}}],
+    }
+    if is_async:
+        async with instance.run("agent"), client.messages.stream(**kwargs) as stream:
+            async for _ in stream:
+                pass
+    else:
+        with instance.run("agent"), client.messages.stream(**kwargs) as stream:
+            for _ in stream:
+                pass
+    finished = (
+        await viewer.wait_for_async(
+            lambda f: f.get("type") == "node.finished" and f["payload"]["nodeId"] == "llm:step"
+        )
+    )["payload"]
+    assert finished["output"]["finishReason"] == "length"
+    assert finished["output"]["rawFinishReason"] == "max_tokens"
+    assert finished["output"]["toolCalls"] == [
+        {"id": "toolu_cut", "name": "run_sql", "input": None, "inputText": partial_json}
+    ]
+    assert finished["usage"] == {"inputTokens": 12, "outputTokens": 64, "inclusive": True}
+    _all_valid(viewer, validate_frame)
+
+
 def test_langchain_chat_model_usage_finish_reason_and_tool_calls(
     attached: Any, validate_frame: Any
 ) -> None:
@@ -611,4 +686,61 @@ def test_langchain_chat_model_usage_finish_reason_and_tool_calls(
         {"id": "c1", "name": "get_weather", "input": {"city": "Lisbon"}},
         {"id": "c2", "name": "write", "input": None, "inputText": '{"a'},
     ]
+    _all_valid(viewer, validate_frame)
+
+
+def test_langchain_chat_anthropic_cache_writes_reported_as_the_5m_1h_split(
+    attached: Any, validate_frame: Any
+) -> None:
+    # langchain-anthropic zeroes input_token_details.cache_creation when it
+    # reports the 5m/1h split; the handler reads usage_metadata first, and must
+    # agree with the raw Anthropic usage of the same response (300 written).
+    pytest.importorskip("langchain_core")
+    from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.messages import AIMessage, HumanMessage
+    from langchain_core.outputs import ChatGeneration, ChatResult
+
+    from graphmind.integrations.langchain import GraphMindCallbackHandler
+
+    raw_usage = {
+        "input_tokens": 50, "output_tokens": 40, "cache_read_input_tokens": 1000,
+        "cache_creation_input_tokens": 300,
+        "cache_creation": {"ephemeral_5m_input_tokens": 300, "ephemeral_1h_input_tokens": 0},
+    }
+
+    class ChatAnthropicLike(BaseChatModel):
+        @property
+        def _llm_type(self) -> str:
+            return "anthropic-chat"
+
+        def _generate(self, messages: Any, stop: Any = None, run_manager: Any = None,
+                      **kwargs: Any) -> ChatResult:
+            message = AIMessage(
+                content="done",
+                usage_metadata={
+                    "input_tokens": 1350, "output_tokens": 40, "total_tokens": 1390,
+                    "input_token_details": {
+                        "cache_read": 1000, "cache_creation": 0,
+                        "ephemeral_5m_input_tokens": 300, "ephemeral_1h_input_tokens": 0,
+                    },
+                },
+                response_metadata={"stop_reason": "end_turn", "usage": raw_usage},
+            )
+            return ChatResult(generations=[ChatGeneration(message=message)])
+
+    instance, viewer = attached()
+    handler = GraphMindCallbackHandler(instance.session)
+    ChatAnthropicLike().invoke([HumanMessage("hi")], config={"callbacks": [handler]})
+    finished = viewer.wait_for(
+        lambda f: f.get("type") == "node.finished" and f["payload"]["nodeId"].startswith("llm:")
+    )["payload"]
+    expected = {
+        "inputTokens": 1350,
+        "outputTokens": 40,
+        "inclusive": True,
+        "cacheReadTokens": 1000,
+        "cacheWriteTokens": 300,
+    }
+    assert anthropic_usage(raw_usage) == expected
+    assert finished["usage"] == expected
     _all_valid(viewer, validate_frame)

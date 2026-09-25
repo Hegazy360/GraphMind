@@ -398,6 +398,34 @@ const usage = [
     raw: { input_tokens: 50, output_tokens: 40, input_token_details: { cache_read: 1000, cache_creation: 300 } },
     out: u(1350, 40, { cacheReadTokens: 1000, cacheWriteTokens: 300 }),
   },
+  {
+    // langchain-anthropic (Python, 1.4.x) moves the write count into the
+    // 5m/1h split and zeroes cache_creation "to avoid double counting".
+    provider: 'langchain',
+    name: 'usage_metadata from ChatAnthropic: cache_creation zeroed, 5m/1h split reported',
+    raw: {
+      input_tokens: 1350,
+      output_tokens: 40,
+      total_tokens: 1390,
+      input_token_details: {
+        cache_read: 1000,
+        cache_creation: 0,
+        ephemeral_5m_input_tokens: 300,
+        ephemeral_1h_input_tokens: 0,
+      },
+    },
+    out: u(1350, 40, { cacheReadTokens: 1000, cacheWriteTokens: 300 }),
+  },
+  {
+    provider: 'langchain',
+    name: 'usage_metadata with only the 5m/1h split',
+    raw: {
+      input_tokens: 1350,
+      output_tokens: 40,
+      input_token_details: { cache_read: 1000, ephemeral_5m_input_tokens: 200, ephemeral_1h_input_tokens: 100 },
+    },
+    out: u(1350, 40, { cacheReadTokens: 1000, cacheWriteTokens: 300 }),
+  },
   { provider: 'langchain', name: 'usage_metadata without details', raw: { input_tokens: 10, output_tokens: 2, total_tokens: 12 }, out: u(10, 2) },
   {
     provider: 'langchain',

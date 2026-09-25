@@ -155,6 +155,38 @@ class TestLlmCapture < Minitest::Test
     assert_equal digest, S.capture_tools(Object.new, "r", [symbolic])["tools"][0]["schemaHash"]
   end
 
+  WEATHER_TOOL = { "type" => "function",
+                   "function" => { "name" => "get_weather", "parameters" => { "type" => "object" } } }.freeze
+
+  def full_gc
+    3.times { GC.start(full_mark: true, immediate_sweep: true) }
+  end
+
+  # Through a helper, so no frame of the test holds the run memory.
+  def capture_weather(owner, run_key)
+    S.capture_tools(owner, run_key, [WEATHER_TOOL])
+  end
+
+  def test_tool_schema_memory_survives_gc_while_the_owner_lives
+    owner = Object.new
+    assert capture_weather(owner, "r1").key?("toolSchemas")
+    refute capture_weather(owner, "r1").key?("toolSchemas")
+    full_gc
+    refute capture_weather(owner, "r1").key?("toolSchemas"),
+           "a GC wiped the memory of a live owner: the schema was re-sent in the same run"
+    S.reset_tool_schema_memory(owner)
+    full_gc
+    assert capture_weather(owner, "r1").key?("toolSchemas"), "a reset forgets what was sent"
+    refute capture_weather(owner, "r1").key?("toolSchemas")
+  end
+
+  def test_a_frozen_owner_still_gets_its_tools_recorded
+    owner = Object.new.freeze
+    assert capture_weather(owner, "r1").key?("toolSchemas")
+    assert_equal [{ "name" => "get_weather", "schemaHash" => S.schema_hash(WEATHER_TOOL) }],
+                 capture_weather(owner, "r1")["tools"]
+  end
+
   def test_record_keeps_everything
     history = Array.new(300) { |i| { role: :user, content: "m#{i} #{'x' * 3000}" } }
     out = S.record(history)
@@ -238,6 +270,40 @@ class TestLlmCapture < Minitest::Test
                     "inputText" => '{"path":"a.txt","content":"hel' }], output["toolCalls"]
     assert_valid_frame(started)
     assert_valid_frame(finished)
+  end
+
+  PLAIN_CHAT = {
+    "id" => "chatcmpl-1", "model" => "gpt-test",
+    "choices" => [{ "index" => 0, "finish_reason" => "stop",
+                    "message" => { "role" => "assistant", "content" => "ok" } }],
+    "usage" => { "prompt_tokens" => 1, "completion_tokens" => 1, "total_tokens" => 2 }
+  }.freeze
+
+  def test_ruby_openai_sends_tool_schemas_once_per_run_across_gc
+    skip("ruby-openai is not installed") unless LLM_CAPTURE_OPENAI
+    session, viewer = attached_session
+    client = OpenAI::Client.new(access_token: "test-key", log_errors: false) do |faraday|
+      faraday.adapter(:test) do |stub|
+        stub.post("/v1/chat/completions") { [200, { "Content-Type" => "application/json" }, JSON.generate(PLAIN_CHAT)] }
+      end
+    end
+    Graphmind::Integrations::RubyOpenAI.instrument(client, session)
+    tool = { type: "function", function: { name: "get_weather", parameters: { type: "object" } } }
+    steps = 4
+
+    session.run("agent") do
+      steps.times do
+        client.chat(parameters: { model: "gpt-test", messages: [{ role: "user", content: "hi" }], tools: [tool] })
+        full_gc
+      end
+    end
+
+    started = viewer.wait_for_frame("node.started", count: steps + 1)
+                    .select { |f| f["payload"]["kind"] == "llm" }
+    assert_equal steps, started.length
+    with_schemas = started.count { |f| f["payload"]["input"].key?("toolSchemas") }
+    assert_equal 1, with_schemas, "toolSchemas once per run per hash, not on #{with_schemas} of #{steps} steps"
+    assert(started.all? { |f| f["payload"]["input"]["tools"] == [{ "name" => "get_weather", "schemaHash" => S.schema_hash(tool) }] })
   end
 
   def test_ruby_openai_streamed_usage_and_tool_calls_come_from_the_chunks

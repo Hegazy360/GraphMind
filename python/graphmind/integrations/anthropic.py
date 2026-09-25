@@ -541,6 +541,12 @@ def _finish_stream(
                 summary = _summarize(final)
                 if not summary.get("text"):
                     summary.pop("text", None)
+                if state.calls or state.blocks:
+                    # The tee saw the tool_use blocks: its calls keep the raw
+                    # text of one cut off by max_tokens (``inputText``). The
+                    # snapshot parses that text in partial mode, silently
+                    # dropping whatever is incomplete.
+                    summary.pop("toolCalls", None)
         except Exception:
             summary = None
     output = state.output()

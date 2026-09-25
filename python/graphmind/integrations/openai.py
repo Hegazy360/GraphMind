@@ -236,8 +236,9 @@ def _summarize(flavor: str, result: Any) -> dict[str, Any]:
             out.update(finish_fields(raw, bool(calls), refused))
             if isinstance(status, str):
                 out["status"] = status
-            if output is not None:
-                out["output"] = safe_value(output)
+            # Not the raw ``output`` items too (TS parity): their
+            # ``arguments`` / ``input`` would carry, one key over, the very
+            # tool-call arguments the redaction switches hide in ``toolCalls``.
     except Exception:
         pass
     return out
@@ -690,7 +691,7 @@ class _Call:
         output = state.output()
         if state.final is not None:
             # A Responses-API stream ends with the whole Response: report the
-            # same fields a non-streamed call does (output items, status).
+            # same fields a non-streamed call does (tool calls, status).
             summary = _summarize(self.flavor, state.final)
             if not summary.get("text"):
                 summary.pop("text", None)

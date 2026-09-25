@@ -308,11 +308,15 @@ def langchain_usage(usage: Any) -> dict[str, Any] | None:
         in_details = _get(usage, "input_token_details")
         cache_read = token_count(_get(in_details, "cache_read"))
         cache_write = token_count(_get(in_details, "cache_creation"))
-        if cache_write is None and in_details is not None:
-            cache_write = sum_reported(
+        if in_details is not None:
+            # langchain-anthropic reports the writes as the 5m/1h split and
+            # zeroes ``cache_creation`` ("to avoid double counting").
+            split = sum_reported(
                 token_count(_get(in_details, "ephemeral_5m_input_tokens")),
                 token_count(_get(in_details, "ephemeral_1h_input_tokens")),
             )
+            if split is not None and (cache_write is None or split > cache_write):
+                cache_write = split
         input_tokens = token_count(_get(usage, "input_tokens"))
         cached = sum_reported(cache_read, cache_write)
         if input_tokens is not None and cached is not None and cached > input_tokens:

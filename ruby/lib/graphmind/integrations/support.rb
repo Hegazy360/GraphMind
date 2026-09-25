@@ -73,9 +73,12 @@ module Graphmind
       URL_USERINFO_RE = %r{\A([A-Za-z][A-Za-z0-9+.-]*://)[^/?#@]*@}
       MAX_TOOL_DEFINITION_DEPTH = 16
 
-      SCHEMA_MEMORY = ObjectSpace::WeakMap.new
+      # What an owner (the session) was sent lives on the owner itself, so it is
+      # exactly as alive as the owner. Not an ObjectSpace::WeakMap: its VALUES
+      # are weak too, so any GC wiped it and the schemas were re-sent mid-run.
+      SCHEMA_MEMORY_IVAR = :@__graphmind_tool_schemas
       SCHEMA_LOCK = Mutex.new
-      private_constant :SCHEMA_MEMORY, :SCHEMA_LOCK
+      private_constant :SCHEMA_MEMORY_IVAR, :SCHEMA_LOCK
 
       module_function
 
@@ -365,11 +368,7 @@ module Graphmind
       end
 
       def run_memory(owner, run_key)
-        runs = SCHEMA_MEMORY[owner]
-        if runs.nil?
-          runs = {}
-          SCHEMA_MEMORY[owner] = runs
-        end
+        runs = owner_memory(owner)
         hashes = runs.delete(run_key)
         if hashes.nil?
           hashes = Set.new
@@ -379,9 +378,18 @@ module Graphmind
         hashes
       end
 
+      # A frozen owner cannot carry the memory: it gets a fresh one per step, so
+      # its schemas are re-sent (extra bytes, never a missing definition).
+      def owner_memory(owner)
+        return {} if owner.frozen?
+
+        runs = owner.instance_variable_get(SCHEMA_MEMORY_IVAR)
+        runs.is_a?(Hash) ? runs : owner.instance_variable_set(SCHEMA_MEMORY_IVAR, {})
+      end
+
       # Forget what a session was sent (tests).
       def reset_tool_schema_memory(owner)
-        SCHEMA_LOCK.synchronize { SCHEMA_MEMORY[owner] = {} }
+        SCHEMA_LOCK.synchronize { owner.instance_variable_set(SCHEMA_MEMORY_IVAR, {}) unless owner.frozen? }
       end
 
       # The allow-listed parameters actually given (String or Symbol keys), JSON-safe.
