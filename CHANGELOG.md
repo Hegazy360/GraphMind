@@ -8,8 +8,112 @@ distribution, and the Ruby `graphmind` gem).
 
 ## 0.6.0 (unreleased)
 
-<!-- PHASE7-PENDING: headline + the sections for detectors, argument editing,
-control plane, usage truth and the context view are written when each lands. -->
+The release for the failures that don't throw. GraphMind now holds an agent on
+an error-shaped tool result, a tool call the token limit cut off, the same
+error again and again, or a repeating cycle of calls; lets you fix a held tool
+call's arguments and run the real call; records token counts you can compare
+from one step to the next and shows what changed between two LLM steps and
+what it cost; and your coding agent can drive a paused run from the terminal.
+Controlling a held run now needs a credential. The smart holds and the new loop
+kinds are TypeScript only in 0.6.0 (every TS adapter and `graphmind
+mcp-proxy`); argument editing works in TypeScript and Python.
+
+### Added — the debugger stops on the failures that don't throw (smart holds, loop kinds)
+
+- **A tool that returned its failure holds** (`smart.rule: 'error-result'`).
+  While a debugger is attached, an error-shaped result holds the call at its
+  `after` gate: `isError: true`, `success: false`, a non-zero numeric
+  `exit_code` / `exitCode` / `exitStatus`, or a plain object whose only key is
+  `error`. Nothing else counts; no text is searched for "error". Under
+  `graphmind mcp-proxy` an `isError: true` result is still gated at the tool's
+  `error` point, as one hold carrying this rule whether or not the error
+  breakpoint is armed; a JSON-RPC error stays an ordinary error hold.
+- **A tool call the model could not finish holds** (`smart.rule:
+  'truncated-tool-call'`): an LLM step the token limit or a content filter
+  stopped (normalized `finishReason` `length` / `content-filter`) while it was
+  requesting a tool call, whose arguments are then very likely cut off. It
+  holds before your code has the result for AI SDK `generateText` steps,
+  non-streaming OpenAI requests and Anthropic `messages.create`; a `streamText`
+  step waits at its `finish` part, an Anthropic stream (`messages.stream()`
+  too) before `message_stop`, LangChain and LangGraph at the end of the model
+  run. A streamed OpenAI response is recorded but not held. The AI SDK,
+  Anthropic and LangChain adapters gained these LLM `after` gates; detached,
+  they are called with no options (a streamed AI SDK step is not gated at all).
+- Both are **on by default** and hold only while attached.
+  `GRAPHMIND_BREAK_ON_ERROR_RESULT` / `GRAPHMIND_BREAK_ON_TRUNCATED` set to `0`,
+  `false`, `off` or `no` turn them off (any other value leaves them on), and the
+  session options `breakOnErrorResult` / `breakOnTruncated` beat the
+  environment. `smart.detail` is GraphMind's own sentence, never a quote of the
+  result, and is left out under any HIDE switch that covers the node.
+- **Two new loop kinds** under `reason: 'loop'`. `cycle`: 2 to 4 calls repeated
+  in 3 identical laps — same tool, same arguments **and** same result at each
+  position, at least two distinct calls per lap — held at the first call of the
+  fourth lap. `error-repeat`: the same tool failed 3 times in a row with the
+  same error (name and message; the arguments may differ), thrown or
+  error-shaped, held before the 4th call; a success of that tool ends the
+  streak. Both fill the four 0.5 loop fields, and `loop.kind` / `period` /
+  `laps` say which. Their fingerprints are HMAC digests keyed with a random
+  per-process salt that never leaves the process, and `"__REDACTED__"` under a
+  covering HIDE switch.
+  `GRAPHMIND_LOOP_ALLOW`, `GRAPHMIND_ON_LOOP` and `GRAPHMIND_LOOP_THRESHOLD=0`
+  apply to them; the threshold itself still governs only the identical-repeat
+  rule.
+- **Every hold carries a `reason`**: `loop`, `breakpoint` (with `smart` for a
+  smart hold), `step` or `error` — four values a 0.5 server already accepts.
+- **The viewer says what held**: "Loop: search → fetch, 3 identical rounds
+  (same arguments, same results). Holding round 4 at search.", "Repeated error:
+  run_sql failed 3× in a row with the same error (arguments varied).", a
+  sentence per smart rule, the cycle's laps outlined on the canvas and the
+  evidence in the inspector.
+
+### Added — fix a held tool call's arguments, and the real call runs (edit arguments)
+
+- **Edit arguments…** (key `e`) on a held tool call the app marked `editable`.
+  The editor opens on the call's live arguments (after an accepted edit, the
+  ones it last ran with), lists the keys you changed and sends **only those**:
+  every other key keeps its live value, so a long argument you never touched is
+  never replaced by its recorded preview. **Run with N changes** at a `before`
+  gate (`continue` + `input`), **Retry with N changes** at an `after` or `error`
+  gate (`retry` + `input`). The real tool runs, and the agent carries on with
+  its result.
+- **Checked by the tool's own schema, in the app.** The edit's top-level keys
+  replace the live ones and the merged arguments go through the tool's schema —
+  AI SDK `asSchema(tool.inputSchema).validate`, zod, any Standard Schema, the
+  `inputSchema` from the server's last `tools/list` for `mcp-proxy`, the
+  function's signature in Python — on the host's own task, within 4 s. A
+  refusal comes back as `exec.refused` with a reason that never quotes your
+  value, and the call **stays held** under the same pause; a disconnect or a
+  pause timeout while validating continues with the original arguments. A
+  schema's transforms never run twice on arguments you did not touch: the edit
+  is merged into the model's raw arguments and parsed once (AI SDK, LangChain
+  `tool()`), and where those cannot be recovered (a high-level McpServer tool)
+  a partial edit is taken only when the schema leaves the parsed arguments
+  unchanged; otherwise every argument must be given.
+- **This call only.** The model still sees the arguments it asked for, and a
+  later call of the same tool starts from the model's arguments again. A plain
+  Retry after an accepted edit re-runs the edited arguments. The release records
+  `exec.resumed.edited {after}` with what actually ran — the viewer marks the
+  call **edited** and shows *asked for* next to *ran with* — and who released
+  it.
+- **Where:** every wrapped AI SDK tool (streaming tools at their `before`
+  gate); Anthropic and OpenAI wrapped tools called with one object of arguments
+  (OpenAI: or its JSON text); LangGraph `wrapStructuredTool` / `gm.tool`;
+  `@graphmind-ai/mcp` tools registered with an input schema; every `tools/call`
+  through `graphmind mcp-proxy` (only `arguments` can change, spliced into the
+  frame's original bytes, so an id above 2^53 and `_meta` reach the server
+  unchanged); Python `@gm.tool` / `gm.wrap_tools`. LLM steps are not editable in
+  0.6.0, and the Ruby gem does not take edits.
+- **Guarded.** It needs a 0.6.0 app and server, a credential (the viewer's
+  token, or the agent token at `--allow-control=edit`), and an app and server
+  that did not switch it off (`GRAPHMIND_DISABLE_EDIT_INPUT`, `serve
+  --no-edit-input`). Under `GRAPHMIND_HIDE_INPUTS` / `GRAPHMIND_HIDE_TOOL_ARGS`
+  an edit is a full replacement, so its answer never reveals the hidden values,
+  and `edited.after` is hidden too. An edit that still holds `"__REDACTED__"`, a
+  truncation marker or a `graphmind mcp` preview is refused by the app and by
+  the server. Parallel calls of one tool can each be edited: the pause names the
+  call it holds (`exec.paused.instanceId`).
+- From a terminal: `graphmind resume <pauseId> --run <id> --action retry
+  --input '{"limit": 50}'` (or `--input @args.json`).
 
 ### Added — drive a paused agent from your coding agent (control plane)
 
@@ -38,22 +142,25 @@ control plane, usage truth and the context view are written when each lands. -->
   is forwarded with a `requestId`, others get `pause-taken`, a pause known to be
   closed gets `no-such-pause`. An app's refusal, or 5 s without an answer,
   reopens it. A resume the app answers late is still told what the app did
-  (`resumed` if it ran; the others `superseded`), and an old client's
-  un-echoed answer is credited only to a resume that asked for that action.
-  Resumes for made-up pause ids, and tokenless long-polls (at most 8 of the 16
-  slots), cannot crowd out a real one; a peer cannot take over a live run by
-  flooding fresh run ids.
+  (`resumed` if it ran; the others `superseded`); an answer without a
+  `requestId`, from an app that says it echoes them (`request-id`), is a
+  release nobody asked for, and an old client's un-echoed answer is credited
+  only to a resume that asked for that action. Resumes for made-up pause ids,
+  and tokenless long-polls (at most 8 of the 16 slots), cannot crowd out a real
+  one; a peer cannot take over a live run by flooding fresh run ids.
 - **Audit.** The stored `exec.resumed` records who released it (`principal`:
   `viewer`, `agent` or `anonymous`, from the credential — never from the app)
   and an optional sanitized `operator` label. The viewer shows "resumed by
   agent" and, in the run bar, its own control level and the agent's.
 - **The viewer says why a resume did not land.** The server's own answers —
   `pause-taken` (another tab or `graphmind resume` got there first),
-  `no-such-pause`, `edit-refused` (a tab without the token, `--no-edit-input`),
+  `no-such-pause`, `still-resolving`, `not-editable`, `edit-refused`,
   `forbidden` — reach the pause they are about, in plain words: in the argument
-  editor (matched to its request by `requestId`, which the server now echoes on
-  an immediate refusal, with the `outcome`) and under the pause row, instead of
-  the editor waiting 10 s and saying the app had not answered.
+  editor (matched to its request by the `requestId` the server echoes on an
+  immediate refusal, with the `outcome`) and under the pause row or card,
+  instead of the editor waiting 10 s and saying the app had not answered. A tab
+  offers only what the server will accept from it: without the token, Continue,
+  Retry and Abort, with a note saying why.
 
 ### Added — what changed between two LLM steps, and what it cost (context view)
 
@@ -84,6 +191,54 @@ control plane, usage truth and the context view are written when each lands. -->
   inspector. The table is a separate chunk the viewer fetches only for a run
   with token usage; a single-file export opened from disk shows no cost.
 
+### Changed — token counts you can compare, and each LLM step recorded as it was sent (usage truth)
+
+- **`inputTokens` is the whole prompt, cached tokens included**, marked
+  `inclusive: true`, in every adapter and in Python and Ruby. Providers
+  disagree — Anthropic's `input_tokens` is only the uncached tail, OpenAI's
+  already includes cached tokens, ruby_llm 2.0 counts input without cache — so
+  each adapter adds the cache counts back where its provider left them out
+  (Anthropic's 5m / 1h cache-write split too, also when LangChain reports the
+  split and zeroes `cache_creation`). `cacheReadTokens`, `cacheWriteTokens` and
+  `reasoningTokens` (OpenAI's reasoning tokens; Anthropic's thinking tokens in
+  TypeScript and Python) appear only when the provider reported them: a
+  reported 0 stays 0, and a missing count is never filled with 0 (Python used
+  to). The legacy `cacheCreationTokens` / `cachedInputTokens` stay as aliases
+  through 0.6.x. A failed AI SDK or Anthropic (TypeScript) stream keeps the
+  usage it had already reported. The viewer and `graphmind mcp` trust
+  `inclusive` and label older events "as reported".
+- **Every LLM step's output says why it stopped and what it asked for**:
+  `finishReason` normalized to `stop`, `length`, `tool-calls`,
+  `content-filter`, `error` or `other` (an OpenAI refusal is `content-filter`,
+  Anthropic's `pause_turn` is `other`), the provider's own `rawFinishReason`,
+  and `toolCalls: [{id?, name, input, inputText?}]`, where `inputText` holds
+  arguments that did not parse, such as a call cut off mid-stream (from a
+  Python Anthropic `messages.stream()` too, which used to report the SDK's
+  partial parse as a complete call). An OpenAI Responses stream that ends early
+  (TypeScript) still lists the calls requested so far, and streamed custom tool
+  calls are recorded. The Python OpenAI Responses output no longer carries the
+  raw `output` items next to `toolCalls`, so the tool switches cover those
+  arguments. `toolCalls` fall under `GRAPHMIND_HIDE_OUTPUTS`, and their
+  arguments also under `GRAPHMIND_HIDE_TOOL_ARGS` and `GRAPHMIND_HIDE_INPUTS`.
+- **Each step's input is the request as sent**: the prompt in full (the
+  LangGraph 20,000-character preview is opt-in only, the Ruby 12-message /
+  2,000-character trim and the Python caps are gone; the 512 KB event limit is
+  the one bound), the sampling parameters from an allow-list under the SDK's
+  own names (headers and provider options, which can carry credentials, are
+  never recorded), and `tools: [{name, schemaHash}]` with each tool's full
+  definition sent once per run as `toolSchemas`. A definition the 512 KB limit
+  shrank is sent again, intact, on the run's next step.
+- **A tool definition never records a credential.** Outside its schema, keys
+  that look like an authorization, header, token, secret, password, key,
+  cookie, credential or bearer are dropped, and any `*url` value loses its
+  user:password, query and fragment — which the OpenAI `mcp` tool and the AI
+  SDK's `openai.mcp` can carry — in TypeScript, Python and Ruby alike, before
+  the definition is hashed.
+- One shared fixture (`packages/client/test/fixtures/llm.json`) holds the
+  TypeScript, Python and Ruby adapters to the same usage mappings, finish
+  reasons, tool calls, schema hashes, parameter allow-list and credential
+  scrubbing.
+
 ### Changed — control needs a credential (security)
 
 - At start the server mints a **viewer** token (full control; reaches the
@@ -111,6 +266,23 @@ control plane, usage truth and the context view are written when each lands. -->
   viewer can no longer be framed.
 - `graphmind mcp` is unchanged and still read-only; its instructions now say
   where control lives and that recorded payloads are untrusted data.
+
+### Fixed — security, found reviewing this release before it shipped
+
+- **The viewer's token goes only to the page's own server.** It is checked
+  against the server that served the page, never a `?server=` target; a failed
+  check drops only the token that failed; a tab picks up a newer token another
+  tab stored; and a `#token=` link replaces a working token only after the
+  server confirms it.
+- **A tokenless viewer socket could steer the run.** It could inject a result —
+  an injected LLM completion chooses the next tool call and its arguments — and
+  arm breakpoints. It is now limited to continue, retry and abort (see above).
+- **Recorded ids never carry control characters.** The server forwards a
+  resumer's `requestId` only when it is 1 to 128 of `A-Z a-z 0-9 . _ : -`
+  (otherwise it mints a UUID), and it writes app-written text to its log with
+  control and bidi characters escaped, as the CLI prints it.
+- **Tool definitions and Python Responses output** could record credentials
+  and hidden tool arguments (see *usage truth* above).
 
 ### Fixed — a privacy switch no longer fails open on spelling
 
@@ -160,12 +332,17 @@ rather than records. If you set one of these to an unusual value meaning
   inputs take only full replacements; `GRAPHMIND_DISABLE_EDIT_INPUT` turns it
   off; the redactor covers `exec.resumed.edited` and `exec.refused.message`.
   `session.gate()` / `gate_async()` take `editable=`, `validate_input=` and
-  `result=`; `gm.merge_tool_input` is the default rule.
-- **Python and Ruby** echo `requestId`, read `hello.ack.hubCapabilities`, and
-  refuse an injected value that still holds `__REDACTED__` or a truncated
-  preview under every debugger (the gate stays held; a 0.5 debugger also gets a
-  log line). Ruby does not announce `edit-input`; an edit sent to it is refused
-  (`disabled`) rather than dropped.
+  `result=`; `gm.merge_tool_input` is the default rule. Its pauses name the
+  held execution (`exec.paused.instanceId`).
+- **Python and Ruby** echo `requestId` and say so in their handshake
+  (`request-id`, whatever `GRAPHMIND_DISABLE_EDIT_INPUT` says), read
+  `hello.ack.hubCapabilities`, and refuse an injected value that still holds
+  `__REDACTED__` or a truncated preview under every debugger (the gate stays
+  held; a 0.5 debugger also gets a log line). Ruby does not announce
+  `edit-input`; an edit that reaches it is refused (`disabled`) rather than
+  dropped.
+- Not ported yet: the smart holds and the `cycle` / `error-repeat` loop kinds.
+  The Python and Ruby identical-repeat loop hold is unchanged.
 - The marker list gained the Python SDK's own recording bounds (`…[truncated]`,
   `<N bytes>`, `…[depth limit]`, `…[N more]`, `[N more keys]`), in the client
   and the server alike. New shared conformance fixture
@@ -173,16 +350,32 @@ rather than records. If you set one of these to an unusual value meaning
   validator results, message sanitising, the merge rule), consumed by the
   TypeScript, Python and Ruby suites; `redaction.json` gained the pause answers.
 
+### Docs
+
+- New page: **Edit arguments and run** (the editor, what happens to an edit,
+  where it works, who may use it, the CLI).
+- The environment reference covers the smart holds, the loop kinds and the new
+  switches; the CLI reference the control commands, their exit codes and the
+  HTTP routes; *Inspecting* the usage semantics and the Context & cost view;
+  the wire protocol every 0.6.0 field; `SECURITY.md` and the security page the
+  control credentials and the tokenless gap that remains; *Remote development*
+  the `#token=` link.
+
 ### Wire protocol (additive — every 0.5 peer accepts or ignores these)
 
 - `exec.paused.editable`, `exec.paused.smart {rule, detail?}`,
-  `exec.paused.loop.kind / period / laps`
+  `exec.paused.loop.kind / period / laps`, `exec.paused.instanceId` (the held
+  execution, when the sender knows it)
 - new event `exec.refused {pauseId, code, message?, requestId?}` — an edited
   input was refused and the gate is still held
 - `exec.resume.input / requestId`; `exec.resumed.edited {after} / requestId /
   principal`
-- `hello.ack.hubCapabilities`; client capability `edit-input`
+- `hello.ack.hubCapabilities`; client capabilities `edit-input` and
+  `request-id` (it echoes `requestId`; announced even with edits switched off)
 - `TokenUsage.inclusive / cacheReadTokens / cacheWriteTokens / reasoningTokens`
+- The server's viewer socket (`/ws/ui`, not the app's wire): `welcome.control`
+  (the tab's principal, the agent level, whether edits are on),
+  `resume.result`, and `code` / `pauseId` / `outcome` / `requestId` on `error`
 
 New loop kinds keep `reason: "loop"` and still fill the four 0.5 loop fields;
 smart holds travel as `reason: "breakpoint"` so a 0.5 debugger, whose reason
