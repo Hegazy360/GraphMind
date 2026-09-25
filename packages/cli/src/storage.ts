@@ -123,6 +123,9 @@ export interface Storage {
 
   getRun(id: string): RunSummary | undefined;
 
+  /** A run's lifecycle status alone (no counts): cheap enough for the ingest path. */
+  getRunStatus(id: string): RunLifecycleStatus | undefined;
+
   /** All runs, most recently started first. */
   listRuns(): RunSummary[];
 

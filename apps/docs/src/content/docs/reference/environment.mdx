@@ -191,6 +191,13 @@ Costs and limits:
   under 0.5 ms in Python and Ruby (`test_fingerprinting_a_1kb_input_is_cheap` in each), where
   the canonicaliser is interpreted code. For a tool that takes megabytes of arguments, use
   `allowNodes` or `GRAPHMIND_ON_LOOP=off`.
+- **Result digest cost (TypeScript, 0.6.0):** each watched tool's *completion* pays too, for
+  the cycle and error-repeat kinds below: its result is canonicalized and digested (a salted
+  HMAC, computed locally and never sent) when `node.finished` is emitted, attached or detached,
+  whenever the guard is on (the default). The walk stops at 256K characters of canonical form
+  (`MAX_OUTPUT_CANONICAL_CHARS` in `packages/client/src/loop-guard.ts`); a larger result is not
+  digested and compares equal to nothing. A result of about 185 KB costs about 1 ms per call
+  detached. For a tool that returns large results, use `allowNodes` or `GRAPHMIND_ON_LOOP=off`.
 - **Identical calls in parallel also count.** Their starts are back-to-back, so once the
   threshold is reached each further identical call can be held.
 - **One run can span requests.** Under `graphmind mcp-proxy` a whole host session is one run.
@@ -240,6 +247,12 @@ breakpoint holds.
 | `error-result` | `GRAPHMIND_BREAK_ON_ERROR_RESULT` | A tool returned an error-shaped result: `isError === true`, `success === false`, a non-zero numeric `exit_code` / `exitCode` / `exitStatus`, or a plain object whose only key is `error`. Nothing else counts; text is never searched for words like "error". |
 | `truncated-tool-call` | `GRAPHMIND_BREAK_ON_TRUNCATED` | An LLM step's normalized finish reason is `length` or `content-filter` and the step requested at least one tool call, whose arguments are then very likely cut off. |
 
+- **Not a breakpoint.** They hold whether or not the pause-on-error breakpoint is armed:
+  `graphmind serve --pause-on-error off` and clearing that chip in the viewer do not turn them
+  off. Both are on by default; only `0`, `false`, `off` or `no` in the app's environment turns
+  one off — for `graphmind mcp-proxy`, the `env` of its entry in your MCP client config. They
+  exist in the TypeScript adapters and the MCP proxy; the Python and Ruby SDKs do not hold on
+  them.
 - **`detail`** is a short sentence in GraphMind's own words, such as `the tool returned a
   result with isError: true`. It never quotes the result, and it is left out under any HIDE
   switch that covers the node.

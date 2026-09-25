@@ -10,8 +10,12 @@
  *    and past tense;
  *  - a cycle's lap is the set of nodes the canvas outlines.
  */
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { parseEnvelope } from '@graphmind-ai/schema';
+import { HoldEvidence } from '../src/components/HoldEvidence.js';
+import { tokenBuffers } from '../src/store/tokenBuffers.js';
 import { MAX_REFUSALS_PER_PAUSE, applyEvent, type RunsMap } from '../src/store/applyEvent.js';
 import {
   EDIT_LIVE_ARGS,
@@ -371,8 +375,9 @@ describe('smart banners', () => {
   });
 
   it('truncated-tool-call: the token limit, or the content filter when the step says so', () => {
-    const run = smartRun('truncated-tool-call', 'llm');
-    const { node, pause } = get(run, 'llm:step');
+    resetCounters();
+    const length = smartRun('truncated-tool-call', 'llm', { finishReason: 'length' });
+    const { node, pause } = get(length, 'llm:step');
     expect(holdBannerText(node, pause)).toBe('The model stopped at the token limit in the middle of a tool call');
     expect(holdBannerText(node, pause, true)).toBe(
       'Was held — the model stopped at the token limit in the middle of a tool call',
@@ -381,6 +386,86 @@ describe('smart banners', () => {
     const filtered = smartRun('truncated-tool-call', 'llm', { finishReason: 'content-filter' });
     const f = get(filtered, 'llm:step');
     expect(smartBannerText(f.node, f.pause)).toBe('A content filter stopped the model in the middle of a tool call');
+  });
+
+  /**
+   * The REAL event order: every adapter but LangGraph runs the after gate
+   * BEFORE node.finished, so while the hold is open the step has no output.
+   * The cause comes from the SDK's value-free `smart.detail` instead.
+   */
+  describe('while held, before node.finished (the real event order)', () => {
+    const FILTER = 'the model was stopped by the content filter with 1 tool call requested; 1 call has arguments that did not parse';
+    const LENGTH = 'the model was stopped at the token limit with 1 tool call requested';
+    function held(detail?: string): RunState {
+      return build([
+        started('llm:step', 'llm', { instanceId: 's1' }),
+        ev('exec.paused', {
+          pauseId: 'p1',
+          nodeId: 'llm:step',
+          point: 'after',
+          reason: 'breakpoint',
+          instanceId: 's1',
+          smart: { rule: 'truncated-tool-call', ...(detail !== undefined ? { detail } : {}) },
+        }),
+      ]);
+    }
+
+    it('a content-filter stop is called one, and the hint does not say to raise the token limit', () => {
+      const { node, pause } = get(held(FILTER), 'llm:step');
+      expect(node.executions.at(-1)?.output).toBeUndefined();
+      expect(holdBannerText(node, pause)).toBe('A content filter stopped the model in the middle of a tool call');
+      expect(holdHint(pause, node)).not.toContain('Raise the token limit');
+      expect(holdHint(pause, node)).toContain('content filter');
+    });
+
+    it('a token-limit stop says so, and says to raise it', () => {
+      const { node, pause } = get(held(LENGTH), 'llm:step');
+      expect(holdBannerText(node, pause)).toBe('The model stopped at the token limit in the middle of a tool call');
+      expect(holdHint(pause, node)).toContain('Raise the token limit');
+    });
+
+    it('with no detail and no output it names neither cause', () => {
+      const { node, pause } = get(held(), 'llm:step');
+      expect(holdBannerText(node, pause)).toBe("The model's reply was cut off in the middle of a tool call");
+    });
+
+    it('the evidence names the finish reason and shows the arguments streamed so far', () => {
+      const run = build([
+        started('llm:step', 'llm', { instanceId: 's1', runId: 'run-trunc' }),
+        ev(
+          'exec.paused',
+          { pauseId: 'p1', nodeId: 'llm:step', point: 'after', reason: 'breakpoint', instanceId: 's1', smart: { rule: 'truncated-tool-call', detail: FILTER } },
+          { runId: 'run-trunc' },
+        ),
+      ], 'run-trunc');
+      tokenBuffers.beginInstance('run-trunc', 'llm:step');
+      tokenBuffers.push('run-trunc', 900, 'llm:step', [{ t: 'tool-args', v: '{"path":"a.txt","content":"hel' }]);
+      tokenBuffers.flushNow();
+      const { node, pause } = get(run, 'llm:step');
+      const html = renderToStaticMarkup(createElement(HoldEvidence, { runId: 'run-trunc', node, pause }));
+      expect(html).not.toContain('at the token limit');
+      expect(html).toContain('finish reason</span>');
+      expect(html).toContain('content-filter');
+      expect(html).toContain('The tool call it was writing');
+      expect(html).toContain('{&quot;path&quot;:&quot;a.txt&quot;,&quot;content&quot;:&quot;hel');
+    });
+
+    it('at an error-result hold the evidence says the result is shown only after release', () => {
+      const run = build([
+        started('tool:search', 'tool', { instanceId: 'c1' }),
+        ev('exec.paused', {
+          pauseId: 'p1',
+          nodeId: 'tool:search',
+          point: 'after',
+          reason: 'breakpoint',
+          instanceId: 'c1',
+          smart: { rule: 'error-result', detail: 'the tool returned a result with isError: true' },
+        }),
+      ]);
+      const { node, pause } = get(run, 'tool:search');
+      const html = renderToStaticMarkup(createElement(HoldEvidence, { runId: RUN, node, pause }));
+      expect(html).toContain('The result itself is not shown yet');
+    });
   });
 
   it('an ordinary gate has no named hold — the usual "Paused before call" stays', () => {

@@ -25,6 +25,11 @@
  *                              An edit runs the schema twice (the raw-arguments
  *                              probe, then the merged edit): keep 2 x this under
  *                              the client's 4 s VALIDATION_TIMEOUT_MS.
+ *   EDIT_AGENT_PARALLEL=1      optional: the first step asks for TWO calls of
+ *                              the tool at once, `call-a` (to "XYZ") and
+ *                              `call-b` (to "QQQ"). Both throw, so both hold at
+ *                              their own error gate at the same time (the
+ *                              viewer's parallel-holds proof).
  *
  * Output (stdout): `EDIT_AGENT_ATTACHED <runName>` once the handshake is done,
  * then one line `EDIT_AGENT_RESULT <json>` with the final text and every
@@ -37,6 +42,7 @@ import { graphmind } from '@graphmind-ai/sdk';
 
 const RATES = { USD: 1.09, GBP: 0.85, JPY: 162.4 };
 const delayMs = Number(process.env.EDIT_AGENT_VALIDATE_DELAY_MS ?? 0);
+const parallel = process.env.EDIT_AGENT_PARALLEL === '1';
 
 /** Every argument object `execute` was really called with, in order. */
 const executedWith = [];
@@ -68,13 +74,21 @@ function mockModel() {
               { type: 'text-start', id: 't0' },
               { type: 'text-delta', id: 't0', delta: 'Converting the budget. ' },
               { type: 'text-end', id: 't0' },
-              {
-                type: 'tool-call',
-                toolCallId: 'call-fx-1',
-                toolName: 'convertCurrency',
-                // The bad argument: a currency code the tool does not know.
-                input: JSON.stringify({ amount: 100, from: 'EUR', to: 'XYZ' }),
-              },
+              ...(parallel
+                ? [
+                    // Two calls of one tool at once, both with a code the tool does not know.
+                    { type: 'tool-call', toolCallId: 'call-a', toolName: 'convertCurrency', input: JSON.stringify({ amount: 100, from: 'EUR', to: 'XYZ' }) },
+                    { type: 'tool-call', toolCallId: 'call-b', toolName: 'convertCurrency', input: JSON.stringify({ amount: 200, from: 'EUR', to: 'QQQ' }) },
+                  ]
+                : [
+                    {
+                      type: 'tool-call',
+                      toolCallId: 'call-fx-1',
+                      toolName: 'convertCurrency',
+                      // The bad argument: a currency code the tool does not know.
+                      input: JSON.stringify({ amount: 100, from: 'EUR', to: 'XYZ' }),
+                    },
+                  ]),
               finish('tool-calls'),
             ]
           : [

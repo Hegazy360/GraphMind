@@ -318,8 +318,8 @@ that reported them now assert the fix instead:
 Still open, by design for now: the read API needs no credential, so any local
 process — as any OS user — can read runs over loopback even though the
 database file is 0600; and a viewer socket without the 0.6 token can still
-continue, retry, inject and abort (never edit an input). Both are stated in
-`SECURITY.md`.
+continue, retry and abort a held call (never inject a result, edit an input,
+or change breakpoints or step mode). Both are stated in `SECURITY.md`.
 
 ### Residual risks (not GraphMind defects, worth knowing)
 

@@ -83,6 +83,16 @@ describe('graphmind mcp-proxy: zero-config discovery', () => {
   it('reflects --port in the guide so the recipe matches the running server', () => {
     expect(mcpProxyHelp(5151).join('\n')).toContain('http://127.0.0.1:5151');
   });
+
+  it('its knobs name the switch that stops an isError hold, which the server flag does not', () => {
+    const help = mcpProxyHelp().join('\n');
+    expect(help).toContain('these are the knobs');
+    // `serve --pause-on-error off` removes the error BREAKPOINT; an isError
+    // result is held by the proxy's own smart hold, so only its env stops it.
+    expect(help).toContain('GRAPHMIND_BREAK_ON_ERROR_RESULT=0');
+    expect(help).toContain('--pause-on-error off');
+    expect(help).toContain('GRAPHMIND_DISABLE_EDIT_INPUT=1');
+  });
 });
 
 describe('graphmind mcp-proxy: GRAPHMIND_DISABLED', () => {

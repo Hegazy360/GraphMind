@@ -100,7 +100,8 @@ cache writes at their own rates, output at the output rate. Every figure is labe
 bill. A model the snapshot does not know gets **no dollar figure** rather than a guess, and a
 run's total counts only the steps it could price (the tooltip says how many it left out). The
 price table is a separate download the viewer fetches only for a run with token usage; a
-single-file export (`graphmind record --html`) opened from disk shows no cost.
+single-file export (`graphmind record --html`) of such a run carries the table inside the file,
+so it shows the same figures offline, and loads nothing at open time.
 
 ## Context & cost: what changed since the previous step
 

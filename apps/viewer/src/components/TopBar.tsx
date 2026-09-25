@@ -4,7 +4,7 @@
  * vs timeline). Density is deliberate — this is a developer tool, not a
  * landing page.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { copyText, deepLink } from '../lib/commands.js';
 import { KIND_ORDER, kindMeta } from '../lib/kinds.js';
 import { fmtCost, fmtCount, fmtDuration, fmtTokens } from '../lib/format.js';
@@ -162,6 +162,42 @@ function FilterPopover({ runId }: { runId: string }) {
   );
 }
 
+/**
+ * Which stats the toolbar sheds first when it runs out of room: lowest
+ * first. The est. cost and an error count go last — a cost cut to "$0" reads
+ * as free, which is worse than no figure.
+ */
+const STAT_PRIORITY = {
+  steps: 10,
+  tokens: 20,
+  nodes: 30,
+  tools: 40,
+  held: 50,
+  wall: 60,
+  cost: 70,
+  errors: 80,
+} as const;
+
+/**
+ * Fit the stats into the room the toolbar leaves them. The room is the stats
+ * box's own width (it takes what the title and the actions leave, so the
+ * runs rail and the window both count — a viewport breakpoint counted
+ * neither); the row inside is its content's width. Show every stat, then
+ * shed the lowest priority until the row fits. Called after each render
+ * that changes a value, and when the box is resized.
+ */
+export function fitStats(box: HTMLElement): void {
+  const row = box.firstElementChild;
+  if (!(row instanceof HTMLElement)) return;
+  const items = Array.from(row.querySelectorAll<HTMLElement>('[data-priority]'));
+  for (const item of items) item.hidden = false;
+  const order = [...items].sort((a, b) => Number(a.dataset['priority']) - Number(b.dataset['priority']));
+  for (const item of order) {
+    if (row.offsetWidth <= box.clientWidth) break;
+    item.hidden = true;
+  }
+}
+
 export function TopBar({ runId }: { runId: string }) {
   const view = useUiStore((s) => s.view);
   const theme = useUiStore((s) => s.theme);
@@ -180,6 +216,24 @@ export function TopBar({ runId }: { runId: string }) {
   })();
   const run = useRunStore.getState().runs[runId];
   const badge = run === undefined ? 'pending' : runBadgeStatus(run);
+
+  // Re-fit when a value (so a width) changes or a stat comes or goes.
+  const statsBox = useRef<HTMLDivElement>(null);
+  const fitKey =
+    stats === undefined
+      ? ''
+      : [stats.nodes, stats.steps, stats.tools, stats.errors, stats.wallMs, stats.heldMs, stats.tokensIn, stats.tokensOut, runCost?.total]
+          .map(String)
+          .join('|');
+  useLayoutEffect(() => {
+    const box = statsBox.current;
+    if (box === null) return;
+    fitStats(box);
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => fitStats(box));
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [fitKey]);
 
   const copyLink = async () => {
     const ok = await copyText(deepLink(runId, useUiStore.getState().selectedNodeId));
@@ -209,42 +263,52 @@ export function TopBar({ runId }: { runId: string }) {
       </div>
 
       {stats !== undefined && (
-        <div className="gm-topbar-stats" aria-label="Run statistics">
-          <Stat value={fmtCount(stats.nodes)} label="nodes" />
-          <Stat value={fmtCount(stats.steps)} label="steps" optional />
-          <Stat value={fmtCount(stats.tools)} label="tool calls" />
-          {stats.errors > 0 && <Stat value={fmtCount(stats.errors)} label="errors" tone="error" />}
-          <Stat
-            value={fmtDuration(stats.wallMs)}
-            label="wall"
-            {...(stats.heldMs > 0
-              ? { title: `${fmtDuration(stats.ranMs)} running · ${fmtDuration(stats.heldMs)} held at gates` }
-              : {})}
-          />
-          {stats.heldMs > 0 && (
-            <Stat value={fmtDuration(stats.heldMs)} label="held" title="Time a gate held execution — not run time" />
-          )}
-          {stats.tokensIn + stats.tokensOut > 0 && (
+        <div className="gm-topbar-stats" aria-label="Run statistics" ref={statsBox}>
+          <div className="gm-topbar-stats-row">
+            <Stat value={fmtCount(stats.nodes)} label="nodes" priority={STAT_PRIORITY.nodes} />
+            <Stat value={fmtCount(stats.steps)} label="steps" priority={STAT_PRIORITY.steps} />
+            <Stat value={fmtCount(stats.tools)} label="tool calls" priority={STAT_PRIORITY.tools} />
+            {stats.errors > 0 && (
+              <Stat value={fmtCount(stats.errors)} label="errors" tone="error" priority={STAT_PRIORITY.errors} />
+            )}
             <Stat
-              value={`${fmtTokens(stats.tokensIn)}→${fmtTokens(stats.tokensOut)}`}
-              label={stats.tokenBasis === 'inclusive' || stats.tokenBasis === undefined ? 'tokens' : 'tokens*'}
-              optional
-              title={[
-                inputTitle(stats.tokenBasis),
-                ...detailCells(stats).map((cell) => `${cell.value} ${cell.label}`),
-              ]
-                .filter((part) => part !== '')
-                .join(' · ')}
+              value={fmtDuration(stats.wallMs)}
+              label="wall"
+              priority={STAT_PRIORITY.wall}
+              {...(stats.heldMs > 0
+                ? { title: `${fmtDuration(stats.ranMs)} running · ${fmtDuration(stats.heldMs)} held at gates` }
+                : {})}
             />
-          )}
-          {runCost !== undefined && (
-            <Stat
-              value={fmtCost(runCost.total)}
-              label="est. cost"
-              optional
-              title={`${costTotalTitle(runCost, 'LLM step')} Token counts come from the run; prices do not.`}
-            />
-          )}
+            {stats.heldMs > 0 && (
+              <Stat
+                value={fmtDuration(stats.heldMs)}
+                label="held"
+                title="Time a gate held execution — not run time"
+                priority={STAT_PRIORITY.held}
+              />
+            )}
+            {stats.tokensIn + stats.tokensOut > 0 && (
+              <Stat
+                value={`${fmtTokens(stats.tokensIn)}→${fmtTokens(stats.tokensOut)}`}
+                label={stats.tokenBasis === 'inclusive' || stats.tokenBasis === undefined ? 'tokens' : 'tokens*'}
+                priority={STAT_PRIORITY.tokens}
+                title={[
+                  inputTitle(stats.tokenBasis),
+                  ...detailCells(stats).map((cell) => `${cell.value} ${cell.label}`),
+                ]
+                  .filter((part) => part !== '')
+                  .join(' · ')}
+              />
+            )}
+            {runCost !== undefined && (
+              <Stat
+                value={fmtCost(runCost.total)}
+                label="est. cost"
+                priority={STAT_PRIORITY.cost}
+                title={`${costTotalTitle(runCost, 'LLM step')} Token counts come from the run; prices do not.`}
+              />
+            )}
+          </div>
         </div>
       )}
 
@@ -317,19 +381,20 @@ function Stat({
   label,
   tone,
   title,
-  optional,
+  priority,
 }: {
   value: string;
   label: string;
   tone?: 'error';
   title?: string;
-  /** Dropped first when the toolbar runs out of room. */
-  optional?: boolean;
+  /** The lowest is shed first when the toolbar runs out of room (fitStats). */
+  priority: number;
 }) {
   return (
     <div
-      className={`gm-stat${tone === 'error' ? ' gm-stat--error' : ''}${optional === true ? ' gm-stat--optional' : ''}`}
+      className={`gm-stat${tone === 'error' ? ' gm-stat--error' : ''}`}
       title={title ?? label}
+      data-priority={priority}
     >
       <span className="gm-stat-value">{value}</span>
       <span className="gm-stat-label">{label}</span>

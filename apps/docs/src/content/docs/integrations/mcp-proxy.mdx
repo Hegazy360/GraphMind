@@ -138,9 +138,9 @@ The proxy holds *frames*, so the four actions map onto protocol actions:
 
 | | Held request (`before`) | Held response (`after`, or `error`) |
 | --- | --- | --- |
-| `continue` | Forward unchanged | Forward unchanged |
+| `continue` | Forward unchanged. With [edited arguments](/debugging/edit-arguments/) (a `tools/call`, 0.6): forward the held frame with only its `params.arguments` spliced in — the id, `name`, `_meta` and every other byte stay the client's own | Forward unchanged |
 | `inject` | Do not forward; answer the sender with your value as the JSON-RPC `result` | Forward a rewritten frame carrying your value |
-| `retry` | Same as `continue` — nothing has run yet | Drop it and re-send the original request bytes; the node stays open until the new answer |
+| `retry` | Same as `continue` — nothing has run yet | Drop it and re-send the request; the node stays open until the new answer. It re-sends the original request bytes — unless you send edited arguments with the retry, or an earlier edit of this call was accepted: then the rewritten request, with the latest accepted arguments |
 | `abort` | Do not forward; answer the sender with a JSON-RPC error (`-32099`) | Drop it and answer the requester with `-32099` |
 
 A **notification** has no id and no answer, so it only has a `before` gate: `continue` forwards,
@@ -148,8 +148,19 @@ A **notification** has no id and no answer, so it only has a `before` gate: `con
 
 The `error` gate fires on a JSON-RPC error **and** on an MCP tool result carrying
 `isError: true` — the second is the common one, because that is how a failing tool reports
-itself. Both are armed by default by `graphmind serve`, so a failing tool call pauses without
-any configuration.
+itself. Both hold by default, so a failing tool call pauses without any configuration, but not
+for the same reason:
+
+- a **JSON-RPC error** holds at the `error` breakpoint `graphmind serve` arms by default
+  (`serve --pause-on-error off`, or clearing that chip in the viewer, turns it off);
+- an **`isError: true` result** holds by a smart hold in the proxy itself (`reason: 'breakpoint'`,
+  `smart.rule: 'error-result'`), whether or not that breakpoint is armed. Only the proxy's own
+  environment turns it off: `GRAPHMIND_BREAK_ON_ERROR_RESULT=0` in the `env` of its entry in your
+  MCP client config.
+
+To watch an unattended proxy without it ever stopping traffic, do both, and add
+`GRAPHMIND_ON_LOOP=warn` so a repeated call is logged instead of held (see
+[Debugging MCP servers](/debugging/mcp-servers/)).
 
 ### What you inject, and what the client receives
 

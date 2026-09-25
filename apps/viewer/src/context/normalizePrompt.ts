@@ -37,7 +37,7 @@
  * items were sent), or a shape this file does not know.
  */
 import { MCP_PREVIEW_NOTE_PREFIX, TRUNCATION_SUFFIX } from '@graphmind-ai/schema';
-import { canonicalJson, identityOf } from './canonical.js';
+import { canonicalJson, identityOf, isVolatileKey } from './canonical.js';
 
 export type RefusalCode =
   | 'redacted'
@@ -167,6 +167,10 @@ export function scanRecord(value: unknown, depth = 0): { code: RefusalCode; deta
   const marker = markerOf(record);
   if (marker !== undefined) return marker;
   for (const key of Object.keys(record)) {
+    // Cache and SDK metadata (a LangChain dump's `response_metadata.
+    // token_usage`, redacted by an export for its "token" segment) is never
+    // compared, so what it holds cannot make the diff refuse.
+    if (isVolatileKey(key)) continue;
     const hit = scanRecord(record[key], depth + 1);
     if (hit !== undefined) return hit;
   }
@@ -302,6 +306,11 @@ function describe(role: MessageRole, rawRole: string, msg: Rec, traits: Traits):
     const unique = [...new Set(list)];
     return unique.length > 3 ? `${unique.slice(0, 3).join(', ')} +${unique.length - 3}` : unique.join(', ');
   };
+  // A provider-executed tool (a web search) comes back INSIDE the assistant
+  // turn that called it (AI SDK): that turn is still the model's calls.
+  if (role === 'assistant' && traits.calls.length > 0) {
+    return { kind: 'tool-call', label: `assistant → ${names(traits.calls)}` };
+  }
   if (traits.results.length > 0) {
     return {
       kind: 'tool-result',

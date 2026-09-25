@@ -159,7 +159,11 @@ describe('registry lifecycle', () => {
     await waitForPause(ts, 'p1');
     const attacker = await FakeApp.connect(ts.port, { app: 'evil', capabilities: ALL_CAPABILITIES });
     for (let i = 0; i < 5_001; i += 1) attacker.send('run.started', `flood-${i}`, { app: 'evil', sdk: { name: 'x', version: '0' } });
-    await waitUntil(() => ts.server.storage.getRun('flood-5000') !== undefined, 'the flood stored', 20_000);
+    // The table holds 5,000 claims: the victim's and 4,999 of the peer's. The
+    // peer's own later run ids are refused: nothing it may give up is left.
+    await waitUntil(() => ts.server.storage.getRun('flood-4998') !== undefined, 'the flood stored', 20_000);
+    await sleep(200);
+    expect(ts.server.storage.getRun('flood-4999')).toBeUndefined();
     // Now the attacker writes to the victim's run as if it were its own.
     attacker.send('exec.paused', 'victim-run', { pauseId: 'p1', nodeId: 'tool:x', point: 'before' });
     attacker.send('node.started', 'victim-run', { nodeId: 'tool:evil', kind: 'tool', name: 'evil', instanceId: 'e1' });
@@ -177,6 +181,116 @@ describe('registry lifecycle', () => {
     await attacker.close();
     await victim.app.close();
   }, 30_000);
+
+  it('a flood of fresh run ids cannot push out the claim of a live run whose app is reconnecting', async () => {
+    const ts = await boot({ allowControl: 'resume' }); // default 15 s abandon grace
+    const victim = await FakeApp.connect(ts.port, { app: 'victim', capabilities: ALL_CAPABILITIES });
+    const token = victim.ack?.sessionToken;
+    expect(typeof token).toBe('string');
+    victim.send('run.started', 'victim-run', { app: 'victim', sdk: { name: 'x', version: '0' } });
+    victim.send('node.started', 'victim-run', { nodeId: 'tool:x', kind: 'tool', name: 'x', instanceId: 'x1' });
+    victim.send('exec.paused', 'victim-run', { pauseId: 'p1', nodeId: 'tool:x', point: 'before' });
+    await waitForPause(ts, 'p1');
+    // A transport blip: the socket drops, the run stays `running` through the grace.
+    await victim.close();
+    await waitUntil(async () => (await pauses(ts, 'victim-run')).length === 0, 'the dropped socket\'s pause closed');
+
+    const attacker = await FakeApp.connect(ts.port, { app: 'evil', capabilities: ALL_CAPABILITIES });
+    for (let i = 0; i < 5_001; i += 1) attacker.send('run.started', `flood-${i}`, { app: 'evil', sdk: { name: 'x', version: '0' } });
+    await waitUntil(() => ts.server.storage.getRun('flood-4998') !== undefined, 'the flood stored', 20_000);
+    await sleep(200);
+    attacker.send('exec.paused', 'victim-run', { pauseId: 'p-evil', nodeId: 'tool:x', point: 'before', editable: true });
+    attacker.send('node.started', 'victim-run', { nodeId: 'tool:evil', kind: 'tool', name: 'evil', instanceId: 'e1' });
+    await sleep(300);
+    expect(ts.server.storage.getRun('victim-run')?.status).toBe('running');
+    const stored = () => ts.server.storage.listEvents('victim-run').events;
+    expect(stored().some((e) => (e.payload as { nodeId?: string }).nodeId === 'tool:evil')).toBe(false);
+    expect(await pauses(ts, 'victim-run')).toEqual([]);
+
+    // The real app comes back with its resumeToken: its frames land, and a resume reaches IT.
+    const back = await FakeApp.connect(ts.port, { app: 'victim', capabilities: ALL_CAPABILITIES, resumeToken: token as string });
+    back.seq = victim.seq; // the same client: its seq carries on
+    back.send('node.finished', 'victim-run', { nodeId: 'tool:x', instanceId: 'x1', durationMs: 5, status: 'ok' });
+    back.send('exec.paused', 'victim-run', { pauseId: 'p2', nodeId: 'tool:x', point: 'before' });
+    await waitForPause(ts, 'p2', 'open', 'victim-run');
+    expect(stored().some((e) => e.type === 'node.finished')).toBe(true);
+    const answering = postResume(ts.port, 'victim-run', 'p2', { action: 'continue', timeoutMs: 5_000 }, ts.server.tokens.agent);
+    const resume = await back.nextControl((e) => e.type === 'exec.resume', 'the resume reaches the real app');
+    expect((resume.payload as { pauseId?: string }).pauseId).toBe('p2');
+    const requestId = (resume.payload as { requestId?: string }).requestId;
+    back.send('exec.resumed', 'victim-run', { pauseId: 'p2', action: 'continue', ...(requestId === undefined ? {} : { requestId }) });
+    expect((await answering).body).toMatchObject({ outcome: 'resumed' });
+    expect(attacker.received.peekAll().some((e) => e.type === 'exec.resume')).toBe(false);
+    await attacker.close();
+    await back.close();
+  }, 40_000);
+
+  it('with the claim table flooded, an app starting a new run keeps the claim of its live one (not evicted for the new run)', async () => {
+    const ts = await boot({ allowControl: 'resume' }); // default 15 s abandon grace
+    const victim = await FakeApp.connect(ts.port, { app: 'victim', capabilities: ALL_CAPABILITIES });
+    const token = victim.ack?.sessionToken as string;
+    victim.send('run.started', 'victim-run', { app: 'victim', sdk: { name: 'x', version: '0' } });
+    await waitUntil(() => ts.server.storage.getRun('victim-run') !== undefined, 'victim-run stored');
+
+    const attacker = await FakeApp.connect(ts.port, { app: 'evil', capabilities: ALL_CAPABILITIES });
+    for (let i = 0; i < 5_001; i += 1) attacker.send('run.started', `flood-${i}`, { app: 'evil', sdk: { name: 'x', version: '0' } });
+    await waitUntil(() => ts.server.storage.getRun('flood-4998') !== undefined, 'the flood stored', 20_000);
+    await sleep(200);
+
+    // The app starts a second run while the table is full of the peer's live
+    // runs: nothing may be given up for it — least of all the app's own
+    // claim on victim-run — so the new run is refused.
+    victim.send('run.started', 'victim-run-2', { app: 'victim', sdk: { name: 'x', version: '0' } });
+    await sleep(300);
+    expect(ts.server.storage.getRun('victim-run-2')).toBeUndefined();
+
+    // A transport blip: victim-run is in its reconnect window, and still the app's.
+    await victim.close();
+    await sleep(200);
+    attacker.send('node.started', 'victim-run', { nodeId: 'tool:evil', kind: 'tool', name: 'evil', instanceId: 'e1' });
+    await sleep(300);
+    const stored = () => ts.server.storage.listEvents('victim-run').events;
+    expect(stored().some((e) => (e.payload as { nodeId?: string }).nodeId === 'tool:evil')).toBe(false);
+
+    const back = await FakeApp.connect(ts.port, { app: 'victim', capabilities: ALL_CAPABILITIES, resumeToken: token });
+    back.seq = victim.seq;
+    back.send('node.started', 'victim-run', { nodeId: 'tool:x', kind: 'tool', name: 'x', instanceId: 'x1' });
+    await waitUntil(() => stored().some((e) => (e.payload as { nodeId?: string }).nodeId === 'tool:x'), 'the real app is back in its run');
+    await attacker.close();
+    await back.close();
+  }, 40_000);
+
+  it('a flood of fresh run ids does not reopen finished or abandoned runs to another connection', async () => {
+    const ts = await boot({ abandonGraceMs: 0 });
+    const done = await FakeApp.connect(ts.port, { app: 'done', capabilities: ALL_CAPABILITIES });
+    done.send('run.started', 'done-run', { app: 'done', sdk: { name: 'x', version: '0' } });
+    done.send('run.finished', 'done-run', { status: 'ok' });
+    const gone = await FakeApp.connect(ts.port, { app: 'gone', capabilities: ALL_CAPABILITIES });
+    gone.send('run.started', 'gone-run', { app: 'gone', sdk: { name: 'x', version: '0' } });
+    await waitUntil(() => ts.server.storage.getRun('done-run')?.status === 'ok', 'done-run finished');
+    await waitUntil(() => ts.server.storage.getRun('gone-run') !== undefined, 'gone-run stored');
+    await gone.close();
+    await waitUntil(() => ts.server.storage.getRun('gone-run')?.status === 'abandoned', 'gone-run abandoned');
+
+    const attacker = await FakeApp.connect(ts.port, { app: 'evil', capabilities: ALL_CAPABILITIES });
+    for (let i = 0; i < 5_001; i += 1) attacker.send('run.started', `flood-${i}`, { app: 'evil', sdk: { name: 'x', version: '0' } });
+    // flood-4998 and flood-4999 took the finished run's and the abandoned
+    // run's claims; flood-5000 found nothing it may take and was refused.
+    await waitUntil(() => ts.server.storage.getRun('flood-4999') !== undefined, 'the flood stored', 20_000);
+    await sleep(200);
+    expect(ts.server.storage.getRun('flood-5000')).toBeUndefined();
+    for (const runId of ['done-run', 'gone-run']) {
+      attacker.send('node.started', runId, { nodeId: 'tool:evil', kind: 'tool', name: 'evil', instanceId: 'e1' });
+    }
+    await sleep(300);
+    for (const runId of ['done-run', 'gone-run']) {
+      const events = ts.server.storage.listEvents(runId).events;
+      expect(events.some((e) => (e.payload as { nodeId?: string }).nodeId === 'tool:evil'), runId).toBe(false);
+    }
+    expect(ts.server.storage.getRun('gone-run')?.status).toBe('abandoned');
+    await attacker.close();
+    await done.close();
+  }, 40_000);
 
   it('caps open pauses per app connection at 1,000; a resume for an untracked pause is still forwarded', async () => {
     const ts = await boot();

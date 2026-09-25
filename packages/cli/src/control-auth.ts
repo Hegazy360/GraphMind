@@ -22,8 +22,10 @@
  *    nor a prefix of a token is observable through timing.
  *
  * A UI socket with no credential keeps only the part of the 0.5 behaviour that
- * chooses nothing — continue, retry, abort (deprecated) — and never has more
- * rights than the agent token at level `off`. It cannot edit an input, and it
+ * chooses nothing — continue, retry, abort (deprecated) — so it never has more
+ * rights than the agent token at level `resume` (which may also change
+ * breakpoints and step mode), though more than at `off`, which may release
+ * nothing. It cannot edit an input, and it
  * cannot reach the same power another way: an injected result replaces what
  * the model or the tool returned (an injected LLM completion picks the next
  * tool call AND its arguments), and breakpoints / step mode decide which calls
@@ -226,8 +228,8 @@ export function authorizeResume(
 
 /**
  * Breakpoints and step mode decide which calls hold: the viewer token, or the
- * agent token at level `resume`. A tokenless socket never — it must not be
- * able to do more than the agent token at `off`.
+ * agent token at level `resume`. A tokenless socket never: it may release a
+ * held call (continue, retry, abort) but not decide which calls hold.
  */
 export function authorizeDebugState(principal: Principal, policy: ControlPolicy): Refusal | undefined {
   if (principal === 'viewer') return undefined;

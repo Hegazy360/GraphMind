@@ -228,7 +228,8 @@ export default function App() {
               // Inject from the keyboard always opens the *panel* editor:
               // it is the copy that can never be covered, and it sits beside
               // the error and the input you are about to substitute for.
-              ui.selectNode(runId, pause.nodeId);
+              // Keep a picked execution: it is what chose this pause.
+              if (ui.selectedNodeId !== pause.nodeId) ui.selectNode(runId, pause.nodeId);
               ui.requestInject(pause.pauseId, 'panel');
             }
             return;
@@ -240,7 +241,7 @@ export default function App() {
             const node = useRunStore.getState().runs[runId]?.nodes[pause.nodeId];
             if (node !== undefined && canEditArgs(node, pause, isExportedRun(), ui.control)) {
               e.preventDefault();
-              ui.selectNode(runId, pause.nodeId);
+              if (ui.selectedNodeId !== pause.nodeId) ui.selectNode(runId, pause.nodeId);
               useEditStore.getState().requestEditor(pause.pauseId);
               return;
             }

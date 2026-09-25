@@ -16,6 +16,12 @@ import type { PriceTable } from '../src/prices/engine.js';
 import { useRunStore } from '../src/store/runStore.js';
 import { RUN, ev, resetCounters, started } from './helpers.js';
 import { recordedRun } from './recorded.js';
+import { ingestValue } from '../src/connection/ingest.js';
+import { previousLlmStep } from '../src/context/steps.js';
+import { generateLoopRun } from '../src/store/loop.js';
+import { generateMcpRun } from '../src/store/mcpFixture.js';
+import { runStats } from '../src/store/stats.js';
+import demoRun from '../src/fixtures/demo-run.json';
 
 const TABLE = JSON.parse(
   readFileSync(fileURLToPath(new URL('../src/prices/data_slim.json', import.meta.url)), 'utf8'),
@@ -214,6 +220,79 @@ describe('Context & cost render', () => {
     expect(out).toContain('−1 +1 lines');
     expect(out).toContain('The system prompt changed — a provider prompt cache misses from the system prompt on.');
     expect(out).toContain('temperature 0.2 → 0.9');
+  });
+});
+
+// The /try showcase replays these (?fixture=1 is the README's "Try in
+// browser" link, ?fixture=loop, ?fixture=mcp). They are 0.6 recordings, so
+// the headline has to work on them: what changed between steps, true token
+// counts — not "can't compare" and not "recorded before GraphMind 0.6".
+describe('the /try showcase fixtures', () => {
+  interface StepView {
+    step: string;
+    html: string;
+    out: string;
+  }
+
+  /** Ingest a fixture the way FixtureConnection does, then render every LLM step. */
+  function showcase(envelopes: unknown[]): { steps: StepView[]; tokenBasis: string | undefined } {
+    useRunStore.setState({ runs: {} });
+    for (const envelope of envelopes) ingestValue(structuredClone(envelope), 'fixture');
+    const runs = Object.values(useRunStore.getState().runs);
+    expect(runs).toHaveLength(1);
+    const run = runs[0]!;
+    const steps: StepView[] = [];
+    for (const node of Object.values(run.nodes)) {
+      if (node.kind !== 'llm') continue;
+      node.executions.forEach((exec, execIndex) => {
+        // The view diffs after first paint; warm the memo so the markup has the verdict.
+        const prev = previousLlmStep(run, node.nodeId, execIndex);
+        if (prev !== undefined) computeDiffOutcome(prev.exec.input, exec.input);
+        const html = renderToStaticMarkup(createElement(ContextCost, { runId: run.runId, node, exec, execIndex }));
+        steps.push({ step: `${node.nodeId} #${execIndex + 1}`, html, out: text(html) });
+      });
+    }
+    return { steps, tokenBasis: runStats(run).tokenBasis };
+  }
+
+  const caveats = (steps: StepView[]): string[] =>
+    steps.filter((s) => s.out.includes('as reported') || s.out.includes('recorded before GraphMind 0.6')).map((s) => s.step);
+
+  it('the demo: every later step shows what changed since the one before (append-only)', () => {
+    setPriceTableForTests(TABLE);
+    const { steps, tokenBasis } = showcase(demoRun as unknown[]);
+    expect(steps.map((s) => s.step)).toEqual(['llm:step #1', 'llm:step #2', 'llm:step #3']);
+    expect(steps[0]?.html).toContain('data-testid="diff-first"');
+    for (const later of steps.slice(1)) {
+      expect(later.html, later.step).not.toContain('data-testid="diff-refused"');
+      expect(later.html, later.step).toContain('data-testid="diff-summary"');
+      expect(later.out, later.step).toContain('+2 added');
+      expect(later.out, later.step).not.toMatch(/−\d+ removed/);
+    }
+    expect(caveats(steps)).toEqual([]);
+    expect(tokenBasis).toBe('inclusive');
+  });
+
+  it.each([
+    ['loop', () => generateLoopRun(T0)],
+    ['mcp', () => generateMcpRun()],
+  ] as const)('?fixture=%s: inclusive usage, never labelled as recorded before 0.6', (_name, load) => {
+    setPriceTableForTests(TABLE);
+    const { steps, tokenBasis } = showcase(load());
+    expect(steps.length).toBeGreaterThan(0);
+    expect(caveats(steps)).toEqual([]);
+    expect(tokenBasis).toBe('inclusive');
+  });
+
+  it('?fixture=loop: each round reads as the same call and the same answer appended again', () => {
+    setPriceTableForTests(TABLE);
+    const { steps } = showcase(generateLoopRun(T0));
+    expect(steps).toHaveLength(3);
+    for (const later of steps.slice(1)) {
+      expect(later.out, later.step).not.toContain("doesn't recognise the shape");
+      expect(later.html, later.step).toContain('data-testid="diff-summary"');
+      expect(later.out, later.step).toContain('+2 added');
+    }
   });
 });
 

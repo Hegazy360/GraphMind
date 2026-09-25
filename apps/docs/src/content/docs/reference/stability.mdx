@@ -48,8 +48,16 @@ field a sender emits:
    once per process, naming its replacement.
 2. **Removed in the next major**, not before.
 
-Nothing is deprecated today. The runtime warning is a commitment for the first deprecation, not
-code that exists yet.
+### Deprecated in 0.6.0
+
+Neither of these is something your code calls, so neither prints the runtime warning; each is
+named in the 0.6.0 CHANGELOG, and each is an exception to "removed in the next major", said here
+so you can plan for it:
+
+| Deprecated | What replaces it | When it may go |
+| --- | --- | --- |
+| Continuing, retrying or aborting a held call from a viewer socket **without a token** (the 0.5 behaviour) | The viewer token (the link `graphmind serve` opens), or `graphmind resume` with `--allow-control` | In a later minor: requiring the token then is a change of behaviour, named in that release's CHANGELOG. The server logs a one-time note whenever such a socket connects. |
+| The usage aliases `cacheCreationTokens` and `cachedInputTokens`, and `stopReason` on Anthropic TypeScript steps | `cacheWriteTokens` / `cacheReadTokens` and `rawFinishReason`, sent beside them since 0.6.0 | After 0.6.x. They are extra fields a sender emits next to their replacements, so a consumer that reads the new names is unaffected. |
 
 Out of scope: internal modules that are not exported from a package's entry point, the
 viewer's DOM and CSS, and the exact wording of log lines and error messages. They change when

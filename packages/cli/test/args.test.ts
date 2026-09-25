@@ -1,6 +1,6 @@
 /** CLI argument parsing (hand-rolled, subcommand-shaped). */
 import { describe, expect, it } from 'vitest';
-import { defaultFlags, parseCliArgs } from '../src/args.js';
+import { OPTION_HELP, defaultFlags, parseCliArgs } from '../src/args.js';
 
 describe('parseCliArgs', () => {
   it('defaults to the serve command with open enabled', () => {
@@ -41,5 +41,13 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['--version']).flags.version).toBe(true);
     expect(parseCliArgs(['-h']).flags.help).toBe(true);
     expect(parseCliArgs(['--help']).flags.help).toBe(true);
+  });
+
+  it('--help says everything --allow-control=resume grants, breakpoints and step mode included', () => {
+    // control-auth.ts: authorizeDebugState and authorizeDemoStart let the agent
+    // token at `resume` arm breakpoints, switch step mode and start the demo.
+    const help = OPTION_HELP.join('\n').replace(/\s+/g, ' ');
+    expect(help).toContain('resume = continue/retry/abort, and set breakpoints / step mode');
+    expect(help).toContain('start the demo');
   });
 });

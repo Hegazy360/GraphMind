@@ -34,7 +34,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createSession, type Session } from '@graphmind-ai/client';
 import { PROTOCOL_VERSION } from '@graphmind-ai/schema';
-import { RawIngest, RawViewer, WireServer, sleep, waitForEvents } from '../src/wire.js';
+import { RawIngest, RawViewer, WireServer, drainIngest, sleep, waitForEvents, type WireFrame } from '../src/wire.js';
 
 const INJECTED = 'value-the-operator-chose-for-the-victim';
 
@@ -330,4 +330,113 @@ describe('seq squatting cannot suppress a run that is already claimed', () => {
   it('the real app’s events are not swallowed, and none are fabricated', () => {
     expect(squatted.names).toEqual(Array.from({ length: 8 }, () => 'REAL'));
   });
+});
+
+// The claim table is bounded (5,000). Flooding fresh run ids used to evict
+// "the oldest claim of a run nobody holds" — which is exactly a LIVE run whose
+// claim-aware app is between a dropped socket and its reconnect (the 15 s
+// abandon grace). The flooder then wrote into that run, owned it, received
+// the operator's resume, and locked the real app out; the same flood reopened
+// finished and abandoned runs. See `Hub.evictClaimFor`.
+describe('a run-id flood cannot take a live run in its reconnect window, or reopen an ended one', () => {
+  const CLAIM_AWARE = ['pause', 'inject', 'retry', 'abort', 'edit-input', 'run-claim'];
+  const PEER_CAPS = ['pause', 'inject', 'retry', 'abort', 'edit-input']; // no run-claim, no credential
+  const opened: { close(): void }[] = [];
+  const booted: WireServer[] = [];
+  afterAll(async () => {
+    for (const socket of opened) socket.close();
+    for (const s of booted) await s.close();
+  });
+
+  async function until(check: () => boolean | Promise<boolean>, what: string, timeoutMs = 20_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!(await check())) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+      await sleep(20);
+    }
+  }
+  const tokenOf = (socket: RawIngest): string | undefined =>
+    (socket.inbound().find((f) => f.type === 'hello.ack')?.payload as { sessionToken?: string } | undefined)?.sessionToken;
+  const hasNode = (events: WireFrame[], type: string, nodeId: string): boolean =>
+    events.some((e) => e.type === type && (e.payload as { nodeId?: string } | undefined)?.nodeId === nodeId);
+  const frame = (socket: RawIngest, seq: number, runId: string, type: string, payload: unknown): void =>
+    socket.send(JSON.stringify({ gm: PROTOCOL_VERSION, seq, ts: Date.now(), runId, type, payload }));
+
+  async function flood(s: WireServer, peer: RawIngest, prefix: string): Promise<void> {
+    for (let i = 0; i < 5_000; i += 1) {
+      peer.frame({ runId: `${prefix}-${i}`, type: 'run.started', payload: { app: 'peer', sdk: { name: 'x', version: '0' } } });
+    }
+    await until(() => s.server.storage.getRun(`${prefix}-4999`) !== undefined, 'the flood stored', 60_000);
+  }
+
+  async function connect(s: WireServer, app: string, caps: string[], resumeToken?: string): Promise<RawIngest> {
+    const socket = await RawIngest.connect(s, { hello: false });
+    opened.push(socket);
+    socket.hello(app, { capabilities: caps, ...(resumeToken === undefined ? {} : { resumeToken }) });
+    await until(() => tokenOf(socket) !== undefined, `${app} hello.ack`);
+    return socket;
+  }
+
+  it('the flooder’s frames never land in the live run; the reconnected app keeps it and gets the resume', async () => {
+    const RUN = 'victim-run';
+    const s = await WireServer.boot(); // default 15 s abandon grace
+    booted.push(s);
+    const victim = await connect(s, 'victim-app', CLAIM_AWARE);
+    const resumeToken = tokenOf(victim) as string;
+    victim.frame({ runId: RUN, type: 'run.started', payload: { app: 'victim-app', sdk: { name: 'x', version: '0' } } });
+    victim.frame({ runId: RUN, type: 'node.started', payload: { nodeId: 'tool:shell', kind: 'tool', name: 'shell', instanceId: 's1', input: { cmd: 'ls' } } });
+    victim.frame({ runId: RUN, type: 'exec.paused', payload: { pauseId: 'p1', nodeId: 'tool:shell', point: 'before' } });
+    await waitForEvents(s, RUN, 3);
+    // A transport blip: the socket drops; the run stays `running` through the grace.
+    victim.close();
+    await until(() => s.server.hub.listPauses(RUN).length === 0, 'the dropped socket processed');
+
+    const peer = await connect(s, 'peer', PEER_CAPS);
+    await flood(s, peer, 'flood');
+    frame(peer, 800_000, RUN, 'exec.paused', { pauseId: 'p-evil', nodeId: 'tool:shell', point: 'before', editable: true });
+    peer.node(RUN, 800_001, 'FABRICATED');
+    await drainIngest(s, peer);
+    expect((await s.runs()).find((r) => r.id === RUN)?.status).toBe('running'); // still inside the grace
+    expect(hasNode(await s.events(RUN), 'node.started', 'tool:FABRICATED')).toBe(false);
+    expect(s.server.hub.listPauses(RUN)).toEqual([]);
+
+    // The real app comes back with its resumeToken: its frames land.
+    const back = await connect(s, 'victim-app', CLAIM_AWARE, resumeToken);
+    expect(tokenOf(back)).toBe(resumeToken);
+    frame(back, 10, RUN, 'node.finished', { nodeId: 'tool:shell', instanceId: 's1', output: 'real', durationMs: 5, status: 'ok' });
+    frame(back, 11, RUN, 'exec.paused', { pauseId: 'p2', nodeId: 'tool:shell', point: 'after' });
+    await until(() => s.server.hub.listPauses(RUN).some((p) => p.pauseId === 'p2'), 'the real app’s pause open');
+    expect(hasNode(await s.events(RUN), 'node.finished', 'tool:shell')).toBe(true);
+
+    // The operator's resume, edited input and all, reaches the real app only.
+    const viewer = await RawViewer.operator(s);
+    opened.push(viewer);
+    await sleep(50);
+    peer.received.length = 0;
+    viewer.control(RUN, 'exec.resume', { pauseId: 'p2', action: 'continue' });
+    await until(() => back.inbound().some((f) => f.type === 'exec.resume'), 'the resume delivered to the real app', 5_000);
+    expect(peer.inbound().some((f) => f.type === 'exec.resume')).toBe(false);
+  }, 120_000);
+
+  it('the flood does not reopen a finished run, or append to and revive an abandoned one', async () => {
+    const s = await WireServer.boot({ abandonGraceMs: 0 });
+    booted.push(s);
+    const victim = await connect(s, 'victim-app', CLAIM_AWARE);
+    victim.frame({ runId: 'done-run', type: 'run.started', payload: { app: 'victim-app', sdk: { name: 'x', version: '0' } } });
+    victim.frame({ runId: 'done-run', type: 'run.finished', payload: { status: 'ok' } });
+    victim.frame({ runId: 'gone-run', type: 'run.started', payload: { app: 'victim-app', sdk: { name: 'x', version: '0' } } });
+    await waitForEvents(s, 'done-run', 2);
+    await waitForEvents(s, 'gone-run', 1);
+    victim.close();
+    await until(async () => (await s.runs()).find((r) => r.id === 'gone-run')?.status === 'abandoned', 'gone-run abandoned');
+
+    const peer = await connect(s, 'peer', PEER_CAPS);
+    await flood(s, peer, 'flood2');
+    peer.node('done-run', 800_000, 'FABRICATED');
+    peer.node('gone-run', 800_000, 'FABRICATED');
+    await drainIngest(s, peer, 'marker-2');
+    expect(hasNode(await s.events('done-run'), 'node.started', 'tool:FABRICATED')).toBe(false);
+    expect(hasNode(await s.events('gone-run'), 'node.started', 'tool:FABRICATED')).toBe(false);
+    expect((await s.runs()).find((r) => r.id === 'gone-run')?.status).toBe('abandoned');
+  }, 120_000);
 });

@@ -23,7 +23,8 @@ The API is idiomatic Python rather than a transliteration: a context manager for
 decorator for tools, and one `instrument_*` call per client. Everything below has a module-level
 form (`import graphmind as gm`, then `gm.tool`) and an instance form
 (`gm = graphmind.init(...)`, then `gm.tool`) — `init` sets the process-wide default, so the two
-refer to the same session and can be mixed freely.
+refer to the same session and can be mixed freely. (One exception: call
+`graphmind.merge_tool_input`, used under [Edit arguments](#edit-arguments-06), on the module.)
 
 ## End to end (OpenAI)
 
@@ -306,10 +307,11 @@ the switches are on [Edit arguments and run](/debugging/edit-arguments/); what i
   edit are hidden too. `GRAPHMIND_DISABLE_EDIT_INPUT=1` turns edits off in this app. LLM calls are
   never editable, and neither are LangChain callbacks — they observe, they do not own the call.
 
-Your own gate can take edits: `session.gate(point, node, editable=True, validate_input=...)` —
-for tool arguments, a validator calling `gm.merge_tool_input(live, proposed, context)`. It runs
-on the thread or task blocked in the gate and must answer within 4 seconds, synchronous work
-included.
+Your own gate can take edits: `gm.session.gate(point, node, editable=True, validate_input=...)`
+in the instance form (`gm = graphmind.init(...)`; `graphmind.session().gate(...)` in the module
+form). For tool arguments, write a validator that calls the module-level
+`graphmind.merge_tool_input(live, proposed, context)` (on the module, not on `gm`). It runs on the
+thread or task blocked in the gate and must answer within 4 seconds, synchronous work included.
 
 ## Capability matrix
 

@@ -4,7 +4,17 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { applyEvent, type RunsMap } from '../src/store/applyEvent.js';
-import { cacheGapNote, callTimeOf, previousLlmStep, stepsSoFar, toolSchemaOf } from '../src/context/steps.js';
+import {
+  CACHE_TTL_MS,
+  GAP_REFRESH_MS,
+  cacheGapNote,
+  cacheGapRecheckAt,
+  callHeldOpen,
+  callTimeOf,
+  previousLlmStep,
+  stepsSoFar,
+  toolSchemaOf,
+} from '../src/context/steps.js';
 import type { RunState } from '../src/store/types.js';
 import { RUN, ev, resetCounters, started } from './helpers.js';
 import { recordedRun, recordedSteps } from './recorded.js';
@@ -55,6 +65,40 @@ describe('previous LLM step', () => {
       llm('b1', 30, 'chain:agent', 'llm:claude'),
     ]);
     expect(previousLlmStep(run, 'llm:claude', 0)?.nodeId).toBe('llm:gpt-4o');
+  });
+
+  it('AI SDK steps pair only within their own invocation: a generateText run inside a tool is not the agent\'s previous step', () => {
+    // The AI SDK middleware gives every call `llm:step` under `agent:<run>`;
+    // only the instanceId's `<invocation>:s<k>` prefix tells the outer agent
+    // (inv_1) from the summarizer its tool ran (inv_2).
+    const ask = { role: 'user', content: [{ type: 'text', text: 'Summarize the Lisbon article for me.' }] };
+    const call = { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'summarize', input: {} }] };
+    const result = { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'summarize', output: { type: 'json', value: {} } }] };
+    const outer = (prompt: unknown[]) => ({ prompt: [{ role: 'system', content: 'You are the main agent.' }, ...prompt], modelId: 'gpt-4o' });
+    const inner = {
+      prompt: [
+        { role: 'system', content: 'You summarize text in one line.' },
+        { role: 'user', content: [{ type: 'text', text: 'Lisbon is the capital of Portugal.' }] },
+      ],
+      modelId: 'gpt-4o-mini',
+    };
+    const step = (instanceId: string, ts: number, input: unknown) =>
+      started('llm:step', 'llm', { parentId: 'agent:a', instanceId, ts, input });
+    const run = build([
+      step('inv_x_1:s0', 10, outer([ask])),
+      finish('llm:step', 'inv_x_1:s0', 20),
+      step('inv_x_2:s0', 30, inner),
+      finish('llm:step', 'inv_x_2:s0', 40),
+      // The adapter's tracker starts a NEW invocation for the agent's next
+      // step (the nested call replaced its state) — the conversation is the
+      // same, and that is what pairs it.
+      step('inv_x_3:s0', 50, outer([ask, call, result])),
+      finish('llm:step', 'inv_x_3:s0', 60),
+      step('inv_x_3:s1', 70, outer([ask, call, result, { role: 'assistant', content: 'Done.' }])),
+    ]);
+    expect(previousLlmStep(run, 'llm:step', 1)).toBeUndefined(); // the nested call: a conversation of its own
+    expect(previousLlmStep(run, 'llm:step', 2)?.exec.instanceId).toBe('inv_x_1:s0');
+    expect(previousLlmStep(run, 'llm:step', 3)?.exec.instanceId).toBe('inv_x_3:s0');
   });
 });
 
@@ -108,6 +152,48 @@ describe('cache gap note', () => {
     const note = cacheGapNote(run, previousLlmStep(run, 'llm:step', 1)!, { nodeId: 'llm:step', exec }, 0);
     expect(note?.kind).toBe('held');
     expect(note?.text).toMatch(/^Held 12 min before this call/);
+  });
+
+  it('a hold still OPEN at this step\'s before gate: the note appears once the gap crosses the cache lifetime, and keeps counting', () => {
+    // No event arrives while it is held, so the view re-checks on the clock
+    // (cacheGapRecheckAt) instead of waiting for one.
+    const run = build([
+      llm('s1', 0),
+      finish('llm:step', 's1', 900),
+      llm('s2', 1_000),
+      ev('exec.paused', { pauseId: 'p2', nodeId: 'llm:step', point: 'before', instanceId: 's2' }, { ts: 1_100 }),
+    ]);
+    const exec = run.nodes['llm:step']!.executions[1]!;
+    const prev = previousLlmStep(run, 'llm:step', 1)!;
+    const cur = { nodeId: 'llm:step', exec };
+    expect(callHeldOpen(run, 'llm:step', exec)).toBe(true);
+    const inside = 900 + 296_000;
+    expect(cacheGapNote(run, prev, cur, inside)).toBeUndefined();
+    // Due exactly when the gap passes five minutes.
+    const due = cacheGapRecheckAt(run, prev, cur, inside);
+    expect(due).toBe(900 + CACHE_TTL_MS + 1);
+    const note = cacheGapNote(run, prev, cur, due!);
+    expect(note?.kind).toBe('held');
+    expect(note?.text).toMatch(/^Held 5(\.0)? min before this call — the provider's 5-minute prompt cache has likely expired$/);
+    // Past it, it recounts the minutes periodically.
+    expect(cacheGapRecheckAt(run, prev, cur, 900 + 10 * MIN)).toBe(900 + 10 * MIN + GAP_REFRESH_MS);
+    expect(cacheGapNote(run, prev, cur, 900 + 10 * MIN)?.text).toMatch(/^Held 10 min before this call/);
+  });
+
+  it('nothing to re-check once the hold is released, or when the step was never held', () => {
+    const released = build([
+      llm('s1', 0),
+      finish('llm:step', 's1', 900),
+      llm('s2', 1_000),
+      ev('exec.paused', { pauseId: 'p2', nodeId: 'llm:step', point: 'before', instanceId: 's2' }, { ts: 1_100 }),
+      ev('exec.resumed', { pauseId: 'p2', action: 'continue' }, { ts: 1_100 + 7 * MIN }),
+    ]);
+    const exec = released.nodes['llm:step']!.executions[1]!;
+    expect(callHeldOpen(released, 'llm:step', exec)).toBe(false);
+    expect(cacheGapRecheckAt(released, previousLlmStep(released, 'llm:step', 1), { nodeId: 'llm:step', exec }, 0)).toBeUndefined();
+    const plain = build([llm('s1', 0), finish('llm:step', 's1', 900), llm('s2', 1_000)]);
+    const exec2 = plain.nodes['llm:step']!.executions[1]!;
+    expect(cacheGapRecheckAt(plain, previousLlmStep(plain, 'llm:step', 1), { nodeId: 'llm:step', exec: exec2 }, 0)).toBeUndefined();
   });
 
   it('a short hold inside a long idle gap is still "idle"', () => {

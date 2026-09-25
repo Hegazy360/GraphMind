@@ -132,7 +132,12 @@ export interface NodeState {
   /** The sender asked for this node to open folded (`node.started.collapsed`, 0.5.0). */
   collapsed?: boolean;
   executions: NodeExecution[];
-  /** Set while an `exec.paused` gate on this node is unresolved. */
+  /**
+   * Set while an `exec.paused` gate on this node is unresolved: the newest
+   * one. Two parallel calls of one tool can both hold — every one is in
+   * `activePausesOf(run, nodeId)`, and releasing this one falls back to
+   * another that is still held.
+   */
   activePauseId?: string;
   lastError?: ErrorInfo;
 }
@@ -235,6 +240,50 @@ export function nodeStatus(node: NodeState): NodeLifeStatus {
 /** Derived: latest execution of a node, if any. */
 export function latestExecution(node: NodeState): NodeExecution | undefined {
   return node.executions[node.executions.length - 1];
+}
+
+/**
+ * Derived: every unresolved pause holding `nodeId`, oldest first. More than
+ * one when parallel calls of the same tool are held at once.
+ */
+export function activePausesOf(run: RunState, nodeId: string): Pause[] {
+  const out: Pause[] = [];
+  for (const id of Object.keys(run.pauses)) {
+    const pause = run.pauses[id];
+    if (pause !== undefined && pause.active && pause.nodeId === nodeId) out.push(pause);
+  }
+  return out.sort((a, b) => a.ts - b.ts);
+}
+
+/**
+ * Derived: the error "Why this failed" leads with for `exec`, or undefined.
+ * Its own error while it has not succeeded. The node's last error only when
+ * this execution owns it: it ended in error, or it is held at the error gate
+ * that names it. Never for a call held BEFORE it ran (an error-repeat hold
+ * on the next call), never for a call that is simply still running, and
+ * never for one that succeeded (`recoveredError` says that as history).
+ */
+export function executionError(
+  run: RunState | undefined,
+  node: NodeState,
+  exec: NodeExecution,
+): ErrorInfo | undefined {
+  if (exec.status === 'ok') return undefined;
+  if (exec.error !== undefined) return exec.error;
+  if (exec.status === 'error') return node.lastError;
+  if (exec.status !== 'running' || run === undefined || node.activePauseId === undefined) return undefined;
+  const heldAtError = activePausesOf(run, node.nodeId).some(
+    (p) =>
+      p.point === 'error' &&
+      p.heldAmbiguous !== true &&
+      p.heldBy?.some((h) => h.nodeId === node.nodeId && h.instanceId === exec.instanceId) === true,
+  );
+  return heldAtError ? node.lastError : undefined;
+}
+
+/** Derived: an execution that failed, was retried and then succeeded — its earlier error, as history. */
+export function recoveredError(exec: NodeExecution): ErrorInfo | undefined {
+  return exec.status === 'ok' ? exec.error : undefined;
 }
 
 /** Derived: does the run have any unresolved pause? */

@@ -9,6 +9,7 @@ import type { NodeKind } from '@graphmind-ai/schema';
 import type { FlowNodeData } from '../../store/runStateToFlow.js';
 import { isExportedRun } from '../../connection/FixtureConnection.js';
 import { broadcastControl } from '../../connection/ServerConnection.js';
+import { debugDeniedNote } from '../../lib/control.js';
 import { fmtRanHeld, ranMs } from '../../lib/duration.js';
 import { fmtDuration } from '../../lib/format.js';
 import { kindLabel } from '../../lib/kinds.js';
@@ -37,15 +38,20 @@ import { PauseBanner } from './PauseBanner.js';
  * The dot stays — it is part of how the card reads — but it is disabled and
  * says why, rather than lighting up red on a control the FixtureConnection
  * silently drops.
+ *
+ * A tab without the token may not change breakpoints (the server refuses
+ * it, 0.6): the dot still shows whether one is armed, but is disabled and
+ * says why.
  */
 function BreakpointDot({ name, kind }: { name: string; kind: NodeKind }) {
   const matcher = { kind, name };
   const key = matcherKey(matcher);
   const isSet = useUiStore((s) => s.breakpoints.some((m) => matcherKey(m) === key));
+  const denied = useUiStore((s) => debugDeniedNote(s.control));
   const recorded = isExportedRun();
   const toggle = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (recorded) return;
+    if (recorded || denied !== undefined) return;
     const ui = useUiStore.getState();
     if (isSet) {
       ui.removeBreakpoint(matcher);
@@ -61,6 +67,17 @@ function BreakpointDot({ name, kind }: { name: string; kind: NodeKind }) {
         className="gm-bp gm-bp--dead"
         title={`This is a recorded run — ${name} already ran, and there is no server to set a breakpoint on.`}
         aria-label={`Breakpoints unavailable in a recorded run`}
+      />
+    );
+  }
+  if (denied !== undefined) {
+    return (
+      <button
+        className={`gm-bp gm-bp--locked nodrag${isSet ? ' gm-bp--set' : ''}`}
+        disabled
+        onClick={(e) => e.stopPropagation()}
+        title={`${isSet ? 'A breakpoint is armed here. ' : ''}${denied}`}
+        aria-label={isSet ? `Breakpoint on ${name} (read-only)` : `Breakpoints on ${name} unavailable`}
       />
     );
   }

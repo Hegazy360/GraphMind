@@ -14,14 +14,40 @@
  * nodes a cycle goes round (highlighted on the canvas).
  */
 import { cycleLap, loopBannerText, pastTense } from './loop.js';
-import type { NodeState, Pause, RunState } from './types.js';
+import type { NodeExecution, NodeState, Pause, RunState } from './types.js';
+
+/** The execution a pause holds: its exact heldBy entry, else the node's latest. */
+export function heldExecOf(node: NodeState, pause: Pause): NodeExecution | undefined {
+  const held = pause.heldBy?.find((h) => h.nodeId === node.nodeId);
+  const exact = held === undefined ? undefined : node.executions.find((e) => e.instanceId === held.instanceId);
+  return exact ?? node.executions[node.executions.length - 1];
+}
 
 /** The held execution's normalized LLM finish reason (C1), when it recorded one. */
-function finishReasonOf(node: NodeState): string | undefined {
-  const output = node.executions[node.executions.length - 1]?.output;
+function finishReasonOf(node: NodeState, pause: Pause): string | undefined {
+  const output = heldExecOf(node, pause)?.output;
   if (output === null || typeof output !== 'object') return undefined;
   const reason = (output as Record<string, unknown>)['finishReason'];
   return typeof reason === 'string' ? reason : undefined;
+}
+
+export type TruncationCause = 'length' | 'content-filter';
+
+/**
+ * Why a truncated-tool-call hold's reply was cut off. Every adapter but
+ * LangGraph runs the after gate BEFORE node.finished, so while the hold is
+ * open the step has no output to read a finish reason from: the SDK's
+ * value-free `smart.detail` ("stopped at the token limit" / "stopped by the
+ * content filter", packages/client smart.ts) says it instead. `undefined`
+ * when neither is known.
+ */
+export function truncationCause(node: NodeState, pause: Pause): TruncationCause | undefined {
+  const recorded = finishReasonOf(node, pause);
+  if (recorded === 'length' || recorded === 'content-filter') return recorded;
+  const detail = pause.smart?.detail ?? '';
+  if (/content filter/i.test(detail)) return 'content-filter';
+  if (/token limit/i.test(detail)) return 'length';
+  return undefined;
 }
 
 /** The one line for a smart hold. `undefined` when the pause is not one. */
@@ -31,10 +57,13 @@ export function smartBannerText(node: NodeState, pause: Pause, replayed = false)
   if (rule === 'error-result') {
     line = `${node.name} returned an error result without throwing`;
   } else if (rule === 'truncated-tool-call') {
+    const cause = truncationCause(node, pause);
     line =
-      finishReasonOf(node) === 'content-filter'
+      cause === 'content-filter'
         ? 'A content filter stopped the model in the middle of a tool call'
-        : 'The model stopped at the token limit in the middle of a tool call';
+        : cause === 'length'
+          ? 'The model stopped at the token limit in the middle of a tool call'
+          : "The model's reply was cut off in the middle of a tool call";
   } else {
     return undefined;
   }
@@ -76,7 +105,8 @@ const ERROR_REPEAT_HINT =
 const ERROR_RESULT_HINT =
   'The tool returned a result shaped like an error (isError, success: false, a non-zero exit ' +
   'code, or nothing but an error key) instead of throwing, so the model would carry on as if it ' +
-  'had worked. Continue hands it over as it is; Retry runs the call again; Inject substitutes a ' +
+  'had worked. The result itself is shown once the gate is released (the app records it after ' +
+  'the hold). Continue hands it over as it is; Retry runs the call again; Inject substitutes a ' +
   'result; Abort stops the run. GRAPHMIND_BREAK_ON_ERROR_RESULT=0 turns this off.';
 
 const TRUNCATED_HINT =
@@ -85,15 +115,39 @@ const TRUNCATED_HINT =
   'is; Abort stops the run. Retry sends the same request again (same token limit), and only where ' +
   'the step can be re-run: a streamed step refuses it. GRAPHMIND_BREAK_ON_TRUNCATED=0 turns this off.';
 
-/** What each verb does at this hold — the banner's tooltip. `undefined` for an ordinary gate. */
-export function holdHint(pause: Pause): string | undefined {
+const TRUNCATED_LENGTH_HINT =
+  'The model’s reply hit the token limit while it was writing a tool call, so that call’s ' +
+  'arguments are incomplete. Raise the token limit and Retry, or Abort. ' +
+  'GRAPHMIND_BREAK_ON_TRUNCATED=0 turns this off.';
+
+const TRUNCATED_FILTER_HINT =
+  'The provider’s content filter stopped the model’s reply while it was writing a tool call, so ' +
+  'that call’s arguments are incomplete. A larger token limit will not help: Retry may get a ' +
+  'different reply, or Abort and change the prompt. GRAPHMIND_BREAK_ON_TRUNCATED=0 turns this off.';
+
+/**
+ * What each verb does at this hold — the banner's tooltip. `undefined` for
+ * an ordinary gate. `node` lets a truncated-tool-call hold name its cause.
+ */
+export function holdHint(pause: Pause, node?: NodeState): string | undefined {
   if (pause.reason === 'loop') {
     if (pause.loop?.kind === 'cycle') return CYCLE_HINT;
     if (pause.loop?.kind === 'error-repeat') return ERROR_REPEAT_HINT;
     return REPEAT_HINT;
   }
   if (pause.smart?.rule === 'error-result') return ERROR_RESULT_HINT;
-  if (pause.smart?.rule === 'truncated-tool-call') return TRUNCATED_HINT;
+  if (pause.smart?.rule === 'truncated-tool-call') {
+    const detail = pause.smart.detail ?? '';
+    const cause =
+      node !== undefined
+        ? truncationCause(node, pause)
+        : /content filter/i.test(detail)
+          ? 'content-filter'
+          : /token limit/i.test(detail)
+            ? 'length'
+            : undefined;
+    return cause === 'content-filter' ? TRUNCATED_FILTER_HINT : cause === 'length' ? TRUNCATED_LENGTH_HINT : TRUNCATED_HINT;
+  }
   return undefined;
 }
 

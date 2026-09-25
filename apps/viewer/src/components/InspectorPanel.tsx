@@ -30,7 +30,17 @@ import { tokenBuffers } from '../store/tokenBuffers.js';
 import { useRunStore } from '../store/runStore.js';
 import { failureContext, nodeStats } from '../store/stats.js';
 import { useUiStore } from '../store/uiStore.js';
-import { nodeStatus, resumerLabel, type NodeExecution, type NodeState, type Pause } from '../store/types.js';
+import {
+  activePausesOf,
+  executionError,
+  nodeStatus,
+  recoveredError,
+  resumerLabel,
+  type NodeExecution,
+  type NodeState,
+  type Pause,
+} from '../store/types.js';
+import { heldExecutionIndex, shownPause } from '../lib/gate.js';
 import { EditedArgs } from './EditedArgs.js';
 import { HoldEvidence, isRepeatLoop } from './HoldEvidence.js';
 import { IconAlert, IconClose, IconLink } from './Icons.js';
@@ -289,12 +299,12 @@ function ExecutionDetails({
       : tokenBuffers.getInstanceSnapshot(runId, node.nodeId, execIndex, node.executions.length);
   const streamed = tokens.text;
   const timing = tokenBuffers.getInstanceTiming(runId, node.nodeId, execIndex, node.executions.length);
-  // Fall back to the node-level error only when this execution is the one
-  // that can own it (it failed, or is still running) — a clean retry must
-  // not inherit its predecessor's error.
-  const error =
-    exec.error ??
-    (exec.status === 'error' || exec.status === 'running' ? node.lastError : undefined);
+  // Only an execution that owns the error leads with it (store/types.ts
+  // executionError): never a call held before it ran, never a clean retry
+  // or a sibling. A call that failed and then succeeded on retry says so as
+  // history instead.
+  const error = useRunStore((s) => executionError(s.runs[runId], node, exec));
+  const recovered = recoveredError(exec);
   const stats = nodeStats(node);
   const usage = usageView(exec.usage);
   const nodeCost = useNodeCost(node);
@@ -304,6 +314,11 @@ function ExecutionDetails({
     <>
       {error !== undefined && (
         <WhyItFailed runId={runId} node={node} exec={exec} error={error} />
+      )}
+      {recovered !== undefined && (
+        <div className="gm-pause-note gm-why-recovered" data-testid="why-recovered">
+          Failed, then succeeded on retry. The earlier error: {recovered.name}: {recovered.message}
+        </div>
       )}
 
       {node.kind === 'llm' && (
@@ -588,9 +603,31 @@ function InspectorInner({ runId, nodeId }: { runId: string; nodeId: string }) {
     }
   });
   const dragging = useRef(false);
-  const pause = useRunStore((s) => {
-    const activeId = s.runs[runId]?.nodes[nodeId]?.activePauseId;
-    return activeId === undefined ? undefined : s.runs[runId]?.pauses[activeId];
+  // The hold the inspector explains and the keyboard acts on: the picked
+  // execution's own hold, else the node's newest (lib/gate.ts shownPause).
+  const pause = useRunStore((s) => shownPause(s.runs[runId], nodeId, instanceIdx));
+  // Parallel calls of one tool can hold at once: the footer has one row per
+  // held call. Selected as a string so the selector result stays stable.
+  const heldIds = useRunStore((s) => {
+    const run = s.runs[runId];
+    if (run === undefined || run.nodes[nodeId]?.activePauseId === undefined) return '';
+    return activePausesOf(run, nodeId)
+      .map((p) => p.pauseId)
+      .join(' ');
+  });
+  const pauses = useRunStore((s) => (heldIds === '' ? undefined : s.runs[runId]?.pauses));
+  // Unpicked, the inspector opens on the execution the shown hold names
+  // exactly, so the evidence matches the editor's prefill.
+  const heldIdx = useRunStore((s) => heldExecutionIndex(s.runs[runId], nodeId));
+  // Whether the displayed execution leads with "Why this failed" (then the
+  // footer row for that same call does not repeat the error line).
+  const whyShown = useRunStore((s) => {
+    const run = s.runs[runId];
+    const n = run?.nodes[nodeId];
+    if (run === undefined || n === undefined || n.executions.length === 0) return false;
+    const i = Math.max(0, Math.min(instanceIdx ?? heldIdx ?? n.executions.length - 1, n.executions.length - 1));
+    const e = n.executions[i];
+    return e !== undefined && executionError(run, n, e) !== undefined;
   });
 
   const onDragStart = useCallback((event: React.MouseEvent) => {
@@ -648,9 +685,21 @@ function InspectorInner({ runId, nodeId }: { runId: string; nodeId: string }) {
 
   if (node === undefined) return null;
   const status = nodeStatus(node);
-  const idx = Math.max(0, Math.min(instanceIdx ?? node.executions.length - 1, node.executions.length - 1));
+  const idx = Math.max(0, Math.min(instanceIdx ?? heldIdx ?? node.executions.length - 1, node.executions.length - 1));
   const exec = node.executions[idx];
   const held = pause !== undefined && pause.active;
+  const heldRows = heldIds
+    .split(' ')
+    .map((id) => pauses?.[id])
+    .filter((p): p is Pause => p !== undefined && p.active)
+    .map((p) => {
+      const exact = p.heldAmbiguous === true ? undefined : p.heldBy?.find((h) => h.nodeId === nodeId);
+      const index = exact === undefined ? -1 : node.executions.findIndex((e) => e.instanceId === exact.instanceId);
+      return { pause: p, execIndex: index >= 0 ? index : undefined };
+    });
+  if (held && pause !== undefined && !heldRows.some((r) => r.pause.pauseId === pause.pauseId)) {
+    heldRows.push({ pause, execIndex: undefined });
+  }
 
   return (
     <aside
@@ -737,14 +786,37 @@ function InspectorInner({ runId, nodeId }: { runId: string; nodeId: string }) {
       </div>
 
       {held && pause !== undefined && (
-        <footer className="gm-inspect-held" aria-label="Held at a gate">
-          <PauseActions
-            runId={runId}
-            node={node}
-            pause={pause}
-            variant="panel"
-            hideError={exec?.error !== undefined || node.lastError !== undefined}
-          />
+        <footer
+          className={`gm-inspect-held${heldRows.length > 1 ? ' gm-inspect-held--multi' : ''}`}
+          aria-label="Held at a gate"
+        >
+          {heldRows.map((row) => {
+            const rowIdx = row.execIndex;
+            const keyed = row.pause.pauseId === pause.pauseId;
+            return (
+              <div
+                key={row.pause.pauseId}
+                className={`gm-held-row${keyed ? ' gm-held-row--keyed' : ''}`}
+                data-testid="held-row"
+              >
+                <PauseActions
+                  runId={runId}
+                  node={node}
+                  pause={row.pause}
+                  variant="panel"
+                  shortcuts={keyed}
+                  // The Why block above already says this row's error.
+                  hideError={whyShown && row.execIndex === idx}
+                  {...(heldRows.length > 1
+                    ? {
+                        instanceLabel: rowIdx !== undefined ? `call #${rowIdx + 1}` : 'call ?',
+                        ...(rowIdx !== undefined ? { onPickInstance: () => setInstanceIdx(rowIdx) } : {}),
+                      }
+                    : {})}
+                />
+              </div>
+            );
+          })}
         </footer>
       )}
     </aside>

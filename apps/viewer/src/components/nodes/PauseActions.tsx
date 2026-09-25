@@ -37,14 +37,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { isExportedRun } from '../../connection/FixtureConnection.js';
 import { TOKENLESS_NOTE, controlAllows } from '../../lib/control.js';
-import { canEditArgs, latestRefusal, refusalText } from '../../lib/editArgs.js';
-import { injectAndResume, pausePointLabel, resumeGate, stepGate } from '../../lib/gate.js';
+import { canEditArgs, heldExecution, latestRefusal, refusalText } from '../../lib/editArgs.js';
+import { injectAndResume, injectPrefill, pausePointLabel, resumeGate, stepGate } from '../../lib/gate.js';
 import { hubReplyText, replyAnswers } from '../../lib/hubReply.js';
 import { useEditStore } from '../../store/editStore.js';
 import { holdBannerText, holdHint } from '../../store/holds.js';
 import { useRunStore } from '../../store/runStore.js';
 import { useUiStore } from '../../store/uiStore.js';
-import { latestExecution, type NodeState, type Pause } from '../../store/types.js';
+import type { NodeState, Pause } from '../../store/types.js';
 import { EditArgsEditor } from './EditArgsEditor.js';
 
 export type PauseVariant = 'card' | 'panel';
@@ -62,6 +62,17 @@ export interface PauseActionsProps {
    * not emphasis.
    */
   hideError?: boolean;
+  /**
+   * Parallel calls of one tool can hold at once. The inspector renders one
+   * row per held call and names each (`instanceLabel`); only the row the
+   * keyboard acts on shows the single-key hints (`shortcuts`). The card
+   * shows one and counts the others (`moreHeld`).
+   */
+  instanceLabel?: string;
+  /** Show this row's execution in the inspector (the instance label becomes a button). */
+  onPickInstance?: () => void;
+  shortcuts?: boolean;
+  moreHeld?: number;
 }
 
 /** Why every debugger control is dead in an exported run. */
@@ -73,7 +84,8 @@ const LIVE_HINT =
   'Held by the debugger. Note: user-configured totalMs/stepMs/chunkMs timeouts can still abort a ' +
   'run during a long hold (per-tool toolMs is neutralized).';
 
-function Key({ children }: { children: string }) {
+function Key({ children, show = true }: { children: string; show?: boolean }) {
+  if (!show) return null;
   return (
     <span className="gm-kbd gm-kbd--inline" aria-hidden>
       {children}
@@ -88,6 +100,10 @@ export function PauseActions({
   variant,
   autoFocus,
   hideError,
+  instanceLabel,
+  onPickInstance,
+  shortcuts = true,
+  moreHeld = 0,
 }: PauseActionsProps) {
   const [injecting, setInjecting] = useState(false);
   /** The argument editor (panel copy only). */
@@ -104,7 +120,9 @@ export function PauseActions({
   const pendingEdit = useEditStore((s) => s.pending[pause.pauseId]);
   const control = useUiStore((s) => s.control);
 
-  const exec = latestExecution(node);
+  // The call this gate holds (exact when the pause names its instance) —
+  // with parallel holds, not simply the node's latest execution.
+  const exec = heldExecution(node, pause);
   const error = exec?.error ?? node.lastError;
   const replayed = isExportedRun();
   const editable = canEditArgs(node, pause, replayed, control);
@@ -125,14 +143,8 @@ export function PauseActions({
       ? reply
       : undefined;
 
-  const prefill = useMemo(() => {
-    const shape = exec?.output !== undefined && exec.output !== null ? exec.output : exec?.input;
-    try {
-      return JSON.stringify(shape ?? {}, null, 2);
-    } catch {
-      return '{}';
-    }
-  }, [exec]);
+  const prefillInfo = useMemo(() => injectPrefill(exec, pause.point), [exec, pause.point]);
+  const prefill = prefillInfo.text;
 
   const openInject = () => {
     setDraft(prefill);
@@ -240,6 +252,33 @@ export function PauseActions({
     [pause, node.name, node.executions.length, replayed, runId],
   );
 
+  const instanceTag =
+    instanceLabel === undefined ? null : onPickInstance !== undefined ? (
+      <button
+        className="gm-pause-instance"
+        data-testid="pause-instance"
+        title={`Show ${instanceLabel} (${heldExecution(node, pause)?.instanceId ?? 'unknown instance'}) above`}
+        onClick={onPickInstance}
+      >
+        {instanceLabel}
+      </button>
+    ) : (
+      <span className="gm-pause-instance" data-testid="pause-instance">
+        {instanceLabel}
+      </span>
+    );
+  const moreChip =
+    moreHeld > 0 ? (
+      <button
+        className="gm-pause-more"
+        data-testid="pause-more"
+        title={`${moreHeld} more ${node.name} call${moreHeld === 1 ? ' is' : 's are'} held — the inspector lists every one`}
+        onClick={() => useUiStore.getState().selectNode(runId, node.nodeId)}
+      >
+        +{moreHeld} held
+      </button>
+    ) : null;
+
   return (
     <>
       {holdLabel !== undefined ? (
@@ -247,11 +286,13 @@ export function PauseActions({
           className={`gm-pause-label gm-pause-label--loop${
             variant === 'card' ? ' gm-pause-label--clamp' : ''
           }`}
-          title={replayed ? RECORDED_HINT : holdHint(pause) ?? LIVE_HINT}
+          title={replayed ? RECORDED_HINT : holdHint(pause, node) ?? LIVE_HINT}
           data-testid="hold-label"
         >
           <span className="gm-dot gm-dot--paused" />
           <span className="gm-pause-label-text">{holdLabel}</span>
+          {instanceTag}
+          {moreChip}
         </div>
       ) : (
         <div
@@ -260,6 +301,8 @@ export function PauseActions({
         >
           <span className="gm-dot gm-dot--paused" />
           {pointLabel}
+          {instanceTag}
+          {moreChip}
         </div>
       )}
       {pause.point === 'error' && error !== undefined && hideError !== true && (
@@ -275,38 +318,38 @@ export function PauseActions({
             ref={continueRef}
             className="gm-action gm-action--primary"
             onClick={() => resumeGate(runId, pause.pauseId, 'continue')}
-            title="Release this gate and run on (c)"
+            title={shortcuts ? 'Release this gate and run on (c)' : 'Release this gate and run on'}
           >
             Continue
-            <Key>c</Key>
+            <Key show={shortcuts}>c</Key>
           </button>
           {canStep && (
             <button
               className="gm-action"
               onClick={() => stepGate(runId, pause.pauseId)}
-              title="Resume and pause at the next gate (s)"
+              title={shortcuts ? 'Resume and pause at the next gate (s)' : 'Resume and pause at the next gate'}
             >
               Step
-              <Key>s</Key>
+              <Key show={shortcuts}>s</Key>
             </button>
           )}
           <button
             className="gm-action"
             onClick={() => resumeGate(runId, pause.pauseId, 'retry')}
-            title="Run this call again (r)"
+            title={shortcuts ? 'Run this call again (r)' : 'Run this call again'}
           >
             Retry
-            <Key>r</Key>
+            <Key show={shortcuts}>r</Key>
           </button>
           {canInject && (
             <button
               className="gm-action"
               onClick={openInject}
-              title="Substitute a result and continue (i)"
+              title={shortcuts ? 'Substitute a result and continue (i)' : 'Substitute a result and continue'}
               aria-expanded={injecting}
             >
               Inject…
-              <Key>i</Key>
+              <Key show={shortcuts}>i</Key>
             </button>
           )}
           {editable && (
@@ -316,13 +359,15 @@ export function PauseActions({
               title={
                 variant === 'card'
                   ? 'Run this call with changed arguments — opens the editor in the inspector (e)'
-                  : 'Run this call with changed arguments (e)'
+                  : shortcuts
+                    ? 'Run this call with changed arguments (e)'
+                    : 'Run this call with changed arguments'
               }
               {...(variant === 'panel' ? { 'aria-expanded': editing } : {})}
             >
               {/* The card's row has room for two lines of verbs, not three. */}
               {variant === 'card' ? 'Edit args…' : 'Edit arguments…'}
-              <Key>e</Key>
+              <Key show={shortcuts}>e</Key>
             </button>
           )}
           <button
@@ -393,6 +438,11 @@ export function PauseActions({
           onClick={(e) => e.stopPropagation()}
         >
           <div className="gm-section-label gm-inject-title">Inject output for {node.name}</div>
+          {prefillInfo.note !== undefined && (
+            <div className="gm-pause-note" data-testid="inject-note">
+              {prefillInfo.note}
+            </div>
+          )}
           <textarea
             ref={editorRef}
             className={invalid ? 'gm-invalid' : ''}

@@ -152,3 +152,70 @@ describe('buildRunHtml', () => {
     expect(() => build([])).toThrow(/escapes/);
   });
 });
+
+// The viewer's price table is a lazy chunk (`import("./data_slim-<hash>.js")`).
+// Inlined, that relative import resolves against the document, so an export
+// served from a folder fetched and ran whatever sat beside it, and from disk
+// it could not price anything. The table now travels as data; the CSP
+// forbids loading anything.
+describe('buildRunHtml — the price table and the CSP', () => {
+  const TABLE = [{ id: 'anthropic', name: 'Anthropic', models: [{ id: 'claude-sonnet-4-5' }] }];
+  /** What Vite emits for a JSON module chunk. */
+  const chunk = (table: unknown): string => `const t=JSON.parse('${JSON.stringify(table).replace(/'/g, "\\'")}');export{t as default};`;
+
+  beforeEach(() => {
+    writeFileSync(
+      join(viewerDist, 'assets', 'index-abc.js'),
+      'globalThis.__BOOTED__ = true; const load = () => import("./data_slim-Xy_9.js");',
+    );
+    writeFileSync(join(viewerDist, 'assets', 'data_slim-Xy_9.js'), chunk(TABLE));
+  });
+
+  const usageRun = () => [
+    event(0, 'run.started', { app: 'a', sdk: { name: 't', version: '1' } }),
+    event(1, 'node.finished', { nodeId: 'llm:step', durationMs: 5, status: 'ok', usage: { inputTokens: 10, outputTokens: 2, inclusive: true } }),
+  ];
+
+  function pricesOf(html: string): unknown {
+    const match = /<script type="application\/json" id="graphmind-prices">([\s\S]*?)<\/script>/.exec(html);
+    return match?.[1] === undefined ? undefined : JSON.parse(match[1]);
+  }
+
+  it('a run with token usage carries the table the entry imports, as a JSON block', () => {
+    expect(pricesOf(build(usageRun()))).toEqual(TABLE);
+  });
+
+  it('a run without usage carries no table (nothing to price)', () => {
+    const html = build([event(0, 'node.finished', { nodeId: 'tool:x', durationMs: 1, status: 'ok' })]);
+    expect(html).not.toContain('graphmind-prices');
+  });
+
+  it('escapes the table like the run: a "</script>" in it cannot close the block', () => {
+    writeFileSync(join(viewerDist, 'assets', 'data_slim-Xy_9.js'), chunk([{ id: '</script><b>x' }]));
+    const html = build(usageRun());
+    expect(html).not.toContain('</script><b>');
+    expect(pricesOf(html)).toEqual([{ id: '</script><b>x' }]);
+  });
+
+  it('a chunk it cannot read as a table exports without prices, never a broken page', () => {
+    writeFileSync(join(viewerDist, 'assets', 'data_slim-Xy_9.js'), 'export default something();');
+    const html = build(usageRun());
+    expect(html).not.toContain('graphmind-prices');
+    expect(html).toContain('globalThis.__BOOTED__ = true;');
+  });
+
+  it('a price chunk the entry names but the build lacks is a broken build: an error', () => {
+    rmSync(join(viewerDist, 'assets', 'data_slim-Xy_9.js'));
+    expect(() => build(usageRun())).toThrow(/data_slim-Xy_9\.js.*not readable/);
+  });
+
+  it('forbids loading anything at open time: a CSP before any script', () => {
+    const html = build(usageRun());
+    const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html)?.[1] ?? '';
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("script-src 'unsafe-inline'");
+    expect(csp).not.toMatch(/script-src[^;]*('self'|https?:|blob:|data:|\*)/);
+    expect(csp).toContain("base-uri 'none'");
+    expect(html.indexOf('Content-Security-Policy')).toBeLessThan(html.indexOf('<script'));
+  });
+});

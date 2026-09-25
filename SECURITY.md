@@ -139,7 +139,9 @@ a coding agent's shell included — can still **continue, retry or abort** a hel
 call over a `/ws/ui` socket without a token, whatever the level (see below). It
 cannot inject, edit, or change breakpoints or step mode that way: those need a
 token, so a tokenless socket never has more rights than the agent token at
-`off`. `serve --json` never
+`resume` (which can also change breakpoints and step mode) — though more than
+the agent token at the default `off`, which can release nothing.
+`serve --json` never
 prints a token. Tokens are compared as SHA-256 digests in constant time;
 `?token=` and cookies are never read. The stored `exec.resumed` carries a
 `principal` (`viewer` / `agent` / `anonymous`) taken from the credential that

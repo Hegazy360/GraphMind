@@ -79,8 +79,14 @@ The adapter — not the viewer — implements these, and the semantics are preci
 ## Turning it off
 
 Pause-on-error is a breakpoint like any other: a matcher of `{ point: 'error' }`. The viewer
-shows it as a removable chip in the run bar — clear the chip and errors flow straight through
-while everything else stays live.
+shows it as a removable chip in the run bar — clear the chip (or start the server with
+`--pause-on-error off`) and thrown errors flow straight through while everything else stays live.
+
+Two failures that do not throw — a tool result shaped like an error (`isError: true`,
+`success: false`, a non-zero exit code) and an LLM step cut off in the middle of a tool call —
+are [smart holds](/reference/environment/#smart-holds) of the app's SDK, not this breakpoint, so
+the chip does not control them. `GRAPHMIND_BREAK_ON_ERROR_RESULT=0` and
+`GRAPHMIND_BREAK_ON_TRUNCATED=0` in the app's environment turn them off.
 
 <Aside type="tip" title="Long autonomous runs">
 Leaving pause-on-error armed is the point of running a long agent under GraphMind at all: it

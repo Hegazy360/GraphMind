@@ -50,7 +50,7 @@ graphmind --db ./x.db              # database file (default ~/.graphmind/graphmi
 graphmind --no-open                # do not open a browser
 graphmind --pause-on-error tool    # arm the default error breakpoint on tools only
 graphmind --pause-on-error off     # start with no breakpoints at all
-graphmind --allow-control=resume   # let `graphmind resume` (a coding agent) continue/retry/abort
+graphmind --allow-control=resume   # let `graphmind resume` (a coding agent) continue/retry/abort, and set breakpoints / step mode
 graphmind --no-edit-input          # refuse every input edit, from anyone
 graphmind serve --json --no-open   # headless: one JSON line on stdout, never a token
 ```
@@ -87,9 +87,10 @@ What needs a credential: any `exec.resume` that carries an edited `input` or inj
 /api/demo/start`); every CLI control command. A viewer socket **without** a token keeps the part
 of the 0.5 behaviour that chooses nothing — continue, retry and abort — and can never edit an
 input, inject a result, or change breakpoints or step mode (the server answers `error {code:
-'forbidden'}`, followed by the real `state`; the viewer hides those controls). That tokenless mode
-is **deprecated**: the server logs a one-time note when one connects, and it will need the token
-in a later minor.
+'forbidden'}`, followed by the real `state`; the viewer does not offer inject or edit there, and
+disables its run/step switch, breakpoint controls and palette actions, saying why). That
+tokenless mode is **deprecated**: the server logs a one-time note when one connects, and it will
+need the token in a later minor (see [Stability](/reference/stability/#deprecated-in-060)).
 
 Every response carries `Content-Security-Policy: frame-ancestors 'none'`, `X-Frame-Options:
 DENY`, `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`; `/api` responses add

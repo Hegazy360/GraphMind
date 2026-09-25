@@ -106,7 +106,7 @@ export class FakeApp {
   /** Connect + `hello` -> `hello.ack` handshake (unless `handshake: false`). */
   static async connect(
     port: number,
-    opts: { app?: string; capabilities?: string[]; handshake?: boolean } = {},
+    opts: { app?: string; capabilities?: string[]; handshake?: boolean; resumeToken?: string } = {},
   ): Promise<FakeApp> {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ingest`);
     const app = new FakeApp(ws);
@@ -116,6 +116,7 @@ export class FakeApp {
       versions: { protocol: 1, client: 'test-0.0.0' },
       capabilities: opts.capabilities ?? ['pause', 'step'],
       ...(opts.app === undefined ? {} : { app: opts.app }),
+      ...(opts.resumeToken === undefined ? {} : { resumeToken: opts.resumeToken }),
     });
     const ackEnvelope = await app.received.next((e) => e.type === 'hello.ack', 3000, 'hello.ack');
     app.ack = ackEnvelope.payload as MessagePayloadMap['hello.ack'];

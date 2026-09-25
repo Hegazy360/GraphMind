@@ -14,7 +14,9 @@ error again and again, or a repeating cycle of calls; lets you fix a held tool
 call's arguments and run the real call; records token counts you can compare
 from one step to the next and shows what changed between two LLM steps and
 what it cost; and your coding agent can drive a paused run from the terminal.
-Controlling a held run now needs a credential. The smart holds and the new loop
+Editing arguments, injecting results and changing breakpoints or step mode now
+need a credential; a tokenless viewer can still continue, retry and abort
+(deprecated). The smart holds and the new loop
 kinds are TypeScript only in 0.6.0 (every TS adapter and `graphmind
 mcp-proxy`); argument editing works in TypeScript and Python.
 
@@ -147,7 +149,9 @@ mcp-proxy`); argument editing works in TypeScript and Python.
   release nobody asked for, and an old client's un-echoed answer is credited
   only to a resume that asked for that action. Resumes for made-up pause ids,
   and tokenless long-polls (at most 8 of the 16 slots), cannot crowd out a real
-  one; a peer cannot take over a live run by flooding fresh run ids.
+  one; a peer cannot take over a live run by flooding fresh run ids — not
+  while its app is connected, nor while it reconnects — and the flood no
+  longer reopens finished or abandoned runs to another connection.
 - **Audit.** The stored `exec.resumed` records who released it (`principal`:
   `viewer`, `agent` or `anonymous`, from the credential — never from the app)
   and an optional sanitized `operator` label. The viewer shows "resumed by
@@ -189,7 +193,12 @@ mcp-proxy`); argument editing works in TypeScript and Python.
   model the snapshot does not know gets **no dollar figure**. This replaces
   the flat $3 / $15 per million tokens estimate in the top bar and the
   inspector. The table is a separate chunk the viewer fetches only for a run
-  with token usage; a single-file export opened from disk shows no cost.
+  with token usage. A single-file export (`graphmind record --html`) of such a
+  run carries the table inside the file, so it prices the run offline too, and
+  loads nothing at open time: it used to look for the chunk beside the file
+  (fetching and running whatever sat there when served from a folder, and
+  failing with CORS errors from disk), and now a Content-Security-Policy
+  forbids loading anything.
 
 ### Changed — token counts you can compare, and each LLM step recorded as it was sent (usage truth)
 
@@ -277,10 +286,12 @@ mcp-proxy`); argument editing works in TypeScript and Python.
 - **A tokenless viewer socket could steer the run.** It could inject a result —
   an injected LLM completion chooses the next tool call and its arguments — and
   arm breakpoints. It is now limited to continue, retry and abort (see above).
-- **Recorded ids never carry control characters.** The server forwards a
-  resumer's `requestId` only when it is 1 to 128 of `A-Z a-z 0-9 . _ : -`
-  (otherwise it mints a UUID), and it writes app-written text to its log with
-  control and bidi characters escaped, as the CLI prints it.
+- **A resumer's `requestId` never carries control characters, and app-written
+  ids and text are escaped wherever they are printed.** The server forwards a
+  `requestId` only when it is 1 to 128 of `A-Z a-z 0-9 . _ : -` (otherwise it
+  mints a UUID). Run, node and pause ids an app writes are stored as sent; the
+  server's log and the CLI print them, and any app-written text, with control
+  and bidi characters escaped.
 - **Tool definitions and Python Responses output** could record credentials
   and hidden tool arguments (see *usage truth* above).
 
@@ -318,6 +329,27 @@ rather than records. If you set one of these to an unusual value meaning
   for the OpenAI Agents SDK and passing an instrumented client to Pydantic AI
   providers. The frameworks themselves are not in the test suite; the client
   calls they make are.
+
+### Fixed — the viewer
+
+- **Parallel calls of one tool that hold at once are all shown.** The card
+  showed the newest hold while `c` released another one, `e` opened nothing,
+  and releasing the shown hold dropped the node back to running while the
+  other call was still held. The card now shows one hold and counts the rest
+  ("+1 held"), the inspector's footer has one row per held call, named, and
+  every key acts on the hold on screen; releasing one falls back to the next.
+- **"Why this failed" belongs to the call that failed.** With parallel calls
+  an error was pinned on whichever call was still running (a sibling that went
+  on to succeed kept it for good), and the inspector opened on the latest call
+  instead of the held one. A call held before it ran (an error-repeat hold)
+  no longer shows the previous call's error as its own, and a call that failed
+  and then succeeded on retry says so as history.
+- **The top bar counts tokens once.** An agent that reports the sum of its
+  steps (the bundled demo; an AI SDK OpenTelemetry import) was added to the
+  steps themselves.
+- **A tab without the token** is no longer offered run/step mode, "Break
+  everywhere", breakpoint dots or their palette actions, which the server
+  refuses: they are disabled and say why.
 
 ### Added — Python and Ruby speak the 0.6.0 pause protocol
 

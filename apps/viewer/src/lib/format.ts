@@ -69,12 +69,31 @@ export function fmtTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
-/** Estimated spend. Sub-cent numbers still need to read as money. */
+/** The smallest amount `fmtCost` spells out; anything below reads `<$0.0001`. */
+const COST_FLOOR = 0.0001;
+
+/**
+ * Estimated spend. Sub-cent numbers still need to read as money, and a cost
+ * that is not zero never reads as zero: a mini model's short step (a
+ * hundredth of a cent) is `<$0.0001`, not `$0.0000`. `fmtCostExact` keeps
+ * the digits for a tooltip.
+ */
 export function fmtCost(usd: number): string {
+  if (!Number.isFinite(usd)) return '—';
   if (usd === 0) return '$0';
+  if (usd < COST_FLOOR) return `<$${COST_FLOOR}`;
   if (usd < 0.01) return `$${usd.toFixed(4)}`;
   if (usd < 1) return `$${usd.toFixed(3)}`;
   return `$${usd.toFixed(2)}`;
+}
+
+/** A cost to two significant digits, however small (`$0.000010`) — for tooltips. */
+export function fmtCostExact(usd: number): string {
+  if (!Number.isFinite(usd)) return '—';
+  if (usd === 0) return '$0';
+  if (usd >= COST_FLOOR) return fmtCost(usd);
+  const decimals = Math.min(12, 1 - Math.floor(Math.log10(usd)));
+  return `$${usd.toFixed(decimals)}`;
 }
 
 export function fmtCount(n: number): string {

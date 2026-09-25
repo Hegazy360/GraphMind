@@ -10,7 +10,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { matchSorter } from 'match-sorter';
 import { broadcastControl, getConnection } from '../connection/ServerConnection.js';
+import { isExportedRun } from '../connection/FixtureConnection.js';
 import { canvasActions, copyText, deepLink } from '../lib/commands.js';
+import { debugDeniedNote } from '../lib/control.js';
 import { fmtRelative } from '../lib/format.js';
 import { collapsibleRoots } from '../store/collapse.js';
 import { useRunStore } from '../store/runStore.js';
@@ -29,8 +31,16 @@ interface PaletteItem {
   hint?: string | undefined;
   status?: NodeLifeStatus | undefined;
   keywords?: string | undefined;
+  /**
+   * Why this action cannot run here (a recorded run, a tab without the
+   * token). Listed, so it can be found, but inert and saying why.
+   */
+  disabled?: { note: string; short: string } | undefined;
   run: () => void;
 }
+
+/** Why mode and breakpoint actions do nothing in an exported run. */
+const RECORDED_NOTE = 'This is a recorded run: there is no server to change breakpoints or step mode on.';
 
 function useActionItems(runId: string | undefined): PaletteItem[] {
   const view = useUiStore((s) => s.view);
@@ -41,9 +51,24 @@ function useActionItems(runId: string | undefined): PaletteItem[] {
   const fixtureActive = useUiStore((s) => s.fixtureActive);
   const selectedNodeId = useUiStore((s) => s.selectedNodeId);
   const collapsedCount = useUiStore((s) => (runId === undefined ? 0 : collapsedFor(s, runId).length));
+  const control = useUiStore((s) => s.control);
 
   return useMemo<PaletteItem[]>(() => {
     const ui = useUiStore.getState();
+    // Mode and breakpoints: the server refuses them from a tab without the
+    // token, and a recording has no server at all.
+    const deniedNote = isExportedRun() ? RECORDED_NOTE : debugDeniedNote(control);
+    const debugDenied =
+      deniedNote === undefined
+        ? undefined
+        : {
+            note: deniedNote,
+            short: isExportedRun()
+              ? 'recorded run'
+              : control?.principal === 'anonymous'
+                ? 'needs the viewer token'
+                : 'not allowed for this token',
+          };
     const items: PaletteItem[] = [
       {
         id: 'act:timeline',
@@ -157,6 +182,7 @@ function useActionItems(runId: string | undefined): PaletteItem[] {
         title: mode === 'run' ? 'Switch to step mode' : 'Switch to run mode',
         subtitle: 'Step mode pauses at every gate',
         keywords: 'debug step through',
+        disabled: debugDenied,
         run: () => {
           const next = mode === 'run' ? 'step' : 'run';
           ui.setMode(next);
@@ -168,6 +194,7 @@ function useActionItems(runId: string | undefined): PaletteItem[] {
         group: 'Actions',
         title: 'Break before every node',
         keywords: 'breakpoint pause all gate',
+        disabled: debugDenied,
         run: () => {
           const matcher = {};
           ui.addBreakpoint(matcher);
@@ -179,6 +206,7 @@ function useActionItems(runId: string | undefined): PaletteItem[] {
         group: 'Actions',
         title: 'Clear every breakpoint',
         keywords: 'remove breakpoints',
+        disabled: debugDenied,
         run: () => {
           for (const matcher of useUiStore.getState().breakpoints) {
             ui.removeBreakpoint(matcher);
@@ -207,6 +235,7 @@ function useActionItems(runId: string | undefined): PaletteItem[] {
           group: 'Actions',
           title: `${isSet ? 'Clear' : 'Set'} breakpoint on ${node.name}`,
           keywords: 'break gate selected',
+          disabled: debugDenied,
           run: () => {
             if (isSet) {
               ui.removeBreakpoint(matcher);
@@ -237,7 +266,7 @@ function useActionItems(runId: string | undefined): PaletteItem[] {
       });
     }
     return items;
-  }, [view, filters.errorPathOnly, followCamera, mode, theme, fixtureActive, selectedNodeId, collapsedCount, runId]);
+  }, [view, filters.errorPathOnly, followCamera, mode, theme, fixtureActive, selectedNodeId, collapsedCount, runId, control]);
 }
 
 export function CommandPalette() {
@@ -329,7 +358,7 @@ export function CommandPalette() {
   const close = () => useUiStore.getState().setPaletteOpen(false);
 
   const choose = (item: PaletteItem | undefined) => {
-    if (item === undefined) return;
+    if (item === undefined || item.disabled !== undefined) return;
     item.run();
     close();
   };
@@ -389,10 +418,14 @@ export function CommandPalette() {
                 <div key={item.id}>
                   {header !== undefined && <div className="gm-palette-group">{header}</div>}
                   <button
-                    className={`gm-palette-item${i === active ? ' gm-palette-item--active' : ''}`}
+                    className={`gm-palette-item${i === active ? ' gm-palette-item--active' : ''}${
+                      item.disabled !== undefined ? ' gm-palette-item--disabled' : ''
+                    }`}
                     data-active={i === active}
                     role="option"
                     aria-selected={i === active}
+                    aria-disabled={item.disabled !== undefined ? true : undefined}
+                    title={item.disabled?.note}
                     onMouseEnter={() => setActive(i)}
                     onClick={() => choose(item)}
                   >
@@ -402,8 +435,10 @@ export function CommandPalette() {
                       <IconChevron width={11} height={11} style={{ opacity: 0.45, flexShrink: 0 }} />
                     )}
                     <span className="gm-palette-title">{item.title}</span>
-                    {item.subtitle !== undefined && (
-                      <span className="gm-palette-sub">{item.subtitle}</span>
+                    {item.disabled !== undefined ? (
+                      <span className="gm-palette-sub">{item.disabled.short}</span>
+                    ) : (
+                      item.subtitle !== undefined && <span className="gm-palette-sub">{item.subtitle}</span>
                     )}
                     {item.hint !== undefined && <span className="gm-palette-hint">{item.hint}</span>}
                   </button>

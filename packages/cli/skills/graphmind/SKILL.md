@@ -52,8 +52,9 @@ graphmind serve --json --no-open --allow-control=resume &
 ```
 
 - `--allow-control` limits what `graphmind resume` may do: `off` (default:
-  nothing), `resume` (continue, retry, abort), `inject` (also substitute a
-  result), `edit` (also run a held call with edited arguments). Use the lowest
+  nothing), `resume` (continue, retry, abort — and also set breakpoints and step
+  mode, which decide which calls hold, and start the demo), `inject` (also
+  substitute a result), `edit` (also run a held call with edited arguments). Use the lowest
   level the task needs, and **ask the user before starting with `edit`**: an
   edited call is a REAL call with the arguments you chose (it can write files,
   send requests, run shell commands, charge money).

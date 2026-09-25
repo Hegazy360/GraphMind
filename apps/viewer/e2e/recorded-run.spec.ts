@@ -11,7 +11,12 @@
  * says why. (The resume actions inside a held gate are covered in
  * deep-links.spec.ts — that page already offers none.)
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join, normalize, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { auditPage } from './audit.js';
 import { FIXTURE_NODES, expect, nodeCard, openFixtureRun, openViewer, test } from './harness.js';
 
@@ -117,3 +122,123 @@ for (const theme of ['dark', 'light'] as const) {
     expect(report.contrast, 'a disabled control faded below 3:1').toEqual([]);
   });
 }
+
+// ── a REAL export: `graphmind record --html`'s own exporter ────────────────
+//
+// The viewer lazily imports its price table (`import("./data_slim-<hash>.js")`).
+// Inlined into one file, that specifier resolves against the DOCUMENT: an
+// export served from a folder fetched — and ran — whatever file sat next to
+// it, in its origin, beside every envelope of the run; from disk it failed
+// with CORS errors and no cost. The export now carries the table as data and
+// forbids loading anything (CSP). Built here with the CLI's own buildRunHtml
+// (what `record --html` calls) from the viewer this suite just built.
+
+const REPO = fileURLToPath(new URL('../../../', import.meta.url));
+const EXPORTER = join(REPO, 'packages', 'cli', 'dist', 'export-html.js');
+const VIEWER_DIST = join(REPO, 'apps', 'viewer', 'dist');
+
+type BuildRunHtml = (options: {
+  runId: string;
+  app: string;
+  events: { seq: number; ts: number; runId: string; type: string; nodeId: string | null; payload: unknown }[];
+  schemaVersion: number;
+  viewerDist: string;
+  version: string;
+}) => string;
+
+async function realExport(): Promise<string> {
+  const { buildRunHtml } = (await import(pathToFileURL(EXPORTER).href)) as { buildRunHtml: BuildRunHtml };
+  const envelopes = EXPORTED_RUN as { seq: number; ts: number; runId: string; type: string; payload: Record<string, unknown> }[];
+  return buildRunHtml({
+    runId: envelopes[0]?.runId ?? 'run',
+    app: 'trip-planner',
+    events: envelopes.map((e) => ({
+      seq: e.seq,
+      ts: e.ts,
+      runId: e.runId,
+      type: e.type,
+      nodeId: (e.payload['nodeId'] as string | undefined) ?? null,
+      payload: e.payload,
+    })),
+    schemaVersion: 1,
+    viewerDist: VIEWER_DIST,
+    version: '0.6.0-e2e',
+  });
+}
+
+/** Files planted beside the export: every lazy chunk name the viewer build has. */
+function plantSiblings(folder: string): string[] {
+  const names = readdirSync(join(VIEWER_DIST, 'assets')).filter((f) => f.endsWith('.js') && !f.startsWith('index-'));
+  for (const name of names) {
+    writeFileSync(
+      join(folder, name),
+      'window.__PLANTED__ = (Array.isArray(window.__GRAPHMIND_RUN__) ? window.__GRAPHMIND_RUN__.length : 0);\nexport default [];\n',
+    );
+  }
+  return names;
+}
+
+test.describe('a real record --html export', () => {
+  test.skip(!existsSync(EXPORTER), 'needs the workspace packages built: pnpm -r --filter ./packages/** run build');
+
+  let root: string;
+  let server: Server;
+  let origin: string;
+  const served: string[] = [];
+
+  test.beforeAll(async () => {
+    root = mkdtempSync(join(tmpdir(), 'graphmind-export-e2e-'));
+    mkdirSync(join(root, 'team'));
+    writeFileSync(join(root, 'team', 'run.html'), await realExport());
+    expect(plantSiblings(join(root, 'team')).some((n) => n.startsWith('data_slim-'))).toBe(true);
+    server = createServer((req, res) => {
+      const path = decodeURIComponent((req.url ?? '/').split('?')[0] ?? '/');
+      served.push(path);
+      const file = normalize(join(root, path));
+      if (!file.startsWith(root + sep) || !existsSync(file)) {
+        res.writeHead(404).end();
+        return;
+      }
+      res.writeHead(200, { 'content-type': file.endsWith('.html') ? 'text/html' : 'text/javascript' }).end(readFileSync(file));
+    });
+    await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
+    origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  test.afterAll(async () => {
+    await new Promise<void>((ok) => server.close(() => ok()));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('served from a folder, it loads nothing beside itself, runs nothing planted there, and still prices the run', async ({ page }) => {
+    served.length = 0;
+    const requested: string[] = [];
+    page.on('request', (r) => requested.push(r.url()));
+    await page.goto(`${origin}/team/run.html`);
+    await expect(page.locator('.react-flow__node')).toHaveCount(7, { timeout: 15_000 });
+    // The demo's LLM steps report usage: the top bar prices them from the
+    // table the file carries.
+    await expect(page.locator('.gm-topbar-stats')).toContainText('est. cost');
+    await expect(page.locator('.gm-topbar-stats')).toContainText('$0.024');
+    await page.waitForTimeout(500);
+    expect(await page.evaluate(() => (window as { __PLANTED__?: unknown }).__PLANTED__)).toBeUndefined();
+    expect(requested.filter((url) => !url.endsWith('/team/run.html') && !url.endsWith('/favicon.ico'))).toEqual([]);
+    expect(served.filter((path) => path !== '/team/run.html' && path !== '/favicon.ico')).toEqual([]);
+  });
+
+  test('opened from disk, it prices the run with no request and no console error', async ({ page }) => {
+    const requested: string[] = [];
+    page.on('request', (r) => requested.push(r.url()));
+    await page.goto(pathToFileURL(join(root, 'team', 'run.html')).href);
+    await expect(page.locator('.react-flow__node')).toHaveCount(7, { timeout: 15_000 });
+    await expect(page.locator('.gm-topbar-stats')).toContainText('$0.024');
+    await page.getByRole('button', { name: 'Fit view' }).click();
+    await page.waitForTimeout(700);
+    await nodeCard(page, FIXTURE_NODES.llm).locator('.gm-node-title').click();
+    const ctx = page.getByRole('complementary', { name: 'Node inspector' }).getByTestId('context-cost');
+    await expect(ctx).toContainText('≈ est. (prices as of');
+    await expect(ctx).not.toContainText('Prices unavailable here');
+    expect(requested.filter((url) => url.includes('data_slim') || url.includes('synthetic-'))).toEqual([]);
+    // (The harness fails the test on any console error — a CSP refusal included.)
+  });
+});

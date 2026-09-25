@@ -9,6 +9,7 @@
 import { usageView } from '../lib/usage.js';
 import { ranMs } from '../lib/duration.js';
 import { isContainerKind, kindMeta } from '../lib/kinds.js';
+import { rollupNodeIds } from './stats.js';
 import { nodeStatus, type NodeLifeStatus, type NodeState, type RunState } from './types.js';
 
 /**
@@ -164,7 +165,10 @@ export function summarizeGroup(
     status: 'ghost',
   };
   let rank = -1;
-  for (const id of descendantsOf(run, rootId, index)) {
+  const inside = descendantsOf(run, rootId, index);
+  // A sub-agent that reports the sum of its own steps is not counted twice.
+  const rollups = rollupNodeIds(run, inside, rootId);
+  for (const id of inside) {
     const node = run.nodes[id];
     if (node === undefined) continue;
     summary.nodes += 1;
@@ -179,7 +183,7 @@ export function summarizeGroup(
       // the developer's time, not the group's (see lib/duration.ts).
       const ran = ranMs(exec);
       if (ran !== undefined) summary.durationMs += ran;
-      const usage = usageView(exec.usage);
+      const usage = rollups.has(id) ? undefined : usageView(exec.usage);
       if (usage !== undefined) {
         // Totals, cached tokens included (lib/usage.ts, contract C1).
         summary.tokensIn += usage.inputTokens;

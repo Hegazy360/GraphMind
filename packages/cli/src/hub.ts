@@ -79,6 +79,11 @@ export const DEFAULT_ABANDON_GRACE_MS = 15_000;
 
 /** How many run claims to remember. Oldest are evicted first. */
 const MAX_RUN_CLAIMS = 5_000;
+/**
+ * Abandoned runs whose claim was evicted: they take no frame from anyone
+ * (a finished run is sealed by its stored status instead). Bounded; ids only.
+ */
+const MAX_SEALED_RUNS = 10 * MAX_RUN_CLAIMS;
 
 /** Longest `resumeToken` accepted from a client (ours are 32 hex chars). */
 const MAX_RESUME_TOKEN_LENGTH = 128;
@@ -146,6 +151,13 @@ interface RunClaim {
   token: string;
   /** The claimant announced `run-claim`, so the claim outlives its socket. */
   strict: boolean;
+  /**
+   * The run is over as far as this hub knows: it sent `run.finished`, or it
+   * was reconciled to `abandoned`. Only such a claim may be evicted for
+   * another connection's new run — never one of a run still `running`,
+   * whose app may be in its reconnect window.
+   */
+  ended?: 'finished' | 'abandoned';
 }
 
 interface UiConn {
@@ -262,6 +274,8 @@ export class Hub {
    * which is far beyond any real local session.
    */
   private readonly runClaims = new Map<string, RunClaim>();
+  /** Abandoned runs whose claim was evicted (insertion-ordered, capped). */
+  private readonly sealedRuns = new Set<string>();
   /** Rate-limiting state for `throttledLog`, keyed by message kind. */
   private readonly logThrottle = new Map<string, { last: number; suppressed: number }>();
   /** runId -> viewers tailing it. (WILDCARD subscribers are found via subs.) */
@@ -448,6 +462,8 @@ export class Hub {
       // that genuinely finished.
       this.cancelAbandon(envelope.runId);
       this.storage.markRunResumed(envelope.runId);
+      const claim = this.runClaims.get(envelope.runId);
+      if (claim?.ended === 'abandoned') delete claim.ended;
     }
 
     this.storage.ensureRun({
@@ -525,6 +541,8 @@ export class Hub {
         );
       } else if (known.type === 'run.finished') {
         this.storage.markRunFinished(envelope.runId, known.payload.status, envelope.ts);
+        const claim = this.runClaims.get(envelope.runId);
+        if (claim !== undefined) claim.ended = 'finished';
         this.registry.closeRun(envelope.runId);
       } else if (known.type === 'exec.paused') {
         // Only newly stored frames reach here, so a reconnect's replay of a
@@ -600,6 +618,24 @@ export class Hub {
   private checkClaim(conn: IngestConn, runId: string): boolean {
     const claim = this.runClaims.get(runId);
     if (claim === undefined) {
+      // No claim is not "free for all": a run another connection still holds,
+      // an abandoned run whose claim was evicted, and a run that finished are
+      // nobody's to (re)open. A fresh run id has none of these.
+      const owner = this.runOwners.get(runId);
+      const status = owner === undefined ? this.storage.getRunStatus(runId) : undefined;
+      if (
+        (owner !== undefined && owner !== conn) ||
+        this.sealedRuns.has(runId) ||
+        (status !== undefined && status !== 'running' && status !== 'abandoned')
+      ) {
+        this.throttledLog(
+          'ingest-claim',
+          () =>
+            `ingest: refusing a frame for run "${runId}" from ${describeConn(conn)} — ` +
+            'that run belongs to another connection',
+        );
+        return false;
+      }
       if (this.runClaims.size >= MAX_RUN_CLAIMS && !this.evictClaimFor(conn)) {
         this.throttledLog(
           'ingest-claim-cap',
@@ -638,24 +674,48 @@ export class Hub {
   }
 
   /**
-   * Make room for one more claim. Never a run another CONNECTED app owns —
-   * evicting it would let whoever writes next take over that live run and
-   * its pauses. The oldest claim of a run nobody holds goes first, then the
-   * oldest of `conn`'s own. False when every claim is another app's live run.
+   * Make room for one more claim. Never a run still `running` — whether its
+   * app is connected or in its reconnect window (a transport blip, a reaped
+   * socket): evicting that claim would let whoever writes next take over the
+   * live run and receive its resumes. In order: the oldest claim of a run
+   * that finished (its stored status seals it), then of a run reconciled to
+   * abandoned (sealed here, so it cannot be appended to or revived), then
+   * `conn`'s own oldest NON-strict claim (such a claim protects nothing past
+   * its socket anyway, and while `conn` is connected its ownership keeps
+   * everyone else out). Never `conn`'s own strict claim of a running run:
+   * that claim is what keeps the run its app's through a later reconnect
+   * window, and a peer that fills the table must not be able to make the app
+   * give it up by starting a new run. False when none qualifies: the new run
+   * is refused (logged), which only happens under a flood.
    */
   private evictClaimFor(conn: IngestConn): boolean {
+    let abandoned: string | undefined;
     let own: string | undefined;
-    for (const runId of this.runClaims.keys()) {
-      const owner = this.runOwners.get(runId);
-      if (owner === undefined) {
+    for (const [runId, claim] of this.runClaims) {
+      if (claim.ended === 'finished') {
         this.runClaims.delete(runId);
         return true;
       }
-      if (owner === conn && own === undefined) own = runId;
+      if (claim.ended === 'abandoned' && abandoned === undefined && !this.runOwners.has(runId)) abandoned = runId;
+      if (own === undefined && !claim.strict && this.runOwners.get(runId) === conn) own = runId;
+    }
+    if (abandoned !== undefined) {
+      this.runClaims.delete(abandoned);
+      this.seal(abandoned);
+      return true;
     }
     if (own === undefined) return false;
     this.runClaims.delete(own);
     return true;
+  }
+
+  private seal(runId: string): void {
+    this.sealedRuns.delete(runId);
+    this.sealedRuns.add(runId);
+    if (this.sealedRuns.size > MAX_SEALED_RUNS) {
+      const oldest = this.sealedRuns.values().next().value;
+      if (oldest !== undefined) this.sealedRuns.delete(oldest);
+    }
   }
 
   private removeIngest(conn: IngestConn): void {
@@ -694,6 +754,8 @@ export class Hub {
       this.abandonTimers.delete(runId);
       if (this.runOwners.has(runId)) return; // re-claimed in the meantime
       if (this.storage.markRunAbandoned(runId, Date.now())) {
+        const claim = this.runClaims.get(runId);
+        if (claim !== undefined && claim.ended === undefined) claim.ended = 'abandoned';
         this.pushRunUpdate(runId);
         // A long-poll scoped to this run (`graphmind wait --run`) re-checks
         // whether it ended; nothing in the registry changed to wake it.

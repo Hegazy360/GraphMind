@@ -44,7 +44,7 @@ graphmind                # port 4747, open the browser
 graphmind --port 4848    # different port (always binds 127.0.0.1)
 graphmind --db ./x.db    # database file (default ~/.graphmind/graphmind.db)
 graphmind --no-open      # do not open a browser
-graphmind --allow-control=resume   # let `graphmind resume` continue/retry/abort
+graphmind --allow-control=resume   # let `graphmind resume` continue/retry/abort (and set breakpoints / step mode)
 graphmind --no-edit-input          # refuse every input edit
 graphmind serve --json --no-open   # headless: prints {port, url, pid, version}, never a token
 ```
@@ -251,9 +251,10 @@ gate of a client->server `tools/call` is editable. The edit has the shape of
 the node's recorded input — the request's `params` (`{name, arguments,
 _meta}`) — and only `arguments` may change (`name` and `_meta` are locked); the
 new arguments are merged into the live ones (top-level keys replace). `continue`
-at `before` relays the held frame re-serialized with its `params.arguments`
-replaced (id, name, `_meta` and key order kept; it is the only frame that is
-ever re-serialized); `retry` at `after` / `error` re-sends that rewritten
+at `before` relays the held frame with only its `params.arguments` value
+spliced in: every other byte, including the JSON-RPC id, `name`, `_meta` and
+key order, is the client's own (no JSON round trip, so an id above 2^53 or a
+`_meta` number like `1e400` is not changed). `retry` at `after` / `error` re-sends that rewritten
 request instead of the original, and a later plain `retry` re-sends what last
 ran. An edit is first checked against the tool's `inputSchema` from the
 server's last `tools/list` (a conservative shape check; with no schema known,
@@ -270,8 +271,12 @@ holds at the failure with no setup at all. A hold is indistinguishable from a
 hung server from the client's side, so the proxy says so on stderr — `HOLDING
 tools/call #5 at the error gate — resume it in http://127.0.0.1:4747` — and if
 you never resume, the MCP client times out on its own and the session carries
-on. Start the server with `--pause-on-error off` if you want to watch without
-ever stopping traffic.
+on. To watch without ever stopping traffic, start the server with
+`--pause-on-error off` (that removes the error breakpoint, so JSON-RPC errors
+flow) **and** give the proxy `GRAPHMIND_BREAK_ON_ERROR_RESULT=0` and
+`GRAPHMIND_ON_LOOP=warn` in its environment (the `env` of its entry in your MCP
+config): the `isError` hold and the loop guard live in the proxy, not in the
+server's breakpoints, so the server flag alone does not disarm them.
 
 **Injected values are lifted into the shape the method has to return.** MCP
 results are typed, so relaying a bare value verbatim handed the host a

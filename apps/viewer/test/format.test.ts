@@ -2,8 +2,11 @@
  * The duration formatter — one binding contract used everywhere a duration
  * is shown (docs quote these exact strings).
  */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { fmtDuration, fmtExactMs } from '../src/lib/format.js';
+import { fmtCost, fmtCostExact, fmtDuration, fmtExactMs } from '../src/lib/format.js';
+import { activePrices, calcCost, resolveModel, type PriceTable } from '../src/prices/engine.js';
 
 describe('fmtDuration', () => {
   it('follows the binding thresholds', () => {
@@ -44,5 +47,45 @@ describe('fmtExactMs', () => {
     expect(fmtExactMs(9.96)).toBe('10ms');
     expect(fmtExactMs(38_100.4)).toBe(`${(38_100).toLocaleString()}ms`);
     expect(fmtExactMs(Number.NaN)).toBe('—');
+  });
+});
+
+describe('fmtCost', () => {
+  /** Every digit 0: what a reader takes for "free". */
+  const readsAsZero = (text: string): boolean => !/[1-9]/.test(text);
+
+  it('a cheap step that is not free never reads as zero', () => {
+    // A gpt-4o-mini step of 20 input / 12 output tokens, priced by the bundled
+    // table: about a thousandth of a cent.
+    const table = JSON.parse(
+      readFileSync(fileURLToPath(new URL('../src/prices/data_slim.json', import.meta.url)), 'utf8'),
+    ) as PriceTable;
+    const hit = resolveModel(table, { model: 'gpt-4o-mini', provider: 'openai' });
+    const prices = hit === undefined ? undefined : activePrices(hit.model, new Date('2026-09-20T12:00:00Z'));
+    const cost = prices === undefined ? undefined : calcCost({ inputTokens: 20, outputTokens: 12 }, prices);
+    expect(cost?.total).toBeGreaterThan(0);
+    const total = cost?.total ?? 0;
+    expect(fmtCost(total)).toBe('<$0.0001');
+    for (const usd of [total, 0.00001, 0.000049, 0.0000001, 3e-6]) {
+      expect(readsAsZero(fmtCost(usd)), `fmtCost(${usd}) = ${fmtCost(usd)}`).toBe(false);
+      expect(readsAsZero(fmtCostExact(usd)), `fmtCostExact(${usd}) = ${fmtCostExact(usd)}`).toBe(false);
+    }
+  });
+
+  it('keeps its thresholds above the floor; zero is still $0', () => {
+    expect(fmtCost(0)).toBe('$0');
+    expect(fmtCost(0.0001)).toBe('$0.0001');
+    expect(fmtCost(0.00234)).toBe('$0.0023');
+    expect(fmtCost(0.0971)).toBe('$0.097');
+    expect(fmtCost(12.345)).toBe('$12.35');
+    expect(fmtCost(Number.NaN)).toBe('—');
+  });
+
+  it('fmtCostExact: two significant digits below the floor, fmtCost above it', () => {
+    expect(fmtCostExact(0.0000102)).toBe('$0.000010');
+    expect(fmtCostExact(3e-6)).toBe('$0.0000030');
+    expect(fmtCostExact(1e-7)).toBe('$0.00000010');
+    expect(fmtCostExact(0)).toBe('$0');
+    expect(fmtCostExact(0.0971)).toBe('$0.097');
   });
 });

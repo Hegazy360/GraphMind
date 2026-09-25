@@ -381,7 +381,8 @@ export function generateMcpRun(startTs: number = Date.now() - 12_000): FixtureEn
       nodeId: MCP_NODES.sampling,
       instanceId: 'req-4',
       output: { role: 'assistant', model: 'claude-haiku-4-5', stopReason: 'endTurn' },
-      usage: { inputTokens: 1840, outputTokens: 216 },
+      // A 0.6 sender stamps `inclusive` on every usage (C1).
+      usage: { inputTokens: 1840, outputTokens: 216, inclusive: true },
       durationMs: 1_910,
       status: 'ok',
     },

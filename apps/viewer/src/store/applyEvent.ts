@@ -11,6 +11,7 @@
  */
 import type { EventEnvelope, EventPayloadMap, GraphNodeHint } from '@graphmind-ai/schema';
 import { derivedHeldMs } from '../lib/duration.js';
+import { activePausesOf } from './types.js';
 import type {
   LoopInfo,
   LoopKind,
@@ -402,7 +403,12 @@ function applyNodeFinished(
 function applyNodeError(run: RunState, payload: EventPayloadMap['node.error']): RunState {
   const node = run.nodes[payload.nodeId];
   if (node === undefined) return run;
-  const idx = latestRunningIndex(node);
+  // Like node.finished: the execution the error names, else the latest
+  // running one (a guess once parallel calls run — the error-gate pause that
+  // follows names the call and moves the error onto it).
+  const named = typeof payload.instanceId === 'string' ? payload.instanceId : undefined;
+  let idx = named !== undefined ? node.executions.findIndex((e) => e.instanceId === named) : -1;
+  if (idx < 0) idx = latestRunningIndex(node);
   let executions = node.executions;
   if (idx >= 0) {
     const exec = node.executions[idx];
@@ -464,10 +470,40 @@ function applyExecPaused(
   if (node !== undefined) {
     next = {
       ...next,
-      nodes: setNode(next, payload.nodeId, { ...node, activePauseId: payload.pauseId }),
+      nodes: setNode(next, payload.nodeId, {
+        ...node,
+        activePauseId: payload.pauseId,
+        executions:
+          payload.point === 'error' && exactInstanceId !== undefined
+            ? repinError(node, exactInstanceId)
+            : node.executions,
+      }),
     };
   }
   return next;
+}
+
+/**
+ * An error gate names the call that threw. A `node.error` without an
+ * instanceId (the AI SDK adapter) was pinned on the latest running call —
+ * with parallel calls, maybe a sibling that is still fine. Move it onto the
+ * named call. Only the error the last node.error attached (the same object
+ * as `lastError`) is ever moved.
+ */
+function repinError(node: NodeState, instanceId: string): NodeExecution[] {
+  const error = node.lastError;
+  const target = node.executions.findIndex((e) => e.instanceId === instanceId);
+  const owner = target < 0 ? undefined : node.executions[target];
+  if (error === undefined || owner === undefined || owner.error !== undefined) return node.executions;
+  const executions = node.executions.slice();
+  executions[target] = { ...owner, error };
+  const wrong = node.executions.findIndex((e, i) => i !== target && e.status === 'running' && e.error === error);
+  const misplaced = wrong < 0 ? undefined : node.executions[wrong];
+  if (misplaced !== undefined) {
+    const { error: _moved, ...rest } = misplaced;
+    executions[wrong] = rest;
+  }
+  return executions;
 }
 
 /**
@@ -548,8 +584,14 @@ function applyExecResumed(
   };
   const node = next.nodes[pause.nodeId];
   if (node !== undefined) {
-    const { activePauseId: _drop, ...rest } = node;
-    const released: NodeState = node.activePauseId === payload.pauseId ? { ...rest } : node;
+    // Parallel calls of one tool can hold at once: releasing the pause the
+    // node shows falls back to another of its pauses that is still held.
+    let released: NodeState = node;
+    if (node.activePauseId === payload.pauseId) {
+      const { activePauseId: _drop, ...rest } = node;
+      const still = activePausesOf(next, pause.nodeId).at(-1);
+      released = still !== undefined ? { ...rest, activePauseId: still.pauseId } : { ...rest };
+    }
     let executions = released.executions;
     if (edited !== undefined && pause.heldAmbiguous !== true) {
       // The edited pill belongs to the instance that ran with the edit: the

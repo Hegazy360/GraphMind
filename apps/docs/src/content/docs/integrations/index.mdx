@@ -89,7 +89,7 @@ breaks on your framework's next minor release.
 | --- | --- |
 | Never throws into your app | Internal failures degrade to a no-op plus one rate-limited warning |
 | Identity when disabled | `wrapClient` / `wrapTools` return the very object you passed in |
-| Fast path when detached | Gates resolve from a shared promise; events go to the ring buffer only. `packages/client/test/overhead.test.ts` asserts an average and a p99 under 1 ms per awaited gate. |
+| Fast path when detached | Gates resolve from a shared promise; events go to the ring buffer, and the loop guard still fingerprints watched calls ([costs](/reference/environment/#loop-hold)). `packages/client/test/overhead.test.ts` asserts an average and a p99 under 1 ms per awaited gate. |
 | Auto-continue on disconnect | Every held gate releases with `continue`, within 100 ms (`packages/client/test/session.test.ts`) |
 | `instanceId` on every event | Correct attribution when the same node runs concurrently |
 | Kill switches honoured | `GRAPHMIND_DISABLED=1`; off under `NODE_ENV=production` unless `GRAPHMIND=1` |

@@ -26,13 +26,19 @@ afterEach(async () => {
 });
 
 async function attach(
-  options: { breakpoints?: Parameters<FakeViewer['setBreakpoint']>[0][]; server?: string } = {},
+  options: {
+    breakpoints?: Parameters<FakeViewer['setBreakpoint']>[0][];
+    server?: string;
+    /** The proxy's own environment (the `env` of its MCP client config entry). */
+    env?: Record<string, string>;
+  } = {},
 ): Promise<{ viewer: FakeViewer; rig: ProxyRig }> {
   viewer = await FakeViewer.start({ breakpoints: options.breakpoints ?? [] });
   rig = new ProxyRig({
     server: options.server ?? 'raw-server.mjs',
     viewerUrl: viewer.url,
     waitForAttach: true,
+    ...(options.env !== undefined ? { sessionOptions: { env: options.env } } : {}),
   });
   await waitUntil(() => rig?.handle.session.attached === true, 'the proxy to attach');
   return { viewer, rig };
@@ -158,6 +164,19 @@ describe('mcp-proxy: the graph', () => {
       (f) => f.type === 'node.error' && f.payload['nodeId'] === 'tool:softfail',
     );
     expect((soft.payload['error'] as { name: string }).name).toBe('McpToolError');
+  });
+
+  it('watching without stopping: with no error breakpoint, GRAPHMIND_BREAK_ON_ERROR_RESULT=0 in the proxy\'s env lets an isError result through', async () => {
+    // What `serve --pause-on-error off` leaves (no breakpoint armed) plus the
+    // proxy env the docs give: the JSON-RPC error and the isError result both
+    // reach the client, and nothing holds.
+    const { viewer: v, rig: r } = await attach({ env: { GRAPHMIND_BREAK_ON_ERROR_RESULT: '0', GRAPHMIND_ON_LOOP: 'warn' } });
+    r.callTool(1, 'boom');
+    expect(JSON.stringify(await r.response(1))).toContain('the tool exploded');
+    r.callTool(2, 'softfail');
+    expect(JSON.stringify(await r.response(2))).toContain('tool reported failure');
+    await v.waitFor((f) => f.type === 'node.finished' && f.payload['nodeId'] === 'tool:softfail');
+    expect(v.ofType('exec.paused')).toHaveLength(0);
   });
 });
 

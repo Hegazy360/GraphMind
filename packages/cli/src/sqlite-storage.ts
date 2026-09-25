@@ -140,6 +140,7 @@ export class SqliteStorage implements Storage {
   private readonly stmtRunningRunIds: StatementSync;
   private readonly stmtInsertEvent: StatementSync;
   private readonly stmtGetRun: StatementSync;
+  private readonly stmtGetRunStatus: StatementSync;
   private readonly stmtListRuns: StatementSync;
   private readonly stmtListEvents: StatementSync;
   private readonly stmtCountEvents: StatementSync;
@@ -201,6 +202,7 @@ export class SqliteStorage implements Storage {
        VALUES (?, ?, ?, ?, ?, ?)`,
     );
     this.stmtGetRun = this.db.prepare(`SELECT ${RUN_COLUMNS} FROM runs r WHERE r.id = ?`);
+    this.stmtGetRunStatus = this.db.prepare(`SELECT status FROM runs WHERE id = ?`);
     this.stmtListRuns = this.db.prepare(
       `SELECT ${RUN_COLUMNS} FROM runs r ORDER BY r.started_at DESC, r.id DESC`,
     );
@@ -318,6 +320,11 @@ export class SqliteStorage implements Storage {
   getRun(id: string): RunSummary | undefined {
     const row = this.stmtGetRun.get(id) as RunRow | undefined;
     return row === undefined ? undefined : toRunSummary(row);
+  }
+
+  getRunStatus(id: string): RunLifecycleStatus | undefined {
+    const row = this.stmtGetRunStatus.get(id) as { status: string } | undefined;
+    return row === undefined ? undefined : (row.status as RunLifecycleStatus);
   }
 
   listRuns(): RunSummary[] {

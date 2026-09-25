@@ -36,7 +36,7 @@ Summary:
 | Browser | A web page in your browser cannot talk to it: WebSocket upgrades and HTTP requests need a loopback `Host` (defeats DNS rebinding) and either no `Origin` or the served viewer's own. Everything else is `403`. Every response forbids framing (`frame-ancestors 'none'`, `X-Frame-Options: DENY`), sends `Referrer-Policy: no-referrer` and `nosniff`, `/api` adds `no-store`, and no response carries a CORS header. The resume endpoint is POST + `application/json` + Bearer only; no GET mutates. | `packages/cli/src/origin-guard.ts`, `control-http.ts`; `packages/cli/test/origin-guard*.test.ts`, `control-http.test.ts`; `security/tests/control-http-exposure.test.ts` |
 | Control | Input edits, injected results, breakpoints, step mode and every non-GET `/api` route need a per-start 128-bit token: the **viewer** token (delivered only in the `#token=` URL fragment via a 0600 redirect file) or the **agent** token (`~/.graphmind/run/serve-<port>.json`, 0600), which `serve --allow-control=off\|resume\|inject\|edit` limits in the server (default `off`). Constant-time comparison; no `?token=`, no cookies; `serve --json` never prints a token. `--no-edit-input` refuses all edits. The stored `exec.resumed` records `principal` from the credential. | `packages/cli/src/control-auth.ts`, `run-files.ts`, `pause-registry.ts`; `security/tests/control-auth.test.ts`, `control-registry-isolation.test.ts` |
 | Command execution | The server never spawns a process in response to network input. But an authorized input edit chooses the **arguments** of a tool call the app is holding — a `shell` tool then runs what the editor chose, as your app — and an injected LLM completion can name the next tool call and its arguments. Hence the credential and level above, for both. The MCP proxy has no listening socket. | `packages/cli/src/hub.ts`, `server.ts` (no `spawn`); `packages/cli/src/mcp-proxy/proxy.ts` (no `listen`) |
-| Local peers | **Any local process, as any OS user, can read runs over loopback** (the read API needs no credential, although the database file is 0600), and a **tokenless** viewer socket can still continue, retry and abort a held run (0.5 behaviour, deprecated) — whatever `--allow-control` says. It cannot edit inputs, inject results or change breakpoints or step mode, and a peer cannot take over another's live run or pause (flooding fresh run ids does not evict a connected app's claim). | `security/tests/run-isolation.test.ts`, `control-auth.test.ts`, `control-registry-isolation.test.ts`; `internal/decisions.md` "runs are claimed, not squatted" |
+| Local peers | **Any local process, as any OS user, can read runs over loopback** (the read API needs no credential, although the database file is 0600), and a **tokenless** viewer socket can still continue, retry and abort a held run (0.5 behaviour, deprecated) — whatever `--allow-control` says. It cannot edit inputs, inject results or change breakpoints or step mode, and a peer cannot take over another's live run or pause (flooding fresh run ids does not evict the claim of a run still in flight, whether its app is connected or reconnecting, and does not reopen a finished or abandoned run). | `security/tests/run-isolation.test.ts`, `control-auth.test.ts`, `control-registry-isolation.test.ts`; `internal/decisions.md` "runs are claimed, not squatted" |
 | Host application | Instrumentation is fail-open: detached = synchronous no-op; a debugger that disconnects releases every gate; adapters never throw into the host. | `packages/client/src`; `examples/soak` (fail-open checks in CI) |
 | Untrusted input | Envelopes are zod-validated at ingest; oversized payloads are truncated type-preservingly; the JSON-RPC boundary of the MCP proxy is fuzzed. | `security/tests/ingest-fuzz.test.ts`, `protocol-fuzz.test.ts`, `mcp-proxy-fuzz.test.ts`, `mcp-boundary-fuzz.test.ts` |
 
@@ -92,8 +92,9 @@ because they have differed before.
 
 ## Every kill switch
 
-Read by the **instrumented application** (TypeScript, Python and Ruby SDKs all implement the same
-table — `packages/client/src/env.ts`, `python/graphmind/env.py`, `ruby/lib/graphmind/env.rb`):
+Read by the **instrumented application** (TypeScript, Python and Ruby SDKs implement the same
+table — `packages/client/src/env.ts`, `python/graphmind/env.py`, `ruby/lib/graphmind/env.rb` —
+except where a row says otherwise):
 
 | Switch | Effect |
 | --- | --- |
@@ -102,12 +103,14 @@ table — `packages/client/src/env.ts`, `python/graphmind/env.py`, `ruby/lib/gra
 | `pauseTimeoutMs` (session option) | Cap on how long any gate may hold; default is "hold until resumed", which is only possible while a debugger is attached. |
 | `GRAPHMIND_HIDE_INPUTS` / `GRAPHMIND_HIDE_OUTPUTS` / `GRAPHMIND_HIDE_TOOL_ARGS` / `GRAPHMIND_HIDE_TOOL_RESULTS` = `1` **(0.5.0; since 0.6.0 any value but `0`/`false`/`off`/`no` counts, so a misspelling hides rather than records)** | Whole-field redaction at the emit point, by node kind: the named field is replaced with the string `"__REDACTED__"` before it leaves the process, affected events carry `redaction: {count, keys}`, the viewer shows a "hidden by …" chip, and `inject` refuses to send the placeholder back. Coarse by design — a reviewer can reason about it. |
 | `GRAPHMIND_ON_LOOP=off` / `GRAPHMIND_LOOP_THRESHOLD=0` / `GRAPHMIND_LOOP_ALLOW=<tools>` **(0.5.0)** | Disable the identical-tool-call loop hold, or exempt named tools from it (it only ever holds while a debugger is attached). |
+| `GRAPHMIND_DISABLE_EDIT_INPUT` **(0.6.0; any value but `0`/`false`/`off`/`no`)** | This app never takes an edited input: it does not announce `edit-input`, and every edit is refused before any of your code sees it — the code path that lets a remote request choose a held tool call's arguments is off. TypeScript and Python; the Ruby SDK never offers edits. |
+| `GRAPHMIND_BREAK_ON_ERROR_RESULT=0` / `GRAPHMIND_BREAK_ON_TRUNCATED=0` **(0.6.0; on by default, only `0`/`false`/`off`/`no` turn one off)** | Turn off a [smart hold](/reference/environment/#smart-holds): an error-shaped tool result, or an LLM step cut off in the middle of a tool call. They are not breakpoints, so `serve --pause-on-error off` does not affect them. TypeScript adapters and `graphmind mcp-proxy` (the proxy reads its own environment). |
 
 Read by the **CLI / server**:
 
 | Switch | Effect |
 | --- | --- |
-| `DO_NOT_TRACK=1` (or `true`) | Telemetry off. Wins over every GraphMind-specific setting. |
+| `DO_NOT_TRACK=1` (any value but unset, empty, `0`, `false`, `off` or `no`) | Telemetry off. Wins over every GraphMind-specific setting. |
 | `GRAPHMIND_TELEMETRY=0` (or `false`) | Telemetry off. |
 | `GRAPHMIND_TELEMETRY=log` | Telemetry payload printed to stderr with a `[graphmind telemetry]` prefix, **nothing sent** — the audit mode. Also prints under `CI`. |
 | `CI` set | Telemetry off. |

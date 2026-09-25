@@ -22,17 +22,24 @@
  * meantime) and is memoized per pair of inputs; unchanged runs are folded;
  * message bodies and line diffs render only when opened, capped with a
  * "show all" control. The price table is a lazy chunk, requested only once a
- * step with usage is shown; where it cannot load (a single-file export
- * opened from disk) the view says so and shows no dollar figure — the diff
- * is in the main bundle, so it works there too.
+ * step with usage is shown (an exported single-file run carries it inline);
+ * where it cannot load the view says so and shows no dollar figure — the
+ * diff is in the main bundle, so it works there too.
  */
 import { useEffect, useMemo, useReducer, useState } from 'react';
-import { fmtCost, fmtTokens } from '../lib/format.js';
+import { fmtCost, fmtCostExact, fmtTokens } from '../lib/format.js';
 import { priceExecution, sumCosts, type CostTotal, type StepCost } from '../context/cost.js';
 import { computeDiffOutcome, peekDiffOutcome, type DiffOutcome } from '../context/diffOutcome.js';
 import { readableMessage, type NormMessage } from '../context/normalizePrompt.js';
 import { diffLines, type Hunk, type LineOp, type MessageRow, type PromptDiff } from '../context/promptDiff.js';
-import { cacheGapNote, previousLlmStep, stepsSoFar, toolSchemaOf, type StepRef } from '../context/steps.js';
+import {
+  cacheGapNote,
+  cacheGapRecheckAt,
+  previousLlmStep,
+  stepsSoFar,
+  toolSchemaOf,
+  type StepRef,
+} from '../context/steps.js';
 import { usePriceTable } from '../prices/loader.js';
 import { EST_LABEL, PRICE_SNAPSHOT } from '../prices/snapshot.js';
 import { detailCells, inputLabel, inputTitle, usageView, type UsageView } from '../lib/usage.js';
@@ -126,13 +133,14 @@ function UsageCells({
 function costTitle(step: Extract<StepCost, { status: 'priced' }>): string {
   const c = step.cost;
   const parts = [
-    `input ${fmtCost(c.input)}`,
-    ...(c.cacheRead > 0 ? [`cache read ${fmtCost(c.cacheRead)}`] : []),
-    ...(c.cacheWrite > 0 ? [`cache write ${fmtCost(c.cacheWrite)}`] : []),
-    `output ${fmtCost(c.output)}`,
-    ...(c.requests > 0 ? [`request ${fmtCost(c.requests)}`] : []),
+    `input ${fmtCostExact(c.input)}`,
+    ...(c.cacheRead > 0 ? [`cache read ${fmtCostExact(c.cacheRead)}`] : []),
+    ...(c.cacheWrite > 0 ? [`cache write ${fmtCostExact(c.cacheWrite)}`] : []),
+    `output ${fmtCostExact(c.output)}`,
+    ...(c.requests > 0 ? [`request ${fmtCostExact(c.requests)}`] : []),
   ];
-  return `${parts.join(' + ')} — ${step.resolved.provider.name} ${step.resolved.model.id}, ${EST_LABEL}`;
+  const total = c.total < 0.0001 ? ` = ${fmtCostExact(c.total)}` : '';
+  return `${parts.join(' + ')}${total} — ${step.resolved.provider.name} ${step.resolved.model.id}, ${EST_LABEL}`;
 }
 
 function PriceNote({ step, loading, failed }: { step: StepCost | undefined; loading: boolean; failed: boolean }) {
@@ -594,16 +602,27 @@ export function ContextCost({
   // The price table is a lazy chunk: only a step with usage has anything to price.
   const prices = usePriceTable(usage !== undefined);
 
+  // Bumped by a timer while this call is held at its own before gate: no
+  // event arrives then, but the cache note depends on the clock.
+  const [tick, setTick] = useState(0);
   const derived = useMemo(() => {
     const run = useRunStore.getState().runs[runId];
-    if (run === undefined) return { prev: undefined, gap: undefined, runCost: undefined };
+    if (run === undefined) return { prev: undefined, gap: undefined, runCost: undefined, recheckAt: undefined };
+    const now = Date.now();
     const prev = previousLlmStep(run, node.nodeId, execIndex);
-    const gap = prev === undefined ? undefined : cacheGapNote(run, prev, { nodeId: node.nodeId, exec }, Date.now());
+    const cur = { nodeId: node.nodeId, exec };
+    const gap = prev === undefined ? undefined : cacheGapNote(run, prev, cur, now);
+    const recheckAt = cacheGapRecheckAt(run, prev, cur, now);
     const runCost =
       prices.status === 'ready' ? sumCosts(prices.table, stepsSoFar(run, exec).map((s) => s.exec)) : undefined;
-    return { prev, gap, runCost };
-    // statusVersion: pauses, finishes and new steps all bump it.
-  }, [runId, node.nodeId, execIndex, exec, prices, statusVersion]);
+    return { prev, gap, runCost, recheckAt };
+    // statusVersion: pauses, finishes and new steps all bump it; tick: the clock.
+  }, [runId, node.nodeId, execIndex, exec, prices, statusVersion, tick]);
+  useEffect(() => {
+    if (derived.recheckAt === undefined) return;
+    const timer = setTimeout(() => setTick((n) => n + 1), Math.max(0, derived.recheckAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [derived.recheckAt]);
 
   const step = prices.status === 'ready' ? priceExecution(prices.table, exec) : undefined;
 

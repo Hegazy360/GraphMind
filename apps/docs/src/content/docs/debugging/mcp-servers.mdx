@@ -205,8 +205,11 @@ the frame stops.
   is in flight, nothing is burning a timeout, and the host is simply waiting for an answer.
 - **Break `after` a response** and it stops on the way back. Your server has done the work; the
   host has not seen the result yet.
-- **Errors are armed by default.** A JSON-RPC error, and an MCP tool result carrying
-  `isError: true`, both hold — you do not have to configure anything to catch the failing case.
+- **Errors hold by default.** A JSON-RPC error holds at the `error` breakpoint `graphmind serve`
+  arms by default. An MCP tool result carrying `isError: true` holds too, by a smart hold in the
+  proxy itself (`smart.rule: 'error-result'`), whether or not that breakpoint is armed. Either
+  way you do not have to configure anything to catch the failing case.
+  `GRAPHMIND_BREAK_ON_ERROR_RESULT=0` in the proxy's environment turns the `isError` hold off.
 
 ## Injecting a response
 
@@ -339,10 +342,12 @@ graphmind mcp-proxy: HOLDING tools/call #5 at the error gate — resume it in ht
 Three ways out, in order of how much you want the debugger:
 
 - open the viewer and resume it — this is the feature working;
-- run `graphmind serve --pause-on-error off` to observe without stopping on errors (breakpoints
-  live on the server, not on the proxy, so that is the flag that disarms them), and add
-  `"env": { "GRAPHMIND_ON_LOOP": "warn" }` to the proxy's entry in your MCP config so a
-  repeated call is logged instead of held;
+- observe without stopping: run `graphmind serve --pause-on-error off`, which removes the error
+  breakpoint (so a JSON-RPC error flows), **and** add
+  `"env": { "GRAPHMIND_ON_LOOP": "warn", "GRAPHMIND_BREAK_ON_ERROR_RESULT": "0" }` to the proxy's
+  entry in your MCP config. The flag alone is not enough: the `isError: true` hold is a smart hold
+  in the proxy, not a breakpoint on the server, so only the proxy's environment turns it off.
+  `GRAPHMIND_ON_LOOP=warn` logs a repeated call instead of holding it;
 - take the proxy back out of the config when you are done debugging.
 
 The in-process adapter has a milder version of the same thing: it holds, but only your handler

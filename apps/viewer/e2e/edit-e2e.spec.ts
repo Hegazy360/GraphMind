@@ -300,6 +300,40 @@ test('a tab without the token can continue, retry and abort — it is not offere
   await expect(inspector(tokenless).getByTestId('pause-tokenless')).toContainText(
     'No token: this tab can continue, retry and abort.',
   );
+  // Nor are step mode and breakpoints: the run bar's radios, "Break
+  // everywhere", the breakpoint chip's ×, the card's gutter dot and the
+  // palette's actions are disabled and say why — not flipped on a click and
+  // flipped back by the server's refusal.
+  const runBar = tokenless.locator('footer.gm-runbar');
+  const locked = [
+    ['Run radio', runBar.getByRole('radio', { name: 'Run' })],
+    ['Step radio', runBar.getByRole('radio', { name: 'Step' })],
+    ['Break everywhere', runBar.getByRole('button', { name: 'Break everywhere' })],
+    ['breakpoint chip ×', runBar.getByRole('button', { name: /^Clear breakpoint/ })],
+    ['gutter dot', tokenless.locator(`.react-flow__node[data-id="${TOOL_NODE}"] .gm-bp`)],
+  ] as const;
+  for (const [label, control] of locked) {
+    await expect(control, `${label} is disabled for a tokenless tab`).toBeDisabled();
+    expect(await control.getAttribute('title'), `${label} says why`).toContain('No token');
+  }
+  await expect(runBar.getByRole('radio', { name: 'Run' })).toHaveAttribute('aria-checked', 'true');
+  await tokenless.keyboard.press('ControlOrMeta+KeyK');
+  const palette = tokenless.getByRole('dialog', { name: 'Command palette' });
+  await expect(palette).toBeVisible();
+  await tokenless.keyboard.type('>');
+  for (const title of ['Switch to step mode', 'Break before every node', 'Clear every breakpoint']) {
+    const option = palette.getByRole('option').filter({ hasText: title });
+    await expect(option).toHaveAttribute('aria-disabled', 'true');
+    await expect(option).toContainText('needs the viewer token');
+  }
+  // Choosing one does nothing: the palette stays open and the mode stays.
+  // (Playwright will not click an aria-disabled option unforced.)
+  await palette.getByRole('option').filter({ hasText: 'Switch to step mode' }).click({ force: true });
+  await expect(palette).toBeVisible();
+  await tokenless.keyboard.press('Escape');
+  await expect(palette).toHaveCount(0);
+  await expect(runBar.getByRole('radio', { name: 'Run' })).toHaveAttribute('aria-checked', 'true');
+  await expect(runBar.locator('.gm-chip--notice')).toHaveCount(0);
   // Continue still works for a tokenless tab (0.5 behaviour): the tool's error
   // goes back to the model and the run finishes.
   await footer(tokenless).getByRole('button', { name: /^Continue/ }).click();
@@ -372,4 +406,71 @@ test('first writer wins across tabs: a later Continue and a later edit are both 
   const resumed = (await stack.events()).filter((e) => e.type === 'exec.resumed');
   expect(resumed).toHaveLength(1);
   expect(resumed[0]?.payload).toMatchObject({ action: 'retry', principal: 'viewer', edited: { after: { to: 'GBP' } } });
+});
+
+test('two parallel calls of one tool both held: both are shown, every key acts on the one on screen, releasing one leaves the other', async ({
+  page,
+}) => {
+  stack = await startStack();
+  await openWithToken(page, stack);
+  // The model asks for two convertCurrency calls at once (call-a to "XYZ",
+  // call-b to "QQQ"); both throw, so both hold at their own error gate.
+  const agent = stack.startAgent({ EDIT_AGENT_PARALLEL: '1' });
+  const port = stack.port;
+  const openPauses = async (): Promise<string[]> => {
+    const body = (await (await fetch(`http://127.0.0.1:${port}/api/pauses`)).json()) as { pauses: { pauseId: string }[] };
+    return body.pauses.map((p) => p.pauseId);
+  };
+  await expect.poll(openPauses, { timeout: 30_000 }).toHaveLength(2);
+  // Which call each pause holds, from the stored exec.paused.
+  const instanceOf: Record<string, string> = {};
+  for (const e of await stack.events()) {
+    if (e.type === 'exec.paused') instanceOf[e.payload['pauseId'] as string] = e.payload['instanceId'] as string;
+  }
+  expect(Object.values(instanceOf).sort()).toEqual(['call-a', 'call-b']);
+
+  // The card has room for one row: it shows one hold and counts the other;
+  // the inspector's footer lists both, each named by its call.
+  const card = page.locator(`.react-flow__node[data-id="${TOOL_NODE}"]`);
+  await expect(banner(page)).toHaveCount(1);
+  await expect(banner(page).getByTestId('pause-more')).toHaveText('+1 held');
+  await card.locator('.gm-node-title').click();
+  const rows = footer(page).getByTestId('held-row');
+  await expect(rows).toHaveCount(2);
+  // The row the keys act on (it alone shows the single-key hints) names its call.
+  const keyed = footer(page).locator('.gm-held-row--keyed');
+  await expect(keyed).toHaveCount(1);
+  const keyedTitle = (await keyed.getByTestId('pause-instance').getAttribute('title')) ?? '';
+  const keyedCall = /\((call-[ab])\)/.exec(keyedTitle)?.[1];
+  expect(keyedCall, `keyed row title: ${keyedTitle}`).toBeDefined();
+  const otherCall = keyedCall === 'call-a' ? 'call-b' : 'call-a';
+
+  // `c` releases the pause the card and the keyed row show — not another one.
+  await page.keyboard.press('c');
+  await expect.poll(openPauses, { timeout: 10_000 }).toHaveLength(1);
+  const released = (await stack.events()).filter((e) => e.type === 'exec.resumed');
+  expect(released).toHaveLength(1);
+  expect(instanceOf[released[0]?.payload['pauseId'] as string]).toBe(keyedCall);
+  expect(instanceOf[(await openPauses())[0] ?? '']).toBe(otherCall);
+
+  // The other call is still held, and still shown: the card is paused with
+  // its banner, the footer has its row, the top bar says paused.
+  await expect(card.locator('.gm-node')).toHaveClass(/gm-node--paused/);
+  await expect(banner(page)).toHaveCount(1);
+  await expect(banner(page).getByTestId('pause-more')).toHaveCount(0);
+  await expect(rows).toHaveCount(1);
+  await expect(page.locator('.gm-topbar-title .gm-pill').first()).toHaveText('paused');
+
+  // `e` opens the editor for exactly that call; an edit to a known code runs it.
+  await card.locator('.gm-node-title').click();
+  await page.keyboard.press('e');
+  await expect(editor(page)).toBeVisible();
+  await expect(argsBox(page)).toHaveValue(otherCall === 'call-a' ? /"to": "XYZ"/ : /"to": "QQQ"/);
+  await draftWith(page, { to: 'USD' });
+  await argsBox(page).press('ControlOrMeta+Enter');
+  await expect(banner(page)).toHaveCount(0, { timeout: 20_000 });
+  expect(await agent.exited).toBe(0);
+  const ran = agentResult(agent)?.executedWith.map((args) => args.to) ?? [];
+  expect(ran.slice(0, 2).sort()).toEqual(['QQQ', 'XYZ']);
+  expect(ran.slice(2)).toEqual(['USD']);
 });

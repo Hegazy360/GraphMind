@@ -256,6 +256,44 @@ export const LOOP_FINGERPRINT = '0822a220d43d7d43cf74b9fc661a2349';
 
 export const LOOP_REPEATS = 3;
 
+/** The model's own request, as the AI SDK adapter records it (contract C1). */
+const LOOP_SYSTEM = 'You are a travel assistant. Use searchFlights to find flights.';
+const LOOP_ASK = 'Find me the cheapest morning flight AMS → LIS on 3 October.';
+const LOOP_TOOL_HASH = '6f2c1a9e0b7d4c33';
+const LOOP_TOOL_SCHEMA = {
+  type: 'function',
+  name: 'searchFlights',
+  description: 'Search flights between two airports on a date',
+  inputSchema: {
+    type: 'object',
+    properties: { from: { type: 'string' }, to: { type: 'string' }, date: { type: 'string' } },
+    required: ['from', 'to', 'date'],
+  },
+};
+
+/**
+ * Round `round`'s prompt: the system prompt, the ask, and every earlier
+ * round's tool call and its (identical) result — so the prompt diff shows
+ * what a loop looks like: the same call and the same answer appended again.
+ */
+function loopPrompt(round: number): unknown[] {
+  const prompt: unknown[] = [
+    { role: 'system', content: LOOP_SYSTEM },
+    { role: 'user', content: [{ type: 'text', text: LOOP_ASK }] },
+  ];
+  for (let earlier = 1; earlier < round; earlier += 1) {
+    const toolCallId = `call-${earlier}`;
+    prompt.push(
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId, toolName: 'searchFlights', input: { ...LOOP_ARGS } }] },
+      {
+        role: 'tool',
+        content: [{ type: 'tool-result', toolCallId, toolName: 'searchFlights', output: { type: 'json', value: LOOP_OUTPUT } }],
+      },
+    );
+  }
+  return prompt;
+}
+
 /**
  * An agent that asks for the same flight search three times in a row and is
  * held by the loop guard on the third. Each round is one `llm:step` deciding
@@ -301,7 +339,14 @@ export function generateLoopRun(startTs: number = Date.now() - 6_000): LoopFixtu
         name: 'step',
         parentId: LOOP_NODES.agent,
         instanceId: stepId,
-        input: { model: 'gpt-4o-mini', step: round },
+        input: {
+          prompt: loopPrompt(round),
+          modelId: 'gpt-4o-mini',
+          provider: 'openai.chat',
+          tools: [{ name: 'searchFlights', schemaHash: LOOP_TOOL_HASH }],
+          // Each definition once per run (C1): on the first step only.
+          ...(round === 1 ? { toolSchemas: { [LOOP_TOOL_HASH]: LOOP_TOOL_SCHEMA } } : {}),
+        },
       },
       round === 1 ? 120 : 380,
     );
@@ -311,7 +356,8 @@ export function generateLoopRun(startTs: number = Date.now() - 6_000): LoopFixtu
         nodeId: LOOP_NODES.llm,
         instanceId: stepId,
         output: { toolCalls: [{ name: 'searchFlights', args: LOOP_ARGS }] },
-        usage: { inputTokens: 900 + round * 210, outputTokens: 38 },
+        // A 0.6 sender stamps `inclusive` on every usage (C1).
+        usage: { inputTokens: 900 + round * 210, outputTokens: 38, inclusive: true },
         durationMs: 640.25,
         status: 'ok',
       },

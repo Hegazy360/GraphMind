@@ -15,7 +15,8 @@
  */
 import { useMemo } from 'react';
 import { REDACTED } from '../lib/editArgs.js';
-import { holdBannerText, holdHint } from '../store/holds.js';
+import { useTokenSnapshot } from '../hooks/useTokenSnapshot.js';
+import { heldExecOf, holdBannerText, holdHint, truncationCause } from '../store/holds.js';
 import { cycleLap, errorStreak, errorStreakArguments } from '../store/loop.js';
 import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';
@@ -181,12 +182,22 @@ function truncatedCalls(output: unknown): { reason?: string; calls: { name: stri
   return reason !== undefined ? { reason, calls } : { calls };
 }
 
-function SmartEvidence({ node, pause }: { node: NodeState; pause: Pause }) {
+function SmartEvidence({ runId, node, pause }: { runId: string; node: NodeState; pause: Pause }) {
+  // Streamed tool-call arguments: while the hold is open the step's result
+  // (node.finished) has not arrived yet — every adapter but LangGraph gates
+  // before it — so what the model streamed is all there is to show.
+  const tokens = useTokenSnapshot(runId, node.nodeId);
   const smart = pause.smart;
   if (smart === undefined) return null;
   const title = holdBannerText(node, pause) ?? '';
-  const exec = node.executions[node.executions.length - 1];
+  const exec = heldExecOf(node, pause);
+  const recorded = exec?.output !== undefined;
   const truncated = smart.rule === 'truncated-tool-call' ? truncatedCalls(exec?.output) : { calls: [] };
+  const cause = smart.rule === 'truncated-tool-call' ? truncationCause(node, pause) : undefined;
+  const finishReason = truncated.reason ?? cause;
+  const isLatest = exec !== undefined && node.executions[node.executions.length - 1] === exec;
+  const streamedArgs =
+    smart.rule === 'truncated-tool-call' && !recorded && isLatest && tokens.toolArgs !== '' ? tokens.toolArgs : undefined;
   return (
     <section
       className="gm-why gm-loop"
@@ -204,10 +215,10 @@ function SmartEvidence({ node, pause }: { node: NodeState; pause: Pause }) {
           <span data-testid="smart-detail">{smart.detail}</span>
         </div>
       )}
-      {truncated.reason !== undefined && (
+      {finishReason !== undefined && (
         <div className="gm-inspect-kv gm-loop-kv">
           <span>finish reason</span>
-          <span className="gm-mono">{truncated.reason}</span>
+          <span className="gm-mono">{finishReason}</span>
         </div>
       )}
       {truncated.calls.map((call, i) => (
@@ -218,7 +229,24 @@ function SmartEvidence({ node, pause }: { node: NodeState; pause: Pause }) {
           )}
         </div>
       ))}
-      <div className="gm-pause-note gm-loop-note">{holdHint(pause)}</div>
+      {streamedArgs !== undefined && (
+        <div>
+          <div className="gm-why-label">The tool call it was writing (arguments streamed so far)</div>
+          <pre className="gm-why-stack nowheel">{streamedArgs}</pre>
+        </div>
+      )}
+      {smart.rule === 'truncated-tool-call' && !recorded && streamedArgs === undefined && (
+        <div className="gm-pause-note" data-testid="smart-not-recorded">
+          The cut-off call is recorded with the step&apos;s result, once the gate is released.
+        </div>
+      )}
+      {smart.rule === 'error-result' && !recorded && (
+        <div className="gm-pause-note" data-testid="smart-not-recorded">
+          The result itself is not shown yet: the app records it when the gate is released. What it saw
+          (above) names its shape.
+        </div>
+      )}
+      <div className="gm-pause-note gm-loop-note">{holdHint(pause, node)}</div>
     </section>
   );
 }
@@ -230,7 +258,7 @@ export function HoldEvidence({ runId, node, pause }: { runId: string; node: Node
     if (pause.loop?.kind === 'error-repeat') return <ErrorRepeatEvidence node={node} pause={pause} />;
     return null; // repeat: InspectorPanel's LoopEvidence
   }
-  if (pause.smart !== undefined) return <SmartEvidence node={node} pause={pause} />;
+  if (pause.smart !== undefined) return <SmartEvidence runId={runId} node={node} pause={pause} />;
   return null;
 }
 

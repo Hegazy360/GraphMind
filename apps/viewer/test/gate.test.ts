@@ -8,14 +8,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   REDACTED_PLACEHOLDER,
   activePause,
+  heldGate,
   injectAndResume,
+  injectPrefill,
   injectRefusal,
   pausePointLabel,
+  shownPause,
 } from '../src/lib/gate.js';
 import { sendControl } from '../src/connection/ServerConnection.js';
 import { applyEvent, type RunsMap } from '../src/store/applyEvent.js';
+import { useRunStore } from '../src/store/runStore.js';
+import { useUiStore } from '../src/store/uiStore.js';
 import { RUN, ev, resetCounters, started } from './helpers.js';
-import type { RunState } from '../src/store/types.js';
+import { activePausesOf, type RunState } from '../src/store/types.js';
 
 vi.mock('../src/connection/ServerConnection.js', () => ({ sendControl: vi.fn() }));
 
@@ -64,6 +69,91 @@ describe('activePause', () => {
       ev('exec.paused', { pauseId: 'p2', nodeId: 'tool:b', point: 'before' }),
     ]);
     expect(activePause(run)?.pauseId).toBe('p2');
+  });
+});
+
+/**
+ * Two parallel calls of one tool that BOTH hold (the server lists both open):
+ * the keyboard must act on the pause the card and the footer show, and the
+ * selected execution picks which one that is.
+ */
+describe('parallel holds on one node', () => {
+  const TOOL = 'tool:convertCurrency';
+  function bothHeld(): RunState {
+    return build([
+      started('llm:step', 'llm', { instanceId: 's0' }),
+      started(TOOL, 'tool', { parentId: 'llm:step', instanceId: 'call-a', input: { to: 'XYZ' } }),
+      started(TOOL, 'tool', { parentId: 'llm:step', instanceId: 'call-b', input: { to: 'QQQ' } }),
+      ev('node.error', { nodeId: TOOL, instanceId: 'call-a', error: { name: 'Error', message: 'XYZ' } }),
+      ev('exec.paused', { pauseId: 'pause_1', nodeId: TOOL, point: 'error', editable: true, instanceId: 'call-a' }),
+      ev('node.error', { nodeId: TOOL, instanceId: 'call-b', error: { name: 'Error', message: 'QQQ' } }),
+      ev('exec.paused', { pauseId: 'pause_2', nodeId: TOOL, point: 'error', editable: true, instanceId: 'call-b' }),
+    ]);
+  }
+  function select(run: RunState, nodeId: string | undefined, instanceIdx?: number): void {
+    useRunStore.setState({ runs: { [RUN]: run } });
+    useUiStore.getState().selectNode(RUN, nodeId);
+    if (instanceIdx !== undefined) useUiStore.getState().setInstanceIdx(instanceIdx);
+  }
+
+  it('lists every active pause of the node, oldest first', () => {
+    expect(activePausesOf(bothHeld(), TOOL).map((p) => p.pauseId)).toEqual(['pause_1', 'pause_2']);
+  });
+
+  it('the keyboard acts on the pause the card shows for the selected node', () => {
+    const run = bothHeld();
+    select(run, TOOL);
+    const shown = shownPause(run, TOOL)?.pauseId;
+    expect(shown).toBe(run.nodes[TOOL]?.activePauseId);
+    expect(heldGate(RUN)?.pauseId).toBe(shown);
+  });
+
+  it('with nothing selected, the keyboard still acts on a pause a card shows', () => {
+    const run = bothHeld();
+    select(run, undefined);
+    expect(heldGate(RUN)?.pauseId).toBe(run.nodes[TOOL]?.activePauseId);
+  });
+
+  it('picking a held execution in the inspector makes its pause the one shown and keyed', () => {
+    const run = bothHeld();
+    select(run, TOOL, 0); // call-a
+    expect(shownPause(run, TOOL, 0)?.pauseId).toBe('pause_1');
+    expect(heldGate(RUN)?.pauseId).toBe('pause_1');
+    select(run, TOOL, 1); // call-b
+    expect(heldGate(RUN)?.pauseId).toBe('pause_2');
+  });
+
+  it('after one is released, the node, the card and the keyboard fall back to the other', () => {
+    let run = bothHeld();
+    run = applyEvent({ [RUN]: run }, ev('exec.resumed', { pauseId: 'pause_2', action: 'continue' }), 'fixture')[RUN] as RunState;
+    expect(run.nodes[TOOL]?.activePauseId).toBe('pause_1');
+    select(run, TOOL);
+    expect(shownPause(run, TOOL)?.pauseId).toBe('pause_1');
+    expect(heldGate(RUN)?.pauseId).toBe('pause_1');
+  });
+});
+
+describe('injectPrefill — what the inject editor opens with', () => {
+  const exec = (output?: unknown) => ({
+    instanceId: 'c1',
+    input: { env: 'prod' },
+    status: 'running' as const,
+    startedTs: 1,
+    ...(output !== undefined ? { output } : {}),
+  });
+
+  it('a recorded result is the template', () => {
+    expect(JSON.parse(injectPrefill(exec({ ok: true }), 'after').text)).toEqual({ ok: true });
+  });
+
+  it('at an after gate with no result on the wire yet, it starts empty — never with the arguments', () => {
+    const prefill = injectPrefill(exec(), 'after');
+    expect(JSON.parse(prefill.text)).toEqual({});
+    expect(prefill.note).toContain('not recorded yet');
+  });
+
+  it('before the call runs, the arguments stay the template (unchanged)', () => {
+    expect(JSON.parse(injectPrefill(exec(), 'before').text)).toEqual({ env: 'prod' });
   });
 });
 

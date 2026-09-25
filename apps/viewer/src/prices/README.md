@@ -11,10 +11,16 @@ same notice ships in the built viewer as `public/THIRD_PARTY_NOTICES.txt`.
   file's SHA-256 (the unit suite pins the hash, so a refreshed file with a
   stale date fails `test/prices.test.ts`).
 - **Loading**: `loader.ts` pulls the file with a dynamic `import()`, so it is
-  its own build chunk (~334 KB, ~35 KB gzipped) and is fetched only when an
-  LLM step's Context & cost view opens. An exported single-file run
-  (`graphmind record --html`) has no sibling chunks; there the view shows no
-  dollar figures and says the prices did not load.
+  its own build chunk (~334 KB, ~35 KB gzipped) and is fetched only once the
+  viewer shows a run with LLM token usage (the top bar's est. cost, the
+  inspector, Context & cost) — never for a run without. An exported
+  single-file run (`graphmind record --html`) has no sibling chunks and must
+  not look for one (an inlined module's relative `import()` resolves against
+  the document): the exporter embeds the table as a JSON block
+  (`<script type="application/json" id="graphmind-prices">`, read out of the
+  built chunk by `packages/cli/src/export-html.ts`) when the run has usage,
+  and `loader.ts` reads that block before it would import. Where the table
+  cannot load at all, the view shows no dollar figures and says so.
 - **Matching and cost math**: `engine.ts` (mirrors the upstream JS engine;
   unknown model → no price).
 

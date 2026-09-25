@@ -3,8 +3,8 @@
  * separate chunk, fetched once a run has token usage to price (never for a
  * run without); the step shows usage, a snapshot-priced cost, the held-cache
  * note and the prompt diff — including a tool whose schema changed, opened
- * as a definition diff; the top bar carries the priced run cost; a preview
- * prompt is refused.
+ * as a definition diff; the top bar carries the priced run cost; the
+ * bundled demo shows what changed between its steps.
  */
 import { readFileSync } from 'node:fs';
 import { FIXTURE_NODES, expect, nodeCard, openViewer, test } from './harness.js';
@@ -149,7 +149,7 @@ test('prices load lazily, then the step shows usage, cost, the held-cache note a
   await expect(ctx.getByTestId('cache-gap')).toHaveCount(0);
 });
 
-test('the bundled demo: inclusive usage, a preview prompt is refused with the reason', async ({ page }) => {
+test('the bundled demo: inclusive usage, and each step shows what changed since the one before', async ({ page }) => {
   const demo = JSON.parse(readFileSync(new URL('../src/fixtures/demo-run.json', import.meta.url), 'utf8')) as unknown[];
   await openViewer(page, { embeddedRun: demo });
   await expect(page.locator('.react-flow__node')).toHaveCount(7, { timeout: 10_000 });
@@ -164,11 +164,164 @@ test('the bundled demo: inclusive usage, a preview prompt is refused with the re
   const tokensIn = ctx.locator('.gm-inspect-stat', { hasText: 'tokens in' });
   await expect(tokensIn).toHaveAttribute('title', /Total prompt tokens, cached tokens included\./);
   await expect(tokensIn).not.toContainText('as reported');
-  await expect(ctx.getByTestId('diff-refused')).toHaveText(
-    "Can't compare: This step recorded a preview string instead of the messages.",
-  );
+  // The demo records every step as it was sent (C1): step 2 is step 1 plus
+  // the model's first turn and both tool results.
+  await expect(ctx.getByTestId('diff-refused')).toHaveCount(0);
+  const summary = ctx.getByTestId('prompt-diff').getByTestId('diff-summary');
+  await expect(summary).toContainText('+2 added');
+  await expect(summary).not.toContainText('removed');
   // claude-sonnet-4-5 is in the snapshot: priced.
   const priceNote = ctx.getByTestId('price-note');
   await expect(priceNote).toContainText('Priced as Anthropic claude-sonnet-4-5');
   await expect(priceNote).not.toContainText('recorded before GraphMind 0.6');
 });
+
+test('an OPEN before-gate hold: the held-cache note appears once it crosses the 5-minute cache lifetime', async ({ page }) => {
+  // The previous step finished at T0+0.9 s; the next one was held at its
+  // before gate at T0+1.1 s and is never released, so no event arrives while
+  // the developer decides. The page clock starts 296 s after that finish.
+  const OPEN = 'run-context-open-hold';
+  const prevFinished = T0 + 900;
+  let seq = 0;
+  const e = (dt: number, type: string, payload: Record<string, unknown>) => ({ gm: 1, seq: ++seq, ts: T0 + dt, runId: OPEN, type, payload });
+  const input = (content: string) => ({ prompt: [{ role: 'user', content }], modelId: 'claude-sonnet-4-5', provider: 'anthropic.messages' });
+  const run = [
+    e(0, 'run.started', { app: 'open-hold', sdk: { name: 'ai', version: '7.0.0' } }),
+    e(0, 'node.started', { nodeId: 'agent:trip', kind: 'agent', name: 'trip', instanceId: OPEN }),
+    e(10, 'node.started', { nodeId: 'llm:step', parentId: 'agent:trip', kind: 'llm', name: 'step', instanceId: 'i:s0', input: input('hi') }),
+    e(900, 'node.finished', {
+      nodeId: 'llm:step',
+      instanceId: 'i:s0',
+      output: { text: 'ok' },
+      durationMs: 890,
+      status: 'ok',
+      usage: { inputTokens: 12_000, outputTokens: 300, inclusive: true, cacheReadTokens: 0, cacheWriteTokens: 11_000 },
+    }),
+    e(1_000, 'node.started', { nodeId: 'llm:step', parentId: 'agent:trip', kind: 'llm', name: 'step', instanceId: 'i:s1', input: input('hi again') }),
+    e(1_100, 'exec.paused', { pauseId: 'p1', nodeId: 'llm:step', instanceId: 'i:s1', point: 'before', reason: 'breakpoint' }),
+  ];
+  await page.clock.install({ time: new Date(prevFinished + 296_000) });
+  await openViewer(page, { embeddedRun: run });
+  await expect(nodeCard(page, 'llm:step')).toBeVisible();
+  // The price table lands first, so no later prop change re-runs the view by accident.
+  await expect(page.locator('.gm-topbar-stats')).toContainText('est. cost');
+  await nodeCard(page, 'llm:step').locator('.gm-node-title').click();
+  const ctx = inspector(page).getByTestId('context-cost');
+  await expect(ctx).toContainText('No usage yet — the step is still running.');
+  await expect(ctx.getByTestId('cache-gap')).toHaveCount(0); // ≈ 296 s: inside the lifetime
+
+  // 20 s of wall clock on the same open hold (≈ 316 s): the note is up.
+  await page.clock.fastForward(20_000);
+  await expect(ctx.getByTestId('cache-gap')).toHaveText(
+    /^Held 5\.\d min before this call — the provider's 5-minute prompt cache has likely expired$/,
+  );
+  // And it keeps counting while the hold stays open.
+  await page.clock.fastForward(5 * MIN);
+  await expect(ctx.getByTestId('cache-gap')).toHaveText(/^Held 10 min before this call/);
+  await expect(ctx).toContainText('No usage yet — the step is still running.'); // same view, never reloaded
+});
+
+/** A parallel multi-agent run: four sub-agents with steps and tools, one held gate, optionally one failure. */
+function parallelRun(runId: string, withError: boolean): unknown[] {
+  let seq = 0;
+  const e = (dt: number, type: string, payload: Record<string, unknown>) => ({ gm: 1, seq: ++seq, ts: T0 + dt, runId, type, payload });
+  const out: unknown[] = [
+    e(0, 'run.started', { app: 'parallel-research', sdk: { name: 'ai', version: '7.0.0' } }),
+    e(0, 'node.started', { nodeId: 'agent:orchestrator', kind: 'agent', name: 'orchestrator', instanceId: runId }),
+  ];
+  let t = 10;
+  ['alpha', 'bravo', 'charlie', 'delta'].forEach((name, a) => {
+    const agentId = `agent:${name}`;
+    out.push(e(t, 'node.started', { nodeId: agentId, parentId: 'agent:orchestrator', kind: 'agent', name, instanceId: `i:${name}` }));
+    for (let s = 0; s < 3; s += 1) {
+      const stepId = `llm:${name}-step`;
+      const inst = `i:${name}:s${s}`;
+      t += 10;
+      out.push(
+        e(t, 'node.started', {
+          nodeId: stepId,
+          parentId: agentId,
+          kind: 'llm',
+          name: 'step',
+          instanceId: inst,
+          input: { prompt: [{ role: 'user', content: `task ${name} ${s}` }], modelId: 'claude-sonnet-4-5', provider: 'anthropic.messages' },
+        }),
+      );
+      t += 900;
+      out.push(
+        e(t, 'node.finished', {
+          nodeId: stepId,
+          instanceId: inst,
+          output: { text: 'ok' },
+          durationMs: 900,
+          status: 'ok',
+          usage: { inputTokens: 21_000, outputTokens: 800, inclusive: true },
+        }),
+      );
+      for (let k = 0; k < 2; k += 1) {
+        const toolId = `tool:${name}-search-${k}`;
+        const tInst = `c:${name}:${s}:${k}`;
+        t += 10;
+        out.push(e(t, 'node.started', { nodeId: toolId, parentId: stepId, kind: 'tool', name: `search${k}`, instanceId: tInst, input: { q: name } }));
+        const fail = withError && a === 2 && s === 1 && k === 1;
+        t += 300;
+        out.push(
+          e(
+            t,
+            'node.finished',
+            fail
+              ? { nodeId: toolId, instanceId: tInst, durationMs: 300, status: 'error', error: { name: 'RateLimitError', message: '429' } }
+              : { nodeId: toolId, instanceId: tInst, output: { hits: 3 }, durationMs: 300, status: 'ok' },
+          ),
+        );
+      }
+    }
+    t += 10;
+    out.push(e(t, 'node.finished', { nodeId: agentId, instanceId: `i:${name}`, output: { done: true }, durationMs: 100, status: 'ok' }));
+  });
+  t += 10;
+  out.push(e(t, 'node.started', { nodeId: 'tool:publish', parentId: 'agent:orchestrator', kind: 'tool', name: 'publish', instanceId: 'c:pub', input: {} }));
+  out.push(e(t + 5, 'exec.paused', { pauseId: 'p1', nodeId: 'tool:publish', point: 'before', reason: 'breakpoint' }));
+  out.push(e(t + 95_005, 'exec.resumed', { pauseId: 'p1', action: 'continue' }));
+  t += 95_200;
+  out.push(e(t, 'node.finished', { nodeId: 'tool:publish', instanceId: 'c:pub', output: { ok: true }, durationMs: 95_190, heldMs: 95_000, status: 'ok' }));
+  t += 50;
+  out.push(e(t, 'node.finished', { nodeId: 'agent:orchestrator', instanceId: runId, output: { ok: true }, durationMs: t, status: 'ok' }));
+  out.push(e(t + 10, 'run.finished', { status: withError ? 'error' : 'ok' }));
+  return out;
+}
+
+for (const [width, withError] of [
+  [1440, false],
+  [1440, true],
+  [1200, true],
+] as const) {
+  test(`the est. cost stays whole in the top bar: ${width} px, runs rail open${withError ? ', with an error count' : ''}`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await openViewer(page, { embeddedRun: parallelRun(`run-topbar-${width}-${String(withError)}`, withError) });
+    await expect(nodeCard(page, 'agent:orchestrator')).toBeVisible();
+    await expect(page.locator('.gm-rail')).toBeVisible();
+    const cost = page.locator('.gm-topbar-stats .gm-stat').filter({ hasText: 'est. cost' });
+    await expect(cost).toBeVisible();
+    await expect(cost.locator('.gm-stat-value')).toHaveText('$0.900');
+    if (withError) await expect(page.locator('.gm-topbar-stats .gm-stat').filter({ hasText: 'errors' })).toBeVisible();
+    // Geometry, not text content: nothing in the stats row sits past the
+    // box's clip edge — the lowest-priority stats were shed instead.
+    const g = await page.evaluate(() => {
+      const box = document.querySelector('.gm-topbar-stats') as HTMLElement;
+      const row = box.querySelector<HTMLElement>('.gm-topbar-stats-row');
+      const edge = box.getBoundingClientRect().left + box.clientLeft;
+      const right = edge + box.clientWidth;
+      const shown = Array.from(box.querySelectorAll<HTMLElement>('.gm-stat')).filter((el) => !el.hidden);
+      return {
+        fits: row === null ? box.scrollWidth <= box.clientWidth : row.offsetWidth <= box.clientWidth,
+        clipped: shown
+          .filter((el) => el.getBoundingClientRect().right > right + 0.5 || el.getBoundingClientRect().left < edge - 0.5)
+          .map((el) => el.textContent),
+        shown: shown.map((el) => el.querySelector('.gm-stat-label')?.textContent),
+      };
+    });
+    expect(g.clipped, `stats cut at the edge (shown: ${g.shown.join(', ')})`).toEqual([]);
+    expect(g.fits).toBe(true);
+  });
+}

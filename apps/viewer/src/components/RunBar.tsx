@@ -27,6 +27,7 @@ import {
   type ControlInfo,
   type StreamStatus,
 } from '../store/uiStore.js';
+import { debugDeniedNote } from '../lib/control.js';
 import { controlNoticeLabel } from '../lib/hubReply.js';
 import { IconPause, IconReplay, IconStack } from './Icons.js';
 
@@ -134,6 +135,11 @@ export function RunBar({
   const control = useUiStore((s) => s.control);
   const notice = useUiStore((s) => s.controlNotice);
   const recorded = isExportedRun();
+  // Mode and breakpoints are dead in a recording (nothing to control) and
+  // withheld from a tab without the token (the server refuses them): either
+  // way disabled, saying why, rather than flipping and flipping back.
+  const denied = recorded ? RECORDED_HINT : debugDeniedNote(control);
+  const locked = denied !== undefined;
 
   // A refused or superseded resume ("pause taken", "edit refused") is shown
   // for a few seconds: the click did not do what its label said.
@@ -213,16 +219,16 @@ export function RunBar({
       <span className="gm-runbar-divider" />
 
       <div
-        className={`gm-seg${recorded ? ' gm-seg--dead' : ''}`}
+        className={`gm-seg${recorded ? ' gm-seg--dead' : locked ? ' gm-seg--locked' : ''}`}
         role="radiogroup"
         aria-label="Execution mode"
-        title={recorded ? RECORDED_HINT : undefined}
+        title={denied}
       >
         <button
           className={mode === 'run' ? 'gm-seg--on' : ''}
           onClick={() => setMode('run')}
-          disabled={recorded}
-          title={recorded ? RECORDED_HINT : 'Run until a breakpoint or an error'}
+          disabled={locked}
+          title={denied ?? 'Run until a breakpoint or an error'}
           role="radio"
           aria-checked={mode === 'run'}
         >
@@ -231,8 +237,8 @@ export function RunBar({
         <button
           className={mode === 'step' ? 'gm-seg--on' : ''}
           onClick={() => setMode('step')}
-          disabled={recorded}
-          title={recorded ? RECORDED_HINT : 'Pause at every gate'}
+          disabled={locked}
+          title={denied ?? 'Pause at every gate'}
           role="radio"
           aria-checked={mode === 'step'}
         >
@@ -242,10 +248,10 @@ export function RunBar({
 
       <button
         className="gm-toolbtn"
-        title={recorded ? RECORDED_HINT : 'Break before every node'}
+        title={denied ?? 'Break before every node'}
         aria-label="Break everywhere"
         onClick={pauseAll}
-        disabled={recorded}
+        disabled={locked}
       >
         <IconPause />
         <span className="gm-toolbtn-label">Break everywhere</span>
@@ -258,7 +264,12 @@ export function RunBar({
             <span key={key} className="gm-chip gm-chip--bp" title="breakpoint">
               <span className="gm-dot gm-dot--error" style={{ width: 6, height: 6 }} />
               {matcherLabel(m)}
-              <button onClick={() => clearBreakpoint(key)} aria-label={`Clear breakpoint ${matcherLabel(m)}`}>
+              <button
+                onClick={() => clearBreakpoint(key)}
+                disabled={locked}
+                title={denied ?? 'Clear this breakpoint'}
+                aria-label={`Clear breakpoint ${matcherLabel(m)}`}
+              >
                 ×
               </button>
             </span>

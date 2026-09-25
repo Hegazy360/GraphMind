@@ -10,5 +10,7 @@ export function useTokenSnapshot(runId: string, nodeId: string): TokenSnapshot {
     (onChange: () => void) => tokenBuffers.subscribe(runId, nodeId, onChange),
     [runId, nodeId],
   );
-  return useSyncExternalStore(subscribe, () => tokenBuffers.getSnapshot(runId, nodeId));
+  const read = (): TokenSnapshot => tokenBuffers.getSnapshot(runId, nodeId);
+  // The same read serves a server render (static export tests, SSR).
+  return useSyncExternalStore(subscribe, read, read);
 }

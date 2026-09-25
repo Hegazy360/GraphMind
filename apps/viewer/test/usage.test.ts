@@ -8,6 +8,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { parseEnvelope, type EventEnvelope } from '@graphmind-ai/schema';
 import { pricedUsage, sumCosts } from '../src/context/cost.js';
 import { activePrices, calcCost, resolveModel, type PriceTable } from '../src/prices/engine.js';
 import { applyEvent, type RunsMap } from '../src/store/applyEvent.js';
@@ -177,5 +178,88 @@ describe('the bundled demo recording', () => {
       .filter((usage) => usage !== undefined);
     expect(usages.length).toBeGreaterThan(0);
     for (const usage of usages) expect(usageView(usage)?.basis).toBe('inclusive');
+  });
+});
+
+describe('rollup usage is not counted twice', () => {
+  /** Envelopes (demo recording, an OTel import) → run state, the way a replay builds it. */
+  function ingest(raw: readonly unknown[]): RunState {
+    let runs: RunsMap = {};
+    let runId = '';
+    for (const value of raw) {
+      const parsed = parseEnvelope(value);
+      if (parsed.kind !== 'ok') throw new Error(`bad envelope: ${JSON.stringify(parsed)}`);
+      const envelope = parsed.envelope as EventEnvelope;
+      runId ||= envelope.runId;
+      if (envelope.type === 'node.token') continue;
+      runs = applyEvent(runs, envelope, 'fixture');
+    }
+    const run = runs[runId];
+    if (run === undefined) throw new Error('run not built');
+    return run;
+  }
+
+  /** What the est. cost prices: LLM steps only. */
+  function llmTotals(run: RunState): { tokensIn: number; tokensOut: number } {
+    let tokensIn = 0;
+    let tokensOut = 0;
+    for (const id of run.order) {
+      const node = run.nodes[id];
+      if (node?.kind !== 'llm') continue;
+      for (const exec of node.executions) {
+        const view = usageView(exec.usage);
+        tokensIn += view?.inputTokens ?? 0;
+        tokensOut += view?.outputTokens ?? 0;
+      }
+    }
+    return { tokensIn, tokensOut };
+  }
+
+  it('the demo: the agent reports the sum of its steps; the top bar counts the steps once (4.1k→755)', () => {
+    const run = ingest(demoRun as unknown[]);
+    const agentUsage = usageView(run.nodes['agent:trip-planner']?.executions.at(-1)?.usage);
+    expect(agentUsage).toMatchObject({ inputTokens: 4064, outputTokens: 755 });
+    expect(llmTotals(run)).toEqual({ tokensIn: 4064, tokensOut: 755 });
+    const stats = runStats(run);
+    expect({ tokensIn: stats.tokensIn, tokensOut: stats.tokensOut }).toEqual({ tokensIn: 4064, tokensOut: 755 });
+  });
+
+  it('an AI SDK OTel import: ai.usage on the generateText span is not added to its doGenerate spans', () => {
+    const raw = JSON.parse(
+      readFileSync(
+        fileURLToPath(new URL('../../../packages/cli/test/fixtures/otlp-ai-sdk.expected.json', import.meta.url)),
+        'utf8',
+      ),
+    ) as unknown[];
+    const run = ingest(raw);
+    expect(llmTotals(run)).toEqual({ tokensIn: 420, tokensOut: 65 });
+    const stats = runStats(run);
+    expect({ tokensIn: stats.tokensIn, tokensOut: stats.tokensOut }).toEqual({ tokensIn: 420, tokensOut: 65 });
+  });
+
+  it('an agent that reports usage with no reporting descendant still counts; so does every LLM step', () => {
+    const agentUsage = { inputTokens: 50, outputTokens: 5, inclusive: true };
+    const run = buildRun([
+      started('agent:solo', 'agent', { instanceId: 'a1' }),
+      ev('node.finished', { nodeId: 'agent:solo', instanceId: 'a1', output: null, usage: agentUsage, durationMs: 5, status: 'ok' }),
+      ...llmStep('s1', INCLUSIVE),
+    ]);
+    expect(runStats(run)).toMatchObject({ tokensIn: 50 + 1205, tokensOut: 5 + 100 });
+  });
+
+  it('a folded orchestrator does not add a sub-agent\'s rollup to the sub-agent\'s own steps', () => {
+    const sub = { inputTokens: 1205, outputTokens: 100, inclusive: true };
+    const run = buildRun([
+      started('agent:orchestrator', 'agent', { instanceId: 'o' }),
+      started('agent:researcher', 'agent', { instanceId: 'r', parentId: 'agent:orchestrator' }),
+      ...llmStep('s1', INCLUSIVE).map((event) => {
+        if (event.type === 'node.started') (event.payload as { parentId?: string }).parentId = 'agent:researcher';
+        return event;
+      }),
+      ev('node.finished', { nodeId: 'agent:researcher', instanceId: 'r', output: null, usage: sub, durationMs: 20, status: 'ok' }),
+    ]);
+    const summary = summarizeGroup(run, 'agent:orchestrator');
+    expect({ tokensIn: summary.tokensIn, tokensOut: summary.tokensOut }).toEqual({ tokensIn: 1205, tokensOut: 100 });
+    expect(runStats(run)).toMatchObject({ tokensIn: 1205, tokensOut: 100 });
   });
 });

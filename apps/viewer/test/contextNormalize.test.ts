@@ -214,6 +214,32 @@ describe('normalizers — refusals', () => {
     expect(normalizePrompt(input).ok).toBe(true);
   });
 
+  it('a redacted value inside metadata the diff drops does not block it (an exported Python LangChain run)', () => {
+    // `graphmind record --html` redacts secret-shaped keys by segment: a
+    // ChatOpenAI AIMessage dump's response_metadata.token_usage and
+    // usage_metadata.input/output_token_details all match "token". The diff
+    // never compares response_metadata / usage_metadata (canonical.ts).
+    const first = real<unknown>('pythonLangchain', 0);
+    const live = real<{ messages: Record<string, unknown>[][] }>('pythonLangchain', 1);
+    const exported = structuredClone(live);
+    const ai = exported.messages[0]!.find((m) => m['type'] === 'ai')!;
+    ai['response_metadata'] = { token_usage: '__REDACTED__', model_name: 'gpt-4o-mini-2024-07-18', finish_reason: 'tool_calls' };
+    ai['usage_metadata'] = {
+      input_tokens: 900,
+      output_tokens: 15,
+      total_tokens: 915,
+      input_token_details: '__REDACTED__',
+      output_token_details: '__REDACTED__',
+    };
+    expect(canonicalJson(exported)).toBe(canonicalJson(live));
+    expect(normalizePrompt(exported).ok).toBe(true);
+    expect(computeDiffOutcome(first, exported).status).toBe('diff');
+    // A placeholder in what the model does see still refuses.
+    const hidden = structuredClone(exported);
+    hidden.messages[0]!.find((m) => m['type'] === 'ai')!['content'] = '__REDACTED__';
+    expect(refused(hidden)).toEqual({ code: 'redacted' });
+  });
+
   it('shrunk: the 512 KB payload marker, a shrunk field, or the truncation suffix', () => {
     expect(refused({ __graphmindTruncated: true, bytes: 900_000, preview: '{"messages":[' })).toEqual({
       code: 'shrunk',
@@ -247,13 +273,12 @@ describe('normalizers — refusals', () => {
     expect(refused({ messages: [{ role: 'user', content: '[circular]' }] }).detail).toBe('ruby');
   });
 
-  it('preview: a string where the messages should be (the bundled demo), LangGraph and MCP previews', () => {
-    const demo = JSON.parse(
-      readFileSync(fileURLToPath(new URL('../src/fixtures/demo-run.json', import.meta.url)), 'utf8'),
-    ) as { type: string; payload: { kind?: string; input?: unknown } }[];
-    const inputs = demo.filter((e) => e.type === 'node.started' && e.payload.kind === 'llm').map((e) => e.payload.input);
-    expect(normalizePrompt(inputs[0]).ok).toBe(true);
-    expect(refused(inputs[1])).toEqual({ code: 'preview', detail: 'messages' });
+  it('preview: a string where the messages should be (the pre-0.6 demo), LangGraph and MCP previews', () => {
+    // What the bundled demo recorded before 0.6: a summary, not the messages.
+    expect(refused({ model: 'claude-sonnet-4-5', messages: '« 4 messages + 2 tool results »' })).toEqual({
+      code: 'preview',
+      detail: 'messages',
+    });
     expect(refused({ __graphmind: 'truncated', preview: '{"messages"', chars: 40_000 })).toEqual({
       code: 'preview',
       detail: 'langgraph',
@@ -263,6 +288,24 @@ describe('normalizers — refusals', () => {
       detail: 'mcp',
     });
     expect(refused('a prompt as text')).toEqual({ code: 'preview', detail: 'input' });
+  });
+
+  it('the bundled demo records every step as it was sent (C1): each one reads, none is a preview', () => {
+    const demo = JSON.parse(
+      readFileSync(fileURLToPath(new URL('../src/fixtures/demo-run.json', import.meta.url)), 'utf8'),
+    ) as { type: string; payload: { kind?: string; input?: unknown } }[];
+    const inputs = demo.filter((e) => e.type === 'node.started' && e.payload.kind === 'llm').map((e) => e.payload.input);
+    expect(inputs).toHaveLength(3);
+    const prompts = inputs.map((input) => ok(normalizePrompt(input)));
+    expect(prompts.map((p) => p.shape)).toEqual(['ai-sdk', 'ai-sdk', 'ai-sdk']);
+    expect(prompts.map((p) => p.messages.length)).toEqual([1, 3, 5]);
+    // The provider-executed search's result rides in the assistant turn that
+    // called it: that turn still reads as the model's calls.
+    expect(labels(prompts[2]!).slice(3)).toEqual([
+      'assistant → getWeather, webSearch, currencyConvert',
+      'tool results: getWeather, currencyConvert',
+    ]);
+    expect(prompts[0]?.tools?.basis).toBe('hash');
   });
 
   it('batched, server-side state (both spellings), unknown shape, missing input', () => {

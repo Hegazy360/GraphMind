@@ -101,6 +101,32 @@ export interface RunStats {
   ranMs: number;
 }
 
+/**
+ * The non-LLM nodes whose usage is a ROLLUP of usage a descendant also
+ * reported: an agent's node.finished summing its steps (the bundled demo),
+ * or an AI SDK OTel import's `ai.usage` on the generateText span beside each
+ * doGenerate span. Adding both double-counts, and the est. cost beside the
+ * total prices LLM steps only — so run and group totals skip these. An LLM
+ * step always counts (the cost prices every one).
+ *
+ * `ids` limits the walk to a group (its descendants), `stopAt` is the
+ * group's root: an ancestor outside the group is not marked.
+ */
+export function rollupNodeIds(run: RunState, ids: Iterable<string> = run.order, stopAt?: string): Set<string> {
+  const out = new Set<string>();
+  for (const nodeId of ids) {
+    const node = run.nodes[nodeId];
+    if (node === undefined || !node.executions.some((e) => e.usage !== undefined && e.usage !== null)) continue;
+    let parentId = node.parentId;
+    for (let guard = 0; parentId !== undefined && parentId !== stopAt && guard < 64; guard += 1) {
+      if (out.has(parentId)) break; // its ancestors are marked already
+      if (run.nodes[parentId]?.kind !== 'llm') out.add(parentId);
+      parentId = run.nodes[parentId]?.parentId;
+    }
+  }
+  return out;
+}
+
 export function runStats(run: RunState, now: number = Date.now()): RunStats {
   const stats: RunStats = {
     nodes: 0,
@@ -115,6 +141,7 @@ export function runStats(run: RunState, now: number = Date.now()): RunStats {
     ranMs: 0,
   };
   const usage = emptyTotals();
+  const rollups = rollupNodeIds(run);
   for (const nodeId of run.order) {
     const node = run.nodes[nodeId];
     if (node === undefined) continue;
@@ -122,7 +149,7 @@ export function runStats(run: RunState, now: number = Date.now()): RunStats {
     const per = nodeStats(node);
     stats.executions += per.executions;
     stats.errors += per.errors;
-    mergeTotals(usage, per.usage);
+    if (!rollups.has(nodeId)) mergeTotals(usage, per.usage);
     if (node.kind === 'tool') stats.tools += per.executions;
     if (node.kind === 'llm') stats.steps += per.executions;
   }

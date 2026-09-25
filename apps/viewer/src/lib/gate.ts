@@ -14,7 +14,7 @@ import { editAction, markerIn } from './editArgs.js';
 import { useEditStore } from '../store/editStore.js';
 import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';
-import type { Pause, RunSource, RunState } from '../store/types.js';
+import { activePausesOf, type NodeExecution, type Pause, type RunSource, type RunState } from '../store/types.js';
 
 /** The gate currently holding this run, if any. */
 export function activePause(run: RunState | undefined): Pause | undefined {
@@ -26,10 +26,61 @@ export function activePause(run: RunState | undefined): Pause | undefined {
   return undefined;
 }
 
-/** The gate holding `runId`, read straight from the store. */
+/**
+ * The gate the viewer shows for `nodeId`. Parallel calls of one tool can
+ * hold at once: the execution picked in the inspector (`instanceIdx`) shows
+ * its own hold when it has one, otherwise the node shows its newest
+ * (`node.activePauseId`). The card banner, the footer's first row and the
+ * keyboard all use this, so `c` always releases the pause on screen.
+ */
+export function shownPause(run: RunState | undefined, nodeId: string, instanceIdx?: number): Pause | undefined {
+  const node = run?.nodes[nodeId];
+  // Every held node has `activePauseId` (a release falls back to another
+  // hold), so a node without one is not held: no scan.
+  if (run === undefined || node?.activePauseId === undefined) return undefined;
+  const held = activePausesOf(run, nodeId);
+  if (held.length === 0) return undefined;
+  const picked = instanceIdx !== undefined ? node.executions[instanceIdx] : undefined;
+  if (picked !== undefined) {
+    const own = held.find(
+      (p) => p.heldAmbiguous !== true && p.heldBy?.some((h) => h.nodeId === nodeId && h.instanceId === picked.instanceId),
+    );
+    if (own !== undefined) return own;
+  }
+  const primary = node.activePauseId !== undefined ? run.pauses[node.activePauseId] : undefined;
+  return primary?.active === true ? primary : held[held.length - 1];
+}
+
+/**
+ * Which execution the inspector opens on when none is picked: the one the
+ * node's shown hold names exactly (so the evidence matches the editor's
+ * prefill and the error gate's call), else undefined (the latest).
+ */
+export function heldExecutionIndex(run: RunState | undefined, nodeId: string): number | undefined {
+  const shown = shownPause(run, nodeId);
+  const node = run?.nodes[nodeId];
+  if (shown === undefined || node === undefined || shown.heldAmbiguous === true) return undefined;
+  const held = shown.heldBy?.find((h) => h.nodeId === nodeId);
+  if (held === undefined) return undefined;
+  const index = node.executions.findIndex((e) => e.instanceId === held.instanceId);
+  return index >= 0 ? index : undefined;
+}
+
+/**
+ * The gate the keyboard acts on in `runId`, read straight from the store:
+ * the one shown for the selected node (and selected execution), else the
+ * one a card shows for the first held node.
+ */
 export function heldGate(runId: string | undefined): Pause | undefined {
   if (runId === undefined) return undefined;
-  return activePause(useRunStore.getState().runs[runId]);
+  const run = useRunStore.getState().runs[runId];
+  const ui = useUiStore.getState();
+  if (ui.selectedRunId === runId && ui.selectedNodeId !== undefined) {
+    const selected = shownPause(run, ui.selectedNodeId, ui.selectedInstanceIdx);
+    if (selected !== undefined) return selected;
+  }
+  const first = activePause(run);
+  return first === undefined ? undefined : shownPause(run, first.nodeId) ?? first;
 }
 
 function sourceOf(runId: string): RunSource {
@@ -79,6 +130,33 @@ export function injectRefusal(output: unknown): string | undefined {
     return 'this value contains redacted content; edit it before injecting';
   }
   return undefined;
+}
+
+/**
+ * What the inject editor opens with: the recorded result when there is one.
+ * At an `after` gate there may be none yet — every adapter but LangGraph
+ * holds BEFORE it emits node.finished — and pre-filling the arguments there
+ * handed the model the tool's own arguments as its result on an unedited
+ * "Inject & resume". So it starts empty, and says why. Elsewhere (before the
+ * call, on an error) the arguments stay the template, as before.
+ */
+export function injectPrefill(
+  exec: Pick<NodeExecution, 'input' | 'output'> | undefined,
+  point: Pause['point'],
+): { text: string; note?: string } {
+  const recorded = exec?.output !== undefined && exec.output !== null;
+  if (!recorded && point === 'after') {
+    return {
+      text: '{}',
+      note: 'The call’s own result is not recorded yet (the app records it after the hold), so this starts empty: write the result the model should get.',
+    };
+  }
+  const shape = recorded ? exec?.output : exec?.input;
+  try {
+    return { text: JSON.stringify(shape ?? {}, null, 2) ?? '{}' };
+  } catch {
+    return { text: '{}' };
+  }
 }
 
 export type InjectResult = { ok: true } | { ok: false; reason: string };

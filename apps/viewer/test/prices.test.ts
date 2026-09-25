@@ -6,7 +6,8 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { PRICES_ELEMENT_ID, getPriceTableState, loadPriceTable, setPriceTableForTests } from '../src/prices/loader.js';
 import {
   activePrices,
   calcCost,
@@ -176,5 +177,40 @@ describe('cost math', () => {
     expect(calcCost({ inputTokens: 10, outputTokens: 10 }, { input_mtok: 1 })).toBeUndefined();
     expect(calcCost({ inputTokens: 10, outputTokens: 0 }, { input_mtok: 1 })?.total).toBeCloseTo(1e-5, 12);
     expect(calcCost({ inputTokens: 10, outputTokens: 0 }, { audio_hours: 1 })).toBeUndefined();
+  });
+});
+
+describe('loading the table', () => {
+  afterEach(() => {
+    delete (globalThis as { document?: unknown }).document;
+    setPriceTableForTests(undefined);
+  });
+
+  /** A page whose only element is the exporter's JSON block. */
+  function pageWithBlock(text: string): void {
+    (globalThis as { document?: unknown }).document = {
+      getElementById: (id: string) => (id === PRICES_ELEMENT_ID ? { textContent: text } : null),
+    };
+  }
+
+  it('an exported run reads the table it carries, and never imports a chunk from beside the file', async () => {
+    const small = [{ id: 'anthropic', name: 'Anthropic', models: [] }];
+    pageWithBlock(JSON.stringify(small));
+    setPriceTableForTests(undefined);
+    expect(await loadPriceTable()).toEqual(small);
+    expect(getPriceTableState()).toEqual({ status: 'ready', table: small });
+  });
+
+  it('a malformed block is an error (no dollar figures), not a fallback to the import', async () => {
+    pageWithBlock('{"not":"a table"}');
+    setPriceTableForTests(undefined);
+    expect(await loadPriceTable()).toBeUndefined();
+    expect(getPriceTableState()).toEqual({ status: 'error' });
+  });
+
+  it('with no block (a served viewer), the lazy chunk is the table', async () => {
+    setPriceTableForTests(undefined);
+    const table = await loadPriceTable();
+    expect(table?.length).toBe(TABLE.length);
   });
 });

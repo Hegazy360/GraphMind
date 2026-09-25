@@ -100,17 +100,162 @@
       "name": "llm step",
       "instanceId": "inv1:s1",
       "input": {
-        "model": "claude-sonnet-4-5",
-        "messages": [
+        "prompt": [
           {
             "role": "system",
             "content": "You are a meticulous travel planner. Use tools for live data."
           },
           {
             "role": "user",
-            "content": "Plan a 4-day trip to Lisbon in October for 2 people, budget €1,800."
+            "content": [
+              {
+                "type": "text",
+                "text": "Plan a 4-day trip to Lisbon in October for 2 people, budget €1,800."
+              }
+            ]
           }
-        ]
+        ],
+        "modelId": "claude-sonnet-4-5",
+        "provider": "anthropic.messages",
+        "maxOutputTokens": 2048,
+        "tools": [
+          {
+            "name": "searchFlights",
+            "schemaHash": "3b9e61c0d4a27f15"
+          },
+          {
+            "name": "searchHotels",
+            "schemaHash": "a70c2e94f81b3d6e"
+          },
+          {
+            "name": "getWeather",
+            "schemaHash": "5d18f3b27ce0a946"
+          },
+          {
+            "name": "currencyConvert",
+            "schemaHash": "e2f4a61b9038c7d5"
+          },
+          {
+            "name": "webSearch",
+            "schemaHash": "91c7d05e3fa2b684"
+          }
+        ],
+        "toolSchemas": {
+          "3b9e61c0d4a27f15": {
+            "type": "function",
+            "name": "searchFlights",
+            "description": "Search return flights between two airports",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                },
+                "depart": {
+                  "type": "string"
+                },
+                "return": {
+                  "type": "string"
+                },
+                "pax": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "from",
+                "to",
+                "depart",
+                "return",
+                "pax"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "a70c2e94f81b3d6e": {
+            "type": "function",
+            "name": "searchHotels",
+            "description": "Search hotels in a city",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "city": {
+                  "type": "string"
+                },
+                "checkIn": {
+                  "type": "string"
+                },
+                "nights": {
+                  "type": "number"
+                },
+                "guests": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "city",
+                "checkIn",
+                "nights",
+                "guests"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "5d18f3b27ce0a946": {
+            "type": "function",
+            "name": "getWeather",
+            "description": "Weather forecast for a city over a date range",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "city": {
+                  "type": "string"
+                },
+                "range": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city",
+                "range"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "e2f4a61b9038c7d5": {
+            "type": "function",
+            "name": "currencyConvert",
+            "description": "Convert an amount between currencies at the live rate",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "type": "number"
+                },
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "amount",
+                "from",
+                "to"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "91c7d05e3fa2b684": {
+            "type": "provider-defined",
+            "id": "anthropic.web_search_20250305",
+            "name": "webSearch",
+            "args": {}
+          }
+        }
       }
     }
   },
@@ -454,8 +599,142 @@
       "name": "llm step",
       "instanceId": "inv1:s2",
       "input": {
-        "model": "claude-sonnet-4-5",
-        "messages": "« 4 messages + 2 tool results »"
+        "prompt": [
+          {
+            "role": "system",
+            "content": "You are a meticulous travel planner. Use tools for live data."
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Plan a 4-day trip to Lisbon in October for 2 people, budget €1,800."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "I'll start by finding flight options for October 8–12 and checking hotel availability in Alfama and Baixa in parallel."
+              },
+              {
+                "type": "tool-call",
+                "toolCallId": "call_f1",
+                "toolName": "searchFlights",
+                "input": {
+                  "from": "VIE",
+                  "to": "LIS",
+                  "depart": "2026-10-08",
+                  "return": "2026-10-12",
+                  "pax": 2
+                }
+              },
+              {
+                "type": "tool-call",
+                "toolCallId": "call_h1",
+                "toolName": "searchHotels",
+                "input": {
+                  "city": "Lisbon",
+                  "checkIn": "2026-10-08",
+                  "nights": 4,
+                  "guests": 2
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": [
+              {
+                "type": "tool-result",
+                "toolCallId": "call_f1",
+                "toolName": "searchFlights",
+                "output": {
+                  "type": "json",
+                  "value": {
+                    "options": [
+                      {
+                        "carrier": "TAP",
+                        "flight": "TP1273",
+                        "price": "€214 pp",
+                        "stops": 0,
+                        "depart": "07:05",
+                        "arrive": "09:10"
+                      },
+                      {
+                        "carrier": "Ryanair",
+                        "flight": "FR7332",
+                        "price": "€162 pp",
+                        "stops": 0,
+                        "depart": "16:40",
+                        "arrive": "18:55"
+                      }
+                    ],
+                    "currency": "EUR"
+                  }
+                }
+              },
+              {
+                "type": "tool-result",
+                "toolCallId": "call_h1",
+                "toolName": "searchHotels",
+                "output": {
+                  "type": "json",
+                  "value": {
+                    "hotels": [
+                      {
+                        "name": "Memmo Alfama",
+                        "rating": 4.6,
+                        "pricePerNight": "€138",
+                        "neighborhood": "Alfama"
+                      },
+                      {
+                        "name": "Hotel da Baixa",
+                        "rating": 4.7,
+                        "pricePerNight": "€152",
+                        "neighborhood": "Baixa"
+                      },
+                      {
+                        "name": "Casa Balthazar",
+                        "rating": 4.8,
+                        "pricePerNight": "€171",
+                        "neighborhood": "Chiado"
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "modelId": "claude-sonnet-4-5",
+        "provider": "anthropic.messages",
+        "maxOutputTokens": 2048,
+        "tools": [
+          {
+            "name": "searchFlights",
+            "schemaHash": "3b9e61c0d4a27f15"
+          },
+          {
+            "name": "searchHotels",
+            "schemaHash": "a70c2e94f81b3d6e"
+          },
+          {
+            "name": "getWeather",
+            "schemaHash": "5d18f3b27ce0a946"
+          },
+          {
+            "name": "currencyConvert",
+            "schemaHash": "e2f4a61b9038c7d5"
+          },
+          {
+            "name": "webSearch",
+            "schemaHash": "91c7d05e3fa2b684"
+          }
+        ]
       }
     }
   },
@@ -937,8 +1216,259 @@
       "name": "llm step",
       "instanceId": "inv1:s3",
       "input": {
-        "model": "claude-sonnet-4-5",
-        "messages": "« 8 messages + 6 tool results »"
+        "prompt": [
+          {
+            "role": "system",
+            "content": "You are a meticulous travel planner. Use tools for live data."
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Plan a 4-day trip to Lisbon in October for 2 people, budget €1,800."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "I'll start by finding flight options for October 8–12 and checking hotel availability in Alfama and Baixa in parallel."
+              },
+              {
+                "type": "tool-call",
+                "toolCallId": "call_f1",
+                "toolName": "searchFlights",
+                "input": {
+                  "from": "VIE",
+                  "to": "LIS",
+                  "depart": "2026-10-08",
+                  "return": "2026-10-12",
+                  "pax": 2
+                }
+              },
+              {
+                "type": "tool-call",
+                "toolCallId": "call_h1",
+                "toolName": "searchHotels",
+                "input": {
+                  "city": "Lisbon",
+                  "checkIn": "2026-10-08",
+                  "nights": 4,
+                  "guests": 2
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": [
+              {
+                "type": "tool-result",
+                "toolCallId": "call_f1",
+                "toolName": "searchFlights",
+                "output": {
+                  "type": "json",
+                  "value": {
+                    "options": [
+                      {
+                        "carrier": "TAP",
+                        "flight": "TP1273",
+                        "price": "€214 pp",
+                        "stops": 0,
+                        "depart": "07:05",
+                        "arrive": "09:10"
+                      },
+                      {
+                        "carrier": "Ryanair",
+                        "flight": "FR7332",
+                        "price": "€162 pp",
+                        "stops": 0,
+                        "depart": "16:40",
+                        "arrive": "18:55"
+                      }
+                    ],
+                    "currency": "EUR"
+                  }
+                }
+              },
+              {
+                "type": "tool-result",
+                "toolCallId": "call_h1",
+                "toolName": "searchHotels",
+                "output": {
+                  "type": "json",
+                  "value": {
+                    "hotels": [
+                      {
+                        "name": "Memmo Alfama",
+                        "rating": 4.6,
+                        "pricePerNight": "€138",
+                        "neighborhood": "Alfama"
+                      },
+                      {
+                        "name": "Hotel da Baixa",
+                        "rating": 4.7,
+                        "pricePerNight": "€152",
+                        "neighborhood": "Baixa"
+                      },
+                      {
+                        "name": "Casa Balthazar",
+                        "rating": 4.8,
+                        "pricePerNight": "€171",
+                        "neighborhood": "Chiado"
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "TAP at €214 keeps flights at €428 total; Memmo Alfama fits the budget with €1,372 (~76%) left over. Checking the weather window, October events, and converting the remaining budget for the card that bills in dollars."
+              },
+              {
+                "type": "tool-call",
+                "toolCallId": "call_w1",
+                "toolName": "getWeather",
+                "input": {
+                  "city": "Lisbon",
+                  "range": "Oct 8–12"
+                }
+              },
+              {
+                "type": "tool-call",
+                "toolCallId": "call_w2",
+                "toolName": "getWeather",
+                "input": {
+                  "city": "Sintra",
+                  "range": "Oct 10"
+                }
+              },
+              {
+                "type": "tool-call",
+                "toolCallId": "call_s1",
+                "toolName": "webSearch",
+                "input": {
+                  "query": "Lisbon events October 2026"
+                },
+                "providerExecuted": true
+              },
+              {
+                "type": "tool-result",
+                "toolCallId": "call_s1",
+                "toolName": "webSearch",
+                "output": {
+                  "type": "json",
+                  "value": {
+                    "results": [
+                      {
+                        "title": "Festival Iminente 2026",
+                        "date": "Oct 9–11",
+                        "area": "Marvila"
+                      },
+                      {
+                        "title": "Feira da Ladra",
+                        "date": "Tue & Sat",
+                        "area": "Alfama"
+                      }
+                    ]
+                  }
+                },
+                "providerExecuted": true
+              },
+              {
+                "type": "tool-call",
+                "toolCallId": "call_c1",
+                "toolName": "currencyConvert",
+                "input": {
+                  "amount": 1372,
+                  "from": "EUR",
+                  "to": "USD"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": [
+              {
+                "type": "tool-result",
+                "toolCallId": "call_w1",
+                "toolName": "getWeather",
+                "output": {
+                  "type": "json",
+                  "value": {
+                    "city": "Lisbon",
+                    "forecast": "sunny",
+                    "highC": 24,
+                    "lowC": 16,
+                    "rainChance": 0.05
+                  }
+                }
+              },
+              {
+                "type": "tool-result",
+                "toolCallId": "call_w2",
+                "toolName": "getWeather",
+                "output": {
+                  "type": "json",
+                  "value": {
+                    "city": "Sintra",
+                    "forecast": "mist then sun",
+                    "highC": 21,
+                    "lowC": 14,
+                    "rainChance": 0.2
+                  }
+                }
+              },
+              {
+                "type": "tool-result",
+                "toolCallId": "call_c1",
+                "toolName": "currencyConvert",
+                "output": {
+                  "type": "json",
+                  "value": {
+                    "rate": 1.0834,
+                    "converted": "$1,486.43",
+                    "asOf": "2026-10-01T09:12:00Z"
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "modelId": "claude-sonnet-4-5",
+        "provider": "anthropic.messages",
+        "maxOutputTokens": 2048,
+        "tools": [
+          {
+            "name": "searchFlights",
+            "schemaHash": "3b9e61c0d4a27f15"
+          },
+          {
+            "name": "searchHotels",
+            "schemaHash": "a70c2e94f81b3d6e"
+          },
+          {
+            "name": "getWeather",
+            "schemaHash": "5d18f3b27ce0a946"
+          },
+          {
+            "name": "currencyConvert",
+            "schemaHash": "e2f4a61b9038c7d5"
+          },
+          {
+            "name": "webSearch",
+            "schemaHash": "91c7d05e3fa2b684"
+          }
+        ]
       }
     }
   },

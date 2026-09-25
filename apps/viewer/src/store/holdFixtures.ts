@@ -167,7 +167,10 @@ export function generateSmartRun(
         nodeId: HOLD_NODES.search,
         point: 'after',
         reason: 'breakpoint',
-        smart: { rule: 'error-result', detail: 'the result has isError: true' },
+        instanceId: 'search-1',
+        // The SDK's own wording (packages/client smart.ts). The result is not
+        // on the wire yet: node.finished comes after the gate.
+        smart: { rule: 'error-result', detail: 'the tool returned a result with isError: true' },
       },
       120,
     );
@@ -178,6 +181,10 @@ export function generateSmartRun(
     { nodeId: HOLD_NODES.llm, kind: 'llm', name: 'step', parentId: HOLD_NODES.agent, instanceId: 'step-1', input: { step: 1, maxTokens: 256 } },
     60,
   );
+  // The real order: the step streams a partial tool call, then its after
+  // gate holds BEFORE node.finished (every adapter but LangGraph), so the
+  // step has no output while held — the cause is in the SDK's detail.
+  emit('node.token', { nodeId: HOLD_NODES.llm, deltas: [{ t: 'tool-args', v: '{"path":"notes/summary.md","content":"# Transformers\\n\\nAttention is' }] }, 300);
   emit(
     'exec.paused',
     {
@@ -185,9 +192,13 @@ export function generateSmartRun(
       nodeId: HOLD_NODES.llm,
       point: 'after',
       reason: 'breakpoint',
-      smart: { rule: 'truncated-tool-call', detail: 'finish reason length with 1 tool call' },
+      instanceId: 'step-1',
+      smart: {
+        rule: 'truncated-tool-call',
+        detail: 'the model was stopped at the token limit with 1 tool call requested; 1 call has arguments that did not parse',
+      },
     },
-    400,
+    100,
   );
   return out;
 }

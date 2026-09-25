@@ -76,7 +76,11 @@ test('smart holds say what they caught, in words', async ({ page }) => {
   );
   await openInspectorOn(page, HOLD_NODES.search);
   const evidence = inspector(page).getByTestId('smart-evidence');
-  await expect(evidence.getByTestId('smart-detail')).toHaveText('the result has isError: true');
+  // The SDK's own value-free wording (packages/client smart.ts).
+  await expect(evidence.getByTestId('smart-detail')).toHaveText('the tool returned a result with isError: true');
+  // The result itself is not on the wire yet (node.finished follows the
+  // gate): the evidence says so instead of implying it is shown.
+  await expect(evidence.getByTestId('smart-not-recorded')).toContainText('The result itself is not shown yet');
   await expect(evidence).toContainText('GRAPHMIND_BREAK_ON_ERROR_RESULT=0');
 });
 
@@ -87,4 +91,12 @@ test('a truncated tool call holds the LLM step and says so', async ({ page }) =>
   await expect(banner.getByTestId('hold-label')).toHaveText(
     'Was held — the model stopped at the token limit in the middle of a tool call',
   );
+  // Held before node.finished (the real order): the cause comes from the
+  // SDK's detail, and the cut-off call from what the model streamed.
+  await openInspectorOn(page, HOLD_NODES.llm);
+  const evidence = inspector(page).getByTestId('smart-evidence');
+  await expect(evidence).toContainText('finish reason');
+  await expect(evidence).toContainText('length');
+  await expect(evidence).toContainText('The tool call it was writing (arguments streamed so far)');
+  await expect(evidence).toContainText('"path":"notes/summary.md"');
 });

@@ -32,3 +32,20 @@ export function controlAllows(control: ControlInfo | undefined, right: ControlRi
 export const TOKENLESS_NOTE =
   'No token: this tab can continue, retry and abort. Open the viewer from the link `graphmind serve` ' +
   'printed (or its redirect file) to inject, step, edit arguments or change breakpoints.';
+
+/** Said where the agent token's level withholds breakpoints and step mode. */
+const AGENT_DEBUG_NOTE =
+  'This tab holds the agent token, and this server’s --allow-control level does not let it change ' +
+  'breakpoints or step mode. Open the viewer from the link `graphmind serve` printed for full control.';
+
+/**
+ * Why this tab may not arm or clear breakpoints or switch run/step mode. The
+ * run bar, the gutter dots and the palette disable those controls and say
+ * this, instead of flipping on a click and being flipped back by the
+ * server's refusal. `undefined` when it may (or nothing is known yet: the
+ * server decides).
+ */
+export function debugDeniedNote(control: ControlInfo | undefined): string | undefined {
+  if (controlAllows(control, 'debug')) return undefined;
+  return control?.principal === 'agent' ? AGENT_DEBUG_NOTE : TOKENLESS_NOTE;
+}

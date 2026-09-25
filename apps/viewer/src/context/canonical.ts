@@ -24,6 +24,15 @@ const VOLATILE_KEYS = new Set([
   'response_metadata',
 ]);
 
+/**
+ * A key the comparison drops (above). A placeholder or truncation marker
+ * under one cannot hide a prompt difference, so the refusal scan
+ * (normalizePrompt.ts scanRecord) skips them too.
+ */
+export function isVolatileKey(key: string): boolean {
+  return VOLATILE_KEYS.has(key);
+}
+
 const TEXT_PART_TYPES = new Set(['text', 'input_text', 'output_text']);
 
 /** `[{type:'text', text}]` (volatile keys aside) → `text`; anything else as is. */

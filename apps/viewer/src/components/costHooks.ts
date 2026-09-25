@@ -3,13 +3,14 @@
  * executions" row (node), priced per LLM step from the bundled genai-prices
  * snapshot (context/cost.ts). The table is its own lazily loaded chunk: these
  * hooks start the download only once there is something to price (an LLM step
- * that reported usage), so a run without token counts never fetches it. Where
- * the chunk cannot load (a single-file export opened from disk) no dollar
- * figure renders at all.
+ * that reported usage), so a run without token counts never fetches it. An
+ * exported single-file run carries the table inline (prices/loader.ts);
+ * wherever it cannot load, no dollar figure renders at all.
  */
 import { useMemo } from 'react';
 import { sumCosts, type CostTotal } from '../context/cost.js';
 import { usePriceTable } from '../prices/loader.js';
+import { fmtCostExact } from '../lib/format.js';
 import { EST_LABEL } from '../prices/snapshot.js';
 import { useRunStore } from '../store/runStore.js';
 import type { NodeExecution, NodeState, RunState } from '../store/types.js';
@@ -67,5 +68,6 @@ export function costTotalTitle(total: CostTotal, noun: string): string {
   if (total.reported > 0) {
     parts.push(`${plural(total.reported)} recorded before 0.6 (input as reported — may leave out cached tokens)`);
   }
-  return `${parts.join('; ')} — ${EST_LABEL}.`;
+  const exact = total.total > 0 && total.total < 0.0001 ? ` ${fmtCostExact(total.total)} in all.` : '';
+  return `${parts.join('; ')} — ${EST_LABEL}.${exact}`;
 }
