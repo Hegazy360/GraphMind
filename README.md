@@ -85,15 +85,33 @@ code location; executions light it up.
 - **Breakpoints and step mode** - match on node kind, name, or gate point
   (`before` / `after` / `error`); step mode pauses at every gate. "Pause all"
   is one click.
-- **Inject-and-continue** - edit a tool's result as JSON at a pause and
-  resume; also retry the call, continue with the original error, or abort
-  the run (cooperative cancellation via `AbortSignal`, so SDK retry logic
-  doesn't fight you).
+- **Stops on the failures that don't throw** *(0.6; TypeScript SDKs and
+  `mcp-proxy`)* - a tool that returns
+  an error instead of raising it (`isError`, `success: false`, a non-zero
+  exit code, a bare `{error}`), a tool call the model left unfinished at the
+  token limit, the same tool failing the same way three times in a row, and a
+  cycle of two to four calls repeating with identical arguments and results.
+  Each holds the call with a banner saying why; a plain repeat of the same
+  call is held too.
+- **Edit arguments and run** *(0.6)* - fix a held tool call's arguments and
+  let the real call run with them, checked against the tool's own schema
+  first. Or **inject** a result instead and skip the call; retry it, continue
+  with the original error, or abort the run (cooperative cancellation via
+  `AbortSignal`, so SDK retry logic doesn't fight you).
+- **Drive it from your coding agent** *(0.6)* - `graphmind wait` blocks until
+  a call is held and `graphmind resume` releases it (with an edit or an
+  injected result, as far as `serve --allow-control` allows; off by default).
+  `graphmind skill --install` gives Claude Code the whole debug loop.
 
 ## Inspect and keep everything
 
 <img alt="The inspector panel on the paused node: full error with stack trace, and the exact input the tool received" src="./docs/assets/inspector-open.png" width="100%">
 
+- **What the model actually saw** *(0.6)* - each LLM step records the full
+  request (messages, system prompt, sampling parameters, tools) and shows how
+  it changed since the previous step, with token counts that include cached
+  tokens, cache reads and writes, and an estimated cost from a bundled price
+  table (no network).
 - **Every run is kept** - history persists in SQLite; reopen any past run and
   inspect each node's inputs, outputs, errors, timings, and token usage.
   Export any run with `graphmind record`: `--html` writes a single
