@@ -6,7 +6,7 @@ this repo (`graphmind-ai`, `@graphmind-ai/sdk`, `@graphmind-ai/client`,
 `@graphmind-ai/langgraph`, `@graphmind-ai/mcp`, the Python `graphmind-ai`
 distribution, and the Ruby `graphmind` gem).
 
-## 0.6.0 (unreleased)
+## 0.6.0
 
 The release for the failures that don't throw. GraphMind now holds an agent on
 an error-shaped tool result, a tool call the token limit cut off, the same
@@ -223,7 +223,8 @@ mcp-proxy`); argument editing works in TypeScript and Python.
   and `toolCalls: [{id?, name, input, inputText?}]`, where `inputText` holds
   arguments that did not parse, such as a call cut off mid-stream (from a
   Python Anthropic `messages.stream()` too, which used to report the SDK's
-  partial parse as a complete call). An OpenAI Responses stream that ends early
+  partial parse as a complete call — whichever way the host reads the stream,
+  and on older `anthropic` releases as well as current ones). An OpenAI Responses stream that ends early
   (TypeScript) still lists the calls requested so far, and streamed custom tool
   calls are recorded. The Python OpenAI Responses output no longer carries the
   raw `output` items next to `toolCalls`, so the tool switches cover those

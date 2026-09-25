@@ -10,4 +10,4 @@
  * package version; test/version.test.ts fails when it drifts from
  * package.json.
  */
-export const CLIENT_VERSION = '0.5.1';
+export const CLIENT_VERSION = '0.6.0';
