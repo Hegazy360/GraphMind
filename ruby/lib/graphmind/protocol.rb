@@ -49,7 +49,11 @@ module Graphmind
     # echoes it as `hello.resumeToken` on reconnect, so the debugger can refuse
     # writes to this app's runs from any other local process — including across
     # a disconnect, which is otherwise the one window a claim cannot be proven in.
-    KNOWN_CAPABILITIES = %w[pause step inject retry abort run-claim].freeze
+    # `request-id` (0.6.0): this client echoes `exec.resume.requestId` on the
+    # exec.resumed / exec.refused that answers it, so the debugger can tell a
+    # release that answered nobody (a pause timeout) from one that answered a
+    # resume. Not `edit-input`: this gem never runs an edited input.
+    KNOWN_CAPABILITIES = %w[pause step inject retry abort run-claim request-id].freeze
 
     # Result of parsing one inbound frame.
     ParseResult = Struct.new(:kind, :envelope, :reason, :received, keyword_init: true)

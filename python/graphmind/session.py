@@ -1397,7 +1397,8 @@ class Session:
             token = self._session_token
         payload: dict[str, Any] = {
             "versions": {"protocol": PROTOCOL_VERSION, "client": CLIENT_VERSION},
-            # `edit-input` unless GRAPHMIND_DISABLE_EDIT_INPUT is on (C2 condition a).
+            # `edit-input` unless GRAPHMIND_DISABLE_EDIT_INPUT is on (C2 condition a);
+            # `request-id` always: every resume's requestId is echoed either way.
             "capabilities": [
                 capability
                 for capability in KNOWN_CAPABILITIES

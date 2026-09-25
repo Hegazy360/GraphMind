@@ -38,7 +38,21 @@ WILDCARD_RUN_ID = "*"
 #: input where its ``exec.paused`` says ``editable`` — tool gates of
 #: ``gm.tool`` / ``gm.wrap_tools``. Left out of ``hello`` when
 #: ``GRAPHMIND_DISABLE_EDIT_INPUT`` is on.
-KNOWN_CAPABILITIES = ("pause", "step", "inject", "retry", "abort", "run-claim", "edit-input")
+#:
+#: ``request-id`` (0.6.0): this client echoes ``exec.resume.requestId`` on the
+#: ``exec.resumed`` / ``exec.refused`` that answers it — announced whatever
+#: ``GRAPHMIND_DISABLE_EDIT_INPUT`` says, so the debugger can tell a release
+#: that answered nobody (a pause timeout) from one that answered a resume.
+KNOWN_CAPABILITIES = (
+    "pause",
+    "step",
+    "inject",
+    "retry",
+    "abort",
+    "run-claim",
+    "edit-input",
+    "request-id",
+)
 
 #: Messages the instrumented app sends.
 EVENT_TYPES = frozenset(

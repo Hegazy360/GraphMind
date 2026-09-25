@@ -174,7 +174,9 @@ that cannot show it gets a line in your log instead). Inject the full value, or
 continue, retry or abort. This gem does not run calls with **edited
 arguments** (the TypeScript and Python SDKs do): an edit sent to a Ruby app is
 refused the same way and the call stays paused. Every answer echoes the
-debugger's `requestId`.
+debugger's `requestId`, and the gem says so in its handshake (`request-id`),
+so the debugger never credits a release the app made on its own (a pause
+timeout) to someone's resume.
 
 ---
 

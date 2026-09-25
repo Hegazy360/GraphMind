@@ -128,6 +128,16 @@ class TestAnnouncement:
         capabilities = view.wait_for_type("hello")["payload"]["capabilities"]
         assert "edit-input" not in capabilities and "pause" in capabilities
 
+    @pytest.mark.parametrize("env", [{}, {"GRAPHMIND_DISABLE_EDIT_INPUT": "1"}])
+    def test_request_id_is_announced_whatever_the_kill_switch_says(
+        self, setup: Any, env: dict[str, str]
+    ) -> None:
+        # The app echoes every resume's requestId either way, so the debugger
+        # may credit an answer to the resume it answers (and a release with
+        # none to nobody: a pause timeout).
+        _session, view = setup(env=env)
+        assert "request-id" in view.wait_for_type("hello")["payload"]["capabilities"]
+
     @pytest.mark.parametrize("value", ["", "0", "false", "off", "no", " No "])
     def test_off_spellings_leave_it_announced(self, setup: Any, value: str) -> None:
         _session, view = setup(env={"GRAPHMIND_DISABLE_EDIT_INPUT": value})

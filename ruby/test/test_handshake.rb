@@ -15,7 +15,7 @@ class TestHandshake < Minitest::Test
     assert_equal "*", hello["runId"]
     assert_equal 1, hello["payload"]["versions"]["protocol"]
     assert_equal Graphmind::VERSION, hello["payload"]["versions"]["client"]
-    assert_equal %w[pause step inject retry abort run-claim], hello["payload"]["capabilities"]
+    assert_equal %w[pause step inject retry abort run-claim request-id], hello["payload"]["capabilities"]
     # First connection: nothing to prove continuity with yet.
     refute hello["payload"].key?("resumeToken")
     assert_valid_frame(hello)

@@ -82,6 +82,7 @@ not know. The known set:
 | `abort` | honours `exec.resume` with action `abort` |
 | `run-claim` | stores `hello.ack.sessionToken` and echoes it as `hello.resumeToken` on reconnect, so the debugger may refuse writes to its runs from any other connection (0.5.0) |
 | `edit-input` | can run a held call with an edited input (`exec.resume.input`) where its `exec.paused` says `editable`, and echoes `exec.resume.requestId` on its answer (0.6.0) |
+| `request-id` | echoes `exec.resume.requestId` on the `exec.resumed` / `exec.refused` that answers it, so a release carrying none answered no resume (a pause timeout, a disconnect). Announced whatever `GRAPHMIND_DISABLE_EDIT_INPUT` says — by the TypeScript client, the Python SDK and the Ruby gem (0.6.0) |
 
 ## Events (app → viewer)
 
