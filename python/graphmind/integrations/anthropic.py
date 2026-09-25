@@ -533,25 +533,49 @@ class _AsyncStreamProxy(AsyncStreamTee):
         return await self._inner.get_final_text()  # type: ignore[no-any-return]
 
 
+def _raw_text(buf: Any) -> str | None:
+    if isinstance(buf, (bytes, bytearray)):
+        return bytes(buf).decode("utf-8", errors="replace")
+    return buf if isinstance(buf, str) else None
+
+
 def _raw_tool_inputs(inner: Any) -> dict[int, str] | None:
     """The raw ``input_json_delta`` text a ``MessageStream`` accumulated, by
-    content-block index (the SDK keeps it on a private, name-mangled
-    ``__json_bufs``), or ``None`` when this SDK version keeps none."""
+    content-block index, or ``None`` when this SDK version keeps none.
+
+    Where the SDK keeps it is private and has moved: newer releases hold one
+    name-mangled ``__json_bufs`` dict on the stream; older ones (1.1.x, still
+    inside our ``anthropic>=0.34`` floor) set a ``__json_buf`` attribute on
+    each tool_use block of the message snapshot. Both are read."""
     try:
         attributes = vars(inner)
     except TypeError:
-        return None
+        attributes = {}
     for name, bufs in list(attributes.items()):
         if not (isinstance(name, str) and name.endswith("__json_bufs") and isinstance(bufs, dict)):
             continue
         raw: dict[int, str] = {}
         for index, buf in list(bufs.items()):
-            if isinstance(index, int) and isinstance(buf, (bytes, bytearray)):
-                raw[index] = bytes(buf).decode("utf-8", errors="replace")
-            elif isinstance(index, int) and isinstance(buf, str):
-                raw[index] = buf
+            text = _raw_text(buf)
+            if isinstance(index, int) and text is not None:
+                raw[index] = text
         return raw
-    return None
+    try:
+        snapshot = getattr(inner, "current_message_snapshot", None)
+        content = getattr(snapshot, "content", None)
+    except Exception:
+        return None
+    if not isinstance(content, list):
+        return None
+    found: dict[int, str] = {}
+    for index, block in enumerate(content):
+        try:
+            text = _raw_text(getattr(block, "__json_buf", None))
+        except Exception:
+            text = None
+        if text is not None:
+            found[index] = text
+    return found or None
 
 
 def _finish_stream(
