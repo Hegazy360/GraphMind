@@ -27,6 +27,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { isExportedRun } from '../../connection/FixtureConnection.js';
+import { TOKENLESS_NOTE, controlAllows } from '../../lib/control.js';
 import { canEditArgs, latestRefusal, refusalText } from '../../lib/editArgs.js';
 import { injectAndResume, pausePointLabel, resumeGate, stepGate } from '../../lib/gate.js';
 import { useEditStore } from '../../store/editStore.js';
@@ -89,11 +90,16 @@ export function PauseActions({
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const injectRequest = useUiStore((s) => s.injectRequest);
   const editorRequest = useEditStore((s) => s.editorRequest);
+  const control = useUiStore((s) => s.control);
 
   const exec = latestExecution(node);
   const error = exec?.error ?? node.lastError;
   const replayed = isExportedRun();
-  const editable = canEditArgs(node, pause, replayed);
+  const editable = canEditArgs(node, pause, replayed, control);
+  // Offer only what the server accepts from this tab (no token: continue,
+  // retry and abort — inject and step would come back refused).
+  const canInject = controlAllows(control, 'inject');
+  const canStep = controlAllows(control, 'debug');
   const refusal = latestRefusal(pause);
 
   const prefill = useMemo(() => {
@@ -153,12 +159,13 @@ export function PauseActions({
     if (injectRequest === undefined) return;
     if (injectRequest.pauseId !== pause.pauseId) return;
     if (injectRequest.variant !== variant) return;
+    if (!canInject) return;
     setDraft(prefill);
     setInvalid(false);
     setRefusal(undefined);
     setEditing(false);
     setInjecting(true);
-  }, [injectRequest, pause.pauseId, variant, prefill]);
+  }, [injectRequest, pause.pauseId, variant, prefill, canInject]);
 
   useEffect(() => {
     if (injecting) editorRef.current?.focus({ preventScroll: true });
@@ -250,14 +257,16 @@ export function PauseActions({
             Continue
             <Key>c</Key>
           </button>
-          <button
-            className="gm-action"
-            onClick={() => stepGate(runId, pause.pauseId)}
-            title="Resume and pause at the next gate (s)"
-          >
-            Step
-            <Key>s</Key>
-          </button>
+          {canStep && (
+            <button
+              className="gm-action"
+              onClick={() => stepGate(runId, pause.pauseId)}
+              title="Resume and pause at the next gate (s)"
+            >
+              Step
+              <Key>s</Key>
+            </button>
+          )}
           <button
             className="gm-action"
             onClick={() => resumeGate(runId, pause.pauseId, 'retry')}
@@ -266,15 +275,17 @@ export function PauseActions({
             Retry
             <Key>r</Key>
           </button>
-          <button
-            className="gm-action"
-            onClick={openInject}
-            title="Substitute a result and continue (i)"
-            aria-expanded={injecting}
-          >
-            Inject…
-            <Key>i</Key>
-          </button>
+          {canInject && (
+            <button
+              className="gm-action"
+              onClick={openInject}
+              title="Substitute a result and continue (i)"
+              aria-expanded={injecting}
+            >
+              Inject…
+              <Key>i</Key>
+            </button>
+          )}
           {editable && (
             <button
               className="gm-action"
@@ -301,6 +312,19 @@ export function PauseActions({
         </div>
       )}
 
+      {!replayed && variant === 'panel' && control?.principal === 'anonymous' && (
+        <div className="gm-pause-note" data-testid="pause-tokenless">
+          {TOKENLESS_NOTE}
+        </div>
+      )}
+
+      {!replayed && variant === 'panel' && pause.editable === true && pause.heldAmbiguous === true && (
+        <div className="gm-pause-note" data-testid="pause-edit-ambiguous">
+          More than one {node.name} call is running and the app did not say which one is held, so its
+          arguments cannot be edited here. Continue, Retry and Inject still work.
+        </div>
+      )}
+
       {!replayed && variant === 'panel' && refusal !== undefined && !editing && (
         <div className="gm-pause-note gm-inject-refusal" role="status" data-testid="pause-refusal">
           Refused — the gate is still held.{' '}
@@ -316,7 +340,7 @@ export function PauseActions({
         <EditArgsEditor runId={runId} node={node} pause={pause} onClose={() => setEditing(false)} />
       )}
 
-      {injecting && (
+      {injecting && canInject && (
         <div
           className={variant === 'card' ? 'gm-inject nowheel' : 'gm-inject gm-inject--panel nowheel'}
           onClick={(e) => e.stopPropagation()}

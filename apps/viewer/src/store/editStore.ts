@@ -6,7 +6,9 @@
  *  - `drafts`        — what the user typed, per pause. A refused edit is
  *                      fixed and retried, not retyped.
  *  - `pending`       — the edit request in flight, per pause: the requestId
- *                      the app's `exec.resumed` / `exec.refused` will echo.
+ *                      the app's `exec.resumed` / `exec.refused` will echo,
+ *                      or the server's own answer when it refused the edit
+ *                      itself (it never reached the app).
  *  - `editorRequest` — "open the editor in the inspector" from the keyboard
  *                      (`e`) or the card's button, consumed by the panel that
  *                      opens it so a remount never reopens it by surprise.
@@ -28,6 +30,12 @@ interface EditState {
   editorRequest: EditorRequest | undefined;
   setDraft: (pauseId: string, text: string) => void;
   setPending: (pending: PendingEdit) => void;
+  /**
+   * The server answered a resume of this pause itself (`error` / a
+   * `resume.result` that is not `resumed`): recorded on the pending edit it
+   * is about — the same requestId, or none given — and nowhere else.
+   */
+  noteServerAnswer: (pauseId: string, requestId: string | undefined, code: string, message: string | undefined) => void;
   clearPending: (pauseId: string) => void;
   requestEditor: (pauseId: string) => void;
   /** Drop the request once a panel has acted on it (only if it is still that request). */
@@ -50,6 +58,13 @@ export const useEditStore = create<EditState>((set) => ({
   setDraft: (pauseId, text) =>
     set((s) => (s.drafts[pauseId] === text ? s : { drafts: { ...s.drafts, [pauseId]: text } })),
   setPending: (pending) => set((s) => ({ pending: { ...s.pending, [pending.pauseId]: pending } })),
+  noteServerAnswer: (pauseId, requestId, code, message) =>
+    set((s) => {
+      const pending = s.pending[pauseId];
+      if (pending === undefined || (requestId !== undefined && requestId !== pending.requestId)) return s;
+      const serverAnswer = { code, ...(message === undefined ? {} : { message }) };
+      return { pending: { ...s.pending, [pauseId]: { ...pending, serverAnswer } } };
+    }),
   clearPending: (pauseId) =>
     set((s) => {
       const next = without(s.pending, pauseId);

@@ -66,9 +66,10 @@ At start the server mints two random 128-bit tokens (new on every start):
 Browsers present the viewer token as the WebSocket subprotocol
 `gm.auth.<token>` (the server selects `graphmind.v1`); HTTP clients send
 `Authorization: Bearer <token>`. `?token=` and cookies are never read.
-Input edits and every non-GET `/api` route need a token. A viewer socket
-without one keeps the 0.5 behaviour — continue, retry, inject, abort — and
-never edits an input; that mode is deprecated. Every response carries
+Input edits, injected results, breakpoints, step mode and every non-GET `/api`
+route need a token. A viewer socket without one can only continue, retry and
+abort (0.5 behaviour, deprecated) — whatever `--allow-control` says — and
+never injects, edits an input or changes breakpoints. Every response carries
 `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy:
 no-referrer` and `nosniff` (`/api` adds `Cache-Control: no-store`) and never a
 CORS header.
@@ -150,8 +151,11 @@ private temp file; the path is printed) and the `resume` commands that apply.
 answer (default 30 s). The first resume for a pause wins, from any surface;
 the rest get `taken`. `--input` runs the REAL call with the arguments you
 give (top-level keys replace the live ones) and needs `--allow-control=edit`.
-Exit codes: 0 ok · 1 usage · 2 timeout · 3 no server · 4 nothing to act on ·
-5 not authorized · 6 refused (still held) · 7 taken.
+The printed commands are ready to paste (ids shell-quoted, `--port` named
+when it is not 4747), and app-written text is printed with control
+characters escaped. Exit codes: 0 ok · 1 usage · 2 timeout · 3 no 0.6+
+server on that port · 4 nothing to act on · 5 not authorized · 6 refused
+(still held) · 7 taken.
 
 ### `graphmind skill [--install] [--force]`
 
@@ -253,8 +257,8 @@ ever re-serialized); `retry` at `after` / `error` re-sends that rewritten
 request instead of the original, and a later plain `retry` re-sends what last
 ran. An edit is first checked against the tool's `inputSchema` from the
 server's last `tools/list` (a conservative shape check; with no schema known,
-the server judges), and a refused edit keeps the frame held. The JSON-RPC
-result (including `isError`) is handed to the debugger's smart holds.
+the server judges), and a refused edit keeps the frame held. A JSON-RPC result
+with `isError: true` holds at the `error` gate, like a thrown error.
 
 `error` is armed by default (see `--pause-on-error`), so a broken MCP server
 holds at the failure with no setup at all. A hold is indistinguishable from a

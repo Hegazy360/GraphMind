@@ -28,6 +28,7 @@ import {
   usageView,
 } from '../src/lib/usage.js';
 import { RUN, ev, resetCounters, started } from './helpers.js';
+import demoRun from '../src/fixtures/demo-run.json';
 
 beforeEach(resetCounters);
 
@@ -164,5 +165,15 @@ describe('stats', () => {
     const summary = summarizeGroup(run, 'agent:a');
     expect(summary.tokensIn).toBe(1205);
     expect(summary.tokensOut).toBe(100);
+  });
+});
+
+describe('the bundled demo recording', () => {
+  it('is a 0.6 recording: every LLM usage is inclusive, so the demo is never labelled "as reported"', () => {
+    const usages = (demoRun as { payload?: { usage?: unknown } }[])
+      .map((envelope) => envelope.payload?.usage)
+      .filter((usage) => usage !== undefined);
+    expect(usages.length).toBeGreaterThan(0);
+    for (const usage of usages) expect(usageView(usage)?.basis).toBe('inclusive');
   });
 });

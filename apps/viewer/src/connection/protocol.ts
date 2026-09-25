@@ -92,6 +92,8 @@ export interface ErrorFrame {
   runId?: string;
   code?: string;
   pauseId?: string;
+  /** The resume this refuses (0.6): the requestId it carried, or the one the server minted. */
+  requestId?: string;
 }
 
 export interface ResumeResultFrame {

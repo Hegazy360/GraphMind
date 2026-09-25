@@ -114,8 +114,11 @@ jobs:
 
           PORT=4977
           DB="$RUNNER_TEMP/graphmind-e2e.db"
+          # Injecting needs a credential (0.6): the smoke's debugger presents
+          # the agent token from this home's run file.
+          export GRAPHMIND_HOME="$RUNNER_TEMP/graphmind-e2e-home"
 
-          node packages/cli/dist/cli.js serve --no-open --port "$PORT" --db "$DB" &
+          node packages/cli/dist/cli.js serve --no-open --port "$PORT" --db "$DB" --allow-control=inject &
           SERVER_PID=$!
 
           ready=""

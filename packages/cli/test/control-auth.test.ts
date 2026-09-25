@@ -135,20 +135,32 @@ describe('the level matrix (authorizeResume)', () => {
     }
   });
 
-  it('a tokenless (anonymous) socket keeps 0.5 behaviour and never edits', () => {
+  it('a tokenless (anonymous) socket may only continue, retry and abort — never inject, never edit', () => {
     for (const action of actions) {
-      expect(authorizeResume('anonymous', { agentLevel: 'off', editInput: true }, action, false)).toBeUndefined();
-      expect(authorizeResume('anonymous', { agentLevel: 'edit', editInput: true }, action, true)?.code).toBe(
-        'edit-refused',
-      );
+      for (const level of CONTROL_LEVELS) {
+        const plain = authorizeResume('anonymous', { agentLevel: level, editInput: true }, action, false);
+        // An injected result (an LLM completion picks the next tool call and its
+        // arguments) is as strong as an edit: it needs a credential.
+        if (action === 'inject') expect(plain?.code, level).toBe('forbidden');
+        else expect(plain, `${level} ${action}`).toBeUndefined();
+        expect(authorizeResume('anonymous', { agentLevel: level, editInput: true }, action, true)?.code).toBe(
+          'edit-refused',
+        );
+      }
     }
+    expect(authorizeResume('anonymous', { agentLevel: 'off', editInput: true }, 'inject', false)?.message).toContain(
+      'needs a credential',
+    );
   });
 
-  it('breakpoints and step mode need level resume for the agent token only', () => {
+  it('breakpoints and step mode need the viewer token, or the agent token at level resume — never no token', () => {
     expect(authorizeDebugState('agent', { agentLevel: 'off', editInput: true })?.code).toBe('forbidden');
     expect(authorizeDebugState('agent', { agentLevel: 'resume', editInput: true })).toBeUndefined();
     expect(authorizeDebugState('viewer', { agentLevel: 'off', editInput: true })).toBeUndefined();
-    expect(authorizeDebugState('anonymous', { agentLevel: 'off', editInput: true })).toBeUndefined();
+    // A tokenless socket never has more rights than the agent token at `off`.
+    for (const level of CONTROL_LEVELS) {
+      expect(authorizeDebugState('anonymous', { agentLevel: level, editInput: true })?.code, level).toBe('forbidden');
+    }
   });
 
   it('says how to raise the level, in words an agent can act on', () => {

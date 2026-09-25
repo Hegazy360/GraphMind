@@ -32,6 +32,7 @@ import {
   CredentialVerifier,
   DEFAULT_CONTROL_LEVEL,
   UI_SUBPROTOCOL,
+  authorizeDemoStart,
   bearerToken,
   generateTokens,
   resolveCredential,
@@ -40,7 +41,7 @@ import {
   type ControlPolicy,
   type ControlTokens,
 } from './control-auth.js';
-import { registerControlRoutes, securityHeaderLines, securityHeaders } from './control-http.js';
+import { credentialOf, registerControlRoutes, securityHeaderLines, securityHeaders } from './control-http.js';
 import { parsePauseOnError } from './debug-state.js';
 import { startBundledDemoReplay, type DemoReplay } from './demo/replayer.js';
 import { Hub, type LogFn } from './hub.js';
@@ -309,6 +310,10 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
   // ingest client living in this process). One replay at a time.
   let activeDemo: DemoReplay | undefined;
   app.post('/api/demo/start', async (c) => {
+    // The /api middleware already required a valid credential; this is the level.
+    const credential = credentialOf(c, verifier);
+    const refusal = authorizeDemoStart(credential.kind === 'ok' ? credential.principal : 'anonymous', hub.control);
+    if (refusal !== undefined) return c.json({ ok: false, error: refusal.code, message: refusal.message }, 403);
     if (activeDemo !== undefined && !activeDemo.finished) {
       return c.json({ ok: true, runId: activeDemo.runId, alreadyRunning: true });
     }

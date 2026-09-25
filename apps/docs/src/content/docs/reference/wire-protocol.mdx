@@ -62,8 +62,9 @@ The app dials; the viewer answers. Until the ack lands, the app must consider it
 — which means every gate fails open.
 
 ```text
-app  ──► viewer   hello       { versions: { protocol, client }, capabilities, app?, sdk? }
-app  ◄── viewer   hello.ack   { versions: { protocol, viewer }, capabilities, breakpoints, mode }
+app  ──► viewer   hello       { versions: { protocol, client }, capabilities, app?, sdk?, resumeToken? }
+app  ◄── viewer   hello.ack   { versions: { protocol, viewer }, capabilities, breakpoints, mode,
+                                sessionToken?, hubCapabilities? }
 ```
 
 The ack carries the viewer's **full desired debug state**, so an app that reconnects — or
@@ -79,6 +80,8 @@ not know. The known set:
 | `inject` | honours `exec.resume` with action `inject` + `output` |
 | `retry` | honours `exec.resume` with action `retry` |
 | `abort` | honours `exec.resume` with action `abort` |
+| `run-claim` | stores `hello.ack.sessionToken` and echoes it as `hello.resumeToken` on reconnect, so the debugger may refuse writes to its runs from any other connection (0.5.0) |
+| `edit-input` | can run a held call with an edited input (`exec.resume.input`) where its `exec.paused` says `editable`, and echoes `exec.resume.requestId` on its answer (0.6.0) |
 
 ## Events (app → viewer)
 
@@ -91,8 +94,9 @@ not know. The known set:
 | `node.token` | `{ nodeId, deltas: TokenDelta[], redaction? }` — batched by the sender |
 | `node.finished` | `{ nodeId, instanceId?, output?, usage?, durationMs, heldMs?, status, redaction? }` |
 | `node.error` | `{ nodeId, instanceId?, error, heldMs? }` |
-| `exec.paused` | `{ pauseId, nodeId, point, reason?, loop? }` |
-| `exec.resumed` | `{ pauseId, action }` |
+| `exec.paused` | `{ pauseId, nodeId, point, reason?, loop?, smart?, editable? }` |
+| `exec.resumed` | `{ pauseId, action, edited?, requestId?, principal? }` |
+| `exec.refused` | `{ pauseId, code, message?, requestId? }` — 0.6.0: a proposed edit was refused; the gate is **still held** |
 
 Optional fields added in 0.5.0. Older receivers ignore them under the tolerance rules above:
 
@@ -105,6 +109,27 @@ Optional fields added in 0.5.0. Older receivers ignore them under the tolerance 
 | `exec.paused.reason` | `'loop'` on a [loop hold](/reference/environment/#loop-hold). Other holds carry no reason today. |
 | `exec.paused.loop` | `{ repeats, firstSeq, lastSeq, fingerprint }`: how many identical calls in a row, the `seq` of the first and of the held call's `node.started`, and a 32-hex-character digest of the arguments. The digest is `"__REDACTED__"` when inputs are hidden, and `graphmind record` replaces it with `"__REDACTED__"` unless you pass `--no-redact-secrets`. |
 | `redaction` | `{ count, keys }` on an event whose payload a `GRAPHMIND_HIDE_*` switch changed: how many values were replaced and which fields (`input`, `output`, `deltas`). `failed: true` with `count: 0` marks an event whose payload could not be read safely, so its hidden field was replaced without being read. |
+
+Optional fields added in 0.6.0, for [editing a held call's arguments](/debugging/edit-arguments/)
+(contract C2):
+
+| Field | Meaning |
+| --- | --- |
+| `exec.paused.editable` | `true` when the adapter can apply an edited input at this gate. Absent or `false`: offer no editing. |
+| `exec.paused.smart` | `{ rule, detail? }` with `rule` `error-result` or `truncated-tool-call`, next to `reason: 'breakpoint'`, when a smart breakpoint raised the hold. `detail` never quotes values. |
+| `exec.resumed.edited` | `{ after }`: the input the call actually ran with (redacted like the node's own input). No `before` — that is the node's recorded input. |
+| `exec.resumed.requestId` / `exec.refused.requestId` | The `exec.resume.requestId` this answers, echoed as received. Absent when the client released the gate on its own. |
+| `exec.resumed.principal` | Who won the pause (`viewer`, `agent`, `anonymous`), stamped by the server from the resumer's credential — never by the app. |
+| `exec.refused.code` | `schema` (the tool's schema rejected it), `shape` (not an object, wrong action for the gate, or a locked key), `placeholder` / `truncated` (it still carries `"__REDACTED__"` or a preview marker), `disabled` (switched off), `unsupported` (this client cannot apply it). `message` is at most 200 characters, never quotes values, and is omitted under a covering `GRAPHMIND_HIDE_*` switch. |
+
+A client honours `exec.resume.input` only when it announced `edit-input`, the server listed
+`edit-input` in `hello.ack.hubCapabilities`, the pause said `editable`, and
+`GRAPHMIND_DISABLE_EDIT_INPUT` is off; otherwise it answers `exec.refused` (`disabled` /
+`unsupported`). Valid combinations: `continue` + `input` at `before`, `retry` + `input` at `after`
+or `error`; anything else is `shape`. The input's top-level keys replace the live arguments'
+(unmentioned keys keep their live values); the client validates the result on the host's own
+task, refuses it with the gate reopened, or runs it and answers `exec.resumed { edited: {after} }`.
+A disconnect or pause timeout while validating continues with the original input (fail-open).
 
 A hidden value is the string `"__REDACTED__"`. A hidden token delta keeps its channel, and its
 text becomes `""` with a `chars` field holding the original length (counted in UTF-16 code
@@ -125,7 +150,7 @@ history.
 
 | Type | Payload | Effect |
 | --- | --- | --- |
-| `exec.resume` | `{ pauseId, action, output? }` | Release a held gate. `output` is meaningful only for `inject`. |
+| `exec.resume` | `{ pauseId, action, output?, input?, requestId? }` | Release a held gate. `output` is meaningful only for `inject`; `input` (0.6.0) runs the call with edited arguments (see above); `requestId` (0.6.0) is echoed on the answer. |
 | `breakpoint.set` | `{ matcher }` | Add a breakpoint. Matchers dedupe by exact field equality. |
 | `breakpoint.clear` | `{ matcher }` | Remove a breakpoint set with an identical matcher. |
 | `mode.set` | `{ mode }` | Switch between `run` and `step`. |

@@ -165,6 +165,13 @@ export interface Pause {
   smart?: SmartInfo;
   /** The app can run this call with edited arguments (`exec.paused.editable`, 0.6.0). */
   editable?: boolean;
+  /**
+   * Two or more executions of the held node were running when it paused and
+   * the pause did not name its instance, so which call is held is a guess
+   * (`heldBy` still guesses, for held-time accounting). Arguments are never
+   * edited on a guess, and an edit's pill is not pinned to one.
+   */
+  heldAmbiguous?: boolean;
   /** Edits the app refused while this gate stayed held, oldest first (bounded). */
   refusals?: RefusalRecord[];
   /** The gate was released with edited arguments (`exec.resumed.edited`). */

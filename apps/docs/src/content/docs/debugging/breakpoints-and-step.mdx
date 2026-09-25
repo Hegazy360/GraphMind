@@ -66,6 +66,10 @@ every connected app, and are re-armed on any app that reconnects (they ride in t
 handshake). Two viewers open on the same server see the same breakpoints, and a change from one
 broadcasts to the other.
 
+Changing breakpoints or step mode needs the viewer's token (0.6.0): the viewer `graphmind serve`
+opened has it. A tab opened without it — the plain URL, not the `#token=` link — sees the
+breakpoints but cannot change them; the server refuses and the run bar says why.
+
 ## The three pause points
 
 ```text

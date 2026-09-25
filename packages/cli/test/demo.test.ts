@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { parseEnvelope } from '@graphmind-ai/schema';
+import { parseEnvelope, readUsage } from '@graphmind-ai/schema';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DEMO_FIXTURE_NDJSON } from '../src/demo/fixture-data.js';
 import { loadBundledFixture, parseDemoFixture } from '../src/demo/fixture.js';
@@ -44,6 +44,18 @@ describe('demo fixture', () => {
     expect(fixture.base.some((e) => e.dt > 0)).toBe(true);
   });
 
+  it('is a 0.6 recording: every LLM usage is inclusive, so the demo is never labelled "as reported"', () => {
+    const usages = DEMO_FIXTURE_NDJSON.split('\n')
+      .filter((l) => l.trim() !== '')
+      .map((l) => (JSON.parse(l) as { payload?: { usage?: unknown } }).payload?.usage)
+      .filter((usage) => usage !== undefined);
+    expect(usages.length).toBeGreaterThan(0);
+    for (const usage of usages) {
+      expect(usage).toMatchObject({ inclusive: true });
+      expect(readUsage(usage)?.basis).toBe('inclusive');
+    }
+  });
+
   it('the importable copy matches the NDJSON file byte for byte', () => {
     expect(DEMO_FIXTURE_NDJSON).toBe(readFileSync(FIXTURE_PATH, 'utf8'));
   });
@@ -65,7 +77,8 @@ describe('demo replayer', () => {
 
   async function startReplay(): Promise<{ pauseId: string; runId: string }> {
     ts = await startTestServer();
-    ui = await FakeUI.connect(ts.port);
+    // The viewer with its token: injecting and breakpoints need one (0.6).
+    ui = await FakeUI.connect(ts.port, { token: ts.server.tokens.viewer });
     ui.subscribe('*');
     const fixture = await loadBundledFixture();
     replay = startDemoReplay(
@@ -164,7 +177,7 @@ describe('demo replayer', () => {
 
   it('honors a cleared error breakpoint: no pause, error propagates', async () => {
     ts = await startTestServer();
-    ui = await FakeUI.connect(ts.port);
+    ui = await FakeUI.connect(ts.port, { token: ts.server.tokens.viewer });
     ui.subscribe('*');
     ui.control('breakpoint.clear', '*', { matcher: { point: 'error' } });
     await ui.next((m) => m.type === 'state' && m.breakpoints.length === 0, 'cleared state');
@@ -183,6 +196,32 @@ describe('demo replayer', () => {
 });
 
 describe('POST /api/demo/start', () => {
+  it('the agent token at the default level off cannot start it (off means nothing); at resume it can', async () => {
+    const off = await startTestServer();
+    try {
+      const refused = await fetch(`http://127.0.0.1:${off.port}/api/demo/start`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${off.server.tokens.agent}` },
+      });
+      expect(refused.status).toBe(403);
+      expect(await refused.json()).toMatchObject({ ok: false, error: 'forbidden' });
+      const { body: runs } = await fetchJson(off.port, '/api/runs');
+      expect(runs.runs).toEqual([]);
+    } finally {
+      await off.cleanup();
+    }
+    const resume = await startTestServer({ allowControl: 'resume' });
+    try {
+      const started = await fetch(`http://127.0.0.1:${resume.port}/api/demo/start`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${resume.server.tokens.agent}` },
+      });
+      expect(started.status).toBe(200);
+    } finally {
+      await resume.cleanup();
+    }
+  });
+
   it('kicks off the in-process replayer and registers a demo run', async () => {
     const ts = await startTestServer();
     try {

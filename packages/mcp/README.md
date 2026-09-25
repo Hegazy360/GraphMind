@@ -195,8 +195,9 @@ Resources and prompts get the same treatment against `ReadResourceResult` and
   a low-level `Server`, your `tools/call` handler receives a copy of the
   request with `params.arguments` replaced (`name` and `_meta` untouched). A
   tool registered without an input schema, resources and prompts are not
-  editable. The `after` gate also hands the `CallToolResult` to the
-  debugger's smart holds.
+  editable. The `after` gate also passes the `CallToolResult` to the
+  session's after-gate detectors (the smart-hold hook; the result does not
+  hold the call by itself unless a detector is registered).
 
 ## `@graphmind-ai/mcp` vs `graphmind mcp-proxy`
 

@@ -354,6 +354,15 @@ export class RawViewer extends RawSocket {
     return await RawSocket.open(server.uiUrl, (ws) => new RawViewer(ws), headers);
   }
 
+  /**
+   * The operator's viewer: presents the viewer token, as the viewer opened
+   * from `graphmind serve` does. Breakpoints, step mode and inject need a
+   * credential since 0.6; a tokenless socket may only continue/retry/abort.
+   */
+  static async operator(server: WireServer, headers: Record<string, string> = {}): Promise<RawViewer> {
+    return await RawViewer.connect(server, { ...headers, authorization: `Bearer ${server.server.tokens.viewer}` });
+  }
+
   subscribe(runId: string): void {
     this.send(JSON.stringify({ type: 'subscribe', runId }));
   }

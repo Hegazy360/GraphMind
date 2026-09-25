@@ -247,7 +247,7 @@ describe('inject: whatever the operator types must become a valid MCP result', (
   }
 
   beforeAll(async () => {
-    viewer = await RawViewer.connect(server);
+    viewer = await RawViewer.operator(server);
     await sleep(50);
     // Pause before every tool call, the way an operator debugging an MCP
     // server would.

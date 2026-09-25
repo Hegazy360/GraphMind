@@ -15,10 +15,11 @@
  *     as `Authorization: Bearer`. Never as `?token=` and never as a cookie —
  *     the server reads neither.
  *
- * Without a token the viewer still connects, as in 0.5: it can watch,
- * continue, retry, inject and abort, but cannot edit a held call's input.
- * The token changes every time the server starts; a stale one is dropped the
- * first time the server refuses it.
+ * Without a token the viewer still connects: it can watch, continue, retry
+ * and abort, but cannot inject, edit a held call's input, or change
+ * breakpoints or step mode. The token changes every time the server starts; a
+ * stale one is dropped the first time the server refuses it, and a tab adopts
+ * the newer token another tab of this origin stored.
  */
 
 const STORAGE_KEY = 'graphmind.viewerToken';
@@ -52,8 +53,14 @@ function writeStorage(token: string | undefined): void {
 
 /**
  * Take `#token=…` out of the URL (keeping any other hash, e.g. a deep link)
- * and remember it. Call once, before anything reads `location.hash`.
- * Returns the token that was found, if any.
+ * and remember it. Call once, before anything reads `location.hash` (and on
+ * `hashchange`). Returns the token that was found, if any.
+ *
+ * Any page can navigate the user to `#token=<anything>`, so a fragment token
+ * never displaces a token this tab already has on its word alone: it replaces
+ * it only once this page's own server confirms it is a viewer token (a
+ * refused or unconfirmed one is discarded and the old token kept). With no
+ * token yet it is taken at once — a bad one is dropped at the first refusal.
  */
 export function captureTokenFromLocation(): string | undefined {
   if (typeof location === 'undefined') return undefined;
@@ -72,21 +79,70 @@ export function captureTokenFromLocation(): string | undefined {
     // replaceState can throw on exotic origins; the token is still taken
   }
   if (!TOKEN_RE.test(token)) return undefined;
-  setViewerToken(token);
+  const current = viewerToken();
+  if (current === undefined) setViewerToken(token);
+  else if (current !== token) void adoptIfConfirmed(token);
   return token;
+}
+
+/** Replace the current token with `candidate` once this page's server says it is a viewer token. */
+async function adoptIfConfirmed(candidate: string): Promise<void> {
+  if ((await sessionPrincipal(candidate)) === 'viewer') setViewerToken(candidate);
+}
+
+/**
+ * Who this page's own server says `token` is: `'refused'` on 401, undefined
+ * when the server cannot be asked. Always the page's origin — the token
+ * belongs to the server that served the page, never to a `?server=` target.
+ */
+async function sessionPrincipal(token: string): Promise<string | 'refused' | undefined> {
+  try {
+    const url = new URL('/api/session', location.href).href;
+    const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    if (response.status === 401) return 'refused';
+    if (!response.ok) return undefined;
+    const body = (await response.json()) as { principal?: unknown };
+    return typeof body.principal === 'string' ? body.principal : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function viewerToken(): string | undefined {
   return memoryToken ?? readStorage();
 }
 
-export function setViewerToken(token: string | undefined): void {
-  memoryToken = token;
-  writeStorage(token);
+function notify(token: string | undefined): void {
   for (const listener of [...listeners]) listener(token);
 }
 
+export function setViewerToken(token: string | undefined): void {
+  memoryToken = token;
+  writeStorage(token);
+  notify(token);
+}
+
+/**
+ * Another tab of this origin stored a token (a restarted `graphmind serve`
+ * opened one with its new token): adopt it, so this tab stops presenting a
+ * token the new server refuses. Only a confirmed token ever reaches storage
+ * from a fragment (see captureTokenFromLocation).
+ */
+function onStorage(event: StorageEvent): void {
+  if (event.key !== STORAGE_KEY) return;
+  const stored = readStorage();
+  if (stored === undefined || stored === memoryToken) return;
+  memoryToken = stored;
+  notify(stored);
+}
+
+let watchingStorage = false;
+
 export function onViewerTokenChange(listener: (token: string | undefined) => void): () => void {
+  if (!watchingStorage && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    watchingStorage = true;
+    window.addEventListener('storage', onStorage);
+  }
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
@@ -120,18 +176,19 @@ export function authHeaders(url: string): Record<string, string> {
 }
 
 /**
- * The socket closed before it ever opened while presenting a token. Either
- * the server is down, or the token is from an earlier `graphmind serve` (the
- * server answers 401, which a browser WebSocket cannot see). Ask the server
- * directly; drop the token only when it says so.
+ * The socket closed before it ever opened while presenting `presented`.
+ * Either the server is down, or the token is from an earlier `graphmind
+ * serve` (the server answers 401, which a browser WebSocket cannot see). Ask
+ * this page's own server about THAT token — never another host, whatever
+ * `?server=` says — and on a 401 forget it where it is still held: this
+ * tab's copy, and the per-origin slot only if it still holds that same token
+ * (another tab may have stored a newer, valid one there, which this tab then
+ * adopts).
  */
-export async function checkTokenAfterFailedConnect(httpBase: string): Promise<void> {
-  const token = viewerToken();
-  if (token === undefined) return;
-  try {
-    const response = await fetch(`${httpBase}/api/session`, { headers: { authorization: `Bearer ${token}` } });
-    if (response.status === 401 && viewerToken() === token) setViewerToken(undefined);
-  } catch {
-    // server unreachable: keep the token and let the socket retry
-  }
+export async function checkTokenAfterFailedConnect(presented: string | undefined): Promise<void> {
+  if (presented === undefined) return;
+  if ((await sessionPrincipal(presented)) !== 'refused') return; // valid, or the server is unreachable
+  if (memoryToken === presented) memoryToken = undefined;
+  if (readStorage() === presented) writeStorage(undefined);
+  notify(viewerToken());
 }

@@ -188,6 +188,7 @@ const MAX_ANCESTOR_HOPS = 64;
 function heldByFor(
   run: RunState,
   payload: EventPayloadMap['exec.paused'],
+  exactInstanceId?: string,
 ): NonNullable<Pause['heldBy']> {
   const out: { nodeId: string; instanceId: string }[] = [];
   const push = (nodeId: string, exec: NodeExecution | undefined): void => {
@@ -201,7 +202,10 @@ function heldByFor(
   // durationMs — but still inside the open ancestors' and the run root's,
   // which keep running while the developer looks.
   if (node !== undefined) {
-    const targetIndex = payload.point === 'after' ? oldestRunningIndex(node) : latestRunningIndex(node);
+    const exact =
+      exactInstanceId === undefined ? -1 : node.executions.findIndex((e) => e.instanceId === exactInstanceId);
+    const targetIndex =
+      exact >= 0 ? exact : payload.point === 'after' ? oldestRunningIndex(node) : latestRunningIndex(node);
     if (targetIndex >= 0) push(node.nodeId, node.executions[targetIndex]);
   }
 
@@ -405,6 +409,14 @@ function applyExecPaused(
   const reason = pauseReasonField(payload);
   const loop = loopField(payload);
   const smart = smartField(payload);
+  // Which call is held: exact when the pause names its instance (a sender
+  // that knows it), else a guess — ambiguous once two calls of the node run.
+  const named = (payload as Record<string, unknown>)['instanceId'];
+  const held = run.nodes[payload.nodeId];
+  const exactInstanceId =
+    typeof named === 'string' && held?.executions.some((e) => e.instanceId === named) === true ? named : undefined;
+  const running = held?.executions.filter((e) => e.status === 'running').length ?? 0;
+  const heldAmbiguous = exactInstanceId === undefined && running > 1;
   let next: RunState = {
     ...run,
     pauses: {
@@ -415,7 +427,8 @@ function applyExecPaused(
         point: payload.point,
         ts,
         active: true,
-        heldBy: heldByFor(run, payload),
+        heldBy: heldByFor(run, payload, exactInstanceId),
+        ...(heldAmbiguous ? { heldAmbiguous: true } : {}),
         // Loop hold (W5): why the SDK's built-in breakpoint fired.
         ...(reason !== undefined ? { reason } : {}),
         ...(loop !== undefined ? { loop } : {}),
@@ -519,9 +532,10 @@ function applyExecResumed(
     const { activePauseId: _drop, ...rest } = node;
     const released: NodeState = node.activePauseId === payload.pauseId ? { ...rest } : node;
     let executions = released.executions;
-    if (edited !== undefined) {
+    if (edited !== undefined && pause.heldAmbiguous !== true) {
       // The edited pill belongs to the instance that ran with the edit: the
-      // one this gate held (a retry re-runs the same instance).
+      // one this gate held (a retry re-runs the same instance). Never pinned
+      // to a guess: with parallel calls the pause itself keeps `edited`.
       const index = heldExecutionIndex(node, pause);
       const exec = executions[index];
       if (exec !== undefined) {

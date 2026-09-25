@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createEnvelope, serializeEnvelope } from '@graphmind-ai/schema';
+import { createEnvelope, serializeEnvelope, type ResumeAction } from '@graphmind-ai/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WebSocket } from 'ws';
 import { Hub } from '../src/hub.js';
@@ -26,14 +26,19 @@ const info = (pauseId: string, runId = 'r1'): Omit<PauseInfo, 'state'> => ({
   since: 1,
 });
 
-function begin(registry: PauseRegistry<string>, pauseId: string, extra: { runId?: string; requestId?: string; owner?: string } = {}) {
+function begin(
+  registry: PauseRegistry<string>,
+  pauseId: string,
+  extra: { runId?: string; requestId?: string; owner?: string; principal?: 'viewer' | 'agent' | 'anonymous'; action?: ResumeAction } = {},
+) {
   return registry.begin({
     runId: extra.runId ?? 'r1',
     pauseId,
-    principal: 'viewer',
+    principal: extra.principal ?? 'viewer',
     operator: undefined,
     requestId: extra.requestId,
     owner: extra.owner ?? 'app',
+    ...(extra.action === undefined ? {} : { action: extra.action }),
   });
 }
 
@@ -129,7 +134,7 @@ describe('first writer wins', () => {
     expect(begin(registry, 'p1').kind).toBe('claimed');
   });
 
-  it('a resolving entry reopens after the resolving timeout, and the stale request is answered taken when another claims it', () => {
+  it('a resolving entry reopens after the resolving timeout; the slow request stays pending when another claims it', () => {
     vi.useFakeTimers();
     const registry = new PauseRegistry<string>({ resolvingTimeoutMs: 5_000 });
     registry.open('app', info('p1'));
@@ -141,8 +146,97 @@ describe('first writer wins', () => {
     vi.advanceTimersByTime(1);
     expect(registry.get('r1', 'p1')?.state).toBe('open');
     expect(begin(registry, 'p1', { requestId: 'fast' }).kind).toBe('claimed');
-    expect(outcomes).toHaveLength(1);
-    expect(outcomes[0]).toMatchObject({ outcome: 'taken', requestId: 'slow', code: 'pause-taken' });
+    // Nobody has answered yet: the app's real answer decides who won.
+    expect(outcomes).toEqual([]);
+  });
+
+  it('a late answer echoing the slow request credits IT (resumed), and the one that claimed the reopened pause is superseded', () => {
+    vi.useFakeTimers();
+    const registry = new PauseRegistry<string>({ resolvingTimeoutMs: 5_000 });
+    registry.open('app', info('p1'));
+    begin(registry, 'p1', { requestId: 'agent-abort', principal: 'agent', action: 'abort' });
+    vi.advanceTimersByTime(5_001);
+    begin(registry, 'p1', { requestId: 'viewer-continue', principal: 'viewer', action: 'continue' });
+    const outcomes: ResumeOutcome[] = [];
+    registry.whenAnswered('agent-abort', (o) => outcomes.push(o), 60_000);
+    registry.whenAnswered('viewer-continue', (o) => outcomes.push(o), 60_000);
+    expect(registry.attribution('r1', 'p1', 'agent-abort', true)).toMatchObject({ principal: 'agent' });
+    registry.resumed('r1', 'p1', 'agent-abort', true);
+    expect(outcomes.map((o) => [o.requestId, o.outcome, o.code ?? null, o.principal ?? null])).toEqual([
+      ['agent-abort', 'resumed', null, 'agent'],
+      ['viewer-continue', 'taken', 'superseded', null],
+    ]);
+  });
+
+  it('a late exec.refused for the slow request reopens the pause (the gate is held) and answers only that request', () => {
+    vi.useFakeTimers();
+    const registry = new PauseRegistry<string>({ resolvingTimeoutMs: 5_000 });
+    registry.open('app', info('p1'));
+    begin(registry, 'p1', { requestId: 'agent-edit', principal: 'agent', action: 'continue' });
+    vi.advanceTimersByTime(5_001);
+    begin(registry, 'p1', { requestId: 'viewer-continue', action: 'continue' });
+    expect(registry.get('r1', 'p1')?.state).toBe('resolving');
+    const outcomes: ResumeOutcome[] = [];
+    registry.whenAnswered('agent-edit', (o) => outcomes.push(o), 60_000);
+    registry.whenAnswered('viewer-continue', (o) => outcomes.push(o), 60_000);
+    registry.refused('r1', 'p1', 'agent-edit', 'schema', 'nope');
+    expect(registry.get('r1', 'p1')?.state).toBe('open');
+    expect(outcomes.map((o) => [o.requestId, o.outcome, o.code])).toEqual([['agent-edit', 'refused', 'schema']]);
+  });
+
+  it('an old client (no echo) answering late is credited by the action it applied, never to a request that asked for another', () => {
+    vi.useFakeTimers();
+    const registry = new PauseRegistry<string>({ resolvingTimeoutMs: 5_000 });
+    registry.open('app', info('p1'));
+    begin(registry, 'p1', { requestId: 'r1-abort', principal: 'agent', action: 'abort' });
+    vi.advanceTimersByTime(5_001);
+    begin(registry, 'p1', { requestId: 'r2-continue', principal: 'viewer', action: 'continue' });
+    const outcomes: ResumeOutcome[] = [];
+    registry.whenAnswered('r1-abort', (o) => outcomes.push(o), 60_000);
+    registry.whenAnswered('r2-continue', (o) => outcomes.push(o), 60_000);
+    // The app applied the abort it read first and answered without a requestId.
+    expect(registry.attribution('r1', 'p1', undefined, false, 'abort')).toMatchObject({ principal: 'agent', requestId: 'r1-abort' });
+    registry.resumed('r1', 'p1', undefined, false, 'abort');
+    expect(outcomes.map((o) => [o.requestId, o.outcome, o.code ?? null])).toEqual([
+      ['r1-abort', 'resumed', null],
+      ['r2-continue', 'taken', 'superseded'],
+    ]);
+
+    // No request asked for what the app did: credited to nobody.
+    registry.open('app', info('p2'));
+    begin(registry, 'p2', { requestId: 'r3-continue', action: 'continue' });
+    expect(registry.attribution('r1', 'p2', undefined, false, 'abort')).toBeUndefined();
+    const late: ResumeOutcome[] = [];
+    registry.whenAnswered('r3-continue', (o) => late.push(o));
+    registry.resumed('r1', 'p2', undefined, false, 'abort');
+    expect(late).toMatchObject([{ outcome: 'taken', code: 'superseded' }]);
+  });
+
+  it('resumes to pauses it never saw cannot evict a pending request for a pause it holds', () => {
+    const registry = new PauseRegistry<string>();
+    registry.open('app', info('p1'));
+    expect(begin(registry, 'p1', { requestId: 'agent-edit', principal: 'agent' })).toEqual({ kind: 'claimed', requestId: 'agent-edit' });
+    const outcomes: ResumeOutcome[] = [];
+    registry.whenAnswered('agent-edit', (o) => outcomes.push(o), 60_000);
+    for (let i = 0; i < 1_001; i += 1) {
+      registry.begin({ runId: 'r1', pauseId: `ghost-${i}`, principal: 'anonymous', operator: undefined, requestId: undefined, owner: 'app' });
+    }
+    expect(outcomes).toEqual([]);
+    expect(registry.attribution('r1', 'p1', 'agent-edit', true)).toMatchObject({ principal: 'agent' });
+    registry.dispose();
+  });
+
+  it('knows when the request a pause is resolving on was already answered timeout (its caller gave up)', () => {
+    vi.useFakeTimers();
+    const registry = new PauseRegistry<string>({ resolvingTimeoutMs: 5_000 });
+    registry.open('app', info('p1'));
+    registry.begin({ runId: 'r1', pauseId: 'p1', principal: 'agent', operator: undefined, requestId: 'short', owner: 'app', deadlineMs: 1_000 });
+    expect(registry.resolvingUnanswered('r1', 'p1')).toBe(true);
+    vi.advanceTimersByTime(1_000);
+    expect(registry.get('r1', 'p1')?.state).toBe('resolving');
+    expect(registry.resolvingUnanswered('r1', 'p1')).toBe(false);
+    vi.advanceTimersByTime(4_000);
+    expect(registry.get('r1', 'p1')?.state).toBe('open');
   });
 
   it('attributes an answer by echoed requestId, or (legacy client) to the request resolving that pause', () => {
@@ -257,7 +351,10 @@ describe('hub: a resume that never reached the app does not wedge the pause', ()
     socket.readyState = 2; // CLOSING: `ws` would silently drop the frame
     const start = hub.requestResume('r1', { pauseId: 'p1', action: 'continue' }, 'viewer');
     expect(start.kind).toBe('answered');
-    expect(start.kind === 'answered' && start.outcome).toMatchObject({ outcome: 'no-such-pause', code: 'app-disconnected' });
+    // The same answer a disconnect a moment later gives (closeOwner), as
+    // documented: timeout / app-disconnected (202, CLI exit 2) — never a
+    // timing-dependent 404.
+    expect(start.kind === 'answered' && start.outcome).toMatchObject({ outcome: 'timeout', code: 'app-disconnected' });
     expect(hub.registry.get('r1', 'p1')?.state).toBe('open');
     storage.close();
   });

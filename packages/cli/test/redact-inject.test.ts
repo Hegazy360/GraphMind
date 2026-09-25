@@ -22,7 +22,8 @@ async function ownedRun(): Promise<{ app: FakeApp; ui: FakeUI }> {
   app.send('run.started', RUN, { app: 'guarded', sdk: { name: 'ai', version: '7' } });
   app.send('node.started', RUN, { nodeId: 'tool:x', kind: 'tool', name: 'x', instanceId: '1', input: REDACTED });
   app.send('exec.paused', RUN, { pauseId: 'p1', nodeId: 'tool:x', point: 'before' });
-  const ui = await FakeUI.connect(ts.port);
+  // Injecting needs a credential (0.6): the viewer token.
+  const ui = await FakeUI.connect(ts.port, { token: ts.server.tokens.viewer });
   ui.subscribe(RUN);
   await ui.next((m) => m.type === 'replay.end', 'replay.end');
   return { app, ui };
@@ -46,6 +47,8 @@ describe('hub: exec.resume inject guard', () => {
       pauseId: 'p1',
       code: 'placeholder',
       message: 'inject refused: this value contains redacted content ("__REDACTED__"); edit it before injecting',
+      // Which resume this refuses (the server mints one when none was given).
+      requestId: expect.any(String),
     });
     expect(await appGotNothing(app)).toBe(true);
     await app.close();
@@ -103,7 +106,7 @@ describe('hub: exec.resume inject guard', () => {
 
   it('the guard runs before ownership: an unowned run gets the redaction error, not a routing one', async () => {
     ts = await startTestServer();
-    const ui = await FakeUI.connect(ts.port);
+    const ui = await FakeUI.connect(ts.port, { token: ts.server.tokens.viewer });
     ui.control('exec.resume', 'run-nobody', { pauseId: 'p', action: 'inject', output: REDACTED });
     const err = await ui.next((m) => m.type === 'error', 'ui error');
     expect(err.type === 'error' && err.message).toContain('redacted content');

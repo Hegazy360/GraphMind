@@ -167,16 +167,27 @@ describe('applyEvent: exec.resumed.edited', () => {
     const run = build([
       started('tool:sql', 'tool', { instanceId: 'a', input: { q: 'old' } }),
       started('tool:sql', 'tool', { instanceId: 'b', input: { q: 'other' } }),
-      ev('exec.paused', { pauseId: 'p1', nodeId: 'tool:sql', point: 'after', editable: true }),
+      // The pause names the instance it holds (a sender that knows it).
+      ev('exec.paused', { pauseId: 'p1', nodeId: 'tool:sql', point: 'after', editable: true, instanceId: 'a' } as never),
       ev('exec.resumed', { pauseId: 'p1', action: 'retry', edited: { after: { q: 'new' } }, requestId: 'req-9' }),
     ]);
     const node = run.nodes['tool:sql'];
     const pause = run.pauses['p1'];
-    // An `after` gate holds the oldest running instance: `a`.
     expect(node?.executions.map((e) => e.edited)).toEqual([{ after: { q: 'new' } }, undefined]);
     expect(node?.executions[0]?.input).toEqual({ q: 'old' }); // what the model asked for stays
     expect(pause).toMatchObject({ active: false, resolvedAction: 'retry', edited: { after: { q: 'new' } }, resolvedRequestId: 'req-9' });
     expect(node?.activePauseId).toBeUndefined();
+  });
+
+  it('with two calls running and no instanceId on the pause, the pill is pinned to neither (the pause keeps it)', () => {
+    const run = build([
+      started('tool:sql', 'tool', { instanceId: 'a', input: { q: 'old' } }),
+      started('tool:sql', 'tool', { instanceId: 'b', input: { q: 'other' } }),
+      ev('exec.paused', { pauseId: 'p1', nodeId: 'tool:sql', point: 'after', editable: true }),
+      ev('exec.resumed', { pauseId: 'p1', action: 'retry', edited: { after: { q: 'new' } } }),
+    ]);
+    expect(run.nodes['tool:sql']?.executions.map((e) => e.edited)).toEqual([undefined, undefined]);
+    expect(run.pauses['p1']).toMatchObject({ heldAmbiguous: true, edited: { after: { q: 'new' } } });
   });
 
   it('keeps a redacted after as the placeholder, and marks nothing without edited', () => {

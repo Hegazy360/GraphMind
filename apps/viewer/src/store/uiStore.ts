@@ -19,7 +19,7 @@ export type ConnectionStatus = 'connecting' | 'live' | 'detached' | 'replaying' 
  * Absent: a 0.5 server, or no live socket.
  */
 export interface ControlInfo {
-  /** `viewer` = full control (the #token= credential); `anonymous` = no token (no input edits). */
+  /** `viewer` = full control (the #token= credential); `anonymous` = no token (continue/retry/abort only). */
   principal: 'viewer' | 'agent' | 'anonymous';
   /** What `graphmind resume` (the agent token) may do: serve --allow-control. */
   agentLevel: 'off' | 'resume' | 'inject' | 'edit';

@@ -7,8 +7,14 @@
  * A headless "debugger" speaking the viewer protocol receives exec.paused,
  * injects a corrected result, and the agent's final answer must contain it.
  *
- * Requires a graphmind-ai server on 127.0.0.1:4747 (override GM_HTTP/GM_WS).
+ * Requires a graphmind-ai server on 127.0.0.1:4747 (override GM_HTTP/GM_WS)
+ * started with `--allow-control=inject`: injecting needs a credential (0.6),
+ * so the debugger presents the agent token from the server's run file
+ * (`$GRAPHMIND_HOME/run/serve-<port>.json`), or GM_TOKEN when set.
  */
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocket } from 'ws';
 import { simulateReadableStream, stepCountIs, streamText, tool } from 'ai';
@@ -20,6 +26,20 @@ import { PROTOCOL_VERSION } from '@graphmind-ai/schema';
 const HTTP = process.env.GM_HTTP ?? 'http://127.0.0.1:4747';
 const WS_UI = process.env.GM_WS ?? 'ws://127.0.0.1:4747/ws/ui';
 const INJECTED = { amount: 100, converted: 91.3, currency: 'USD', note: 'INJECTED_BY_DEBUGGER' };
+
+/** The control credential: GM_TOKEN, else the agent token `graphmind serve` wrote for this port. */
+function controlToken(): string | undefined {
+  if (process.env.GM_TOKEN) return process.env.GM_TOKEN;
+  const home = process.env.GRAPHMIND_HOME ? process.env.GRAPHMIND_HOME : join(homedir(), '.graphmind');
+  try {
+    const file = JSON.parse(readFileSync(join(home, 'run', `serve-${new URL(HTTP).port}.json`), 'utf8')) as {
+      agentToken?: string;
+    };
+    return file.agentToken;
+  } catch {
+    return undefined;
+  }
+}
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = ''): void {
@@ -37,7 +57,8 @@ interface DebuggerLog {
 
 function startHeadlessDebugger(): { log: DebuggerLog; close: () => void; ready: Promise<void> } {
   const log: DebuggerLog = { sawRunUpdate: false, sawReplayStart: false, pausedEnvelope: null, injectedForPause: null };
-  const socket = new WebSocket(WS_UI);
+  const token = controlToken();
+  const socket = new WebSocket(WS_UI, token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } });
   const subscribed = new Set<string>();
   let seq = 0;
   const send = (frame: unknown) => socket.send(JSON.stringify(frame));

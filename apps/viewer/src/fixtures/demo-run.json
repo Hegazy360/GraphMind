@@ -324,7 +324,8 @@
       },
       "usage": {
         "inputTokens": 612,
-        "outputTokens": 187
+        "outputTokens": 187,
+        "inclusive": true
       },
       "durationMs": 2450,
       "status": "ok"
@@ -629,7 +630,8 @@
       },
       "usage": {
         "inputTokens": 1418,
-        "outputTokens": 156
+        "outputTokens": 156,
+        "inclusive": true
       },
       "durationMs": 1980,
       "status": "ok"
@@ -1387,7 +1389,8 @@
       },
       "usage": {
         "inputTokens": 2034,
-        "outputTokens": 412
+        "outputTokens": 412,
+        "inclusive": true
       },
       "durationMs": 5320,
       "status": "ok"
@@ -1409,7 +1412,8 @@
       },
       "usage": {
         "inputTokens": 4064,
-        "outputTokens": 755
+        "outputTokens": 755,
+        "inclusive": true
       },
       "durationMs": 10060,
       "status": "ok"

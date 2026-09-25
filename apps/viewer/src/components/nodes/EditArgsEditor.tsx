@@ -5,9 +5,10 @@
  * card's button opens it there.
  *
  * The flow, in the order the user meets it:
- *   1. a JSON editor prefilled from the recorded arguments of the held
- *      instance, with the scope note: this call only, the model still sees
- *      what it asked for;
+ *   1. a JSON editor prefilled with the held instance's LIVE arguments — the
+ *      recorded ones, or the last edit the app accepted for it (a retry
+ *      re-runs that) — with the scope note: this call only, the model still
+ *      sees what it asked for;
  *   2. a live diff of the top-level keys that changed — only those are sent,
  *      so a truncated or hidden value the user did not touch keeps its live
  *      value — and the reasons any change cannot be sent;
@@ -24,7 +25,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   answerFor,
   EDIT_ANSWER_TIMEOUT_MS,
+  editBase,
   editPrefill,
+  editShape,
   heldExecution,
   latestRefusal,
   newRequestId,
@@ -37,6 +40,7 @@ import {
 } from '../../lib/editArgs.js';
 import { editAndResume } from '../../lib/gate.js';
 import { useEditStore } from '../../store/editStore.js';
+import { useRunStore } from '../../store/runStore.js';
 import type { NodeState, Pause } from '../../store/types.js';
 
 export interface EditArgsEditorProps {
@@ -71,13 +75,19 @@ function ChangeRow({ change }: { change: ArgChange }) {
 }
 
 export function EditArgsEditor({ runId, node, pause, onClose }: EditArgsEditorProps) {
-  const exec = heldExecution(node, pause);
-  const recorded = exec?.input;
-  const prefill = useMemo(() => editPrefill(recorded), [recorded]);
+  // What the call runs with now (an accepted edit sticks), and where its
+  // editable keys are (mcp-proxy: inside `arguments`).
+  const { input: recorded, edited } = editBase(heldExecution(node, pause));
+  const sdk = useRunStore((s) => s.runs[runId]?.meta.sdk);
+  const shape = editShape(sdk, recorded);
+  const prefill = useMemo(() => editPrefill(recorded, { edited, shape }), [recorded, edited, shape]);
   const stored = useEditStore((s) => s.drafts[pause.pauseId]);
   const pending = useEditStore((s) => s.pending[pause.pauseId]);
   const draft = stored ?? (prefill.ok ? prefill.text : '');
-  const plan = useMemo(() => (prefill.ok ? planEdit(recorded, draft) : undefined), [prefill, recorded, draft]);
+  const plan = useMemo(
+    () => (prefill.ok ? planEdit(recorded, draft, shape) : undefined),
+    [prefill, recorded, draft, shape],
+  );
   const [localError, setLocalError] = useState<string | undefined>(undefined);
   const [now, setNow] = useState(() => Date.now());
   const editorRef = useRef<HTMLTextAreaElement>(null);

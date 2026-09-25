@@ -68,7 +68,7 @@ let runSettled = false;
 
 beforeAll(async () => {
   server = await WireServer.boot();
-  viewer = await RawViewer.connect(server);
+  viewer = await RawViewer.operator(server);
   await sleep(50);
 
   // The operator arms a breakpoint before every tool call, then starts the app.

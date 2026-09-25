@@ -9,6 +9,9 @@
  *                    [--operator <label>] [--timeout <s>] [--json]
  *
  * All three talk HTTP to the `graphmind serve` on `--port` (default 4747).
+ * Everything they print that an app wrote (ids, names, a hold's detail) goes
+ * through `printable`, and the commands they suggest shell-quote the ids and
+ * name the port — `/ingest` needs no credential, so that text is untrusted.
  * Listing and waiting are reads (no credential, same as `/api/runs`).
  * `resume` presents the agent token from `$GRAPHMIND_HOME/run/serve-<port>.json`,
  * which the server writes at start (0600) — and the SERVER decides what that
@@ -16,10 +19,11 @@
  * so an allow-listed shell command cannot do more than the human allowed.
  *
  * Exit codes (documented in `graphmind --help` and reference/cli):
- *   0 ok · 1 usage/unexpected · 2 timeout · 3 server unreachable ·
+ *   0 ok · 1 usage/unexpected · 2 timeout · 3 no GraphMind 0.6+ server on the port ·
  *   4 nothing to act on (no such pause; `wait --run`: the run ended) ·
- *   5 not authorized (no/stale token, level too low, edit refused by the hub) ·
- *   6 refused (the app would not run the edit, or a placeholder/truncated value) ·
+ *   5 not authorized (no/stale token, level too low, `--no-edit-input`) ·
+ *   6 refused (the app would not run the edit, the pause/app cannot take one, or
+ *     a placeholder/truncated value) ·
  *   7 taken (another resume won the pause)
  */
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -27,6 +31,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ParsedCli } from '../args.js';
 import { DEFAULT_PORT, type EnvLike } from '../paths.js';
+import { hasUnprintable, printable, shellQuote } from '../printable.js';
 import { readRunFile } from '../run-files.js';
 import { recordTelemetry } from '../telemetry.js';
 
@@ -45,10 +50,10 @@ export const EXIT_CODE_HELP: readonly string[] = [
   '  0  ok (resumed; a pause was found; listed)',
   '  1  usage error, or something unexpected',
   '  2  timeout (wait: no pause in time; resume: no answer from the app yet)',
-  '  3  no GraphMind server on that port',
+  '  3  no GraphMind server on that port (or one older than 0.6, without pauses/wait/resume)',
   '  4  nothing to act on (no such pause; wait --run: the run ended)',
-  '  5  not authorized (no or stale token file, --allow-control too low, edit refused)',
-  '  6  refused (the app would not run the edit; placeholder or truncated value)',
+  '  5  not authorized (no or stale token file, --allow-control too low, edits off on this server)',
+  '  6  refused (the app would not run the edit, or this pause/app cannot take one; placeholder or truncated value)',
   '  7  taken (another resume — the viewer, another agent — won the pause)',
 ];
 
@@ -56,6 +61,12 @@ export const EXIT_CODE_HELP: readonly string[] = [
 export const DEFAULT_WAIT_SECONDS = 90;
 /** Values up to this many JSON characters are printed inline; larger ones go to a file. */
 export const INLINE_LIMIT = 2_000;
+/**
+ * `wait` never polls faster than this: a server that answers before the
+ * requested long-poll ends (one without the control plane, a buffering proxy)
+ * must not be hammered.
+ */
+export const MIN_POLL_INTERVAL_MS = 1_000;
 
 export interface ControlIo {
   log(message: string): void;
@@ -93,7 +104,7 @@ async function request(
   port: number,
   path: string,
   init: RequestInit & { timeoutMs: number },
-): Promise<{ status: number; body: Record<string, unknown> }> {
+): Promise<{ status: number; body: Record<string, unknown>; json: boolean }> {
   let response: Response;
   try {
     response = await fetch(`${baseUrl(port)}${path}`, {
@@ -113,15 +124,57 @@ async function request(
     );
   }
   let body: Record<string, unknown> = {};
+  let json = false;
   try {
     const parsed: unknown = await response.json();
     if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
       body = parsed as Record<string, unknown>;
+      json = true;
     }
   } catch {
     // not JSON: leave the body empty; the status still speaks
   }
-  return { status: response.status, body };
+  return { status: response.status, body, json };
+}
+
+function isPauseList(result: { status: number; body: Record<string, unknown>; json: boolean }): boolean {
+  return result.status === 200 && result.json && Array.isArray(result.body['pauses']);
+}
+
+/**
+ * Does `port` serve the 0.6 control plane? `'none'` when nothing answers. A
+ * 0.5.x server has no `/api/pauses`: it serves its viewer page for any unknown
+ * GET, so the list comes back as 200 HTML there.
+ */
+async function controlPlaneOn(port: number): Promise<'yes' | 'no' | 'none'> {
+  try {
+    return isPauseList(await request(port, '/api/pauses', { timeoutMs: 5_000 })) ? 'yes' : 'no';
+  } catch {
+    return 'none';
+  }
+}
+
+/**
+ * Why a server that answered is not one these commands can drive. `GET
+ * /health` names a GraphMind server and its version.
+ */
+async function noControlPlane(port: number): Promise<string> {
+  let version: string | undefined;
+  try {
+    const health = await request(port, '/health', { timeoutMs: 3_000 });
+    if (health.json && health.body['name'] === 'graphmind-ai' && typeof health.body['version'] === 'string') {
+      version = health.body['version'];
+    }
+  } catch {
+    // it answered a moment ago; say what we know
+  }
+  if (version !== undefined) {
+    return (
+      `the GraphMind server on port ${port} (version ${printable(version)}) has no control plane — ` +
+      'pauses, wait and resume need `graphmind serve` 0.6 or later (restart it with the new version, or use the viewer)'
+    );
+  }
+  return `the service on port ${port} is not a GraphMind 0.6+ server (it has no /api/pauses); check --port`;
 }
 
 function ago(ms: number, now = Date.now()): string {
@@ -149,6 +202,30 @@ function asPauses(value: unknown): Pause[] {
   return Array.isArray(value) ? (value as Pause[]) : [];
 }
 
+/** ` --port N` for a suggested command, or nothing on the default port. */
+export function portFlag(port: number): string {
+  return port === DEFAULT_PORT ? '' : ` --port ${port}`;
+}
+
+/** An app-written value, fit for a terminal: controls and bidi shown as `\uXXXX`. */
+function shown(value: unknown): string {
+  return printable(String(value));
+}
+
+/**
+ * Ids that can go into a pasteable command: shell-quoted, and only when they
+ * carry nothing a terminal would act on (quoting does not stop an escape
+ * sequence from reaching the screen).
+ */
+function commandIds(pause: Pick<Pause, 'runId' | 'pauseId'>): { runId: string; pauseId: string } | undefined {
+  if (hasUnprintable(pause.runId) || hasUnprintable(pause.pauseId)) return undefined;
+  return { runId: shellQuote(pause.runId), pauseId: shellQuote(pause.pauseId) };
+}
+
+/** Said instead of a command whose ids cannot be printed safely. */
+const UNSAFE_IDS_NOTE =
+  'The run or pause id contains control characters, so no command is suggested; release it from the viewer.';
+
 // -- pauses -------------------------------------------------------------------
 
 export async function runPauses(parsed: ParsedCli, io: ControlIo = defaultIo()): Promise<number> {
@@ -166,6 +243,10 @@ export async function runPauses(parsed: ParsedCli, io: ControlIo = defaultIo()):
     io.error(`graphmind pauses: ${(error as Error).message}`);
     return EXIT.unreachable;
   }
+  if (result.status === 200 && !isPauseList(result)) {
+    io.error(`graphmind pauses: ${await noControlPlane(port)}`);
+    return EXIT.unreachable;
+  }
   if (result.status !== 200) {
     io.error(`graphmind pauses: the server answered ${result.status}`);
     return EXIT.usage;
@@ -176,8 +257,8 @@ export async function runPauses(parsed: ParsedCli, io: ControlIo = defaultIo()):
     return EXIT.ok;
   }
   if (pauses.length === 0) {
-    io.log(`No open pauses on ${baseUrl(port)}${parsed.flags.run === undefined ? '' : ` in run ${parsed.flags.run}`}.`);
-    io.log('Block until one appears:  graphmind wait');
+    io.log(`No open pauses on ${baseUrl(port)}${parsed.flags.run === undefined ? '' : ` in run ${shown(parsed.flags.run)}`}.`);
+    io.log(`Block until one appears:  graphmind wait${portFlag(port)}`);
     return EXIT.ok;
   }
   io.log(`${pauses.length} held pause(s) on ${baseUrl(port)}\n`);
@@ -188,15 +269,20 @@ export async function runPauses(parsed: ParsedCli, io: ControlIo = defaultIo()):
   const now = Date.now();
   for (const pause of pauses) {
     io.log(
-      `  ${pause.runId.slice(0, 24).padEnd(24)} ${pause.pauseId.slice(0, 10).padEnd(10)} ` +
-        `${pause.nodeId.slice(0, 26).padEnd(26)} ${pause.point.padEnd(7)} ` +
-        `${reasonLabel(pause).slice(0, 22).padEnd(22)} ${pause.state.padEnd(10)} ${ago(pause.since, now)}` +
+      `  ${shown(pause.runId.slice(0, 24)).padEnd(24)} ${shown(pause.pauseId.slice(0, 10)).padEnd(10)} ` +
+        `${shown(pause.nodeId.slice(0, 26)).padEnd(26)} ${shown(pause.point).padEnd(7)} ` +
+        `${shown(reasonLabel(pause).slice(0, 22)).padEnd(22)} ${shown(pause.state).padEnd(10)} ${ago(pause.since, now)}` +
         (pause.editable === true ? '  (editable)' : ''),
     );
   }
   const first = pauses[0] as Pause;
-  io.log(`\nInspect one:  graphmind wait --run ${first.runId}`);
-  io.log(`Release it:   graphmind resume ${first.pauseId} --run ${first.runId} --action continue`);
+  const ids = commandIds(first);
+  if (ids === undefined) {
+    io.log(`\n${UNSAFE_IDS_NOTE}`);
+    return EXIT.ok;
+  }
+  io.log(`\nInspect one:  graphmind wait --run ${ids.runId}${portFlag(port)}`);
+  io.log(`Release it:   graphmind resume ${ids.pauseId} --run ${ids.runId}${portFlag(port)} --action continue`);
   return EXIT.ok;
 }
 
@@ -237,6 +323,13 @@ export async function runWait(parsed: ParsedCli, io: ControlIo = defaultIo()): P
   const timeoutS = parsed.flags.timeout ?? DEFAULT_WAIT_SECONDS;
   const deadline = timeoutS === 0 ? Number.POSITIVE_INFINITY : Date.now() + timeoutS * 1000;
 
+  // Reads need no credential, but a long-poll that presents the agent token
+  // is never crowded out by tokenless ones (MAX_TOKENLESS_WAITS).
+  const credential = readRunFile(io.env, port);
+  const headers: Record<string, string> = credential.ok
+    ? { authorization: `Bearer ${credential.content.agentToken}` }
+    : {};
+
   let found: Pause | undefined;
   let runEnded: { status: string } | undefined;
   for (;;) {
@@ -246,15 +339,20 @@ export async function runWait(parsed: ParsedCli, io: ControlIo = defaultIo()): P
     if (runId !== undefined) params.set('runId', runId);
     params.set('wait', String(chunk));
     let result;
+    const askedAt = Date.now();
     try {
-      result = await request(port, `/api/pauses?${params.toString()}`, { timeoutMs: chunk * 1000 + 10_000 });
+      result = await request(port, `/api/pauses?${params.toString()}`, { headers, timeoutMs: chunk * 1000 + 10_000 });
     } catch (error) {
       io.error(`graphmind wait: ${(error as Error).message}`);
       return EXIT.unreachable;
     }
     if (result.status === 429) {
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await new Promise((resolve) => setTimeout(resolve, MIN_POLL_INTERVAL_MS));
       continue;
+    }
+    if (result.status === 200 && !isPauseList(result)) {
+      io.error(`graphmind wait: ${await noControlPlane(port)}`);
+      return EXIT.unreachable;
     }
     if (result.status !== 200) {
       io.error(`graphmind wait: the server answered ${result.status}`);
@@ -268,16 +366,22 @@ export async function runWait(parsed: ParsedCli, io: ControlIo = defaultIo()): P
       break;
     }
     if (Date.now() >= deadline) break;
+    // An answer with nothing in it, before the long-poll was up and without
+    // `timedOut`: this server does not hold the request. Never spin on it.
+    const early = MIN_POLL_INTERVAL_MS - (Date.now() - askedAt);
+    if (result.body['timedOut'] !== true && early > 0) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(early, Math.max(0, deadline - Date.now()))));
+    }
   }
 
   if (found === undefined) {
     if (runEnded !== undefined) {
       if (parsed.flags.json) io.log(JSON.stringify({ pause: null, run: { id: runId, status: runEnded.status } }));
-      else io.log(`Run ${runId} ended (${runEnded.status}) without pausing.`);
+      else io.log(`Run ${shown(runId)} ended (${shown(runEnded.status)}) without pausing.`);
       return EXIT.gone;
     }
     if (parsed.flags.json) io.log(JSON.stringify({ pause: null, timedOut: true }));
-    else io.log(`No pause within ${timeoutS}s${runId === undefined ? '' : ` in run ${runId}`}. Run it again to keep waiting.`);
+    else io.log(`No pause within ${timeoutS}s${runId === undefined ? '' : ` in run ${shown(runId)}`}. Run it again to keep waiting.`);
     return EXIT.timeout;
   }
 
@@ -314,7 +418,7 @@ export async function runWait(parsed: ParsedCli, io: ControlIo = defaultIo()): P
   if (Object.hasOwn(node, 'error')) values.push(['error', node.error]);
   const rendered = values.map(([name, value]) => [name, renderValue(value, name, dir)] as const);
 
-  const commands = nextCommands(found);
+  const commands = nextCommands(found, port);
   if (parsed.flags.json) {
     const out: Record<string, unknown> = {
       pause: {
@@ -339,10 +443,17 @@ export async function runWait(parsed: ParsedCli, io: ControlIo = defaultIo()): P
     return EXIT.ok;
   }
 
-  io.log(`Paused: run ${found.runId} · pause ${found.pauseId}${found.app === undefined ? '' : ` · app ${found.app}`}`);
-  const named = node.name === undefined ? found.nodeId : `${found.nodeId} (${node.kind ?? 'node'} "${node.name}")`;
+  io.log(
+    `Paused: run ${shown(found.runId)} · pause ${shown(found.pauseId)}${found.app === undefined ? '' : ` · app ${shown(found.app)}`}`,
+  );
+  const named =
+    node.name === undefined
+      ? shown(found.nodeId)
+      : `${shown(found.nodeId)} (${shown(node.kind ?? 'node')} "${shown(node.name)}")`;
   io.log(`  node      ${named}, ${pointLabel(found.point)}`);
-  io.log(`  reason    ${reasonLabel(found)}${found.smart?.detail === undefined ? '' : ` — ${found.smart.detail}`}`);
+  io.log(
+    `  reason    ${shown(reasonLabel(found))}${found.smart?.detail === undefined ? '' : ` — ${shown(found.smart.detail)}`}`,
+  );
   io.log(
     `  editable  ${found.editable === true ? 'yes (--input runs the REAL call with the arguments you give)' : 'no'}`,
   );
@@ -350,16 +461,28 @@ export async function runWait(parsed: ParsedCli, io: ControlIo = defaultIo()): P
     if (value.file !== undefined) {
       io.log(`  ${name.padEnd(9)} ${kb(value.bytes ?? 0)} → ${value.file}`);
     } else {
-      io.log(`  ${name.padEnd(9)} ${JSON.stringify(value.inline)}`);
+      // JSON escapes C0 controls but not C1 or bidi characters.
+      io.log(`  ${name.padEnd(9)} ${shown(JSON.stringify(value.inline))}`);
     }
+  }
+  if (commands.length === 0) {
+    io.log(UNSAFE_IDS_NOTE);
+    return EXIT.ok;
   }
   io.log('Next:');
   for (const command of commands) io.log(`  ${command}`);
   return EXIT.ok;
 }
 
-function nextCommands(pause: Pause): string[] {
-  const base = `graphmind resume ${pause.pauseId} --run ${pause.runId}`;
+/**
+ * The `graphmind resume` commands that apply to `pause`, ready to paste: ids
+ * shell-quoted, `--port` named when it is not the default. None when an id
+ * carries a control character (see `commandIds`).
+ */
+function nextCommands(pause: Pause, port: number): string[] {
+  const ids = commandIds(pause);
+  if (ids === undefined) return [];
+  const base = `graphmind resume ${ids.pauseId} --run ${ids.runId}${portFlag(port)}`;
   const out = [`${base} --action continue`];
   if (pause.editable === true) {
     out.push(
@@ -446,8 +569,22 @@ export async function runResume(parsed: ParsedCli, io: ControlIo = defaultIo()):
   const port = parsed.flags.port ?? DEFAULT_PORT;
   const credential = readRunFile(io.env, port);
   if (!credential.ok) {
+    if (credential.reason === 'missing') {
+      // A clean exit removes the file, so "no file" most often means "no
+      // server": say so (exit 3, like pauses and wait), and keep "not
+      // authorized" for a server that is up without a file for this user.
+      const plane = await controlPlaneOn(port);
+      if (plane === 'none') {
+        io.error(`graphmind resume: no GraphMind server on port ${port} (start it with \`graphmind serve\`)`);
+        return EXIT.unreachable;
+      }
+      if (plane === 'no') {
+        io.error(`graphmind resume: ${await noControlPlane(port)}`);
+        return EXIT.unreachable;
+      }
+    }
     io.error(`graphmind resume: ${credential.message}`);
-    return credential.reason === 'missing' ? EXIT.unauthorized : EXIT.unauthorized;
+    return EXIT.unauthorized;
   }
 
   let result;

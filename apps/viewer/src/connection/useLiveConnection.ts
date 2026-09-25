@@ -14,12 +14,14 @@ import {
   type MessagePayloadMap,
 } from '@graphmind-ai/schema';
 import useWebSocketWithRetry from '../hooks/useWebSocketWithRetry.js';
+import { useEditStore } from '../store/editStore.js';
 import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';
 import {
   checkTokenAfterFailedConnect,
   onViewerTokenChange,
   socketProtocols,
+  tokenFor,
   viewerToken,
 } from './auth.js';
 import { ingestValue } from './ingest.js';
@@ -35,7 +37,6 @@ import {
   buildControlFrame,
   buildSubscribeFrame,
   registerConnection,
-  resolveHttpBase,
   type ServerConnection,
 } from './ServerConnection.js';
 
@@ -65,10 +66,17 @@ export function useLiveConnection(url: string | null): ServerConnection {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `token` is what changes the result
     [url, token],
   );
+  // The token this socket presents — the one to check if it is refused.
+  const presented = useMemo(
+    () => (url === null ? undefined : tokenFor(url)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `token` is what changes the result
+    [url, token],
+  );
   const ws = useWebSocketWithRetry(url, {
     ...(protocols === undefined ? {} : { protocols }),
     onFailedOpen: () => {
-      if (protocols !== undefined) void checkTokenAfterFailedConnect(resolveHttpBase(location.search));
+      // Checked with this page's own server, never a `?server=` target.
+      if (presented !== undefined) void checkTokenAfterFailedConnect(presented);
     },
     onStatus: (status) => {
       if (url === null) return;
@@ -149,15 +157,20 @@ export function useLiveConnection(url: string | null): ServerConnection {
           console.warn('[graphmind] server error:', frame.message);
           const notice = noticeFor(frame.code, frame.message);
           if (notice !== undefined) useUiStore.getState().noteControl(notice.code, notice.message);
+          // A refused resume never reached the app: an edit waiting on it
+          // hears the server's reason now, not "no answer" in 10 s.
+          if (frame.pauseId !== undefined && frame.code !== undefined) {
+            useEditStore.getState().noteServerAnswer(frame.pauseId, frame.requestId, frame.code, frame.message);
+          }
           break;
         }
         case 'resume.result':
           // `resumed` shows up on the canvas by itself (the exec.resumed event);
           // everything else means the click did not do what it said.
           if (frame.outcome !== 'resumed') {
-            useUiStore
-              .getState()
-              .noteControl(frame.code ?? frame.outcome, frame.message ?? `resume ${frame.outcome}`);
+            const code = frame.code ?? frame.outcome;
+            useUiStore.getState().noteControl(code, frame.message ?? `resume ${frame.outcome}`);
+            useEditStore.getState().noteServerAnswer(frame.pauseId, frame.requestId, code, frame.message);
           }
           break;
         default:

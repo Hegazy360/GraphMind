@@ -22,8 +22,9 @@ call goes through for real.
    ([breakpoints & step mode](/debugging/breakpoints-and-step/)).
 
 2. **Choose "Edit arguments…"** (keyboard: `e`). It appears only on pauses the app marked as
-   editable — see [where it works](#where-it-works). The editor opens pre-filled with the
-   arguments the model asked for.
+   editable — see [where it works](#where-it-works). The editor opens pre-filled with the call's
+   **live** arguments: what the model asked for or, after an edit the app accepted for this
+   call, the arguments it last ran with (a note says so).
 
 3. **Change what is wrong.** The editor lists the keys you changed. **Only those keys are sent**;
    every other key keeps its live value, so a large argument you did not touch is never replaced
@@ -72,7 +73,7 @@ The same works from a terminal or a coding agent — see [driving it from the CL
 | Anthropic / OpenAI SDKs | Wrapped tools called with one object of arguments (OpenAI: or its JSON text). |
 | LangGraph (`@graphmind-ai/langgraph`) | Tools wrapped with `wrapStructuredTool` or `gm.tool`. |
 | MCP servers (`@graphmind-ai/mcp`) | Tools registered with an input schema. |
-| `graphmind mcp-proxy` | Every `tools/call`. Only `arguments` can change; `name` and `_meta` are locked. |
+| `graphmind mcp-proxy` | Every `tools/call`. Only `arguments` can change, key by key (a removed argument is refused like a removed top-level key); `name` and `_meta` are locked. |
 | Python (`graphmind-ai`) | Functions wrapped with `@gm.tool` / `gm.wrap_tools`, sync and async, checked against the function's signature ([details](/integrations/python/#edit-arguments-06)). LangChain callbacks observe and cannot take an edit. |
 | Ruby (`graphmind` gem) | Not in 0.6.0: an edit sent to a Ruby app is refused (`disabled`) and the call stays held. |
 
@@ -82,15 +83,19 @@ framework rebuilds the next request from its own history — which is not a fix 
 It needs a 0.6.0 app and a 0.6.0 server. An older server never marks a pause editable, and an
 older app never offers one.
 
+When the same tool runs several calls at once and the pause does not say which one is held, the
+viewer does not offer the editor — it would be guessing which call's arguments you are editing.
+Continue, Retry and Inject still work.
+
 ## Turning it off, and who may use it
 
 - In the app: `GRAPHMIND_DISABLE_EDIT_INPUT=1`. The app stops offering editable pauses and
   refuses edits. Any value except `0`, `false`, `off` and `no` counts.
 - On the server: `graphmind serve --no-edit-input` refuses every edit, from any credential.
 - An edit needs a credential. The viewer the server opened has one; a browser tab or script that
-  connects without it can still continue, retry, inject or abort (as in 0.5), but cannot edit.
-  The agent token used by `graphmind resume` can edit only when the server runs with
-  `--allow-control=edit`.
+  connects without it can still continue, retry or abort (as in 0.5), but cannot edit, inject or
+  change breakpoints — the viewer hides those controls there. The agent token used by
+  `graphmind resume` can edit only when the server runs with `--allow-control=edit`.
 
 <Aside type="caution" title="An edit runs your real tool">
 Unlike inject, an edit **executes** the tool — a shell command, a SQL query, a payment API —

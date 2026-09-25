@@ -153,6 +153,31 @@ describe('registry lifecycle', () => {
     await victim.app.close();
   });
 
+  it('a peer that writes 5,000 fresh run ids cannot push out a live run\'s claim and then take the run and its pause', async () => {
+    const ts = await boot({ allowControl: 'resume' });
+    const victim = await heldApp(ts.port, { runId: 'victim-run' });
+    await waitForPause(ts, 'p1');
+    const attacker = await FakeApp.connect(ts.port, { app: 'evil', capabilities: ALL_CAPABILITIES });
+    for (let i = 0; i < 5_001; i += 1) attacker.send('run.started', `flood-${i}`, { app: 'evil', sdk: { name: 'x', version: '0' } });
+    await waitUntil(() => ts.server.storage.getRun('flood-5000') !== undefined, 'the flood stored', 20_000);
+    // Now the attacker writes to the victim's run as if it were its own.
+    attacker.send('exec.paused', 'victim-run', { pauseId: 'p1', nodeId: 'tool:x', point: 'before' });
+    attacker.send('node.started', 'victim-run', { nodeId: 'tool:evil', kind: 'tool', name: 'evil', instanceId: 'e1' });
+    await sleep(300);
+    expect(ts.server.storage.listEvents('victim-run').events.some((e) => e.type === 'node.started' && (e.payload as { nodeId?: string }).nodeId === 'tool:evil')).toBe(false);
+    // The victim still owns its run: its frames are stored, and a resume reaches IT.
+    victim.app.send('node.started', 'victim-run', { nodeId: 'tool:later', kind: 'tool', name: 'later', instanceId: 'l1' });
+    await waitUntil(
+      () => ts.server.storage.listEvents('victim-run').events.some((e) => (e.payload as { nodeId?: string }).nodeId === 'tool:later'),
+      'the victim\'s later frame stored',
+    );
+    const answer = await postResume(ts.port, 'victim-run', 'p1', { action: 'continue', timeoutMs: 5_000 }, ts.server.tokens.agent);
+    expect(answer.body).toMatchObject({ outcome: 'resumed' });
+    expect(victim.resumes.map((r) => r.pauseId)).toEqual(['p1']);
+    await attacker.close();
+    await victim.app.close();
+  }, 30_000);
+
   it('caps open pauses per app connection at 1,000; a resume for an untracked pause is still forwarded', async () => {
     const ts = await boot();
     const held = await heldApp(ts.port, { answer: 'ignore' });
@@ -248,13 +273,14 @@ describe('first writer wins', () => {
     viewer.control('exec.resume', held.runId, { pauseId: 'p1', action: 'continue' });
     await waitForPause(ts, 'p1', 'resolving');
     await waitForPause(ts, 'p1', 'open');
-    // Reopened: the next resume is forwarded (and the first request lost it).
+    // Reopened: the next resume is forwarded. The first request is answered
+    // by what the app actually did — it released the gate for the second one.
     held.setAnswer('echo');
     const second = await postResume(ts.port, held.runId, 'p1', { action: 'continue' }, ts.server.tokens.agent);
     expect(second.body.outcome).toBe('resumed');
     expect(held.resumes).toHaveLength(2);
     const lost = await viewer.next((m) => m.type === 'resume.result', 'first result');
-    expect(lost).toMatchObject({ outcome: 'taken', code: 'pause-taken' });
+    expect(lost).toMatchObject({ outcome: 'taken', code: 'superseded' });
     await held.app.close();
   });
 
@@ -351,6 +377,133 @@ describe('first writer wins', () => {
     expect(Object.keys(held.resumes[0] as object).sort()).toEqual(['action', 'pauseId', 'requestId']);
     await held.app.close();
   });
+});
+
+describe('late answers: the app\'s real answer decides every waiting resume', () => {
+  it('a 0.6 app applies the resume it read first after the pause reopened: THAT resumer is told resumed, the other superseded', async () => {
+    const ts = await boot({ resolvingTimeoutMs: 300, allowControl: 'resume' });
+    const held = await heldApp(ts.port, { answer: 'ignore' }); // announces edit-input: echoes requestIds
+    await waitForPause(ts, 'p1');
+    const r1 = postResume(ts.port, held.runId, 'p1', { action: 'abort', requestId: 'agent-abort-1', timeoutMs: 10_000 }, ts.server.tokens.agent);
+    await waitUntil(() => held.resumes.length === 1, 'R1 forwarded');
+    await waitForPause(ts, 'p1', 'resolving');
+    await waitForPause(ts, 'p1', 'open'); // the app is slow: reopened
+    const r2 = postResume(ts.port, held.runId, 'p1', { action: 'continue', requestId: 'viewer-continue-1', timeoutMs: 10_000 }, ts.server.tokens.viewer);
+    await waitUntil(() => held.resumes.length === 2, 'R2 forwarded');
+    held.app.send('exec.resumed', held.runId, { pauseId: 'p1', action: 'abort', requestId: 'agent-abort-1' });
+    const [a1, a2] = await Promise.all([r1, r2]);
+    await waitUntil(async () => (await storedResumed(ts, held.runId)).length === 1, 'stored');
+    expect((await storedResumed(ts, held.runId))[0]).toMatchObject({ action: 'abort', requestId: 'agent-abort-1', principal: 'agent' });
+    expect({ status: a1.status, body: a1.body }).toMatchObject({ status: 200, body: { outcome: 'resumed', requestId: 'agent-abort-1', principal: 'agent' } });
+    expect({ status: a2.status, body: a2.body }).toMatchObject({ status: 409, body: { outcome: 'taken', code: 'superseded', requestId: 'viewer-continue-1' } });
+    await held.app.close();
+  });
+
+  it('an old client (no requestId echo) answering late: credited by the action it applied, not to whoever holds the slot', async () => {
+    const ts = await boot({ resolvingTimeoutMs: 300, allowControl: 'resume' });
+    const held = await heldApp(ts.port, { answer: 'ignore', capabilities: ['pause', 'step', 'inject', 'retry', 'abort', 'run-claim'] });
+    await waitForPause(ts, 'p1');
+    const agentAnswer = postResume(ts.port, held.runId, 'p1', { action: 'abort', timeoutMs: 10_000 }, ts.server.tokens.agent);
+    await waitUntil(() => held.resumes.length === 1, 'R1 forwarded');
+    await waitForPause(ts, 'p1', 'resolving');
+    await waitForPause(ts, 'p1', 'open');
+    const viewer = await ui(ts, ts.server.tokens.viewer);
+    viewer.control('exec.resume', held.runId, { pauseId: 'p1', action: 'continue' });
+    await waitUntil(() => held.resumes.length === 2, 'R2 forwarded');
+    held.app.send('exec.resumed', held.runId, { pauseId: 'p1', action: 'abort' });
+    const viewerResult = await viewer.next((m) => m.type === 'resume.result', 'viewer resume.result');
+    const agent = await agentAnswer;
+    await waitUntil(async () => (await storedResumed(ts, held.runId)).length === 1, 'stored');
+    // "aborted by agent" — the abort that ran was the agent's.
+    expect((await storedResumed(ts, held.runId))[0]).toMatchObject({ action: 'abort', principal: 'agent' });
+    expect(viewerResult).toMatchObject({ outcome: 'taken', code: 'superseded' });
+    expect(agent.body).toMatchObject({ outcome: 'resumed', principal: 'agent' });
+    await held.app.close();
+  });
+
+  it('a retry right after the caller\'s own short timeout is "still-resolving" (202, not taken), and the pause reopens on its own', async () => {
+    const ts = await boot({ resolvingTimeoutMs: 3_000, allowControl: 'resume' });
+    const held = await heldApp(ts.port, { answer: 'ignore' });
+    await waitForPause(ts, 'p1');
+    const first = await postResume(ts.port, held.runId, 'p1', { action: 'continue', requestId: 'req-first', timeoutMs: 1_000 }, ts.server.tokens.agent);
+    expect(first.status).toBe(202);
+    expect(first.body).toMatchObject({ outcome: 'timeout', code: 'no-answer' });
+    expect((await pauses(ts))[0]?.state).toBe('resolving');
+    const retry = await postResume(ts.port, held.runId, 'p1', { action: 'continue', requestId: 'req-retry', timeoutMs: 1_000 }, ts.server.tokens.agent);
+    expect(retry.status).toBe(202);
+    expect(retry.body).toMatchObject({ outcome: 'timeout', code: 'still-resolving' });
+    expect(held.resumes).toHaveLength(1);
+    // It reopens on its own; then, while a caller IS waiting, another resume is taken.
+    await waitForPause(ts, 'p1', 'open');
+    const waiting = postResume(ts.port, held.runId, 'p1', { action: 'continue', timeoutMs: 5_000 }, ts.server.tokens.agent);
+    await waitUntil(() => held.resumes.length === 2, 'forwarded after the reopen');
+    const taken = await postResume(ts.port, held.runId, 'p1', { action: 'abort' }, ts.server.tokens.agent);
+    expect(taken).toMatchObject({ status: 409, body: { outcome: 'taken', code: 'pause-taken' } });
+    held.app.send('exec.resumed', held.runId, { pauseId: 'p1', action: 'continue', requestId: held.resumes[1]?.requestId });
+    expect((await waiting).body).toMatchObject({ outcome: 'resumed' });
+    await held.app.close();
+  });
+
+  it('a flood of tokenless resumes for made-up pause ids cannot turn a pending edit into a false timeout or strip its principal', async () => {
+    const ts = await boot({ allowControl: 'edit' });
+    ts.server.hub.state.set({ kind: 'tool', point: 'before' });
+    const session = createSession({ url: `ws://127.0.0.1:${ts.port}/ingest`, appName: 'real-agent', enabled: true, env: {}, retryIntervalMs: 60_000 });
+    cleanups.push(() => session.dispose());
+    expect(await session.ready({ timeoutMs: 5_000 })).toBe(true);
+    const live = { query: 'lisbon', limit: 5 };
+    let releaseValidation!: () => void;
+    const validationGate = new Promise<void>((resolve) => {
+      releaseValidation = resolve;
+    });
+    let validating = false;
+    let runId = '';
+    let resolveDecision!: (d: GateDecision) => void;
+    const decision = new Promise<GateDecision>((resolve) => {
+      resolveDecision = resolve;
+    });
+    void session.run('edit-me', async (ctx) => {
+      runId = ctx.runId;
+      session.emit('node.started', { nodeId: 'tool:search', kind: 'tool', name: 'search', instanceId: 's-1', input: live });
+      resolveDecision(
+        await session.gate(
+          'before',
+          { nodeId: 'tool:search', kind: 'tool', name: 'search' },
+          {
+            editable: true,
+            validateInput: async (proposed) => {
+              validating = true;
+              await validationGate;
+              return mergeToolInput(live, proposed);
+            },
+          },
+        ),
+      );
+    });
+    await waitUntil(() => runId !== '', 'run started');
+    await waitUntil(async () => (await pauses(ts, runId)).length === 1, 'held');
+    const pauseId = (await pauses(ts, runId))[0]?.pauseId as string;
+    let answeredEarly: unknown;
+    const pending = postResume(ts.port, runId, pauseId, { action: 'continue', input: { query: 'porto' }, operator: 'claude-code' }, ts.server.tokens.agent).then(
+      (r) => {
+        answeredEarly ??= r.body;
+        return r;
+      },
+    );
+    await waitUntil(() => validating, 'the app is validating the edit');
+    const anon = await ui(ts);
+    for (let i = 0; i < 1_001; i += 1) anon.control('exec.resume', runId, { pauseId: `ghost-${i}`, action: 'continue' });
+    // Frames on one socket are handled in order; an anonymous edit is refused at once.
+    anon.control('exec.resume', runId, { pauseId: 'sentinel', action: 'continue', input: { query: 'x' } });
+    await anon.next((m) => m.type === 'error' && m.code === 'edit-refused', 'sentinel refusal');
+    await sleep(200);
+    expect(answeredEarly, 'the agent was told something before the app answered').toBeUndefined();
+    releaseValidation();
+    expect(await decision).toMatchObject({ action: 'continue', input: { query: 'porto', limit: 5 } });
+    const answer = await pending;
+    await waitUntil(async () => (await storedResumed(ts, runId)).length === 1, 'stored');
+    expect({ status: answer.status, outcome: answer.body.outcome }).toEqual({ status: 200, outcome: 'resumed' });
+    expect((await storedResumed(ts, runId))[0]).toMatchObject({ principal: 'agent', operator: 'claude-code', edited: { after: { query: 'porto', limit: 5 } } });
+  }, 30_000);
 });
 
 describe('principal and operator', () => {
@@ -486,21 +639,31 @@ describe('credentials on the viewer socket', () => {
 });
 
 describe('what a credential may do', () => {
-  it('tokenless viewer sockets keep 0.5 behaviour (continue/retry/inject/abort, breakpoints), never edits, with a one-time deprecation note', async () => {
+  it('tokenless viewer sockets keep only continue/retry/abort (0.5, deprecated): never edits, injects, breakpoints or mode; one deprecation note', async () => {
     const logs: string[] = [];
     const ts = await boot({ log: (line) => logs.push(line) });
     const held = await heldApp(ts.port, { editable: true, answer: 'echo' });
     await waitForPause(ts, 'p1');
     const anon = await ui(ts);
     await ui(ts); // a second tokenless socket: still one note
-    anon.control('exec.resume', held.runId, { pauseId: 'p1', action: 'continue', input: { query: 'x' } });
-    expect((await errorFrame(anon)).code).toBe('edit-refused');
-    expect(held.resumes).toEqual([]);
+    anon.control('exec.resume', held.runId, { pauseId: 'p1', action: 'continue', input: { query: 'x' }, requestId: 'edit-1' });
+    // The refusal names the request it answers, so the viewer's editor can show it at once.
+    expect(await errorFrame(anon)).toMatchObject({ code: 'edit-refused', pauseId: 'p1', requestId: 'edit-1' });
     anon.control('exec.resume', held.runId, { pauseId: 'p1', action: 'inject', output: { ok: true } });
-    await waitUntil(() => held.resumes.length === 1, 'inject forwarded');
-    expect(held.resumes[0]).toMatchObject({ action: 'inject', output: { ok: true } });
+    expect(await errorFrame(anon)).toMatchObject({ code: 'forbidden', pauseId: 'p1' });
+    expect(held.resumes).toEqual([]);
+    const armed = structuredClone(ts.server.hub.state.breakpoints);
     anon.control('breakpoint.set', '*', { matcher: { kind: 'tool' } });
-    await anon.next((m) => m.type === 'state', 'state');
+    expect((await errorFrame(anon)).code).toBe('forbidden');
+    // ...followed by the real state, so an optimistic viewer puts its toggle back.
+    expect(await anon.next((m) => m.type === 'state', 'state')).toMatchObject({ breakpoints: armed, mode: 'run' });
+    anon.control('mode.set', '*', { mode: 'step' });
+    expect((await errorFrame(anon)).code).toBe('forbidden');
+    expect(ts.server.hub.state.mode).toBe('run');
+    expect(ts.server.hub.state.breakpoints).toEqual(armed);
+    anon.control('exec.resume', held.runId, { pauseId: 'p1', action: 'continue' });
+    await waitUntil(() => held.resumes.length === 1, 'continue forwarded');
+    expect(held.resumes[0]).toMatchObject({ action: 'continue' });
     expect(logs.filter((line) => line.includes('Tokenless viewer sockets are deprecated'))).toHaveLength(1);
     await held.app.close();
   });
@@ -584,16 +747,18 @@ describe('what a credential may do', () => {
     await app.close();
   });
 
-  it('an edit needs an owner that announced edit-input and an editable pause', async () => {
+  it('an edit needs an owner that announced edit-input and an editable pause (422 not-editable: the credential is fine)', async () => {
     const ts = await boot({ allowControl: 'edit' });
     const old = await heldApp(ts.port, { runId: 'run-old', capabilities: ['pause', 'inject'], editable: true });
     const plain = await heldApp(ts.port, { runId: 'run-plain', editable: false });
     await waitUntil(async () => (await pauses(ts)).length === 2, 'two pauses');
     const a = await postResume(ts.port, 'run-old', 'p1', { action: 'continue', input: { q: 1 } }, ts.server.tokens.agent);
-    expect(a.body).toMatchObject({ outcome: 'refused', code: 'edit-refused' });
+    expect(a.status).toBe(422);
+    expect(a.body).toMatchObject({ outcome: 'refused', code: 'not-editable' });
     expect(a.body.message).toContain('edit-input');
     const b = await postResume(ts.port, 'run-plain', 'p1', { action: 'continue', input: { q: 1 } }, ts.server.tokens.agent);
-    expect(b.body).toMatchObject({ outcome: 'refused', code: 'edit-refused' });
+    expect(b.status).toBe(422);
+    expect(b.body).toMatchObject({ outcome: 'refused', code: 'not-editable' });
     expect(b.body.message).toContain('not editable');
     expect(old.resumes).toEqual([]);
     expect(plain.resumes).toEqual([]);
@@ -759,7 +924,8 @@ describe('a real @graphmind-ai/client session holding an editable gate', () => {
     const [pause] = (await pauses(ts, runId)) as unknown as { pauseId: string; editable?: boolean }[];
     expect(pause?.editable).toBeUndefined();
     const answer = await postResume(ts.port, runId, pause?.pauseId as string, { action: 'continue', input: { a: 1 } }, ts.server.tokens.agent);
-    expect(answer.body).toMatchObject({ outcome: 'refused', code: 'edit-refused' });
+    // The credential is fine; this pause cannot take an edit.
+    expect(answer.body).toMatchObject({ outcome: 'refused', code: 'not-editable' });
   });
 });
 
@@ -868,7 +1034,7 @@ describe('echo detection: a 0.6 client with GRAPHMIND_DISABLE_EDIT_INPUT still e
     await waitUntil(async () => (await pauses(ts, run.runId)).length === 1, 'held');
     const pauseId = (await pauses(ts, run.runId))[0]?.pauseId as string;
     const edit = await postResume(ts.port, run.runId, pauseId, { action: 'continue', input: { cmd: 'ls' } }, ts.server.tokens.viewer);
-    expect(edit.body).toMatchObject({ outcome: 'refused', code: 'edit-refused' });
+    expect(edit.body).toMatchObject({ outcome: 'refused', code: 'not-editable' });
     const ok = await postResume(ts.port, run.runId, pauseId, { action: 'continue', requestId: 'agent-req-1' }, ts.server.tokens.agent);
     expect(ok.body).toMatchObject({ outcome: 'resumed', requestId: 'agent-req-1' });
     await waitUntil(async () => (await storedResumed(ts, run.runId)).length === 1, 'stored');

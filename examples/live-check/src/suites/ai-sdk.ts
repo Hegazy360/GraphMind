@@ -372,7 +372,7 @@ async function scenarioFailOpen(report: Report): Promise<void> {
   const { startLiveServer } = await import('../harness/server.js');
   const { HeadlessDebugger } = await import('../harness/debugger.js');
   const server = await startLiveServer();
-  const dbg = await HeadlessDebugger.connect(server.uiUrl);
+  const dbg = await HeadlessDebugger.connect(server.uiUrl, server.server.tokens.viewer);
   dbg.setBreakpoint({ kind: 'llm', point: 'before' });
 
   let killedAt = 0;

@@ -202,7 +202,8 @@ call's async context. `exec.resume.requestId` is echoed on `exec.resumed` /
 `exec.refused` as it came.
 
 `gate('after', node, { result })` hands the call's result to the session's
-after-gate detectors (smart holds); it is never sent through this option.
+after-gate detectors (the smart-hold hook — none is registered by default, so
+the result alone never holds the call); it is never sent through this option.
 
 Tool wrappers build these options with `toolGateOptions(session, edit, {result})`
 (undefined while detached, so the detached path is untouched), read an accepted

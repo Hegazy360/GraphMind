@@ -14,7 +14,7 @@ export interface Harness {
 
 export async function withHarness<T>(fn: (h: Harness) => Promise<T>): Promise<T> {
   const server = await startLiveServer();
-  const dbg = await HeadlessDebugger.connect(server.uiUrl);
+  const dbg = await HeadlessDebugger.connect(server.uiUrl, server.server.tokens.viewer);
   try {
     return await fn({ server, dbg, url: server.ingestUrl });
   } finally {

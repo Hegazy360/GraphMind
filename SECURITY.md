@@ -115,10 +115,10 @@ component by component:
 
 | Attack step in CVE-2025-49596 | GraphMind |
 | --- | --- |
-| Service listens on localhost, unauthenticated | Partly the same starting point: `graphmind serve` binds `127.0.0.1` only ([`packages/cli/src/server.ts`](./packages/cli/src/server.ts), `const host = '127.0.0.1'`) and **reading** needs no credential. Since 0.6.0, **control** does: input edits and every non-GET `/api` route need a per-start 128-bit token ([`packages/cli/src/control-auth.ts`](./packages/cli/src/control-auth.ts); see *Control credentials* below). A tokenless viewer socket can still continue, retry, inject and abort, as in 0.5 (deprecated). |
+| Service listens on localhost, unauthenticated | Partly the same starting point: `graphmind serve` binds `127.0.0.1` only ([`packages/cli/src/server.ts`](./packages/cli/src/server.ts), `const host = '127.0.0.1'`) and **reading** needs no credential. Since 0.6.0, **control** does: input edits, injected results, breakpoints, step mode and every non-GET `/api` route need a per-start 128-bit token ([`packages/cli/src/control-auth.ts`](./packages/cli/src/control-auth.ts); see *Control credentials* below). A tokenless viewer socket can still continue, retry and abort a held call, as in 0.5 (deprecated). |
 | A web page reaches it (WebSocket handshakes are exempt from the same-origin policy; DNS rebinding makes `fetch` same-origin) | **Closed.** Every HTTP request and every WebSocket upgrade passes [`packages/cli/src/origin-guard.ts`](./packages/cli/src/origin-guard.ts): the `Host` must be a loopback name (defeats rebinding) and the `Origin`, if present, must be the viewer this server serves (`http://127.0.0.1:<port>` / `http://localhost:<port>`) — anything else is a 403, including `Origin: null`, another local port, and any remote site. Non-browser clients (SDKs, curl) send no `Origin` and pass; a page cannot omit it. `GRAPHMIND_ALLOWED_ORIGINS` is an explicit opt-in for dev servers. |
 | The page sends a request that does damage | **Proven against a held gate.** [`packages/cli/test/origin-guard.test.ts`](./packages/cli/test/origin-guard.test.ts): `WS /ws/ui rejects foreign origins` (random site, `null`, another loopback port), `WS /ingest rejects foreign origins`, `HTTP API rejects rebound hosts` (rebound `Host`, cross-origin `fetch` with a loopback `Host`). [`packages/cli/test/origin-guard-control.test.ts`](./packages/cli/test/origin-guard-control.test.ts): with a real app paused at a gate, five browser-originated upgrade attempts are refused and no `exec.resume` reaches the app, then the legitimate viewer resumes it (so the hold was real); browser-originated `POST`s — including to `/api/demo/start`, the resume endpoint, a rebound-`Host` variant and a no-preflight "simple" POST — are refused by the guard before any route runs. Since 0.6.0 there **is** an HTTP resume endpoint (`POST /api/runs/:runId/pauses/:pauseId/resume`, for `graphmind resume`); it is shaped so a page cannot reach it even past the guard: POST only (`GET`/`OPTIONS` → 405, and no GET mutates anything, because a top-level navigation carries no `Origin`), `Content-Type: application/json` only (a form cannot send it), credential only in `Authorization: Bearer` (never `?token=`, never a cookie), and no CORS header on any response ([`security/tests/control-http-exposure.test.ts`](./security/tests/control-http-exposure.test.ts)). Every response also forbids framing (`frame-ancestors 'none'`, `X-Frame-Options: DENY`) against clickjacking. |
-| The service spawns a command from request data | **Not present in the server.** Nothing in the server or hub spawns a process in response to network input. What changed in 0.6.0: an input edit lets an authorized request choose the **arguments** of a tool call the instrumented app is holding (a `shell` tool would then run a command of the requester's choosing, as the app). That is why edits need the viewer token or the agent token at `--allow-control=edit`, the app's own `edit-input` capability, an `editable` pause and no `--no-edit-input` ([`security/tests/control-auth.test.ts`](./security/tests/control-auth.test.ts)). The only `spawn` sites in the CLI are `open-browser.ts` (opening the viewer at startup, a CLI flag), `commands/demo.ts` (`--live`, a CLI flag), `commands/init.ts` (local scaffolding) and `mcp-proxy/proxy.ts` (the command *you* pass on the command line). `POST /api/demo/start` replays a bundled fixture through an in-process client; it executes nothing. |
+| The service spawns a command from request data | **Not present in the server.** Nothing in the server or hub spawns a process in response to network input. What changed in 0.6.0: an input edit lets an authorized request choose the **arguments** of a tool call the instrumented app is holding (a `shell` tool would then run a command of the requester's choosing, as the app). That is why edits need the viewer token or the agent token at `--allow-control=edit`, the app's own `edit-input` capability, an `editable` pause and no `--no-edit-input` ([`security/tests/control-auth.test.ts`](./security/tests/control-auth.test.ts)). Injecting a result reaches the same power another way — an injected LLM completion names the next tool call **and** its arguments — so it needs the viewer token or the agent token at `--allow-control=inject`, and a tokenless socket can never inject, nor arm the breakpoints that decide which calls hold. The only `spawn` sites in the CLI are `open-browser.ts` (opening the viewer at startup, a CLI flag), `commands/demo.ts` (`--live`, a CLI flag), `commands/init.ts` (local scaffolding) and `mcp-proxy/proxy.ts` (the command *you* pass on the command line). `POST /api/demo/start` replays a bundled fixture through an in-process client; it executes nothing. |
 | A malicious MCP server attacks the inspector | `graphmind mcp-proxy` has **no listening socket**: it is a stdio pipe between the client that spawned it and the server it spawns, and it reports to the local hub as an ordinary ingest client. It parses JSON-RPC from an untrusted client and an untrusted server and never evaluates anything it relays; that boundary is fuzzed in `security/tests/mcp-proxy-fuzz.test.ts` and `mcp-boundary-fuzz.test.ts`. |
 
 ### Control credentials (0.6.0)
@@ -132,8 +132,14 @@ terminal, and the viewer strips the fragment from the address bar at once. The
 **agent** token is written to `$GRAPHMIND_HOME/run/serve-<port>.json`
 (directory 0700, file 0600, removed on a clean exit) for `graphmind resume`,
 and is limited **in the server** by `serve --allow-control=off|resume|inject|edit`
-(default `off`) — so a coding agent allowed to run the CLI cannot do more than
-the human allowed, whatever a prompt injection tells it. `serve --json` never
+(default `off`) — so whatever a prompt injection tells a coding agent, it cannot
+make `graphmind resume` do more than the human allowed. One gap remains while
+tokenless viewer sockets are deprecated rather than gone: any local process —
+a coding agent's shell included — can still **continue, retry or abort** a held
+call over a `/ws/ui` socket without a token, whatever the level (see below). It
+cannot inject, edit, or change breakpoints or step mode that way: those need a
+token, so a tokenless socket never has more rights than the agent token at
+`off`. `serve --json` never
 prints a token. Tokens are compared as SHA-256 digests in constant time;
 `?token=` and cookies are never read. The stored `exec.resumed` carries a
 `principal` (`viewer` / `agent` / `anonymous`) taken from the credential that
@@ -152,11 +158,14 @@ What the loopback boundary does **not** protect against, stated plainly:
   the host network, can read every recorded prompt and payload over loopback,
   even though the database file itself is 0600. "The trust boundary is the OS
   account" is therefore not true for reading; it is for the credential files.
-- **Tokenless viewer sockets can still steer a held run.** For compatibility a
-  `/ws/ui` socket without a token keeps the 0.5 behaviour: continue, retry,
-  inject a result, abort, change breakpoints. It can never edit an input. This
-  mode is deprecated (the server logs a note) and will require the token in a
-  later minor.
+- **Tokenless viewer sockets can still release a held call.** For
+  compatibility a `/ws/ui` socket without a token keeps the part of the 0.5
+  behaviour that chooses nothing: continue, retry and abort — whatever
+  `--allow-control` says, since that level bounds the agent token only. It can
+  never edit an input, inject a result, or change breakpoints or step mode (an
+  injected LLM completion would choose the next tool call and its arguments;
+  breakpoints decide what holds). This mode is deprecated (the server logs a
+  note) and will require the token in a later minor.
 - **Run isolation.** Since Phase 5 a local process can no longer hijack
   another process's run (`hello.ack` mints a per-client `sessionToken`; a run
   belongs to the token that first wrote to it —

@@ -7,8 +7,8 @@ description: Debug an AI agent (Vercel AI SDK, Anthropic or OpenAI SDK, LangGrap
 
 GraphMind records every agent run (LLM steps, tool calls, errors) into a local
 SQLite database, shows it as a live graph in a browser viewer, and can HOLD the
-agent at a gate (before or after a tool call, on an error, on a loop or an
-error-shaped result) until someone resumes it. Everything stays on this machine:
+agent at a gate (before or after a tool call, on an error, or on a repeating
+loop) until someone resumes it. Everything stays on this machine:
 the server binds 127.0.0.1 only.
 
 You (the coding agent) can drive the holds with four commands: `graphmind
@@ -77,8 +77,10 @@ graphmind wait --run <runId> --timeout 60 --json   # or without --run: any run
 node, point, reason, whether it is editable), the held call's recorded input
 (and error, if any), and the exact `resume` commands that apply. Values over
 2 KB are written to a private temp file and only the path is printed: read the
-file if you need it. Exit codes: 0 found, 2 timed out (run it again), 4 the run
-ended without pausing, 3 no server.
+file if you need it. The printed commands are ready to run as they are (ids
+quoted, `--port` included when it is not 4747). Exit codes: 0 found, 2 timed
+out (run it again), 4 the run ended without pausing, 3 no GraphMind 0.6+ server
+on that port (none running, or an older version: the message says which).
 
 Decide, then release it:
 
@@ -93,9 +95,13 @@ graphmind resume <pauseId> --run <runId> --action abort
 
 `resume` waits for the app's answer (default 30 s) and exits 0 resumed, 6
 refused (the app rejected the edit: schema, shape, a placeholder or truncated
-value; the call is STILL held, fix it and resume again), 7 taken (the human or
-another agent released it first), 4 not held any more, 5 not authorized
-(`--allow-control` too low, or a stale token file), 2 no answer yet.
+value — or this pause or app cannot take an edit at all, `not-editable`; the
+call is STILL held: fix the edit, or continue/retry/inject without one), 7
+taken (the human or another agent is releasing it, or released it first), 4
+not held any more, 5 not authorized (`--allow-control` too low, a stale token
+file, or edits switched off with `--no-edit-input`), 2 no answer yet (run it
+again — also when your own earlier resume is still unanswered), 3 no server
+(start it with `graphmind serve`).
 
 `graphmind pauses [--run <id>] [--json]` lists what is held right now.
 

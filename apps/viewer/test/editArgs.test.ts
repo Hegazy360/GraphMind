@@ -5,8 +5,11 @@
  * and how an answer is matched to the request that caused it.
  */
 import { readFileSync } from 'node:fs';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRUNCATION_SUFFIX } from '@graphmind-ai/schema';
+import { EditArgsEditor } from '../src/components/nodes/EditArgsEditor.js';
 import {
   EDIT_ANSWER_TIMEOUT_MS,
   REDACTED,
@@ -15,7 +18,9 @@ import {
   argDiff,
   canEditArgs,
   editAction,
+  editBase,
   editPrefill,
+  editShape,
   heldExecution,
   latestRefusal,
   markerIn,
@@ -31,7 +36,8 @@ import { sendControl } from '../src/connection/ServerConnection.js';
 import { applyEvent, type RunsMap } from '../src/store/applyEvent.js';
 import { useEditStore } from '../src/store/editStore.js';
 import { RUN, ev, resetCounters, started } from './helpers.js';
-import type { Pause, RunState } from '../src/store/types.js';
+import type { NodeState, Pause, RunState } from '../src/store/types.js';
+import type { ControlInfo } from '../src/store/uiStore.js';
 
 vi.mock('../src/connection/ServerConnection.js', () => ({ sendControl: vi.fn() }));
 
@@ -478,5 +484,228 @@ describe('editStore — drafts survive the panel, requests are consumed once', (
     expect(useEditStore.getState().editorRequest?.pauseId).toBe('p2');
     useEditStore.getState().consumeEditorRequest(useEditStore.getState().editorRequest?.nonce ?? -1);
     expect(useEditStore.getState().editorRequest).toBeUndefined();
+  });
+});
+
+describe('parallel calls of one tool — the editor edits the call that is held, or is not offered', () => {
+  const A_ARGS = { q: 'alpha', limit: 5 };
+  const B_ARGS = { q: 'beta', limit: 50 };
+
+  /** A starts, B starts, A throws and holds at its editable error gate: the ai-sdk wire (no instanceId). */
+  function errorGate(extra: Record<string, unknown> = {}): RunState {
+    return build([
+      started('tool:search', 'tool', { instanceId: 'call-A', input: A_ARGS }),
+      started('tool:search', 'tool', { instanceId: 'call-B', input: B_ARGS }),
+      ev('node.error', { nodeId: 'tool:search', error: { name: 'Error', message: 'upstream 500' } }),
+      ev('exec.paused', { pauseId: 'pA', nodeId: 'tool:search', point: 'error', editable: true, ...extra }),
+    ]);
+  }
+
+  it('with two calls running and no instanceId on the pause, "Edit arguments" is not offered (it would edit a guess)', () => {
+    const { node, pause } = nodeAndPause(errorGate(), 'tool:search', 'pA');
+    expect(pause.heldAmbiguous).toBe(true);
+    expect(canEditArgs(node, pause)).toBe(false);
+  });
+
+  it('the same at an after gate, where the guess is the oldest running call', () => {
+    const run = build([
+      started('tool:search', 'tool', { instanceId: 'call-A', input: A_ARGS }),
+      started('tool:search', 'tool', { instanceId: 'call-B', input: B_ARGS }),
+      ev('exec.paused', { pauseId: 'pB', nodeId: 'tool:search', point: 'after', editable: true }),
+    ]);
+    const { node, pause } = nodeAndPause(run, 'tool:search', 'pB');
+    expect(canEditArgs(node, pause)).toBe(false);
+  });
+
+  it('an edit made elsewhere (the CLI) never puts the edited pill on a guessed call', () => {
+    const run = build([
+      ...[
+        started('tool:search', 'tool', { instanceId: 'call-A', input: A_ARGS }),
+        started('tool:search', 'tool', { instanceId: 'call-B', input: B_ARGS }),
+        ev('exec.paused', { pauseId: 'pA', nodeId: 'tool:search', point: 'error', editable: true }),
+      ],
+      ev('exec.resumed', { pauseId: 'pA', action: 'retry', edited: { after: { q: 'gamma', limit: 5 } }, requestId: 'r-1' }),
+    ]);
+    const node = run.nodes['tool:search'];
+    const pills = Object.fromEntries((node?.executions ?? []).map((e) => [e.instanceId, e.edited]));
+    expect(pills).toEqual({ 'call-A': undefined, 'call-B': undefined });
+    // The pause still records that it was released with an edit.
+    expect(run.pauses['pA']).toMatchObject({ resolvedEdited: true });
+  });
+
+  it('an exec.paused that names its instanceId is exact: the editor targets that call and the pill lands on it', () => {
+    const run = errorGate({ instanceId: 'call-A' });
+    const { node, pause } = nodeAndPause(run, 'tool:search', 'pA');
+    expect(pause.heldAmbiguous).toBeUndefined();
+    expect(canEditArgs(node, pause)).toBe(true);
+    expect(heldExecution(node, pause)?.input).toEqual(A_ARGS);
+    const released = applyEvent(
+      { [RUN]: run },
+      ev('exec.resumed', { pauseId: 'pA', action: 'retry', edited: { after: { q: 'gamma', limit: 5 } } }),
+      'fixture',
+    )[RUN];
+    const pills = Object.fromEntries((released?.nodes['tool:search']?.executions ?? []).map((e) => [e.instanceId, e.edited]));
+    expect(pills).toEqual({ 'call-A': { after: { q: 'gamma', limit: 5 } }, 'call-B': undefined });
+  });
+});
+
+describe('after an accepted edit, the next gate opens on the live (edited) arguments', () => {
+  const MODEL_ARGS = { amount: 100, from: 'EUR', to: 'USD' };
+  const LIVE = { amount: 100, from: 'XXX', to: 'USD' };
+
+  /** continue + {from:'XXX'} accepted at before; the tool throws; the SAME instance holds at its error gate. */
+  function heldAfterEdit(): { node: NodeState; pause: Pause; run: RunState } {
+    const run = build([
+      started('tool:convertCurrency', 'tool', { instanceId: 'call-1', input: MODEL_ARGS }),
+      ev('exec.paused', { pauseId: 'p1', nodeId: 'tool:convertCurrency', point: 'before', editable: true }),
+      ev('exec.resumed', { pauseId: 'p1', action: 'continue', edited: { after: LIVE }, requestId: 'req-1' }),
+      ev('node.error', { nodeId: 'tool:convertCurrency', error: { name: 'Error', message: 'unknown currency code' } }),
+      ev('exec.paused', { pauseId: 'p2', nodeId: 'tool:convertCurrency', point: 'error', editable: true }),
+    ]);
+    return { ...nodeAndPause(run, 'tool:convertCurrency', 'p2'), run };
+  }
+
+  it('prefills with and diffs against what the call runs with now, saying so', () => {
+    const { node, pause } = heldAfterEdit();
+    const base = editBase(heldExecution(node, pause));
+    expect(base).toEqual({ input: LIVE, edited: true });
+    const prefill = editPrefill(base.input, { edited: base.edited });
+    expect(prefill.ok && JSON.parse(prefill.text)).toEqual(LIVE);
+    expect(prefill.ok && prefill.notes.join(' ')).toContain('last ran with');
+  });
+
+  it('putting a key back to the model’s value is a change that can be sent', () => {
+    const { node, pause } = heldAfterEdit();
+    const { input } = editBase(heldExecution(node, pause));
+    const plan = planEdit(input, JSON.stringify(MODEL_ARGS));
+    expect(plan.payload).toEqual({ from: 'EUR' });
+  });
+
+  it('changing only one key sends only it, and the call runs with exactly what the editor showed', () => {
+    const { node, pause } = heldAfterEdit();
+    const { input } = editBase(heldExecution(node, pause));
+    const shown = { ...(input as Record<string, unknown>), to: 'GBP' };
+    const plan = planEdit(input, JSON.stringify(shown));
+    expect(plan.payload).toEqual({ to: 'GBP' });
+    // The app merges the sent keys into the LIVE arguments (C2).
+    expect({ ...LIVE, ...plan.payload }).toEqual(shown);
+  });
+
+  it('a hidden edited.after falls back to the recorded input (which then says it is hidden)', () => {
+    expect(editBase({ instanceId: 'x', input: MODEL_ARGS, status: 'running', startedTs: 1, edited: { after: REDACTED } })).toEqual({
+      input: MODEL_ARGS,
+      edited: false,
+    });
+    expect(editBase(undefined)).toEqual({ input: undefined, edited: false });
+  });
+
+  it('the editor itself opens on the live arguments', () => {
+    const { node, pause, run } = heldAfterEdit();
+    const html = renderToStaticMarkup(createElement(EditArgsEditor, { runId: run.runId, node, pause, onClose: () => {} }));
+    const textarea = /<textarea[^>]*>([\s\S]*?)<\/textarea>/.exec(html)?.[1] ?? '';
+    expect(JSON.parse(textarea.replace(/&quot;/g, '"'))).toEqual(LIVE);
+  });
+});
+
+describe('mcp-proxy calls — the arguments live one level down', () => {
+  // `graphmind mcp-proxy` records the request params {name, arguments, _meta}
+  // and merges an edit into params.arguments (only `arguments` may change).
+  const LIVE = { name: 'delete_branch', arguments: { branch: 'feature-x', force: true }, _meta: { progressToken: 'p-1' } };
+
+  it('deleting a key inside `arguments` is blocked, like a removed top-level key — never sent and silently put back', () => {
+    const plan = planEdit(LIVE, JSON.stringify({ ...LIVE, arguments: { branch: 'feature-x' } }), 'arguments');
+    expect(plan.problems.map((p) => [p.key, p.reason])).toEqual([['arguments.force', 'removed']]);
+    expect(plan.payload).toBeUndefined();
+  });
+
+  it('a changed argument is sent as {arguments: {<key>}} and counted as one change', () => {
+    const plan = planEdit(LIVE, JSON.stringify({ ...LIVE, arguments: { branch: 'main', force: true } }), 'arguments');
+    expect(plan.changes.map((c) => c.key)).toEqual(['arguments.branch']);
+    expect(plan.payload).toEqual({ arguments: { branch: 'main' } });
+  });
+
+  it('one argument recorded as a truncated preview does not block editing another', () => {
+    const recorded = { name: 'search', arguments: { q: 'a', limit: 5, doc: `xxx${TRUNCATION_SUFFIX}` }, _meta: {} };
+    const prefill = editPrefill(recorded, { shape: 'arguments' });
+    expect(prefill.ok && prefill.notes.join(' ')).toContain('"doc"');
+    const draft = { ...recorded, arguments: { ...recorded.arguments, q: 'b' } };
+    const plan = planEdit(recorded, JSON.stringify(draft), 'arguments');
+    expect(plan.problems).toEqual([]);
+    expect(plan.payload).toEqual({ arguments: { q: 'b' } });
+    // Editing inside the preview is still blocked, per argument.
+    const inside = planEdit(recorded, JSON.stringify({ ...recorded, arguments: { ...recorded.arguments, doc: 'yyy' + TRUNCATION_SUFFIX } }), 'arguments');
+    expect(inside.problems.map((p) => [p.key, p.reason])).toEqual([['arguments.doc', 'truncated']]);
+  });
+
+  it('`name`, `_meta` and other keys are locked', () => {
+    const plan = planEdit(LIVE, JSON.stringify({ ...LIVE, name: 'drop_database' }), 'arguments');
+    expect(plan.problems.map((p) => [p.key, p.reason])).toEqual([['name', 'locked']]);
+    expect(plan.payload).toBeUndefined();
+  });
+
+  it('editShape: the proxy run edits `arguments`; every other tool edits top-level keys', () => {
+    const proxyRun = build([
+      ev('run.started', { app: 'proxy', sdk: { name: 'mcp-proxy', version: '0.6.0' } }),
+      started('tool:delete_branch', 'tool', { instanceId: 'c1', input: LIVE }),
+    ]);
+    expect(editShape(proxyRun.meta.sdk, heldExecution(proxyRun.nodes['tool:delete_branch'] as NodeState, { pauseId: 'x', nodeId: 'tool:delete_branch', point: 'before', ts: 0, active: true })?.input)).toBe('arguments');
+    resetCounters();
+    const sdkRun = build([
+      ev('run.started', { app: 'app', sdk: { name: '@graphmind-ai/ai-sdk', version: '0.6.0' } }),
+      started('tool:t', 'tool', { instanceId: 'c1', input: LIVE }),
+    ]);
+    expect(editShape(sdkRun.meta.sdk, LIVE)).toBe('top');
+    // An SDK tool with the same shape keeps top-level semantics.
+    const plan = planEdit(LIVE, JSON.stringify({ ...LIVE, arguments: { branch: 'feature-x' } }));
+    expect(plan.payload).toEqual({ arguments: { branch: 'feature-x' } });
+  });
+});
+
+describe('who may edit, and the server answering an edit itself', () => {
+  const control = (principal: 'viewer' | 'agent' | 'anonymous', extra: Partial<ControlInfo> = {}): ControlInfo => ({
+    principal,
+    agentLevel: 'off',
+    editInput: true,
+    hubCapabilities: ['pause-registry', 'edit-input'],
+    ...extra,
+  });
+
+  it('is not offered to a tab the server would refuse every edit from', () => {
+    const { node, pause } = nodeAndPause(heldTool({ editable: true }));
+    expect(canEditArgs(node, pause, false, control('viewer'))).toBe(true);
+    expect(canEditArgs(node, pause, false, undefined)).toBe(true); // a replay, or a 0.5 server
+    expect(canEditArgs(node, pause, false, control('anonymous'))).toBe(false);
+    expect(canEditArgs(node, pause, false, control('viewer', { editInput: false }))).toBe(false);
+    expect(canEditArgs(node, pause, false, control('agent', { agentLevel: 'inject' }))).toBe(false);
+    expect(canEditArgs(node, pause, false, control('agent', { agentLevel: 'edit' }))).toBe(true);
+  });
+
+  it('a refusal the server sent at once (edit-refused, pause-taken, …) answers the edit now, in its own words', () => {
+    const pause: Pause = { pauseId: 'p1', nodeId: 'tool:sql', point: 'before', ts: 0, active: true };
+    const pending: PendingEdit = {
+      runId: RUN,
+      pauseId: 'p1',
+      requestId: 'edit-1',
+      sentAt: 1_000,
+      lastRefusalSeq: -1,
+      serverAnswer: { code: 'pause-taken', message: 'another resume for this pause is already being answered' },
+    };
+    const answer = answerFor(pause, pending, 1_001);
+    expect(answer.state).toBe('refused');
+    if (answer.state !== 'refused') return;
+    expect(refusalText(answer.refusal.code, answer.refusal.message)).toContain('Another resume');
+    expect(refusalText('edit-refused', 'input edits need a credential: open the viewer…')).toContain('need a credential');
+    expect(refusalText('not-editable', 'this pause is not editable')).not.toContain('The app refused');
+  });
+
+  it('the edit store takes the server\'s answer only for the edit it is about', () => {
+    useEditStore.setState({ pending: {} });
+    useEditStore.getState().setPending({ runId: RUN, pauseId: 'p1', requestId: 'edit-1', sentAt: 1, lastRefusalSeq: -1 });
+    useEditStore.getState().noteServerAnswer('p1', 'someone-else', 'pause-taken', 'x');
+    expect(useEditStore.getState().pending['p1']?.serverAnswer).toBeUndefined();
+    useEditStore.getState().noteServerAnswer('p1', 'edit-1', 'pause-taken', 'taken');
+    expect(useEditStore.getState().pending['p1']?.serverAnswer).toEqual({ code: 'pause-taken', message: 'taken' });
+    useEditStore.getState().noteServerAnswer('p9', 'edit-1', 'pause-taken', 'x'); // no pending edit there: ignored
+    expect(useEditStore.getState().pending['p9']).toBeUndefined();
   });
 });

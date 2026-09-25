@@ -147,8 +147,8 @@ describe('the server arms what the user asked for', () => {
   });
 
   it('does not disturb breakpoints the viewer sets afterwards', async () => {
-    const { port } = await boot({ pauseOnError: 'off' });
-    const ui = await FakeUI.connect(port);
+    const { port, server } = await boot({ pauseOnError: 'off' });
+    const ui = await FakeUI.connect(port, { token: server.tokens.viewer });
     ui.control('breakpoint.set', '*', { matcher: { kind: 'tool', name: 'charge' } });
     await ui.next((m) => m.type === 'state', 'state after breakpoint.set');
     const app = await FakeApp.connect(port);

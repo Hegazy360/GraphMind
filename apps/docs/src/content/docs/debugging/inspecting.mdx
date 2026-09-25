@@ -81,8 +81,7 @@ The last three appear **only when the provider reported them** — a reported `0
 unreported count is absent, never filled with `0`. Providers disagree about what "input" means
 (Anthropic's `input_tokens` is only the uncached tail; OpenAI's `prompt_tokens` already includes
 cached tokens; ruby_llm counts input without cache), so each adapter adds the cache counts back
-where its provider left them out. That is what makes one step comparable with the next, and the
-context-window gauge honest.
+where its provider left them out. That is what makes one step comparable with the next.
 
 Events recorded before 0.6 carry no `inclusive` marker. The viewer and `graphmind mcp` show
 their `inputTokens` **as reported** (it may exclude cached tokens), labelled so. The one

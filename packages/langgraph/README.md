@@ -156,8 +156,9 @@ arrives after that — and the tool receives the parsed value; a refused edit
 keeps the gate held. A `ToolCall` handed to a class-based tool keeps its id. A
 `gm.tool` function has no schema and runs the merged input as it is. This call
 only: the model still sees the arguments it asked for. Callback-only gates and
-model calls are not editable. The `after` gate also hands the result to the
-debugger's smart holds.
+model calls are not editable. The `after` gate also passes the result to the
+session's after-gate detectors (the smart-hold hook; the result does not hold
+the call by itself unless a detector is registered).
 
 When the callback handler is attached it already announced the tool run (with
 LangChain's run id, parentage and `toolCallId`), so the wrapper stays quiet and

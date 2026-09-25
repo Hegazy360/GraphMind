@@ -19,7 +19,11 @@ control plane, usage truth and the context view are written when each lands. -->
   `resume` commands that apply. `resume <pauseId> --run <id> --action
   continue|retry|inject|abort [--output …] [--input …]` waits for the app's
   answer. `--json` everywhere; documented exit codes (0 ok, 2 timeout, 3 no
-  server, 4 nothing to act on, 5 not authorized, 6 refused, 7 taken).
+  0.6+ server — none, or an older version, named — 4 nothing to act on, 5 not
+  authorized, 6 refused, 7 taken). Suggested commands are ready to paste (ids
+  shell-quoted, `--port` named off the default port); app-written text is
+  printed with control and bidi characters escaped; `wait` never polls faster
+  than once a second.
 - **`graphmind serve --json`** prints `{port, url, pid, version}` — never a
   token — for running the debugger headless.
 - **`graphmind skill [--install]`**: a Claude Code Agent Skill
@@ -33,7 +37,12 @@ control plane, usage truth and the context view are written when each lands. -->
   and referees every resume — from any viewer tab, the CLI or HTTP: the first
   is forwarded with a `requestId`, others get `pause-taken`, a pause known to be
   closed gets `no-such-pause`. An app's refusal, or 5 s without an answer,
-  reopens it.
+  reopens it. A resume the app answers late is still told what the app did
+  (`resumed` if it ran; the others `superseded`), and an old client's
+  un-echoed answer is credited only to a resume that asked for that action.
+  Resumes for made-up pause ids, and tokenless long-polls (at most 8 of the 16
+  slots), cannot crowd out a real one; a peer cannot take over a live run by
+  flooding fresh run ids.
 - **Audit.** The stored `exec.resumed` records who released it (`principal`:
   `viewer`, `agent` or `anonymous`, from the credential — never from the app)
   and an optional sanitized `operator` label. The viewer shows "resumed by
@@ -46,14 +55,18 @@ control plane, usage truth and the context view are written when each lands. -->
   the CLI opens — never a command-line URL; printed only to a terminal) and an
   **agent** token (`~/.graphmind/run/serve-<port>.json`, 0600) that
   **`serve --allow-control=off|resume|inject|edit`** limits in the server.
-  Default `off`: a coding agent can do nothing until you allow it.
-- **Input edits** and **every non-GET `/api` route** (including `POST
-  /api/demo/start`) need a token. `?token=` and cookies are never accepted.
+  Default `off`: the agent token can do nothing until you allow it (not even
+  start the demo).
+- **Input edits**, **injected results**, **breakpoints and step mode**, and
+  **every non-GET `/api` route** (including `POST /api/demo/start`) need a
+  token. An injected LLM completion picks the next tool call and its
+  arguments, so it is guarded like an edit. `?token=` and cookies are never accepted.
   `serve --no-edit-input` refuses all edits. The server also refuses edited
   inputs and injected values that still contain `__REDACTED__` or a truncation
   marker, using the client's own marker list.
-- **Deprecated:** a viewer socket without a token still continues, retries,
-  injects and aborts as in 0.5 (never edits); the server logs a one-time note.
+- **Deprecated:** a viewer socket without a token still continues, retries
+  and aborts as in 0.5 — whatever `--allow-control` says — but never injects,
+  edits, or changes breakpoints or step mode; the server logs a one-time note.
   Reading runs still needs no credential — any local process can read them over
   loopback.
 - Every response now carries `Content-Security-Policy: frame-ancestors

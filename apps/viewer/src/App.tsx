@@ -12,6 +12,7 @@ import { resolveServerUrl } from './connection/ServerConnection.js';
 import { parseStressParams, useStressRun } from './connection/StressConnection.js';
 import { formatHash, parseHash } from './router.js';
 import { canvasActions, copyText, deepLink } from './lib/commands.js';
+import { controlAllows } from './lib/control.js';
 import { canEditArgs } from './lib/editArgs.js';
 import { heldGate, resumeGate, stepGate } from './lib/gate.js';
 import { applyTheme, nextTheme, saveTheme } from './lib/theme.js';
@@ -215,7 +216,10 @@ export default function App() {
         if (pause !== undefined) {
           const runId = ui.selectedRunId;
           const key1 = e.key.toLowerCase();
-          if (key1 === 'c' || key1 === 's' || key1 === 'r' || key1 === 'i') {
+          // A tokenless tab has no Step or Inject (the server refuses them).
+          const withheld =
+            (key1 === 's' && !controlAllows(ui.control, 'debug')) || (key1 === 'i' && !controlAllows(ui.control, 'inject'));
+          if (!withheld && (key1 === 'c' || key1 === 's' || key1 === 'r' || key1 === 'i')) {
             e.preventDefault();
             if (key1 === 'c') resumeGate(runId, pause.pauseId, 'continue');
             else if (key1 === 's') stepGate(runId, pause.pauseId);
@@ -234,7 +238,7 @@ export default function App() {
           // Like `i`, it opens the panel's copy, beside the evidence.
           if (key1 === 'e') {
             const node = useRunStore.getState().runs[runId]?.nodes[pause.nodeId];
-            if (node !== undefined && canEditArgs(node, pause, isExportedRun())) {
+            if (node !== undefined && canEditArgs(node, pause, isExportedRun(), ui.control)) {
               e.preventDefault();
               ui.selectNode(runId, pause.nodeId);
               useEditStore.getState().requestEditor(pause.pauseId);

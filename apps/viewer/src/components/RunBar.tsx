@@ -101,8 +101,9 @@ function ControlChip({ control }: { control: ControlInfo }) {
       : {
           label: 'no token',
           hint:
-            'This tab connected without the viewer token: it can continue, retry, inject and abort, but not edit a ' +
-            'held call. Open the viewer from the link `graphmind serve` printed (or its redirect file) for full control.',
+            'This tab connected without the viewer token: it can continue, retry and abort, but not inject, step, ' +
+            'edit a held call or change breakpoints. Open the viewer from the link `graphmind serve` printed (or its ' +
+            'redirect file) for full control.',
         };
   const edits = control.editInput ? '' : ' Input edits are off on this server (--no-edit-input).';
   return (

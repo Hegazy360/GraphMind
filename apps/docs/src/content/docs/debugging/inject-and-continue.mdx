@@ -65,6 +65,13 @@ A run you steered by hand never looks like a clean run when you come back to it 
 `graphmind record` keeps the marker, so an exported run stays honest.
 </Aside>
 
+<Aside type="note" title="It needs the viewer's token (0.6.0)">
+An injected LLM completion decides the next tool call and its arguments, so injecting needs a
+control credential, like editing arguments: the viewer `graphmind serve` opened has it (the
+`#token=` link), and `graphmind resume --action inject` needs `--allow-control=inject`. A tab
+opened without the token can continue, retry and abort, and does not show **Inject…**.
+</Aside>
+
 ## Worked example
 
 The bundled demo plants a bug in `convertCurrency`: it inverts an exchange rate, so a ¥520,000

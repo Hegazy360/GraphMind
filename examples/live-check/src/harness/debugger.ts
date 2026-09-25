@@ -49,8 +49,12 @@ export class HeadlessDebugger {
 
   private constructor(private readonly ws: WebSocket) {}
 
-  static async connect(uiUrl: string): Promise<HeadlessDebugger> {
-    const ws = new WebSocket(uiUrl);
+  /**
+   * `token`: the viewer token (`server.tokens.viewer`). Breakpoints, step
+   * mode and inject need a credential since 0.6.
+   */
+  static async connect(uiUrl: string, token?: string): Promise<HeadlessDebugger> {
+    const ws = new WebSocket(uiUrl, token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } });
     const dbg = new HeadlessDebugger(ws);
     ws.on('message', (data) => dbg.onMessage(String(data)));
     await new Promise<void>((resolve, reject) => {

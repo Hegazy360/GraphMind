@@ -27,8 +27,9 @@
  *  4. Authentication (0.6.0+): a browser presents the viewer token as the
  *     subprotocol `gm.auth.<token>` next to `graphmind.v1` (the only one the
  *     server selects); a non-browser client may send `Authorization: Bearer`.
- *     No credential = `anonymous`: continue/retry/inject/abort and debug
- *     state as in 0.5 (deprecated), never input edits. An unknown token is
+ *     No credential = `anonymous`: continue/retry/abort as in 0.5
+ *     (deprecated); never inject, input edits, breakpoints or step mode (a
+ *     refused change answers `error` then the real `state`). An unknown token is
  *     refused at the upgrade (401). `exec.resume` is first-writer-wins per
  *     pause: a second resume for a pause already being answered gets
  *     `error {code:'pause-taken'}`; one the hub knows is closed gets
@@ -71,7 +72,7 @@ export type UiClientMessage =
 /**
  * What this viewer socket may do (0.6.0+, on `welcome`). `principal` is how
  * the socket authenticated: `viewer` (the `#token=` credential), `agent`, or
- * `anonymous` (no credential: continue/retry/inject/abort only, deprecated).
+ * `anonymous` (no credential: continue/retry/abort only, deprecated).
  * `agentLevel` is the server's `--allow-control` level for the agent token,
  * shown so the human can see what a coding agent is allowed to do.
  */

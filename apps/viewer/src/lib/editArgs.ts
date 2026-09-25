@@ -23,6 +23,8 @@
  */
 import { MCP_PREVIEW_NOTE_PREFIX, TRUNCATION_SUFFIX } from '@graphmind-ai/schema';
 import type { NodeExecution, NodeState, Pause, RefusalRecord } from '../store/types.js';
+import type { ControlInfo } from '../store/uiStore.js';
+import { controlAllows } from './control.js';
 
 /** The redaction placeholder (@graphmind-ai/client `REDACTED`). */
 export const REDACTED = '__REDACTED__';
@@ -120,11 +122,45 @@ function sameValue(a: unknown, b: unknown): boolean {
 
 /**
  * Offer "Edit arguments" here? Only on a pause the app marked `editable`,
- * never on an LLM step (0.6.0 edits tool arguments only), and never in an
- * exported run — a recorded gate cannot be released at all.
+ * never on an LLM step (0.6.0 edits tool arguments only), never in an
+ * exported run — a recorded gate cannot be released at all — never when
+ * which of several parallel calls is held is a guess (`heldAmbiguous`), and
+ * never to a tab the server refuses every edit from (`control`: no token, an
+ * agent token below `edit`, `--no-edit-input`).
  */
-export function canEditArgs(node: NodeState, pause: Pause, replayed = false): boolean {
-  return pause.active && pause.editable === true && node.kind !== 'llm' && !replayed;
+export function canEditArgs(node: NodeState, pause: Pause, replayed = false, control?: ControlInfo): boolean {
+  return (
+    pause.active &&
+    pause.editable === true &&
+    pause.heldAmbiguous !== true &&
+    node.kind !== 'llm' &&
+    !replayed &&
+    controlAllows(control, 'edit')
+  );
+}
+
+/**
+ * The arguments the held call runs with NOW — what the editor prefills and
+ * diffs against (C2: "prefilled from the live input"). After an accepted edit
+ * the app keeps running the edited arguments (a retry re-runs them), so that
+ * is `edited.after`; before any edit, the recorded input. A hidden
+ * `edited.after` says nothing usable: the recorded input then decides.
+ */
+export function editBase(exec: NodeExecution | undefined): { input: unknown; edited: boolean } {
+  const after = exec?.edited?.after;
+  if (after !== undefined && after !== REDACTED) return { input: after, edited: true };
+  return { input: exec?.input, edited: false };
+}
+
+/**
+ * Which keys an edit may change. `graphmind mcp-proxy` records a call as its
+ * request params `{name, arguments, _meta}` and applies an edit inside
+ * `arguments` only (merged there); every other tool merges at the top level.
+ */
+export type EditShape = 'top' | 'arguments';
+
+export function editShape(sdk: { name?: string } | undefined, input: unknown): EditShape {
+  return sdk?.name === 'mcp-proxy' && isRecord(input) && Object.hasOwn(input, 'arguments') ? 'arguments' : 'top';
 }
 
 /**
@@ -165,9 +201,11 @@ function isPreviewObject(value: Record<string, unknown>): boolean {
 /**
  * What the editor opens with, or why it cannot open. The arguments must be a
  * JSON object the viewer actually saw: hidden arguments (`__REDACTED__`) and
- * a whole-value preview leave nothing to start from.
+ * a whole-value preview leave nothing to start from. `edited`: the input is
+ * an earlier accepted edit (see `editBase`), which a note says. `shape`:
+ * where the editable keys are (see `editShape`).
  */
-export function editPrefill(input: unknown): Prefill {
+export function editPrefill(input: unknown, options: { edited?: boolean; shape?: EditShape } = {}): Prefill {
   if (input === undefined) {
     return {
       ok: false,
@@ -210,14 +248,22 @@ export function editPrefill(input: unknown): Prefill {
     };
   }
   const notes: string[] = [];
-  if (Object.keys(input).some((key) => SHRINK_MARKER_KEYS.has(key))) {
+  if (options.edited === true) {
+    notes.push(
+      'Pre-filled with the arguments this call last ran with (an accepted edit), not the ones the ' +
+        'model asked for.',
+    );
+  }
+  // Where the editable keys live: the call itself, or its `arguments` (mcp-proxy).
+  const editable = options.shape === 'arguments' && isRecord(input['arguments']) ? input['arguments'] : input;
+  if (Object.keys(editable).some((key) => SHRINK_MARKER_KEYS.has(key))) {
     notes.push(
       'Not every key was recorded (the object was cut to fit). Keys you do not change keep their ' +
         'live values.',
     );
   }
-  const partial = Object.keys(input).filter(
-    (key) => !SHRINK_MARKER_KEYS.has(key) && markerIn(input[key]) !== undefined,
+  const partial = Object.keys(editable).filter(
+    (key) => !SHRINK_MARKER_KEYS.has(key) && markerIn(editable[key]) !== undefined,
   );
   if (partial.length > 0) {
     notes.push(
@@ -254,7 +300,7 @@ export interface ArgChange {
   after: unknown;
 }
 
-export type KeyProblemReason = 'removed' | 'placeholder' | 'truncated' | 'marker-key' | 'proto';
+export type KeyProblemReason = 'removed' | 'placeholder' | 'truncated' | 'marker-key' | 'proto' | 'locked';
 
 /** A change that cannot be sent, in words that say what to do instead. */
 export interface KeyProblem {
@@ -310,6 +356,57 @@ function problemFor(key: string, value: unknown, recorded: unknown): KeyProblem 
   };
 }
 
+function hasKey(obj: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+/**
+ * The key-by-key diff of `draft` against `base` (both objects). `prefix` names
+ * where they sit (`arguments.` for mcp-proxy) in what the user reads; the
+ * returned changes carry the bare key in `sendKey`.
+ */
+function diffKeys(
+  base: Record<string, unknown>,
+  draft: Record<string, unknown>,
+  prefix: string,
+): { changes: (ArgChange & { sendKey: string })[]; problems: KeyProblem[] } {
+  const changes: (ArgChange & { sendKey: string })[] = [];
+  const problems: KeyProblem[] = [];
+  for (const key of Object.keys(draft)) {
+    const shown = `${prefix}${key}`;
+    const after = draft[key];
+    if (SHRINK_MARKER_KEYS.has(key)) {
+      if (hasKey(base, key) && sameValue(base[key], after)) continue;
+      problems.push({
+        key: shown,
+        reason: 'marker-key',
+        message: `"${shown}" is GraphMind's truncation marker, not an argument. Leave it as it was, or delete it.`,
+      });
+      continue;
+    }
+    if (hasKey(base, key)) {
+      if (sameValue(base[key], after)) continue;
+      changes.push({ key: shown, sendKey: key, kind: 'changed', before: base[key], after });
+    } else {
+      changes.push({ key: shown, sendKey: key, kind: 'added', after });
+    }
+    const problem = problemFor(shown, after, hasKey(base, key) ? base[key] : undefined);
+    if (problem !== undefined) problems.push(problem);
+  }
+  for (const key of Object.keys(base)) {
+    if (SHRINK_MARKER_KEYS.has(key) || hasKey(draft, key)) continue;
+    const shown = `${prefix}${key}`;
+    problems.push({
+      key: shown,
+      reason: 'removed',
+      message:
+        `"${shown}" was removed, but keys you leave out keep their live value. Put it back, or set it ` +
+        'to null if the tool accepts that.',
+    });
+  }
+  return { changes, problems };
+}
+
 /**
  * The changed-keys diff of a draft against the recorded arguments, and the
  * payload to send. A key counts as changed when its value differs as
@@ -322,8 +419,13 @@ function problemFor(key: string, value: unknown, recorded: unknown): KeyProblem 
  *   - a `__proto__` key anywhere in a sent value.
  * Unchanged keys are never sent, which is what keeps a truncated or hidden
  * value the user did not touch at its live value.
+ *
+ * `shape: 'arguments'` (mcp-proxy): the proxy merges an edit into the call's
+ * `arguments`, so the same rules apply one level down — per argument key, a
+ * removal there blocked too, the payload `{arguments: {<changed keys>}}` —
+ * and every other key (`name`, `_meta`, …) is locked.
  */
-export function planEdit(recorded: unknown, draft: string): EditPlan {
+export function planEdit(recorded: unknown, draft: string, shape: EditShape = 'top'): EditPlan {
   let parsed: unknown;
   try {
     parsed = JSON.parse(draft) as unknown;
@@ -339,46 +441,35 @@ export function planEdit(recorded: unknown, draft: string): EditPlan {
     };
   }
   const base = isRecord(recorded) ? recorded : {};
-  const has = (obj: Record<string, unknown>, key: string): boolean =>
-    Object.prototype.hasOwnProperty.call(obj, key);
-  const changes: ArgChange[] = [];
-  const problems: KeyProblem[] = [];
-
-  for (const key of Object.keys(parsed)) {
-    const after = parsed[key];
-    if (SHRINK_MARKER_KEYS.has(key)) {
-      if (has(base, key) && sameValue(base[key], after)) continue;
+  if (shape === 'arguments' && isRecord(base['arguments']) && isRecord(parsed['arguments'])) {
+    const problems: KeyProblem[] = [];
+    for (const key of new Set([...Object.keys(base), ...Object.keys(parsed)])) {
+      if (key === 'arguments') continue;
+      if (hasKey(base, key) && hasKey(parsed, key) && sameValue(base[key], parsed[key])) continue;
       problems.push({
         key,
-        reason: 'marker-key',
-        message: `"${key}" is GraphMind's truncation marker, not an argument. Leave it as it was, or delete it.`,
+        reason: 'locked',
+        message: `"${key}" is how the client called the tool; only its arguments can be edited. Put it back as it was.`,
       });
-      continue;
     }
-    if (has(base, key)) {
-      if (sameValue(base[key], after)) continue;
-      changes.push({ key, kind: 'changed', before: base[key], after });
-    } else {
-      changes.push({ key, kind: 'added', after });
+    const inner = diffKeys(base['arguments'], parsed['arguments'], 'arguments.');
+    problems.push(...inner.problems);
+    const changes = inner.changes.map(({ sendKey: _send, ...change }) => change);
+    const plan: EditPlan = { changes, problems };
+    if (changes.length > 0 && problems.length === 0) {
+      const args: Record<string, unknown> = {};
+      for (const change of inner.changes) args[change.sendKey] = change.after;
+      plan.payload = { arguments: args };
     }
-    const problem = problemFor(key, after, has(base, key) ? base[key] : undefined);
-    if (problem !== undefined) problems.push(problem);
-  }
-  for (const key of Object.keys(base)) {
-    if (SHRINK_MARKER_KEYS.has(key) || has(parsed, key)) continue;
-    problems.push({
-      key,
-      reason: 'removed',
-      message:
-        `"${key}" was removed, but keys you leave out keep their live value. Put it back, or set it ` +
-        'to null if the tool accepts that.',
-    });
+    return plan;
   }
 
+  const { changes: found, problems } = diffKeys(base, parsed, '');
+  const changes = found.map(({ sendKey: _send, ...change }) => change);
   const plan: EditPlan = { changes, problems };
   if (changes.length > 0 && problems.length === 0) {
     const payload: Record<string, unknown> = {};
-    for (const change of changes) payload[change.key] = change.after;
+    for (const change of found) payload[change.sendKey] = change.after;
     plan.payload = payload;
   }
   return plan;
@@ -469,6 +560,28 @@ export function refusalText(code: string, message?: string, subject: 'arguments'
       return (
         'This call cannot run with edited arguments here. Continue, Retry and Inject still work.'
       );
+    // The server's own answers: the resume never reached the app.
+    case 'pause-taken':
+      return (
+        'Another resume for this pause is already being answered (another tab, or a coding agent), so ' +
+        'this edit was not sent to the app. Wait for that answer, then try again if the gate is still held.'
+      );
+    case 'superseded':
+      return 'The pause was released by something else first (another resume, or the app on its own); this edit did not run.';
+    case 'still-resolving':
+      return 'The app has not answered an earlier resume of this pause yet; try again in a few seconds.';
+    case 'edit-refused':
+    case 'forbidden':
+      return `The server refused this edit${detail !== undefined ? `: ${detail}` : '.'}`;
+    case 'not-editable':
+      return `This call cannot run with edited arguments${detail !== undefined ? `: ${detail}` : '.'} Continue, Retry and Inject still work.`;
+    case 'no-owner':
+    case 'no-such-pause':
+    case 'run-finished':
+    case 'app-disconnected':
+      return `The app holding this pause is gone (it disconnected, or the run ended); nothing was run${
+        detail !== undefined ? ` (${detail})` : '.'
+      }`;
     case 'shape': {
       const what = subject === 'arguments' ? 'these arguments' : 'this';
       return detail !== undefined
@@ -510,6 +623,12 @@ export interface PendingEdit {
   sentAt: number;
   /** Seq of the newest refusal the pause carried at send (-1: none). */
   lastRefusalSeq: number;
+  /**
+   * The server refused the edit itself (no credential, another resume won
+   * the pause, the app is gone…): it never reached the app, so this is the
+   * answer — see editStore `noteServerAnswer`.
+   */
+  serverAnswer?: { code: string; message?: string };
 }
 
 export type EditAnswer =
@@ -533,6 +652,18 @@ export function latestRefusal(pause: Pause): RefusalRecord | undefined {
  */
 export function answerFor(pause: Pause, pending: PendingEdit, now: number = Date.now()): EditAnswer {
   if (!pause.active) return { state: 'resolved' };
+  if (pending.serverAnswer !== undefined) {
+    return {
+      state: 'refused',
+      refusal: {
+        code: pending.serverAnswer.code,
+        ...(pending.serverAnswer.message === undefined ? {} : { message: pending.serverAnswer.message }),
+        requestId: pending.requestId,
+        ts: pending.sentAt,
+        seq: -1,
+      },
+    };
+  }
   const refusals = pause.refusals ?? [];
   for (let i = refusals.length - 1; i >= 0; i--) {
     const refusal = refusals[i];

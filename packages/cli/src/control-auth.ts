@@ -21,8 +21,13 @@
  *  - Comparison is constant-time over SHA-256 digests, so neither the length
  *    nor a prefix of a token is observable through timing.
  *
- * A UI socket with no credential keeps the 0.5 behaviour — continue, retry,
- * inject, abort, breakpoints, mode — deprecated, and never input edits.
+ * A UI socket with no credential keeps only the part of the 0.5 behaviour that
+ * chooses nothing — continue, retry, abort (deprecated) — and never has more
+ * rights than the agent token at level `off`. It cannot edit an input, and it
+ * cannot reach the same power another way: an injected result replaces what
+ * the model or the tool returned (an injected LLM completion picks the next
+ * tool call AND its arguments), and breakpoints / step mode decide which calls
+ * hold at all. Both need a credential.
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { proposedValueRefusal } from '@graphmind-ai/client';
@@ -189,13 +194,25 @@ export function authorizeResume(
 ): Refusal | undefined {
   if (principal === 'viewer') return undefined;
   if (principal === 'anonymous') {
-    if (!hasInput) return undefined; // 0.5 behaviour, deprecated
-    return {
-      code: 'edit-refused',
-      message:
-        'input edits need a credential: open the viewer from the link `graphmind serve` prints ' +
-        '(or its redirect file), or use `graphmind resume` with --allow-control=edit',
-    };
+    if (hasInput) {
+      return {
+        code: 'edit-refused',
+        message:
+          'input edits need a credential: open the viewer from the link `graphmind serve` prints ' +
+          '(or its redirect file), or use `graphmind resume` with --allow-control=edit',
+      };
+    }
+    if (action === 'inject') {
+      // An injected LLM completion chooses the next tool call and its
+      // arguments — the power an input edit has — so it needs a credential too.
+      return {
+        code: 'forbidden',
+        message:
+          'injecting a result needs a credential: open the viewer from the link `graphmind serve` prints ' +
+          '(or its redirect file), or use `graphmind resume` with --allow-control=inject',
+      };
+    }
+    return undefined; // continue / retry / abort: 0.5 behaviour, deprecated
   }
   const level = policy.agentLevel;
   if (hasInput) {
@@ -207,12 +224,38 @@ export function authorizeResume(
   return levelAtLeast(level, 'resume') ? undefined : agentNeeds('resume', level, 'resuming pauses');
 }
 
-/** Breakpoints and step mode: level `resume` for the agent token; open to the others. */
+/**
+ * Breakpoints and step mode decide which calls hold: the viewer token, or the
+ * agent token at level `resume`. A tokenless socket never — it must not be
+ * able to do more than the agent token at `off`.
+ */
 export function authorizeDebugState(principal: Principal, policy: ControlPolicy): Refusal | undefined {
-  if (principal !== 'agent') return undefined;
+  if (principal === 'viewer') return undefined;
+  if (principal === 'anonymous') {
+    return {
+      code: 'forbidden',
+      message:
+        'changing breakpoints or step mode needs a credential: open the viewer from the link ' +
+        '`graphmind serve` prints (or its redirect file)',
+    };
+  }
   return levelAtLeast(policy.agentLevel, 'resume')
     ? undefined
     : agentNeeds('resume', policy.agentLevel, 'changing breakpoints or step mode');
+}
+
+/**
+ * Starting the bundled demo writes a run: the viewer token, or the agent token
+ * at level `resume` — at `off` the agent token can do nothing at all.
+ */
+export function authorizeDemoStart(principal: Principal, policy: ControlPolicy): Refusal | undefined {
+  if (principal === 'viewer') return undefined;
+  if (principal === 'agent') {
+    return levelAtLeast(policy.agentLevel, 'resume')
+      ? undefined
+      : agentNeeds('resume', policy.agentLevel, 'starting the demo');
+  }
+  return { code: 'forbidden', message: 'starting the demo needs a credential' };
 }
 
 /**

@@ -19,7 +19,13 @@ somewhere other than your browser, the flow that works is:
 
 2. **Forward port 4747 to the machine your browser is on**, keeping the **same port number**.
 
-3. **Open `http://localhost:4747`** in your local browser.
+3. **Open the `viewer` link `graphmind serve` printed** — `http://127.0.0.1:4747/#token=…` — in
+   your local browser. The `#token=` part is the viewer's control credential: without it the
+   viewer can watch, continue, retry and abort, but not set breakpoints, step, inject, edit
+   arguments or start the demo. The server prints it only when its output is a terminal (run it
+   in an interactive shell, `docker run -it`, …); otherwise the same link is in the private
+   redirect file it names (`$GRAPHMIND_HOME/run/open-<port>.html`). If the forward lands on
+   another local port, keep the `#token=…` and change only the port.
 
 </Steps>
 
@@ -136,8 +142,9 @@ Running the server inside the container, as above, avoids both.
 
 <Aside type="caution" title="Loopback is the security boundary">
 There is no authentication on the ingest socket or for reading, and a viewer socket without the
-viewer token can still resume, inject into or abort your agent (only input edits need the token).
-Anyone who can reach the port can read your prompts and do all of that. Every flow on this page keeps the
+viewer token can still continue, retry or abort your agent (injecting, editing, breakpoints,
+step mode and starting the demo need the token). Anyone who can reach the port can read your
+prompts and do all of that. Every flow on this page keeps the
 server on a loopback interface and moves only your browser's view of it. Do not put the port
 behind a public tunnel. See [security](/reference/security/#threat-model).
 </Aside>

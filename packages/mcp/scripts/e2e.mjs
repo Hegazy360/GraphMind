@@ -10,10 +10,12 @@
  * Requires packages/cli to have been built (`pnpm --filter graphmind-ai build`).
  */
 import { spawn } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG = resolve(HERE, '..');
@@ -32,17 +34,35 @@ const check = (name, ok, detail = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`);
 };
 
-const server = spawn('node', [`${ROOT}/packages/cli/dist/cli.js`, 'serve', '--port', String(PORT), '--no-open'], {
-  env: { ...process.env, GRAPHMIND_TELEMETRY: '0' },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+// Breakpoints and inject need a credential (0.6): run the server with its
+// own GRAPHMIND_HOME and let the agent token (level inject) drive it.
+const HOME = mkdtempSync(join(tmpdir(), 'graphmind-mcp-e2e-'));
+process.on('exit', () => rmSync(HOME, { recursive: true, force: true }));
+const server = spawn(
+  'node',
+  [
+    `${ROOT}/packages/cli/dist/cli.js`,
+    'serve',
+    '--port',
+    String(PORT),
+    '--no-open',
+    '--allow-control=inject',
+    '--db',
+    join(HOME, 'graphmind.db'),
+  ],
+  {
+    env: { ...process.env, GRAPHMIND_TELEMETRY: '0', GRAPHMIND_HOME: HOME },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  },
+);
 server.stdout.on('data', () => {});
 server.stderr.on('data', (d) => process.stderr.write(`[serve] ${d}`));
 
 async function openUi() {
   for (let i = 0; i < 60; i += 1) {
     try {
-      const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/ui`);
+      const { agentToken } = JSON.parse(readFileSync(join(HOME, 'run', `serve-${PORT}.json`), 'utf8'));
+      const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/ui`, { headers: { authorization: `Bearer ${agentToken}` } });
       await new Promise((resolve, reject) => {
         ws.once('open', resolve);
         ws.once('error', reject);

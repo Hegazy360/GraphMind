@@ -602,7 +602,7 @@ async function scenarioFailOpen(report: Report): Promise<void> {
   report.scenarioStart('fail-open: kill the debugger mid-hold, the real agent finishes anyway');
   const server = await import('../harness/server.js').then((m) => m.startLiveServer());
   const { HeadlessDebugger } = await import('../harness/debugger.js');
-  const dbg = await HeadlessDebugger.connect(server.uiUrl);
+  const dbg = await HeadlessDebugger.connect(server.uiUrl, server.server.tokens.viewer);
   dbg.setBreakpoint({ kind: 'llm', point: 'before' });
 
   let killedAt = 0;

@@ -41,6 +41,14 @@ export const DEFAULT_RESUME_WAIT_MS = 30_000;
 export const MAX_WAIT_MS = 120_000;
 /** Long-polls (resume waits and `GET /api/pauses?wait=`) in flight at once. */
 export const MAX_CONCURRENT_WAITS = 16;
+/**
+ * Of those, the most a caller without a credential may hold. Reads need no
+ * credential, so any local process — or a page's `<img>` (no Origin, a
+ * loopback Host) — can park `GET /api/pauses?wait=`; it must never take the
+ * slots an authenticated resume (or `graphmind wait`, which sends the agent
+ * token) needs.
+ */
+export const MAX_TOKENLESS_WAITS = 8;
 
 const FRAME_ANCESTORS = "frame-ancestors 'none'";
 
@@ -209,6 +217,8 @@ export function registerControlRoutes(
 ): ControlRoutes {
   const { hub, storage, verifier } = deps;
   let activeWaits = 0;
+  /** The part of `activeWaits` parked without a valid credential. */
+  let tokenlessWaits = 0;
   const closers = new Set<() => void>();
 
   // Control paths answer only POST: a GET (a navigation, an <img>, a
@@ -255,18 +265,24 @@ export function registerControlRoutes(
     });
   });
 
+  /** Is there a long-poll slot for this caller? */
+  const slotFree = (authenticated: boolean): boolean =>
+    activeWaits < MAX_CONCURRENT_WAITS && (authenticated || tokenlessWaits < MAX_TOKENLESS_WAITS);
+
   /**
    * Hold a request open until `subscribe`'s wake fires, the deadline passes,
-   * the client goes away, or the server closes. False when every long-poll
-   * slot is taken.
+   * the client goes away, or the server closes. False when no long-poll slot
+   * is free for this caller (see MAX_TOKENLESS_WAITS).
    */
   const park = async (
     c: Context,
     waitMs: number,
+    authenticated: boolean,
     subscribe: (wake: () => void) => () => void,
   ): Promise<boolean> => {
-    if (activeWaits >= MAX_CONCURRENT_WAITS) return false;
+    if (!slotFree(authenticated)) return false;
     activeWaits += 1;
+    if (!authenticated) tokenlessWaits += 1;
     try {
       await new Promise<void>((resolve) => {
         const signal = c.req.raw.signal;
@@ -290,6 +306,7 @@ export function registerControlRoutes(
       });
     } finally {
       activeWaits -= 1;
+      if (!authenticated) tokenlessWaits -= 1;
     }
     return true;
   };
@@ -314,7 +331,8 @@ export function registerControlRoutes(
     let timedOut = false;
     if (waitMs > 0 && !hub.registry.hasOpen(runId) && !runEnded()) {
       const ready = (): boolean => hub.registry.hasOpen(runId) || runEnded();
-      const parked = await park(c, waitMs, (wake) =>
+      const authenticated = credentialOf(c, verifier).kind === 'ok';
+      const parked = await park(c, waitMs, authenticated, (wake) =>
         hub.registry.onChange(() => {
           if (ready()) wake();
         }),
@@ -407,7 +425,7 @@ export function registerControlRoutes(
         );
       }
       // Take a slot BEFORE forwarding: a refused request must have no effect.
-      if (activeWaits >= MAX_CONCURRENT_WAITS) {
+      if (!slotFree(true)) {
         return c.json(
           { error: 'too-many-requests', message: `at most ${MAX_CONCURRENT_WAITS} long-polls at once` },
           429,
@@ -420,7 +438,7 @@ export function registerControlRoutes(
       let outcome: ResumeOutcome | undefined;
       // The registry settles the request by `waitMs` at the latest (as a
       // `timeout` with its own message); the park's deadline is a backstop.
-      await park(c, waitMs + 1_000, (wake) =>
+      await park(c, waitMs + 1_000, true, (wake) =>
         hub.registry.whenAnswered(
           start.requestId,
           (answer) => {

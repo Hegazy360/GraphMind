@@ -143,8 +143,9 @@ describe('graphmind mcp-proxy against a real GraphMind server', () => {
     // {point:'error'} on its own (internal/decisions.md #8). This is the
     // headline claim for `mcp-proxy` — point a client at it, break a server,
     // and the debugger catches it without any setup.
-    const { port } = await boot();
-    const ui = await FakeUI.connect(port);
+    const { port, server } = await boot();
+    // The viewer as `graphmind serve` opens it: with its token (injecting needs one).
+    const ui = await FakeUI.connect(port, { token: server.tokens.viewer });
     cleanups.push(() => ui.close());
     expect(ui.welcome?.breakpoints).toEqual([{ point: 'error' }]);
 

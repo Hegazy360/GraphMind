@@ -5,14 +5,15 @@
  * server leaves for the CLI and the browser.
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from 'node:fs';
+import { connect, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { applySecurityHeaders } from '../src/control-http.js';
+import { MAX_CONCURRENT_WAITS, MAX_TOKENLESS_WAITS, applySecurityHeaders } from '../src/control-http.js';
 import { readRunFile } from '../src/run-files.js';
 import type { ServerOptions } from '../src/server.js';
 import { getJson, heldApp, postResume, rawRequest, sleep } from './control-helpers.js';
-import { startTestServer, waitUntil, type TestServer } from './helpers.js';
+import { FakeApp, startTestServer, waitUntil, type TestServer } from './helpers.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -279,6 +280,73 @@ describe('long-polls', () => {
     // Slots are free again.
     const after = await postResume(ts.port, held.runId, 'p17', { action: 'continue', timeoutMs: 1_000 }, ts.server.tokens.agent);
     expect(after.status).toBe(202);
+    await held.app.close();
+  }, 20_000);
+
+  it('GET /api/pauses?runId=&wait= wakes when the run is reconciled to abandoned (the app died), not at its deadline', async () => {
+    const ts = await boot({ abandonGraceMs: 200 });
+    const app = await FakeApp.connect(ts.port, { app: 'dies' });
+    app.send('run.started', 'run-dies', { app: 'dies', sdk: { name: 'test', version: '0.0.0' } });
+    app.send('node.started', 'run-dies', { nodeId: 'llm:step', kind: 'llm', name: 'step', instanceId: 'i1' });
+    await waitUntil(() => ts.server.hub.getRunInfo('run-dies')?.status === 'running', 'running');
+    const pending = getJson(ts.port, '/api/pauses?runId=run-dies&wait=5');
+    await sleep(200); // parked
+    const crashedAt = Date.now();
+    app.ws.terminate(); // no run.finished
+    const answer = await pending;
+    expect(answer.body).toMatchObject({ pauses: [], run: { id: 'run-dies', status: 'abandoned' } });
+    expect(answer.body.timedOut).toBeUndefined();
+    expect(Date.now() - crashedAt, 'woken by the abandon, ~grace after the crash').toBeLessThan(2_000);
+  });
+
+  it('tokenless long-polls can never take the slots an authenticated resume needs (a local process, or a page\'s <img>)', async () => {
+    const ts = await boot({ allowControl: 'resume' });
+    const held = await heldApp(ts.port, { answer: 'echo' });
+    await waitUntil(() => ts.server.hub.registry.get(held.runId, 'p1') !== undefined, 'held');
+    /** A raw GET left hanging; `answered()` is what the server sent back so far. */
+    const hanging = (path: string, headers: Record<string, string>): Promise<{ answered: () => string }> =>
+      new Promise((resolve, reject) => {
+        let text = '';
+        const socket: Socket = connect(ts.port, '127.0.0.1', () => {
+          const lines = Object.entries(headers).map(([name, value]) => `${name}: ${value}`);
+          socket.write(`GET ${path} HTTP/1.1\r\n${lines.join('\r\n')}\r\n\r\n`);
+          resolve({ answered: () => text });
+        });
+        socket.on('data', (chunk) => {
+          text += chunk.toString('utf8');
+        });
+        socket.on('error', (error) => {
+          if (text === '') reject(error);
+        });
+        cleanups.push(() => {
+          socket.destroy();
+        });
+      });
+    const waits: { answered: () => string }[] = [];
+    for (let i = 0; i < MAX_CONCURRENT_WAITS; i += 1) {
+      // Half from a local process; half shaped like a cross-site <img>/no-cors
+      // GET (no Origin, loopback *.localhost Host), spread over host aliases.
+      const browser = i % 2 === 1;
+      waits.push(
+        await hanging(`/api/pauses?runId=nope-${i}&wait=120`, {
+          Host: browser ? `${['a', 'b', 'c'][i % 3]}.localhost:${ts.port}` : `127.0.0.1:${ts.port}`,
+          ...(browser ? { 'Sec-Fetch-Mode': 'no-cors', 'Sec-Fetch-Dest': 'image', 'Sec-Fetch-Site': 'cross-site' } : {}),
+        }),
+      );
+    }
+    await sleep(300);
+    const refused = waits.filter((w) => w.answered().startsWith('HTTP/1.1 429'));
+    expect(refused).toHaveLength(MAX_CONCURRENT_WAITS - MAX_TOKENLESS_WAITS);
+    expect(waits.filter((w) => w.answered() === '')).toHaveLength(MAX_TOKENLESS_WAITS);
+    // The coding agent's resume still goes through.
+    const answer = await postResume(ts.port, held.runId, 'p1', { action: 'continue', timeoutMs: 5_000 }, ts.server.tokens.agent);
+    expect({ status: answer.status, outcome: answer.body.outcome }).toEqual({ status: 200, outcome: 'resumed' });
+    expect(held.resumes.map((r) => r.pauseId)).toEqual(['p1']);
+    // And so does a long-poll that presents a credential (graphmind wait does).
+    const authenticated = await fetch(`http://127.0.0.1:${ts.port}/api/pauses?runId=other&wait=0.5`, {
+      headers: { authorization: `Bearer ${ts.server.tokens.agent}` },
+    });
+    expect(authenticated.status).toBe(200);
     await held.app.close();
   }, 20_000);
 

@@ -47,6 +47,7 @@ import {
   type Principal,
 } from './control-auth.js';
 import { DebugState } from './debug-state.js';
+import { printable } from './printable.js';
 import {
   PauseRegistry,
   type PauseInfo,
@@ -276,11 +277,20 @@ export class Hub {
   readonly registry: PauseRegistry<IngestConn>;
   readonly control: ControlPolicy;
 
+  /**
+   * Every line the hub logs. App-written text (the app name, run and pause
+   * ids) lands in these lines and `/ingest` needs no credential, so controls
+   * and bidi characters are shown as `\uXXXX` rather than reaching the
+   * operator's terminal.
+   */
+  private readonly log: LogFn;
+
   constructor(
     private readonly storage: Storage,
-    private readonly log: LogFn,
+    log: LogFn,
     options: HubOptions = {},
   ) {
+    this.log = (message) => log(printable(message));
     this.state = new DebugState(options.breakpoints);
     this.abandonGraceMs = Math.max(0, options.abandonGraceMs ?? DEFAULT_ABANDON_GRACE_MS);
     this.control = {
@@ -474,6 +484,7 @@ export class Hub {
         resumed.pauseId,
         resumed.requestId,
         echoesRequestIds(conn),
+        resumed.action,
       );
       if (attribution !== undefined) {
         payload = {
@@ -545,6 +556,7 @@ export class Hub {
           known.payload.pauseId,
           known.payload.requestId,
           echoesRequestIds(conn),
+          known.payload.action,
         );
       } else if (known.type === 'exec.refused') {
         const p = known.payload;
@@ -588,9 +600,14 @@ export class Hub {
   private checkClaim(conn: IngestConn, runId: string): boolean {
     const claim = this.runClaims.get(runId);
     if (claim === undefined) {
-      if (this.runClaims.size >= MAX_RUN_CLAIMS) {
-        const oldest = this.runClaims.keys().next();
-        if (!oldest.done) this.runClaims.delete(oldest.value);
+      if (this.runClaims.size >= MAX_RUN_CLAIMS && !this.evictClaimFor(conn)) {
+        this.throttledLog(
+          'ingest-claim-cap',
+          () =>
+            `ingest: refusing a frame for new run "${runId}" from ${describeConn(conn)} — ` +
+            `${MAX_RUN_CLAIMS} runs are live on other connections`,
+        );
+        return false;
       }
       this.runClaims.set(runId, { token: conn.claimToken, strict: conn.claimAware });
       return true;
@@ -617,6 +634,27 @@ export class Hub {
         'the original app (SDK predates the run-claim capability); upgrade to remove this window',
     );
     this.runClaims.set(runId, { token: conn.claimToken, strict: conn.claimAware });
+    return true;
+  }
+
+  /**
+   * Make room for one more claim. Never a run another CONNECTED app owns —
+   * evicting it would let whoever writes next take over that live run and
+   * its pauses. The oldest claim of a run nobody holds goes first, then the
+   * oldest of `conn`'s own. False when every claim is another app's live run.
+   */
+  private evictClaimFor(conn: IngestConn): boolean {
+    let own: string | undefined;
+    for (const runId of this.runClaims.keys()) {
+      const owner = this.runOwners.get(runId);
+      if (owner === undefined) {
+        this.runClaims.delete(runId);
+        return true;
+      }
+      if (owner === conn && own === undefined) own = runId;
+    }
+    if (own === undefined) return false;
+    this.runClaims.delete(own);
     return true;
   }
 
@@ -655,7 +693,12 @@ export class Hub {
     const reconcile = (): void => {
       this.abandonTimers.delete(runId);
       if (this.runOwners.has(runId)) return; // re-claimed in the meantime
-      if (this.storage.markRunAbandoned(runId, Date.now())) this.pushRunUpdate(runId);
+      if (this.storage.markRunAbandoned(runId, Date.now())) {
+        this.pushRunUpdate(runId);
+        // A long-poll scoped to this run (`graphmind wait --run`) re-checks
+        // whether it ended; nothing in the registry changed to wake it.
+        this.registry.touch();
+      }
     };
     // Always deferred, even at grace 0: `removeIngest` runs inside a socket
     // 'close' handler and a reconnecting client can be mid-handshake.
@@ -690,6 +733,7 @@ export class Hub {
       if (this.storage.markRunAbandoned(runId, now)) reconciled.push(runId);
     }
     for (const runId of reconciled) this.pushRunUpdate(runId);
+    if (reconciled.length > 0) this.registry.touch();
     return reconciled;
   }
 
@@ -715,8 +759,9 @@ export class Hub {
       this.warnedTokenless = true;
       this.log(
         'ui: a viewer connected without a credential. Tokenless viewer sockets are deprecated: ' +
-          'they can still continue, retry, inject and abort, but never edit inputs. Open the viewer ' +
-          'from the #token= link or the redirect file `graphmind serve` prints.',
+          'they can still continue, retry and abort, but never inject, edit inputs, or change ' +
+          'breakpoints or step mode. Open the viewer from the #token= link or the redirect file ' +
+          '`graphmind serve` prints.',
       );
     }
     ws.on('pong', () => {
@@ -841,6 +886,8 @@ export class Hub {
             message: outcome.message ?? outcome.outcome,
             ...(outcome.code === undefined ? {} : { code: outcome.code }),
             pauseId: outcome.pauseId,
+            // So the resumer can tell which of its requests this answers.
+            requestId: outcome.requestId,
           });
           return;
         }
@@ -866,6 +913,8 @@ export class Hub {
         const refusal = authorizeDebugState(conn.principal, this.control);
         if (refusal !== undefined) {
           this.sendToUi(conn, { type: 'error', code: refusal.code, message: refusal.message });
+          // The viewer toggles optimistically: tell it what is really armed.
+          this.sendToUi(conn, this.stateFrame());
           return;
         }
         if (known.type === 'breakpoint.set') {
@@ -943,6 +992,18 @@ export class Hub {
       );
     }
     if (known?.state === 'resolving') {
+      if (!this.registry.resolvingUnanswered(runId, pauseId)) {
+        // The resume it is resolving on was already answered `timeout` (a
+        // short --timeout gave up) and the app has still not answered it.
+        // Nobody took the pause; it is just not answered yet — and it reopens
+        // on its own if the app never answers.
+        return answered(
+          'timeout',
+          'still-resolving',
+          'the app has not answered an earlier resume of this pause yet; it reopens within ' +
+            `${Math.round(this.registry.resolvingTimeoutMs / 1000)} s if the app never does — run it again then`,
+        );
+      }
       return answered('taken', 'pause-taken', 'another resume for this pause is already being answered');
     }
     const owner = this.registry.ownerOf(runId, pauseId) ?? this.runOwners.get(runId);
@@ -950,17 +1011,19 @@ export class Hub {
       return answered('no-such-pause', 'no-owner', `no connected app owns run "${runId}"`);
     }
     if (hasInput) {
+      // The credential is fine here; the target cannot take an edit. A
+      // distinct code (422, CLI exit 6) so nobody raises --allow-control for it.
       if (!owner.capabilities.has(HUB_CAPABILITY_EDIT_INPUT)) {
         return answered(
           'refused',
-          'edit-refused',
+          'not-editable',
           'the app holding this pause did not announce edit-input (its SDK cannot apply an edited input)',
         );
       }
       if (known === undefined || known.editable !== true) {
         return answered(
           'refused',
-          'edit-refused',
+          'not-editable',
           'this pause is not editable (the adapter cannot apply an edited input at this gate)',
         );
       }
@@ -973,6 +1036,7 @@ export class Hub {
       operator: sanitizeOperator((payload as Record<string, unknown>)['operator']),
       requestId: given,
       owner,
+      action,
       ...(deadlineMs === undefined ? {} : { deadlineMs }),
     });
     if (begun.kind === 'taken') {
@@ -1008,13 +1072,15 @@ export class Hub {
       },
     );
     if (!sent) {
+      // The same answer as a disconnect a moment after the send (closeOwner):
+      // one condition, one outcome, whatever the timing.
       const outcome: ResumeOutcome = {
-        outcome: 'no-such-pause',
+        outcome: 'timeout',
         runId,
         pauseId,
         requestId: begun.requestId,
         code: 'app-disconnected',
-        message: 'the app holding this pause is disconnecting; it releases its gates on its own',
+        message: 'the app holding this pause is disconnecting; a detached app releases its gates on its own (fail-open)',
       };
       this.registry.abort(begun.requestId, outcome);
       return { kind: 'answered', outcome };
@@ -1117,12 +1183,12 @@ export class Hub {
     }
   }
 
+  private stateFrame(): UiServerMessage {
+    return { type: 'state', breakpoints: this.state.breakpoints, mode: this.state.mode };
+  }
+
   private broadcastState(): void {
-    const message: UiServerMessage = {
-      type: 'state',
-      breakpoints: this.state.breakpoints,
-      mode: this.state.mode,
-    };
+    const message = this.stateFrame();
     for (const conn of this.uiConns) this.sendToUi(conn, message);
   }
 

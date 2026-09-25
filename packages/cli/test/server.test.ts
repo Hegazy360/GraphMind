@@ -40,8 +40,9 @@ describe('handshake', () => {
   });
 
   it('arms breakpoints and mode set before the app connects (via hello.ack)', async () => {
-    const { port } = await boot();
-    const ui = await FakeUI.connect(port);
+    const { port, server } = await boot();
+    // Breakpoints and step mode need a credential (0.6): the viewer token.
+    const ui = await FakeUI.connect(port, { token: server.tokens.viewer });
     ui.control('breakpoint.set', '*', { matcher: { kind: 'tool', name: 'searchFlights' } });
     await ui.next((m) => m.type === 'state', 'state after breakpoint.set');
     ui.control('mode.set', '*', { mode: 'step' });
@@ -379,7 +380,8 @@ describe('control relay', () => {
       'run_c persisted (ownership established)',
     );
 
-    const ui = await FakeUI.connect(port);
+    // Injecting needs a credential (0.6): the viewer token.
+    const ui = await FakeUI.connect(port, { token: ts.server.tokens.viewer });
     ui.control('exec.resume', 'run_c', { pauseId: 'p1', action: 'inject', output: { fake: true } });
 
     const control = await app.nextControl((e) => e.type === 'exec.resume');
@@ -401,7 +403,7 @@ describe('control relay', () => {
   it('relays breakpoint.set/clear and mode.set to connected apps and broadcasts state', async () => {
     const { port } = await boot();
     const app = await FakeApp.connect(port);
-    const ui = await FakeUI.connect(port);
+    const ui = await FakeUI.connect(port, { token: ts.server.tokens.viewer });
     const observer = await FakeUI.connect(port);
 
     ui.control('breakpoint.set', '*', { matcher: { name: 'searchFlights' } });
