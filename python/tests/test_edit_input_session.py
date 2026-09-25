@@ -155,7 +155,7 @@ class TestEditable:
         options, _ = tool_edit()
         gate = background(lambda: session.gate("before", TOOL, **options))
         paused = view.wait_for_type("exec.paused")
-        assert list(paused["payload"]) == ["pauseId", "nodeId", "point", "editable"]
+        assert list(paused["payload"]) == ["pauseId", "nodeId", "point", "reason", "editable"]
         assert paused["payload"]["editable"] is True
         view.resume(pause_id_of(paused), "continue")
         assert gate.result(5) == CONTINUE
@@ -177,8 +177,8 @@ class TestEditable:
         options, _ = tool_edit()
         gate = background(lambda: session.gate("before", TOOL, **options))
         paused = view.wait_for_type("exec.paused")
-        # The 0.5 frame, byte for byte.
-        assert list(paused["payload"]) == ["pauseId", "nodeId", "point"], label
+        # The 0.5 fields plus the hold's reason (a 0.5 hub accepts it), never editable.
+        assert list(paused["payload"]) == ["pauseId", "nodeId", "point", "reason"], label
         view.resume(pause_id_of(paused), "continue")
         assert gate.result(5) == CONTINUE
 

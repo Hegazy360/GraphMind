@@ -601,14 +601,55 @@ def _cut_sql_stream(partial_json: str, is_async: bool) -> Any:
     return client
 
 
+#: Every way a host reads a ``messages.stream()``: iterating it, its
+#: ``text_stream``, ``get_final_message()`` / ``until_done()`` (which drain it
+#: themselves), and a path GraphMind's tee never sees (the SDK's own text
+#: iterator, reached through attribute passthrough).
+STREAM_CONSUMPTION_MODES = ["iterate", "text_stream", "get_final_message", "until_done", "bypass"]
+
+
+def _consume_stream_sync(stream: Any, mode: str) -> None:
+    if mode == "iterate":
+        for _ in stream:
+            pass
+    elif mode == "text_stream":
+        for _ in stream.text_stream:
+            pass
+    elif mode == "get_final_message":
+        stream.get_final_message()
+    elif mode == "until_done":
+        stream.until_done()
+    else:
+        for _ in stream.__stream_text__():
+            pass
+
+
+async def _consume_stream_async(stream: Any, mode: str) -> None:
+    if mode == "iterate":
+        async for _ in stream:
+            pass
+    elif mode == "text_stream":
+        async for _ in stream.text_stream:
+            pass
+    elif mode == "get_final_message":
+        await stream.get_final_message()
+    elif mode == "until_done":
+        await stream.until_done()
+    else:
+        async for _ in stream.__stream_text__():
+            pass
+
+
 @pytest.mark.parametrize("partial_json", CUT_TOOL_INPUTS)
+@pytest.mark.parametrize("mode", STREAM_CONSUMPTION_MODES)
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
 async def test_anthropic_messages_stream_keeps_the_text_of_a_cut_tool_use(
-    attached: Any, validate_frame: Any, partial_json: str, is_async: bool
+    attached: Any, validate_frame: Any, partial_json: str, mode: str, is_async: bool
 ) -> None:
-    # The event tee builds {input: None, inputText}; the SDK's final-message
-    # snapshot (partial-mode parse) must not replace it with a call whose
-    # arguments are silently missing.
+    # The truncated call is recorded as {input: None, inputText} (contract C1)
+    # however the host read the stream: the SDK's final-message snapshot
+    # (partial-mode parse) must never replace it with a call whose arguments
+    # are silently missing ({} or {"limit": 5}).
     instance, viewer = attached()
     client = _cut_sql_stream(partial_json, is_async)
     instance.instrument_anthropic(client)
@@ -620,12 +661,10 @@ async def test_anthropic_messages_stream_keeps_the_text_of_a_cut_tool_use(
     }
     if is_async:
         async with instance.run("agent"), client.messages.stream(**kwargs) as stream:
-            async for _ in stream:
-                pass
+            await _consume_stream_async(stream, mode)
     else:
         with instance.run("agent"), client.messages.stream(**kwargs) as stream:
-            for _ in stream:
-                pass
+            _consume_stream_sync(stream, mode)
     finished = (
         await viewer.wait_for_async(
             lambda f: f.get("type") == "node.finished" and f["payload"]["nodeId"] == "llm:step"
@@ -635,8 +674,106 @@ async def test_anthropic_messages_stream_keeps_the_text_of_a_cut_tool_use(
     assert finished["output"]["rawFinishReason"] == "max_tokens"
     assert finished["output"]["toolCalls"] == [
         {"id": "toolu_cut", "name": "run_sql", "input": None, "inputText": partial_json}
-    ]
+    ], f"mode={mode}"
     assert finished["usage"] == {"inputTokens": 12, "outputTokens": 64, "inclusive": True}
+    _all_valid(viewer, validate_frame)
+
+
+def _text_then_tool_stream(is_async: bool) -> Any:
+    events = [
+        {"type": "message_start", "message": {
+            "id": "m", "type": "message", "role": "assistant", "model": "claude-test",
+            "content": [], "stop_reason": None, "stop_sequence": None,
+            "usage": {"input_tokens": 12, "output_tokens": 1}}},
+        {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "text_delta", "text": "Looking "}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "text_delta", "text": "it up."}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1,
+         "content_block": {"type": "tool_use", "id": "toolu_1", "name": "run_sql", "input": {}}},
+        {"type": "content_block_delta", "index": 1,
+         "delta": {"type": "input_json_delta", "partial_json": '{"sql": "SELECT 1"}'}},
+        {"type": "content_block_stop", "index": 1},
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+         "usage": {"output_tokens": 20}},
+        {"type": "message_stop"},
+    ]
+    body = anthropic_sse(events)
+    client, _ = make_anthropic(
+        lambda request, recorder: ANTHROPIC_HTTPX.Response(
+            200, headers={"content-type": "text/event-stream"}, content=body
+        ),
+        is_async=is_async,
+    )
+    return client
+
+
+@pytest.mark.parametrize("mode", [*STREAM_CONSUMPTION_MODES, "get_final_text"])
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_anthropic_messages_stream_records_text_tokens_and_calls_once_in_every_mode(
+    attached: Any, validate_frame: Any, mode: str, is_async: bool
+) -> None:
+    """The host still gets what the SDK gives it, and GraphMind records the
+    text, the tool call and each text token exactly once."""
+    instance, viewer = attached()
+    client = _text_then_tool_stream(is_async)
+    instance.instrument_anthropic(client)
+    kwargs: dict[str, Any] = {
+        "model": "claude-test",
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": "count users"}],
+        "tools": [{"name": "run_sql", "input_schema": {"type": "object"}}],
+    }
+    got: list[Any] = []
+    if is_async:
+        async with instance.run("agent"), client.messages.stream(**kwargs) as stream:
+            if mode == "text_stream":
+                got = [t async for t in stream.text_stream]
+            elif mode == "get_final_message":
+                got = [(await stream.get_final_message()).content[1].input]
+            elif mode == "get_final_text":
+                got = [await stream.get_final_text()]
+            else:
+                await _consume_stream_async(stream, mode)
+    else:
+        with instance.run("agent"), client.messages.stream(**kwargs) as stream:
+            if mode == "text_stream":
+                got = list(stream.text_stream)
+            elif mode == "get_final_message":
+                got = [stream.get_final_message().content[1].input]
+            elif mode == "get_final_text":
+                got = [stream.get_final_text()]
+            else:
+                _consume_stream_sync(stream, mode)
+    expected_host = {
+        "text_stream": ["Looking ", "it up."],
+        "get_final_message": [{"sql": "SELECT 1"}],
+        "get_final_text": ["Looking it up."],
+    }
+    assert got == expected_host.get(mode, [])
+    finished = (
+        await viewer.wait_for_async(
+            lambda f: f.get("type") == "node.finished" and f["payload"]["nodeId"] == "llm:step"
+        )
+    )["payload"]
+    assert finished["output"]["text"] == "Looking it up."
+    assert finished["output"]["toolCalls"] == [
+        {"id": "toolu_1", "name": "run_sql", "input": {"sql": "SELECT 1"}}
+    ]
+    assert finished["output"]["finishReason"] == "tool-calls"
+    if mode != "bypass":
+        # Text tokens stream live through the tee, once each (the bypass
+        # path never shows them).
+        streamed = [
+            d["v"]
+            for f in viewer.of_type("node.token")
+            for d in f["payload"]["deltas"]
+            if d["t"] == "text"
+        ]
+        assert "".join(streamed) == "Looking it up."
     _all_valid(viewer, validate_frame)
 
 

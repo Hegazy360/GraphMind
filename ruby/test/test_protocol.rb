@@ -79,6 +79,30 @@ class TestProtocol < Minitest::Test
                  Graphmind::Protocol.parse_envelope_json('{"gm":1,"type":"hello","runId":"*"}').kind
   end
 
+  # json's default max_nesting (100) made a well-formed frame "invalid" only
+  # because it is deep: an inject nested ~100 levels was logged and dropped,
+  # neither applied nor refused, and the resumer timed out. The TypeScript
+  # and Python clients read it; the frame size is bounded by the codec.
+  def test_parse_accepts_a_deeply_nested_resume_output
+    [110, 5_000].each do |depth|
+      output = (1..depth).reduce("leaf") { |inner, _| { "k" => inner } }
+      text = JSON.generate({ "gm" => Graphmind::Protocol::PROTOCOL_VERSION, "seq" => 1, "ts" => 1, "runId" => "*",
+                             "type" => "exec.resume",
+                             "payload" => { "pauseId" => "p1", "action" => "inject", "output" => output } },
+                           max_nesting: false)
+      result = Graphmind::Protocol.parse_envelope_json(text)
+      assert_equal :ok, result.kind, "#{depth} levels: #{result.reason}"
+      # Walked, not compared: Hash#== recurses, and 5,000 levels outrun its stack.
+      value = result.envelope["payload"]["output"]
+      levels = 0
+      while value.is_a?(Hash)
+        value = value["k"]
+        levels += 1
+      end
+      assert_equal [depth, "leaf"], [levels, value]
+    end
+  end
+
   def test_node_kinds_match_the_schema_including_the_mcp_additions
     assert_equal %w[agent llm tool chain retriever server resource prompt custom],
                  Graphmind::Protocol::NODE_KINDS

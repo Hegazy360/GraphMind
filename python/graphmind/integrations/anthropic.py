@@ -12,10 +12,11 @@ Sync (``Anthropic``) and async (``AsyncAnthropic``) clients are both supported.
 For ``messages.stream`` the HTTP request is issued by ``__enter__``, so that is
 where the ``before`` gate is held — again, nothing is in flight while paused.
 
-The stream proxy observes **both** consumption styles (iterating raw events and
-iterating ``.text_stream``) and reads final usage back off
-``get_final_message()``, so token counts land on the node whichever way the
-host reads the stream.
+The stream proxy observes **every** consumption style (iterating raw events,
+iterating ``.text_stream``, ``get_final_message()`` / ``get_final_text()`` /
+``until_done()``) and reads final usage back off the SDK's final message, so
+token counts, and the raw text of a tool call cut off by ``max_tokens``, land
+on the node whichever way the host reads the stream.
 
 ``inject`` hands back the SDK type the call returns (``Message``,
 ``BetaMessage``, their ``Parsed*`` variants), rebuilt from a bare string or an
@@ -132,25 +133,29 @@ def _describe(session: Session, kwargs: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _summarize(message: Any) -> dict[str, Any]:
+def _summarize(message: Any, raw_inputs: dict[int, str] | None = None) -> dict[str, Any]:
     """``node.finished.output``: text, thinking, the ``tool_use`` calls the model
     requested (``{id, name, input}``), the normalized ``finishReason`` and
-    Anthropic's own ``stop_reason`` as ``rawFinishReason``."""
+    Anthropic's own ``stop_reason`` as ``rawFinishReason``. ``raw_inputs``: a
+    streamed message's raw argument JSON by content-block index — used instead
+    of the block's (partial-mode parsed) ``input``, so a call cut off by
+    ``max_tokens`` keeps its text as ``inputText``."""
     out: dict[str, Any] = {}
     try:
         texts: list[str] = []
         tool_calls: list[dict[str, Any]] = []
-        for block in getattr(message, "content", None) or []:
+        for index, block in enumerate(getattr(message, "content", None) or []):
             block_type = getattr(block, "type", None)
             if block_type == "text":
                 text = getattr(block, "text", None)
                 if isinstance(text, str):
                     texts.append(text)
             elif block_type == "tool_use":
+                raw = raw_inputs.get(index) if raw_inputs else None
                 call = tool_call(
                     getattr(block, "id", None),
                     getattr(block, "name", None),
-                    getattr(block, "input", None),
+                    raw if raw is not None else getattr(block, "input", None),
                 )
                 if call is not None:
                     tool_calls.append(call)
@@ -440,8 +445,23 @@ class _Call:
 # -- messages.stream(): a context manager whose __enter__ makes the request ----
 
 
+def _text_of(event: Any) -> str | None:
+    """The text a ``text_delta`` event carries (what the SDK's ``text_stream``
+    yields), else ``None``."""
+    if getattr(event, "type", None) != "content_block_delta":
+        return None
+    delta = getattr(event, "delta", None)
+    if getattr(delta, "type", None) != "text_delta":
+        return None
+    return getattr(delta, "text", None)  # type: ignore[no-any-return]
+
+
 class _StreamProxy(SyncStreamTee):
-    """Tee for ``anthropic`` ``MessageStream``: events *and* ``.text_stream``."""
+    """Tee for ``anthropic`` ``MessageStream``. Every way of reading it —
+    iterating, ``.text_stream``, ``get_final_message()``, ``get_final_text()``,
+    ``until_done()`` — goes through the tee, so the recorded tool calls keep the
+    raw text of one cut off by ``max_tokens`` and tokens stream live. (The SDK's
+    own versions iterate the inner stream, which bypasses the tee.)"""
 
     def __init__(self, inner: Any, call: _Call, state: _StreamState) -> None:
         session = call.session
@@ -453,28 +473,29 @@ class _StreamProxy(SyncStreamTee):
             _finish_stream(call, state, inner, error)
 
         super().__init__(inner, on_chunk, on_end)
-        self._state = state
-        self._session = session
 
     @property
     def text_stream(self) -> Iterator[str]:
-        inner = self._inner
-        state = self._state
-        session = self._session
-
         def generator() -> Iterator[str]:
-            try:
-                for text in inner.text_stream:
-                    if isinstance(text, str) and text:
-                        state.text.append(text)
-                        session.push_token(LLM_NODE_ID, "text", text)
+            # As the SDK's ``__stream_text__`` does over itself.
+            for event in self:
+                text = _text_of(event)
+                if text is not None:
                     yield text
-            except BaseException as exc:
-                self._finish(exc)
-                raise
-            self._finish(None)
 
         return generator()
+
+    def until_done(self) -> None:
+        for _ in self:
+            pass
+
+    def get_final_message(self) -> Any:
+        self.until_done()
+        return self._inner.get_final_message()
+
+    def get_final_text(self) -> str:
+        self.until_done()
+        return self._inner.get_final_text()  # type: ignore[no-any-return]
 
 
 class _AsyncStreamProxy(AsyncStreamTee):
@@ -488,28 +509,49 @@ class _AsyncStreamProxy(AsyncStreamTee):
             _finish_stream(call, state, inner, error)
 
         super().__init__(inner, on_chunk, on_end)
-        self._state = state
-        self._session = session
 
     @property
     def text_stream(self) -> AsyncIterator[str]:
-        inner = self._inner
-        state = self._state
-        session = self._session
-
         async def generator() -> AsyncIterator[str]:
-            try:
-                async for text in inner.text_stream:
-                    if isinstance(text, str) and text:
-                        state.text.append(text)
-                        session.push_token(LLM_NODE_ID, "text", text)
+            async for event in self:
+                text = _text_of(event)
+                if text is not None:
                     yield text
-            except BaseException as exc:
-                self._finish(exc)
-                raise
-            self._finish(None)
 
         return generator()
+
+    async def until_done(self) -> None:
+        async for _ in self:
+            pass
+
+    async def get_final_message(self) -> Any:
+        await self.until_done()
+        return await self._inner.get_final_message()
+
+    async def get_final_text(self) -> str:
+        await self.until_done()
+        return await self._inner.get_final_text()  # type: ignore[no-any-return]
+
+
+def _raw_tool_inputs(inner: Any) -> dict[int, str] | None:
+    """The raw ``input_json_delta`` text a ``MessageStream`` accumulated, by
+    content-block index (the SDK keeps it on a private, name-mangled
+    ``__json_bufs``), or ``None`` when this SDK version keeps none."""
+    try:
+        attributes = vars(inner)
+    except TypeError:
+        return None
+    for name, bufs in list(attributes.items()):
+        if not (isinstance(name, str) and name.endswith("__json_bufs") and isinstance(bufs, dict)):
+            continue
+        raw: dict[int, str] = {}
+        for index, buf in list(bufs.items()):
+            if isinstance(index, int) and isinstance(buf, (bytes, bytearray)):
+                raw[index] = bytes(buf).decode("utf-8", errors="replace")
+            elif isinstance(index, int) and isinstance(buf, str):
+                raw[index] = buf
+        return raw
+    return None
 
 
 def _finish_stream(
@@ -519,7 +561,7 @@ def _finish_stream(
 
     The SDK accumulates a message snapshot regardless of how the host consumed
     the stream, so usage and the full text land on the node even when the host
-    only ever touched ``.text_stream`` (which bypasses our event tee).
+    read it some way the proxy does not tee.
     """
     summary: dict[str, Any] | None = None
     if error is None:
@@ -539,14 +581,16 @@ def _finish_stream(
                 # The SDK's snapshot has the whole message (usage accumulated,
                 # tool_use inputs parsed), however the host read the stream.
                 state.accumulator.add(getattr(final, "usage", None))
-                summary = _summarize(final)
+                tee_saw_calls = bool(state.calls or state.blocks)
+                # The snapshot parses tool input in partial mode, silently
+                # dropping whatever a call cut off by max_tokens left
+                # incomplete: record the raw text instead (``inputText``) —
+                # the tee's, or, when the stream was read past the tee, the
+                # SDK's own buffers.
+                summary = _summarize(final, None if tee_saw_calls else _raw_tool_inputs(inner))
                 if not summary.get("text"):
                     summary.pop("text", None)
-                if state.calls or state.blocks:
-                    # The tee saw the tool_use blocks: its calls keep the raw
-                    # text of one cut off by max_tokens (``inputText``). The
-                    # snapshot parses that text in partial mode, silently
-                    # dropping whatever is incomplete.
+                if tee_saw_calls:
                     summary.pop("toolCalls", None)
         except Exception:
             summary = None

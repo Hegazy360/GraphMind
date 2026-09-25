@@ -84,10 +84,16 @@ module Graphmind
     #   :unknown_type     — well-formed but a type we do not know (tolerate)
     #   :version_mismatch — `gm` differs from ours (`received`)
     #   :invalid          — malformed (`reason`)
+    # No nesting limit: json's default (100) dropped a deep but well-formed
+    # exec.resume unanswered, where the TypeScript and Python clients apply
+    # it. json's parser does not recurse on the machine stack (the deepest
+    # frame the WebSocket codec's size cap allows parses on a thread), and
+    # EditGuard refuses what is too deep to check, so a deep inject is always
+    # answered.
     def parse_envelope_json(text)
       raw =
         begin
-          JSON.parse(text)
+          JSON.parse(text, max_nesting: false)
         rescue StandardError => e
           return ParseResult.new(kind: :invalid, reason: "not JSON (#{e.class})")
         end

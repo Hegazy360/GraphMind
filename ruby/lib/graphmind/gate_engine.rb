@@ -33,14 +33,18 @@ module Graphmind
   # Allocating nothing on the hot path is the whole point.
   CONTINUE = GateDecision.new("continue")
 
-  # The logical node a gate belongs to.
+  # The logical node a gate belongs to. `instance_id`: the execution the gate
+  # holds (its node.started instanceId), when the caller knows it — sent as
+  # exec.paused.instanceId (0.6.0) so a debugger can tell parallel calls of one
+  # node apart. Breakpoints never match on it.
   class GateNode
-    attr_reader :node_id, :kind, :name
+    attr_reader :node_id, :kind, :name, :instance_id
 
-    def initialize(node_id, kind, name)
+    def initialize(node_id, kind, name, instance_id = nil)
       @node_id = node_id
       @kind = kind
       @name = name
+      @instance_id = instance_id
       freeze
     end
 

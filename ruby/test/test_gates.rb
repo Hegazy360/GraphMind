@@ -283,4 +283,93 @@ class TestGates < Minitest::Test
 
     assert_equal %w[alpha-done beta-done gamma-done], results.values_at("alpha", "beta", "gamma")
   end
+
+  # -- exec.paused.reason (0.6.0, contract C4) -----------------------------------
+  #
+  # Every hold carries a reason: `loop`, `breakpoint` (a matched breakpoint),
+  # `step` (step mode) or `error` (a hold at an error point); 0.5 hubs accept
+  # all four. Parity with packages/client/test/hold-reason.test.ts;
+  # `graphmind pauses` / `wait` label a hold by it.
+
+  TOOL = Graphmind::GateNode.new("tool:search", "tool", "search")
+  LLM = Graphmind::GateNode.new("llm:step", "llm", "step")
+
+  def reason_of(session, viewer, point, node, count)
+    worker = Thread.new { session.gate(point, node) }
+    paused = viewer.wait_for_frame("exec.paused", count: count)[count - 1]
+    assert_valid_frame(paused)
+    viewer.resume(paused["payload"]["pauseId"], "continue")
+    assert_equal "continue", value_of(worker).action
+    paused["payload"]["reason"]
+  end
+
+  def test_a_matched_breakpoint_holds_with_reason_breakpoint_before_and_after
+    session, viewer = attached_session(
+      viewer_options: { breakpoints: [{ "kind" => "tool" }, { "kind" => "llm", "point" => "after" }] }
+    )
+    assert_equal "breakpoint", reason_of(session, viewer, "before", TOOL, 1)
+    assert_equal "breakpoint", reason_of(session, viewer, "after", LLM, 2)
+  end
+
+  def test_pause_on_error_holds_with_reason_error
+    session, viewer = attached_session(viewer_options: { breakpoints: [{ "point" => "error" }] })
+    assert_equal "error", reason_of(session, viewer, "error", TOOL, 1)
+  end
+
+  def test_step_mode_holds_with_reason_step_and_error_at_an_error_point
+    session, viewer = attached_session(viewer_options: { mode: "step" })
+    assert_equal "step", reason_of(session, viewer, "before", TOOL, 1)
+    assert_equal "error", reason_of(session, viewer, "error", LLM, 2)
+  end
+
+  def test_step_mode_and_a_matching_breakpoint_hold_with_reason_breakpoint
+    session, viewer = attached_session(
+      viewer_options: { breakpoints: [{ "kind" => "tool", "name" => "search" }], mode: "step" }
+    )
+    assert_equal "breakpoint", reason_of(session, viewer, "before", TOOL, 1)
+    assert_equal "step", reason_of(session, viewer, "before", LLM, 2)
+  end
+
+  # -- exec.paused.instanceId (0.6.0) -----------------------------------------------
+
+  # Two parallel calls of one wrapped tool: AMS starts, LIS starts, AMS raises
+  # and is held. Without exec.paused.instanceId the hub's pause detail (what
+  # `graphmind wait` prints) falls back to the LATEST node.started of the node
+  # and describes LIS's call instead of the held one.
+  def test_exec_paused_names_the_held_call_among_parallel_calls_of_one_tool
+    session, viewer = attached_session(
+      viewer_options: { breakpoints: [{ "kind" => "tool", "name" => "lookup", "point" => "error" }] }
+    )
+    gates = %w[AMS LIS].to_h { |city| [city, { started: Queue.new, go: Queue.new }] }
+    lookup = Graphmind::Wrap.gate_callable(lambda do |city:|
+      gates[city][:started] << true
+      gates[city][:go].pop
+      raise IOError, "lookup failed for #{city}" if city == "AMS"
+
+      "weather in #{city}"
+    end, -> { session }, name: "lookup")
+    session.run("parallel") do |ctx|
+      ams = Thread.new do
+        session.with_run_context(ctx) { lookup.call(city: "AMS") }
+      rescue IOError => e
+        e
+      end
+      gates["AMS"][:started].pop
+      lis = Thread.new { session.with_run_context(ctx) { lookup.call(city: "LIS") } }
+      gates["LIS"][:started].pop
+      gates["AMS"][:go] << true
+      paused = viewer.wait_for_frame("exec.paused").first
+      starts = viewer.frames_of("node.started").select { |f| f["payload"]["nodeId"] == "tool:lookup" }
+      held = starts.find { |f| f["payload"]["input"] == { "city" => "AMS" } }["payload"]["instanceId"]
+      latest = starts.max_by { |f| f["seq"] }["payload"]["instanceId"]
+      refute_equal held, latest, "the latest start is the other call"
+      assert_equal held, paused["payload"]["instanceId"]
+      assert_equal %w[pauseId nodeId point reason instanceId], paused["payload"].keys
+      assert_valid_frame(paused)
+      viewer.resume(paused["payload"]["pauseId"], "continue")
+      gates["LIS"][:go] << true
+      assert_instance_of IOError, value_of(ams)
+      assert_equal "weather in LIS", value_of(lis)
+    end
+  end
 end

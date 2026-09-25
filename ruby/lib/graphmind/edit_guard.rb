@@ -58,11 +58,20 @@ module Graphmind
 
     module_function
 
+    # How deep a value this guard serialises to check (json's default, 100,
+    # refused values the TypeScript client and the Python SDK inject). Finite
+    # on purpose: json's generator recurses on the machine stack, which on a
+    # thread (the transport's, where this runs) runs out between 1,000 and
+    # 2,000 levels, and running out is not always a catchable
+    # SystemStackError. Deeper, or cyclic, is a `shape` refusal — answered,
+    # never dropped.
+    MAX_NESTING = 512
+
     # Refusal for a proposed inject output that must never run: `placeholder`,
-    # `truncated`, or `shape` when it cannot be serialised to be checked. nil
-    # when it is clean. Never raises.
+    # `truncated`, or `shape` when it cannot be serialised to be checked
+    # (nested past MAX_NESTING included). nil when it is clean. Never raises.
     def proposed_value_refusal(value)
-      text = JSON.generate(value)
+      text = JSON.generate(value, max_nesting: MAX_NESTING)
       text = text.dup.force_encoding(Encoding::UTF_8) unless text.encoding == Encoding::UTF_8
       return Refusal.new("placeholder", PLACEHOLDER_MESSAGE) if text.include?(Redaction::REDACTED)
       if TRUNCATION_MARKERS.any? { |marker| text.include?(marker) } ||

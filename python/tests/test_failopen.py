@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from typing import Any
@@ -38,6 +39,145 @@ def test_a_disconnect_auto_continues_held_gates_within_100ms(attached: Any) -> N
     elapsed = released_at[0] - killed_at
     assert elapsed < 0.1, f"auto-continue took {elapsed * 1000:.1f}ms, budget is 100ms"
     assert instance.session._engine.held_count == 0
+
+
+#: Far longer than one gate poll, far shorter than any reconnect (make_gm sets
+#: retry_interval=60 s, and there is no pause timeout by default).
+_RACE_DEADLINE = 3.0
+
+
+def _detach_inside_the_gate_window(instance: Any, viewer: Any) -> dict[str, Any]:
+    """Open the window between a gate's ``attached`` check and ``engine.hold()``:
+    the first positive ``should_pause`` (which runs inside it) drops the viewer
+    and waits until the transport thread's detach handler has RUN
+    ``release_all()`` — with nothing held yet — before answering True. That is
+    the interleaving a socket drop on the transport thread can produce."""
+    session = instance.session
+    engine = session._engine
+    released = threading.Event()
+    seen: dict[str, Any] = {"release_all_counts": [], "fired": False}
+    original_release_all = engine.release_all
+    original_should_pause = engine.should_pause
+
+    def release_all_spy() -> int:
+        count = original_release_all()
+        seen["release_all_counts"].append(count)
+        released.set()
+        return count
+
+    def should_pause_then_detach(point: str, node: Any) -> bool:
+        answer = original_should_pause(point, node)
+        if answer and not seen["fired"]:
+            seen["fired"] = True
+            viewer.drop_connections()
+            assert released.wait(5.0), "the detach handler never ran release_all"
+            assert session.attached is False
+        return answer
+
+    engine.release_all = release_all_spy  # looked up per call by _handle_detached
+    engine.should_pause = should_pause_then_detach
+    return seen
+
+
+async def test_an_async_gate_fails_open_when_the_detach_races_its_hold(attached: Any) -> None:
+    """The detach releases nothing (the hold is not registered yet); the hold
+    registered next must not wait for a debugger that is gone."""
+    instance, viewer = attached(breakpoints=[{"kind": "tool", "name": "fetch"}])
+    seen = _detach_inside_the_gate_window(instance, viewer)
+    ran: list[int] = []
+
+    @instance.tool
+    async def fetch() -> str:
+        ran.append(1)
+        return "real"
+
+    async with instance.run("agent"):
+        task = asyncio.ensure_future(fetch())
+        done, _ = await asyncio.wait({task}, timeout=_RACE_DEADLINE)
+        held_after = instance.session._engine.held_count
+        if not done:
+            task.cancel()  # cleanup only: the CancelledError path discards the hold
+            try:
+                await task
+            except BaseException:
+                pass
+
+    assert seen["fired"] is True, "the race window was never exercised"
+    assert seen["release_all_counts"] == [0], seen["release_all_counts"]
+    assert done, (
+        f"FAIL-OPEN broken: the async tool call is still held {_RACE_DEADLINE}s after the "
+        f"debugger detached (held_count={held_after}, body ran={bool(ran)})"
+    )
+    assert task.result() == "real"
+    assert held_after == 0
+
+
+def test_a_sync_gate_fails_open_when_the_detach_races_its_hold(attached: Any) -> None:
+    instance, viewer = attached(breakpoints=[{"kind": "tool", "name": "fetch"}])
+    seen = _detach_inside_the_gate_window(instance, viewer)
+    result: dict[str, Any] = {}
+
+    @instance.tool
+    def fetch() -> str:
+        return "real"
+
+    def call() -> None:
+        with instance.run("agent"):
+            result["value"] = fetch()
+
+    worker = threading.Thread(target=call, daemon=True)
+    worker.start()
+    worker.join(timeout=_RACE_DEADLINE)
+
+    assert seen["fired"] is True
+    assert seen["release_all_counts"] == [0]
+    assert not worker.is_alive(), "the sync gate stayed held after the debugger detached"
+    assert result.get("value") == "real"
+    assert instance.session._engine.held_count == 0
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_a_held_gate_continues_once_detached_even_if_nothing_released_it(
+    attached: Any, is_async: bool
+) -> None:
+    """Belt and braces: both gates re-check ``attached`` while they wait, so a
+    held gate continues even when the detach callback never reaches it."""
+    instance, viewer = attached(breakpoints=[{"kind": "tool"}])
+    engine = instance.session._engine
+    engine.release_all = lambda: 0  # the detach handler releases nothing
+
+    if is_async:
+
+        @instance.tool
+        async def fetch_async() -> str:
+            return "real"
+
+        task = asyncio.ensure_future(fetch_async())
+        await viewer.wait_for_type_async("exec.paused")
+        viewer.drop_connections()
+        done, _ = await asyncio.wait({task}, timeout=_RACE_DEADLINE)
+        if not done:
+            task.cancel()
+            try:
+                await task
+            except BaseException:
+                pass
+        assert done, "the async gate stayed held after the debugger detached"
+        assert task.result() == "real"
+    else:
+
+        @instance.tool
+        def fetch() -> str:
+            return "real"
+
+        result: list[str] = []
+        worker = threading.Thread(target=lambda: result.append(fetch()), daemon=True)
+        worker.start()
+        await viewer.wait_for_type_async("exec.paused")
+        viewer.drop_connections()
+        await asyncio.to_thread(worker.join, _RACE_DEADLINE)
+        assert result == ["real"], "the sync gate stayed held after the debugger detached"
+    assert engine.held_count == 0
 
 
 def test_dispose_releases_held_gates(attached: Any) -> None:

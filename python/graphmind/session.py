@@ -59,6 +59,7 @@ from .gate import (
     Hold,
     ResumeInfo,
     ValidationRequest,
+    matcher_matches,
 )
 from .held import HeldLedger
 from .ids import agent_node_id, new_id, next_id
@@ -115,6 +116,9 @@ VALIDATION_TIMEOUT_MS = 4000
 #: How long a host whose gate was discarded waits for that gate's final decision.
 _DISCARD_GRACE = 1.0
 
+#: ``exec.paused.reason`` of a hold no built-in breakpoint raised (0.6.0).
+_MATCHED_REASONS = ("breakpoint", "step", "error")
+
 _UNSET: Any = object()
 
 
@@ -143,13 +147,18 @@ def _consume_outcome(task: Any) -> None:
 
 
 class _PendingPause:
-    """What :meth:`Session.gate` hands the hold it opens: why it holds (a loop
-    hold) and, for an editable pause, the validator that will check an edit."""
+    """What :meth:`Session.gate` hands the hold it opens: why it holds
+    (``reason``, with the loop details for a loop hold) and, for an editable
+    pause, the validator that will check an edit."""
 
-    __slots__ = ("loop", "validate")
+    __slots__ = ("editable", "loop", "reason", "validate")
 
-    def __init__(self, loop: LoopInfo | None, validate: Any) -> None:
+    def __init__(
+        self, reason: str, loop: LoopInfo | None, editable: bool = False, validate: Any = None
+    ) -> None:
+        self.reason = reason
         self.loop = loop
+        self.editable = editable
         self.validate = validate
 
 
@@ -639,7 +648,7 @@ class Session:
             loop = self._consult_loop(point, node)
             if loop is None and not self._engine.should_pause(point, node):
                 return CONTINUE
-            pending = self._pending_pause(loop, editable, validate_input)
+            pending = self._pending_pause(point, node, loop, editable, validate_input)
             hold = self._engine.hold(point, node, self._resolve_run_id(), pending)
             handled: ValidationRequest | None = None
             while True:
@@ -690,11 +699,11 @@ class Session:
             loop = self._consult_loop(point, node)
             if loop is None and not self._engine.should_pause(point, node):
                 return CONTINUE
-            pending = self._pending_pause(loop, editable, validate_input)
+            pending = self._pending_pause(point, node, loop, editable, validate_input)
             hold = self._engine.hold(point, node, self._resolve_run_id(), pending)
             handled: ValidationRequest | None = None
             while True:
-                message = await asyncio.wrap_future(self._engine.mailbox(hold))
+                message = await self._next_message_async(hold)
                 if isinstance(message, ValidationRequest):
                     if message is handled:
                         # The verdict could not move the gate on: never spin.
@@ -718,22 +727,59 @@ class Session:
             self._warner.warn("gate", "internal gate error; continuing", exc)
             return CONTINUE
 
+    def _debugger_gone(self) -> bool:
+        """FAIL-OPEN: nobody can resume a gate held now."""
+        return self._disposed or not self._transport.attached
+
     def _next_message_sync(self, hold: Hold) -> Any:
         """Block until the held gate's mailbox has something: a
         :class:`ValidationRequest` to run here, or the final decision."""
         while True:
             future = self._engine.mailbox(hold)
+            if not future.done() and self._debugger_gone():
+                # Checked before every wait, the first right after the hold
+                # was registered: a detach that landed between the gate's
+                # ``attached`` check and ``engine.hold()`` released nothing
+                # (the hold did not exist yet), and nothing else ever would.
+                # Later checks are belt and braces: the disconnect callback
+                # normally releases held gates within a millisecond.
+                self._engine.discard(hold.pause_id)
+                return self._final_decision(hold)
             try:
                 return future.result(timeout=_GATE_POLL)
             except concurrent.futures.TimeoutError:
-                if self._disposed or not self._transport.attached:
-                    # Belt and braces: the disconnect callback normally
-                    # releases held gates within a millisecond.
-                    self._engine.discard(hold.pause_id)
-                    return self._final_decision(hold)
+                continue
             except concurrent.futures.CancelledError:
                 self._engine.discard(hold.pause_id)
                 return self._final_decision(hold)
+
+    async def _next_message_async(self, hold: Hold) -> Any:
+        """:meth:`_next_message_sync` for a task: suspends it (never the loop)
+        and re-checks the fail-open conditions every :data:`_GATE_POLL`."""
+        watched: concurrent.futures.Future[Any] | None = None
+        waiter: asyncio.Future[Any] | None = None
+        try:
+            while True:
+                future = self._engine.mailbox(hold)
+                if waiter is None or future is not watched:
+                    # One waiter per mailbox: a long hold must not pile up
+                    # callbacks on it, one per poll.
+                    watched = future
+                    waiter = asyncio.wrap_future(future)
+                if not future.done() and self._debugger_gone():
+                    self._engine.discard(hold.pause_id)
+                    return await self._final_decision_async(hold)
+                await asyncio.wait({waiter}, timeout=_GATE_POLL)
+                if future.done():
+                    if future.cancelled():
+                        self._engine.discard(hold.pause_id)
+                        return await self._final_decision_async(hold)
+                    return future.result()
+        finally:
+            if waiter is not None and not waiter.done():
+                # Abandoned (cancelled task, or gone): like the plain
+                # ``await wrap_future`` this replaces, stop waiting.
+                waiter.cancel()
 
     def _final_decision(self, hold: Hold) -> GateDecision:
         """The decision a discarded gate was released with (``continue``, or
@@ -742,6 +788,19 @@ class Session:
             message = self._engine.mailbox(hold).result(timeout=_DISCARD_GRACE)
         except BaseException:
             return CONTINUE
+        return message if isinstance(message, GateDecision) else CONTINUE
+
+    async def _final_decision_async(self, hold: Hold) -> GateDecision:
+        """:meth:`_final_decision` without blocking the event loop."""
+        future = self._engine.mailbox(hold)
+        if not future.done():
+            waiter = asyncio.wrap_future(future)
+            await asyncio.wait({waiter}, timeout=_DISCARD_GRACE)
+            if not waiter.done():
+                waiter.cancel()
+        if not future.done() or future.cancelled():
+            return CONTINUE
+        message = future.result()
         return message if isinstance(message, GateDecision) else CONTINUE
 
     def _apply_decision(self, decision: GateDecision) -> GateDecision:
@@ -769,14 +828,21 @@ class Session:
         hub = self._hub_capabilities
         return self._edit_input_enabled and hub is not None and "edit-input" in hub
 
-    def _pending_pause(self, loop: LoopInfo | None, editable: Any, validate_input: Any) -> Any:
-        """What the hold about to open carries to ``_on_paused``: the loop
-        details alone (the 0.5 shape), or a :class:`_PendingPause` when the
-        pause is offered as editable. A ``validate_input`` that is present but
-        not callable is a misconfigured safety check, not "no validator": the
-        pause is not editable."""
+    def _pending_pause(
+        self,
+        point: str,
+        node: GateNode,
+        loop: LoopInfo | None,
+        editable: Any,
+        validate_input: Any,
+    ) -> _PendingPause:
+        """What the hold about to open carries to ``_on_paused``: why it holds
+        and whether it is offered as editable. A ``validate_input`` that is
+        present but not callable is a misconfigured safety check, not "no
+        validator": the pause is not editable."""
+        reason = "loop" if loop is not None else self._matched_reason(point, node)
         if editable is not True or not self._edits_honoured():
-            return loop
+            return _PendingPause(reason, loop)
         if validate_input is not None and not callable(validate_input):
             self._warner.warn(
                 "edit-input-validator",
@@ -784,8 +850,24 @@ class Session:
                 "editable (pass a function returning {'ok': True, 'value': ...} or "
                 "{'ok': False, 'code': ...}, e.g. one calling merge_tool_input)",
             )
-            return loop
-        return _PendingPause(loop, validate_input)
+            return _PendingPause(reason, loop)
+        return _PendingPause(reason, loop, True, validate_input)
+
+    def _matched_reason(self, point: str, node: GateNode) -> str:
+        """Why a hold that no built-in breakpoint raised holds (``matchedReason``
+        in the TypeScript client): at an ``error`` point, ``error`` (the
+        pause-on-error breakpoint, or step mode stopping on an error);
+        elsewhere ``breakpoint`` when one of the debugger's breakpoints
+        matches, else ``step``."""
+        if point == "error":
+            return "error"
+        try:
+            breakpoints, _mode = self._engine.snapshot()
+            if any(matcher_matches(matcher, point, node) for matcher in breakpoints):
+                return "breakpoint"
+        except Exception:
+            return "breakpoint"
+        return "step"
 
     def _handle_resume(self, payload: Mapping[str, Any]) -> None:
         """An ``exec.resume`` for a held gate. Without ``input``: released as in
@@ -1486,15 +1568,18 @@ class Session:
     def _on_paused(
         self, pause_id: str, node: GateNode, point: str, run_id: str, reason: Any = None
     ) -> None:
-        """``exec.paused``: the 0.5 fields in their 0.5 order, then why a loop
-        hold held, then ``editable`` — present only when true, so a pause nobody
-        can edit, and every pause under a 0.5 debugger, is byte-identical to 0.5 —
-        then ``instanceId`` when the integration named the held execution."""
-        editable = isinstance(reason, _PendingPause)
-        loop_info = reason.loop if editable else reason
-        if editable:
+        """``exec.paused``: the 0.5 fields in their 0.5 order, then ``reason``
+        — on every hold (0.6.0): ``loop`` with ``loop``, else ``breakpoint`` /
+        ``step`` / ``error`` from what the debugger armed (0.5 hubs accept all
+        four) — then ``editable``, present only when true, then ``instanceId``
+        when the integration named the held execution. The order is the
+        TypeScript client's (``pausedPayload``)."""
+        pending = reason if isinstance(reason, _PendingPause) else None
+        loop_info = pending.loop if pending is not None else reason
+        editable = pending is not None and pending.editable
+        if pending is not None and editable:
             # Registered FIRST: the debugger may answer the frame at once.
-            self._editable_pauses[pause_id] = reason.validate
+            self._editable_pauses[pause_id] = pending.validate
         try:
             self._ledger.hold_opened(pause_id, run_id, node.node_id, point)
         except Exception:
@@ -1507,6 +1592,8 @@ class Session:
                 payload["loop"] = loop
             except Exception:
                 pass
+        elif pending is not None and pending.reason in _MATCHED_REASONS:
+            payload["reason"] = pending.reason
         if editable:
             payload["editable"] = True
         instance_id = getattr(node, "instance_id", None)

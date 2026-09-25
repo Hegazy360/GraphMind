@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "open3"
+require "tmpdir"
 
 # 0.6.0 parity for the Ruby gem (W1 scope — it does not announce edit-input):
 # the requestId echo, hello.ack.hubCapabilities, the client-side inject guard
@@ -69,7 +71,7 @@ class TestEditGuard < Minitest::Test
     session, viewer = attached_session(viewer_options: { breakpoints: [BEFORE_TOOL], hub_capabilities: EDITS })
     worker = held_tool(session)
     paused = viewer.wait_for_frame("exec.paused").first
-    assert_equal %w[pauseId nodeId point], paused["payload"].keys
+    assert_equal %w[pauseId nodeId point reason instanceId], paused["payload"].keys
     viewer.resume(paused["payload"]["pauseId"], "continue")
     assert_equal "real x", value_of(worker)
   end
@@ -150,6 +152,173 @@ class TestEditGuard < Minitest::Test
         assert ran
       end
     end
+  end
+
+  # -- the gem's own recording bounds --------------------------------------------
+  #
+  # Session#sanitize bounds every recorded tool input and output. Each bound
+  # must leave a marker the shared guard (this gem's, the TS client's and the
+  # hub's) knows, or a pre-filled copy of a cut recording — the viewer's
+  # editor starts from the recorded input at a Ruby gate — is injected and the
+  # app runs on with part of its data silently gone.
+
+  # Its #inspect is longer than Session::MAX_PREVIEW, and JSON cannot express it.
+  class Blob
+    def inspect = "#<Blob #{'y' * 9000}>"
+  end
+
+  ROWS = 250
+
+  def rows = (1..ROWS).map { |i| { "id" => i, "status" => "open" } }
+  def deep(levels) = (1..levels).reduce("leaf") { |inner, _| { "n" => inner } }
+
+  def recordings
+    session = new_session
+    {
+      "array" => session.send(:sanitize, { "rows" => rows }),
+      "hash" => session.send(:sanitize, { "cols" => (1..ROWS).to_h { |i| ["k#{i}", i] } }),
+      "depth" => session.send(:sanitize, deep(80)),
+      "inspect" => session.send(:sanitize, { "blob" => Blob.new })
+    }
+  end
+
+  def test_every_recording_bound_leaves_a_shared_truncation_marker
+    recorded = recordings
+    e = Graphmind::EditGuard::ELLIPSIS
+    assert_equal rows.first(200) + ["#{e}[50 more]"], recorded["array"]["rows"]
+    cols = recorded["hash"]["cols"]
+    assert_equal 201, cols.size
+    assert_equal "[50 more keys]", cols[e]
+    assert_includes JSON.generate(recorded["depth"]), %("#{e}[depth limit]")
+    blob = recorded["inspect"]["blob"]
+    assert_equal "#<Blob #{'y' * (Graphmind::Session::MAX_PREVIEW - 7)}#{e}[truncated]", blob
+    recorded.each do |bound, value|
+      # The viewer pre-fills the recording; the user fixes one field and injects.
+      edited = JSON.parse(JSON.generate(value), max_nesting: false)
+      edited["rows"][0]["status"] = "closed" if bound == "array"
+      assert_equal "truncated", Graphmind::EditGuard.proposed_value_refusal(edited)&.code, bound
+    end
+  end
+
+  def test_a_value_within_every_bound_is_recorded_whole_and_injectable
+    session = new_session
+    value = { "rows" => rows.first(200), "cols" => (1..200).to_h { |i| ["k#{i}", i] },
+              "deep" => deep(40), "text" => "y" * 20_000 }
+    recorded = session.send(:sanitize, value)
+    assert_equal value, recorded
+    assert_nil Graphmind::EditGuard.proposed_value_refusal(recorded)
+  end
+
+  def test_the_typescript_client_and_the_hub_refuse_a_cut_ruby_recording
+    node = ENV.fetch("GRAPHMIND_NODE", "node")
+    client = File.join(GraphmindTest::REPO_ROOT, "packages", "client", "dist", "index.js")
+    hub = File.join(GraphmindTest::REPO_ROOT, "packages", "cli", "dist", "control-auth.js")
+    skip("packages/client and packages/cli are not built") unless File.exist?(client) && File.exist?(hub)
+    Dir.mktmpdir("gm-edit-guard") do |dir|
+      data = File.join(dir, "recordings.json")
+      File.write(data, JSON.generate(recordings, max_nesting: false))
+      script = <<~JS
+        const { proposedValueRefusal } = await import(#{JSON.generate("file://#{client}")});
+        const { contentRefusal } = await import(#{JSON.generate("file://#{hub}")});
+        const fs = await import('node:fs');
+        const recordings = JSON.parse(fs.readFileSync(#{JSON.generate(data)}, 'utf8'));
+        const out = {};
+        for (const [bound, value] of Object.entries(recordings)) {
+          out[bound] = [proposedValueRefusal(value)?.code ?? null, contentRefusal(value, 'output')?.code ?? null];
+        }
+        process.stdout.write(JSON.stringify(out));
+      JS
+      out, err, status = Open3.capture3(node, "--input-type=module", "-e", script)
+      assert status.success?, "node failed: #{err[0, 2000]}"
+      codes = JSON.parse(out)
+      assert_equal(recordings.keys.to_h { |bound| [bound, %w[truncated truncated]] }, codes)
+    end
+  rescue Errno::ENOENT
+    skip("node is not available")
+  end
+
+  def test_a_prefilled_cut_recording_is_never_injected
+    session, viewer = attached_session(viewer_options: { breakpoints: [BEFORE_TOOL] })
+    tool = Graphmind::Wrap.gate_callable(->(list) { list }, -> { session }, name: "search")
+    worker = Thread.new { tool.call(rows) }
+    worker.report_on_exception = false
+    pause_id = viewer.wait_for_frame("exec.paused").first["payload"]["pauseId"]
+    # What the viewer's editor starts from at a Ruby gate: the recorded input.
+    prefill = viewer.frames_of("node.started").last["payload"]["input"]
+    edited = prefill["list"].dup
+    edited[0] = edited[0].merge("status" => "closed")
+    viewer.resume_with({ "pauseId" => pause_id, "action" => "inject", "output" => edited, "requestId" => "cut" })
+    refused = viewer.wait_for_frame("exec.refused").first
+    assert_equal "truncated", refused["payload"]["code"]
+    assert_equal 1, session.stats.held_gates, "the gate stays held after a refused inject"
+    viewer.resume(pause_id, "continue")
+    assert_equal ROWS, value_of(worker).length
+  end
+
+  def test_a_cut_recorded_output_is_refused_too
+    session, viewer = attached_session
+    tool = Graphmind::Wrap.gate_callable(->(_q) { rows }, -> { session }, name: "fetch_rows")
+    assert_equal ROWS, tool.call("all").length
+    output = viewer.wait_for_frame("node.finished").first["payload"]["output"]
+    assert_equal 201, output.length
+    assert_equal "truncated", Graphmind::EditGuard.proposed_value_refusal(output)&.code
+  end
+
+  # -- deeply nested values ------------------------------------------------------
+  #
+  # json's default max_nesting (100) is not a limit the TypeScript client, the
+  # hub or the Python SDK have: a clean value nested ~100 levels was refused
+  # as `shape` here, and a resume frame carrying one was dropped unanswered.
+
+  DEEP = 110
+
+  def deep_value(levels = DEEP) = (1..levels).reduce("leaf") { |inner, _| { "k" => inner } }
+
+  def test_a_clean_deeply_nested_value_is_not_refused
+    assert_nil Graphmind::EditGuard.proposed_value_refusal(deep_value)
+    assert_equal "truncated", Graphmind::EditGuard.proposed_value_refusal(deep_value.merge("x" => "cut…[truncated]"))&.code
+    assert_nil Graphmind::EditGuard.proposed_value_refusal(deep_value(Graphmind::EditGuard::MAX_NESTING - 1))
+  end
+
+  # Past the guard's bound the value cannot be checked: a `shape` refusal,
+  # never a crash (json's generator would overflow the thread's stack).
+  def test_a_value_nested_past_the_guards_bound_is_refused_on_any_thread
+    worker = Thread.new { Graphmind::EditGuard.proposed_value_refusal(deep_value(5_000))&.code }
+    assert_equal "shape", value_of(worker)
+    assert_equal "shape", Graphmind::EditGuard.proposed_value_refusal(deep_value(Graphmind::EditGuard::MAX_NESTING + 1))&.code
+  end
+
+  # Written as the hub's JSON.stringify writes it (the fake viewer's own
+  # JSON.generate keeps json's default nesting limit).
+  def send_deep_inject(viewer, pause_id, output, request_id)
+    frame = JSON.generate({ "gm" => Graphmind::Protocol::PROTOCOL_VERSION, "seq" => 1000, "ts" => 1, "runId" => "*",
+                            "type" => "exec.resume",
+                            "payload" => { "pauseId" => pause_id, "action" => "inject", "output" => output,
+                                           "requestId" => request_id } }, max_nesting: false)
+    viewer.live_connections.each { |connection| connection.send_text(frame) }
+  end
+
+  def test_a_deeply_nested_inject_is_answered_and_applied
+    session, viewer = attached_session(viewer_options: { breakpoints: [BEFORE_TOOL] })
+    worker = held_tool(session)
+    pause_id = viewer.wait_for_frame("exec.paused").first["payload"]["pauseId"]
+    send_deep_inject(viewer, pause_id, deep_value, "deep")
+    resumed = viewer.wait_for_frame("exec.resumed", timeout: 3.0).first
+    assert_equal({ "pauseId" => pause_id, "action" => "inject", "requestId" => "deep" }, resumed["payload"])
+    assert_equal deep_value, value_of(worker)
+    assert_empty warnings.grep(/ignoring invalid frame/)
+  end
+
+  def test_an_inject_too_deep_to_check_is_refused_not_dropped
+    session, viewer = attached_session(viewer_options: { breakpoints: [BEFORE_TOOL] })
+    worker = held_tool(session)
+    pause_id = viewer.wait_for_frame("exec.paused").first["payload"]["pauseId"]
+    send_deep_inject(viewer, pause_id, deep_value(5_000), "too-deep")
+    refused = viewer.wait_for_frame("exec.refused", timeout: 3.0).first
+    assert_equal %w[shape too-deep], refused["payload"].values_at("code", "requestId")
+    assert_equal 1, session.stats.held_gates, "the gate stays held after a refused inject"
+    viewer.resume(pause_id, "continue")
+    assert_equal "real x", value_of(worker)
   end
 
   def test_a_legitimate_truncated_field_is_injected

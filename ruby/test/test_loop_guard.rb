@@ -416,7 +416,7 @@ class TestLoopGuard < Minitest::Test
     viewer.resume(loop_hold["payload"]["pauseId"], "continue")
     error_hold = wait_paused(viewer, 2)
     assert_equal "error", error_hold["payload"]["point"]
-    refute error_hold["payload"].key?("reason")
+    assert_equal "error", error_hold["payload"]["reason"]
     refute error_hold["payload"].key?("loop")
     viewer.resume(error_hold["payload"]["pauseId"], "retry")
     assert_equal %w[ok ok ok], value_of(worker)
@@ -521,7 +521,7 @@ class TestLoopGuard < Minitest::Test
     started = viewer.frames_of("node.started").select { |f| f["payload"]["nodeId"] == "tool:t" }
     assert_equal 3, started.size, "no event may be lost to the nesting either"
     assert_equal({ "name" => "node", "parent" => "[circular]" }, started[0]["payload"]["input"]["x"])
-    assert_includes JSON.generate(started[1]["payload"]["input"]), '"[depth]"'
+    assert_includes JSON.generate(started[1]["payload"]["input"]), '"…[depth limit]"'
     assert_equal({ "me" => "[circular]" }, started[2]["payload"]["input"]["x"])
   end
 
@@ -537,7 +537,9 @@ class TestLoopGuard < Minitest::Test
     viewer.resume(loop_hold["payload"]["pauseId"], "continue")
     plain = wait_paused(viewer, 2)
     assert_equal "tool:other", plain["payload"]["nodeId"]
-    assert_equal %w[nodeId pauseId point], plain["payload"].keys.sort
+    # No loop details: reason "breakpoint"; instanceId (0.6.0) names the held call.
+    assert_equal %w[instanceId nodeId pauseId point reason], plain["payload"].keys.sort
+    assert_equal "breakpoint", plain["payload"]["reason"]
     viewer.resume(plain["payload"]["pauseId"], "continue")
     value_of(worker)
   end

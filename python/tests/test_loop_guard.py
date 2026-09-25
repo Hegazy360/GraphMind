@@ -678,7 +678,7 @@ class TestHold:
         error_hold = view.wait_for(
             lambda f: f.get("type") == "exec.paused" and f["payload"]["point"] == "error"
         )
-        assert "reason" not in error_hold["payload"] and "loop" not in error_hold["payload"]
+        assert error_hold["payload"]["reason"] == "error" and "loop" not in error_hold["payload"]
         view.resume(error_hold["payload"]["pauseId"], "retry")
         thread.join(5)
         assert box.get("value") == ["ok", "ok", "ok"] and len(attempts) == 4
@@ -801,8 +801,9 @@ class TestHold:
         plain = view.wait_for(
             lambda f: f.get("type") == "exec.paused" and f["payload"]["nodeId"] == "tool:other"
         )
-        # No loop details; `instanceId` (0.6.0) names the held call.
-        assert set(plain["payload"]) == {"pauseId", "nodeId", "point", "instanceId"}
+        # No loop details: reason `breakpoint`; `instanceId` (0.6.0) names the held call.
+        assert set(plain["payload"]) == {"pauseId", "nodeId", "point", "reason", "instanceId"}
+        assert plain["payload"]["reason"] == "breakpoint"
         view.resume(plain["payload"]["pauseId"], "continue")
         thread.join(5)
 

@@ -45,9 +45,10 @@ module Graphmind
                finish_extra: nil, inject_as: nil, full_input: false, &body)
       return body.call if session.nil? || !session.enabled? || session.disposed?
 
-      node = GateNode.new(node_id, kind, name)
-      ctx = session.current_run
       instance_id = Ids.next_id("call")
+      # exec.paused names this execution (parallel calls of one tool stay apart).
+      node = GateNode.new(node_id, kind, name, instance_id)
+      ctx = session.current_run
       started = Clock.now_ms
       if full_input && !input.nil?
         session.start_node(node_id: node_id, kind: kind, name: name, instance_id: instance_id,

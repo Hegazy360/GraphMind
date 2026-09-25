@@ -96,6 +96,9 @@ module Graphmind
     # callback is somehow missed.
     GATE_POLL = 0.25
 
+    # exec.paused.reason of a hold no built-in breakpoint raised (0.6.0).
+    MATCHED_REASONS = %w[breakpoint step error].freeze
+
     # Fiber-local, which under Puma/Sidekiq means thread-local: each request or
     # job runs on its own thread's root fiber. See README "Threads".
     RUN_KEY = :graphmind_run_context
@@ -379,7 +382,7 @@ module Graphmind
       loop_info = consult_loop(point, node)
       return CONTINUE if loop_info.nil? && !@engine.should_pause?(point, node)
 
-      hold = @engine.hold(point, node, resolve_run_id, loop_info)
+      hold = @engine.hold(point, node, resolve_run_id, loop_info || matched_reason(point, node))
       settled = false
       begin
         decision = nil
@@ -998,6 +1001,23 @@ module Graphmind
       emit_or_warn("exec.refused", payload, gate[:run_id], gate[:node].kind)
     end
 
+    # Why a hold that no built-in breakpoint raised holds (`matchedReason` in
+    # the TypeScript client): at an `error` point, "error" (the pause-on-error
+    # breakpoint, or step mode stopping on an error); elsewhere "breakpoint"
+    # when one of the debugger's breakpoints matches, else "step".
+    def matched_reason(point, node)
+      return "error" if point == "error"
+
+      @engine.breakpoints.any? { |matcher| @engine.matcher_matches(matcher, point, node) } ? "breakpoint" : "step"
+    rescue StandardError
+      "breakpoint"
+    end
+
+    # exec.paused: the 0.5 fields in their 0.5 order, then `reason` — on every
+    # hold (0.6.0): "loop" with `loop`, else "breakpoint" / "step" / "error"
+    # from what the debugger armed (0.5 hubs accept all four) — then
+    # `instanceId` when the caller named the held execution. The TypeScript
+    # client's order (`pausedPayload`); this gem never offers `editable`.
     def on_paused(pause_id, node, point, run_id, reason = nil)
       swallow { @ledger.hold_opened(pause_id, run_id, node.node_id, point) }
       payload = { "pauseId" => pause_id, "nodeId" => node.node_id, "point" => point }
@@ -1007,7 +1027,11 @@ module Graphmind
           payload["reason"] = "loop"
           payload["loop"] = loop_wire
         end
+      elsif MATCHED_REASONS.include?(reason)
+        payload["reason"] = reason
       end
+      instance_id = node.respond_to?(:instance_id) ? node.instance_id : nil
+      payload["instanceId"] = instance_id if instance_id.is_a?(String) && !instance_id.empty?
       emit_or_warn("exec.paused", payload, run_id)
     end
 
@@ -1086,22 +1110,32 @@ module Graphmind
     # serialized must never break an emit. Anything JSON cannot express
     # degrades to its #inspect string.
     MAX_PREVIEW = 8000
-    # Nesting walked before a "[depth]" marker — the loop fingerprint's bound.
+    # Nesting walked before the depth marker — the loop fingerprint's bound.
     # Deeper values used to exhaust the stack here, or (below ~97 levels) make
     # JSON.generate refuse the whole envelope (max_nesting 100), losing the event.
     MAX_SANITIZE_DEPTH = 64
+    # Entries of an Array or Hash recorded before the rest is counted.
+    MAX_SANITIZE_ITEMS = 200
+
+    # Every bound leaves a marker on the shared truncation list (the Python
+    # SDK's spellings, `PYTHON_PREVIEW_MARKERS` in edit-input.ts; EditGuard and
+    # the hub refuse them), so a pre-filled copy of a cut recording is never
+    # injected as if it were the whole value (refute-security S5).
+    SANITIZE_ELLIPSIS = "…"
+    SANITIZE_DEPTH_MARKER = "#{SANITIZE_ELLIPSIS}[depth limit]".freeze
+    SANITIZE_TEXT_SUFFIX = "#{SANITIZE_ELLIPSIS}[truncated]".freeze
 
     # A cycle (a Hash holding itself, a #to_h that returns a Hash holding the
-    # object) becomes "[circular]" and runaway nesting "[depth]": before, both
-    # recursed until SystemStackError — not a StandardError — which escaped
-    # every rescue into the host's own call.
+    # object) becomes "[circular]" and runaway nesting "…[depth limit]":
+    # before, both recursed until SystemStackError — not a StandardError —
+    # which escaped every rescue into the host's own call.
     def sanitize(value, depth = 0, path = nil)
       case value
       when nil, true, false, Integer, String then return value
       when Float then return value.finite? ? value : value.to_s
       when Symbol then return value.to_s
       end
-      return "[depth]" if depth > MAX_SANITIZE_DEPTH
+      return SANITIZE_DEPTH_MARKER if depth > MAX_SANITIZE_DEPTH
 
       path ||= {}.compare_by_identity
       return "[circular]" if path.key?(value)
@@ -1116,9 +1150,16 @@ module Graphmind
 
     def sanitize_container(value, depth, path)
       case value
-      when Array then value.first(200).map { |v| sanitize(v, depth + 1, path) }
+      when Array
+        out = value.first(MAX_SANITIZE_ITEMS).map { |v| sanitize(v, depth + 1, path) }
+        out << "#{SANITIZE_ELLIPSIS}[#{value.size - MAX_SANITIZE_ITEMS} more]" if value.size > MAX_SANITIZE_ITEMS
+        out
       when Hash
-        value.first(200).each_with_object({}) { |(k, v), out| out[k.to_s] = sanitize(v, depth + 1, path) }
+        out = value.first(MAX_SANITIZE_ITEMS).each_with_object({}) do |(k, v), acc|
+          acc[k.to_s] = sanitize(v, depth + 1, path)
+        end
+        out[SANITIZE_ELLIPSIS] = "[#{value.size - MAX_SANITIZE_ITEMS} more keys]" if value.size > MAX_SANITIZE_ITEMS
+        out
       else
         if value.respond_to?(:to_h)
           begin
@@ -1132,7 +1173,7 @@ module Graphmind
         rescue StandardError, SystemStackError
           value.class.name.to_s
         end
-        text.length > MAX_PREVIEW ? "#{text[0, MAX_PREVIEW]}…" : text
+        text.length > MAX_PREVIEW ? "#{text[0, MAX_PREVIEW]}#{SANITIZE_TEXT_SUFFIX}" : text
       end
     end
   end
