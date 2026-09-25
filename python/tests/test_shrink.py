@@ -72,9 +72,9 @@ def utf8(text: str) -> bytes:
 # -- the fixture ------------------------------------------------------------------------
 
 
-def test_fixture_is_version_2_with_49_cases() -> None:
+def test_fixture_is_version_2_with_50_cases() -> None:
     assert FIXTURE_DATA["version"] == 2
-    assert len(FIXTURE_DATA["cases"]) == 49
+    assert len(FIXTURE_DATA["cases"]) == 50
 
 
 def test_constants_match_the_fixture() -> None:

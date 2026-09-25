@@ -79,6 +79,10 @@ describe('chat.completions: truncated-tool-call at the after gate', () => {
         return value;
       });
     const paused = await llmPause(rig);
+    const stepInstance = rig.viewer.received.find(
+      (f) => f.type === 'node.started' && f.payload['nodeId'] === 'llm:step',
+    )?.payload['instanceId'];
+    expect(typeof stepInstance).toBe('string');
     expect(paused.payload).toEqual({
       pauseId: paused.payload['pauseId'],
       nodeId: 'llm:step',
@@ -88,6 +92,8 @@ describe('chat.completions: truncated-tool-call at the after gate', () => {
         rule: 'truncated-tool-call',
         detail: 'the model was stopped at the token limit with 1 tool call requested; 1 call has arguments that did not parse',
       },
+      // The pause names the step's execution (exec.paused.instanceId, 0.6.0).
+      instanceId: stepInstance,
     });
     expect(seen[0]?.result).toMatchObject({
       text: 'Writing.',

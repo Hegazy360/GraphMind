@@ -204,8 +204,8 @@ class _Wrapper:
         #: The signature as the schema of an edit (None: no edits possible).
         self.check: SchemaCheck | None = None if signature is None else signature_check(signature)
 
-    def node(self) -> GateNode:
-        return GateNode(self.node_id, self.kind, self.name)
+    def node(self, instance_id: str | None = None) -> GateNode:
+        return GateNode(self.node_id, self.kind, self.name, instance_id)
 
 
 class _CallArgs:
@@ -307,9 +307,10 @@ def is_wrapped(fn: Any) -> bool:
 def _run_sync(
     state: _Wrapper, session: Session, fn: Callable[..., Any], args: Any, kwargs: Any
 ) -> Any:
-    node = state.node()
     ctx = session.current_run()
     instance_id = next_id("call")
+    # exec.paused names this call (parallel calls of one tool stay apart).
+    node = state.node(instance_id)
     started = monotonic_ms()
     session.start_node(
         node_id=node.node_id,
@@ -369,9 +370,10 @@ def _run_sync(
 async def _run_async(
     state: _Wrapper, session: Session, fn: Callable[..., Any], args: Any, kwargs: Any
 ) -> Any:
-    node = state.node()
     ctx = session.current_run()
     instance_id = next_id("call")
+    # exec.paused names this call (parallel calls of one tool stay apart).
+    node = state.node(instance_id)
     started = monotonic_ms()
     session.start_node(
         node_id=node.node_id,

@@ -36,6 +36,7 @@ import {
   isAbortError,
   isEditableToolInput,
   toolGateOptions,
+  withInstanceId,
   type GateDecision,
   type GateNode,
   type GateOptions,
@@ -106,7 +107,9 @@ async function gateAt(
  * error gate has had its say).
  */
 export async function gateFlow(options: GateFlowOptions): Promise<unknown> {
-  const { core, ctx, node, instanceId } = options;
+  const { core, ctx, instanceId } = options;
+  // exec.paused names this execution (parallel calls of one node stay apart).
+  const node = withInstanceId(options.node, instanceId);
   const startedAt = now();
 
   core.startNode({

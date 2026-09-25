@@ -168,7 +168,7 @@ describe('applyEvent: exec.resumed.edited', () => {
       started('tool:sql', 'tool', { instanceId: 'a', input: { q: 'old' } }),
       started('tool:sql', 'tool', { instanceId: 'b', input: { q: 'other' } }),
       // The pause names the instance it holds (a sender that knows it).
-      ev('exec.paused', { pauseId: 'p1', nodeId: 'tool:sql', point: 'after', editable: true, instanceId: 'a' } as never),
+      ev('exec.paused', { pauseId: 'p1', nodeId: 'tool:sql', point: 'after', editable: true, instanceId: 'a' }),
       ev('exec.resumed', { pauseId: 'p1', action: 'retry', edited: { after: { q: 'new' } }, requestId: 'req-9' }),
     ]);
     const node = run.nodes['tool:sql'];

@@ -157,6 +157,10 @@ describe('continue + input at the before gate (1.x McpServer)', () => {
     const second = client.callTool({ name: 'convertCurrency', arguments: { amount: 20, from: 'EUR', to: 'GBP' } });
     const a = await pausedAt(viewer, 'tool:convertCurrency', 'before', 1);
     const b = await pausedAt(viewer, 'tool:convertCurrency', 'before', 2);
+    // Each pause names its own call (exec.paused.instanceId, 0.6.0): parallel calls stay apart.
+    const starts = viewer.ofType('node.started').filter((f) => f.payload['nodeId'] === 'tool:convertCurrency');
+    expect([a.payload['instanceId'], b.payload['instanceId']]).toEqual(starts.map((f) => f.payload['instanceId']));
+    expect(new Set([a.payload['instanceId'], b.payload['instanceId']]).size).toBe(2);
     viewer.resumeWith({ pauseId: pauseIdOf(b), action: 'continue', input: { amount: 40 } });
     expect(toolText(await second)).toBe('36 GBP');
     expect(await settledWithin(first, 50)).toBe('pending');

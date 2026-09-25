@@ -29,7 +29,7 @@
  * instead (a truncated streamed tool call is recorded, not held).
  */
 import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
-import { captureTools, pickParams, resultGateOptions } from '@graphmind-ai/client';
+import { captureTools, pickParams, resultGateOptions, withInstanceId } from '@graphmind-ai/client';
 import type { GateNode, RunContext, RunStatus } from '@graphmind-ai/client';
 import { GatedApiPromise, type ApiTracker } from './api-promise.js';
 import type { AdapterCore } from './core.js';
@@ -196,10 +196,12 @@ async function runGatedRequest(
   let attempt = 0;
   const attemptExtra = (): Record<string, unknown> | undefined =>
     attempt > 1 ? { attempts: attempt } : undefined;
+  // exec.paused names this step's execution (parallel steps stay apart).
+  const gateNode = withInstanceId(LLM_GATE_NODE, reporter.ctx.instanceId);
 
   for (;;) {
     attempt += 1;
-    const pre = await core.session.gate('before', LLM_GATE_NODE);
+    const pre = await core.session.gate('before', gateNode);
     if (pre.action === 'abort') {
       reporter.finish(undefined, 'aborted', undefined, attemptExtra());
       throw core.abortError(core.session.currentRun());
@@ -223,7 +225,7 @@ async function runGatedRequest(
         throw error;
       }
       reporter.error(error);
-      const dec = await core.session.gate('error', LLM_GATE_NODE);
+      const dec = await core.session.gate('error', gateNode);
       if (dec.action === 'inject') {
         reporter.finish(dec.output, 'ok', undefined, { injected: true, ...attemptExtra() });
         return dec.output;
@@ -253,7 +255,7 @@ async function runGatedRequest(
     }
 
     const summary = flavor.summarize(reporter, value);
-    const post = await core.session.gate('after', LLM_GATE_NODE, resultGateOptions(core.session, summary.output));
+    const post = await core.session.gate('after', gateNode, resultGateOptions(core.session, summary.output));
     if (post.action === 'inject') {
       reporter.finish(post.output, 'ok', summary.usage, { injected: true, ...attemptExtra() });
       return post.output;

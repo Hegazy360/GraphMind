@@ -169,6 +169,10 @@ describe('mcp-proxy: gates', () => {
     });
     r.callTool(1, 'echo', { text: 'held' });
     const paused = await v.waitForPause('tool:echo', 'before');
+    // The pause names the call it holds (exec.paused.instanceId, 0.6.0).
+    const started = v.ofType('node.started').find((f) => f.payload['nodeId'] === 'tool:echo');
+    expect(typeof started?.payload['instanceId']).toBe('string');
+    expect(paused.payload['instanceId']).toBe(started?.payload['instanceId']);
     await tick(80);
     // The proof it is really held: the server has not logged the call.
     expect(r.err.toString()).not.toContain('handling tools/call');

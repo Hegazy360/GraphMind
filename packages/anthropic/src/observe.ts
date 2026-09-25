@@ -22,6 +22,7 @@ import {
   normalizeFinishReason,
   resultGateOptions,
   toolCall,
+  withInstanceId,
   type GateNode,
   type RecordedToolCall,
   type RunContext,
@@ -107,7 +108,11 @@ export class StepReporter {
    */
   async gateAfter(output: unknown): Promise<boolean> {
     try {
-      const decision = await this.core.session.gate('after', LLM_GATE_NODE, resultGateOptions(this.core.session, output));
+      const decision = await this.core.session.gate(
+        'after',
+        withInstanceId(LLM_GATE_NODE, this.instanceId),
+        resultGateOptions(this.core.session, output),
+      );
       if (decision.action === 'abort') return true;
       if (decision.action === 'retry' || decision.action === 'inject') {
         this.core.warner.warn(

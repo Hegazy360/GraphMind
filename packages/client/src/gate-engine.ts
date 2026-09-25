@@ -33,6 +33,20 @@ export interface GateNode {
   nodeId: string;
   kind: NodeKind;
   name: string;
+  /**
+   * The execution this gate holds (its `node.started.instanceId`), when the
+   * adapter knows it: sent as `exec.paused.instanceId` (0.6.0) so a debugger
+   * can tell parallel calls of one node apart. Breakpoints never match on it.
+   */
+  instanceId?: string;
+}
+
+/**
+ * `node` naming the execution its gate holds (see `GateNode.instanceId`), or
+ * `node` itself when `instanceId` is not a non-empty string. Never throws.
+ */
+export function withInstanceId(node: GateNode, instanceId: unknown): GateNode {
+  return typeof instanceId === 'string' && instanceId !== '' ? { ...node, instanceId } : node;
 }
 
 /**

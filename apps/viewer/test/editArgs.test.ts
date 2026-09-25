@@ -101,6 +101,36 @@ describe('canEditArgs — the editor is offered only where the app said it can a
   });
 });
 
+describe('parallel calls of one tool — exec.paused.instanceId (0.6.0)', () => {
+  const parallel = (paused: Record<string, unknown>) =>
+    build([
+      started('tool:sql', 'tool', { instanceId: 'a', input: { q: 'first' } }),
+      started('tool:sql', 'tool', { instanceId: 'b', input: { q: 'second' } }),
+      ev('exec.paused', { pauseId: 'p1', nodeId: 'tool:sql', point: 'before', editable: true, ...paused }),
+    ]);
+
+  it('a pause that names its call is exact: the editor is offered, on THAT call’s arguments', () => {
+    // `before` would guess the LATEST running call (b); the pause says a.
+    const { node, pause } = nodeAndPause(parallel({ instanceId: 'a' }));
+    expect(pause.heldAmbiguous).toBeUndefined();
+    expect(canEditArgs(node, pause)).toBe(true);
+    expect(heldExecution(node, pause)?.instanceId).toBe('a');
+    expect(editBase(heldExecution(node, pause)).input).toEqual({ q: 'first' });
+  });
+
+  it('without instanceId (a 0.5 or older 0.6 sender) the held call is a guess: no editor', () => {
+    const { node, pause } = nodeAndPause(parallel({}));
+    expect(pause.heldAmbiguous).toBe(true);
+    expect(canEditArgs(node, pause)).toBe(false);
+  });
+
+  it('an instanceId naming no known execution falls back to the guess (still no editor)', () => {
+    const { node, pause } = nodeAndPause(parallel({ instanceId: 'zzz' }));
+    expect(pause.heldAmbiguous).toBe(true);
+    expect(canEditArgs(node, pause)).toBe(false);
+  });
+});
+
 describe('heldExecution — the instance whose arguments are edited', () => {
   it('is the instance the pause holds (heldBy), not merely the latest', () => {
     const run = build([

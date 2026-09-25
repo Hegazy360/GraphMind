@@ -764,8 +764,13 @@ export class GraphMindCallbackHandler extends BaseCallbackHandler {
   }
 }
 
-function gateNode(record: RunRecord): { nodeId: string; kind: NodeKind; name: string } {
-  return { nodeId: record.nodeId, kind: record.kind, name: record.name };
+/**
+ * The gate's node. It names the held execution (`exec.paused.instanceId`) when
+ * the record is the node it reports — not a run folded into an ancestor.
+ */
+function gateNode(record: RunRecord): { nodeId: string; kind: NodeKind; name: string; instanceId?: string } {
+  const node = { nodeId: record.nodeId, kind: record.kind, name: record.name };
+  return record.emitted ? { ...node, instanceId: record.instanceId } : node;
 }
 
 function readString(value: unknown): string | undefined {

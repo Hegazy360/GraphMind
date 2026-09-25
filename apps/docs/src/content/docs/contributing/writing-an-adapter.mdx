@@ -87,7 +87,7 @@ async function instrumentedCall(params) {
   });
 
   const startedAt = monotonicNow();
-  const decision = await session.gate('before', { nodeId, kind: 'llm', name: 'step' });
+  const decision = await session.gate('before', { nodeId, kind: 'llm', name: 'step', instanceId });
   if (decision.action === 'inject') return decision.output;
   if (decision.action === 'abort') throw ctx.signal.reason;
 
@@ -104,7 +104,7 @@ async function instrumentedCall(params) {
     return result;
   } catch (error) {
     session.emit('node.error', { nodeId, instanceId, error: toErrorInfo(error) });
-    const onError = await session.gate('error', { nodeId, kind: 'llm', name: 'step' });
+    const onError = await session.gate('error', { nodeId, kind: 'llm', name: 'step', instanceId });
     if (onError.action === 'inject') return onError.output;
     if (onError.action === 'retry') return instrumentedCall(params);
     throw error;
@@ -123,6 +123,10 @@ Time with `monotonicNow()` / `elapsedMs()`, not `Date.now()`: they are monotonic
 0.01 ms and never negative. Start the clock before the gate and report the whole wall-clock
 span as `durationMs`. Do not subtract hold time yourself: the session adds `heldMs` to
 `node.finished` and `node.error`, and the viewer shows ran time from the two.
+
+Give the gate the execution's `instanceId` too (0.6+). It goes out as `exec.paused.instanceId`,
+so a debugger can tell parallel calls of one node apart: the viewer offers **Edit arguments** on
+a pause while two calls of the same tool run only when the pause names its call.
 
 Emitting `node.started` **before** `gate('before')`, with the real `input`, is also what the
 [loop hold](/reference/environment/#loop-hold) needs. The session fingerprints the input there

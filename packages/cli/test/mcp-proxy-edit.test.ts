@@ -369,7 +369,13 @@ describe('retry + input at the error and after gates', () => {
     const paused = await pausedAt(v, 'tool:echoArgs', 'after');
     expect(paused.payload['smart']).toEqual({ rule: 'error-result' });
     expect(paused.payload['editable']).toBe(true);
-    expect(seen[0]?.node).toEqual({ nodeId: 'tool:echoArgs', kind: 'tool', name: 'echoArgs' });
+    expect(seen[0]?.node).toEqual({
+      nodeId: 'tool:echoArgs',
+      kind: 'tool',
+      name: 'echoArgs',
+      instanceId: paused.payload['instanceId'],
+    });
+    expect(typeof paused.payload['instanceId']).toBe('string');
     expect(seen[0]?.result).toMatchObject({ ratio: 1.5, content: [{ type: 'text' }] });
     v.resumeWith({ pauseId: pauseIdOf(paused), action: 'retry', input: { arguments: { text: 'good' } } });
     const response = await r.response(1);

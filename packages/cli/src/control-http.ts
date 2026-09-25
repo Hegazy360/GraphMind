@@ -133,8 +133,9 @@ export interface PauseDetail extends Omit<PauseInfo, 'state'> {
 }
 
 /**
- * Rebuild one pause from the stored run: the `exec.paused`, the latest
- * `node.started` of that node before it (the held execution — its input),
+ * Rebuild one pause from the stored run: the `exec.paused`, the held
+ * execution's `node.started` before it (its input) — the one the pause names
+ * (`exec.paused.instanceId`, 0.6.0 senders), else the latest of that node —
  * and any `node.error` / `node.finished` of that execution before the hold.
  */
 export function describePause(
@@ -151,11 +152,17 @@ export function describePause(
   const p = recordOf(paused.payload);
   const nodeId = typeof p['nodeId'] === 'string' ? p['nodeId'] : '';
 
+  // Parallel calls of one node: the pause may name the one it holds.
+  const named = typeof p['instanceId'] === 'string' ? p['instanceId'] : undefined;
   let started: StoredEvent | undefined;
+  let latest: StoredEvent | undefined;
   for (const event of events) {
     if (event.seq >= paused.seq) break;
-    if (event.type === 'node.started' && event.nodeId === nodeId) started = event;
+    if (event.type !== 'node.started' || event.nodeId !== nodeId) continue;
+    latest = event;
+    if (named !== undefined && recordOf(event.payload)['instanceId'] === named) started = event;
   }
+  started ??= latest;
   const s = recordOf(started?.payload);
   const instanceId = typeof s['instanceId'] === 'string' ? s['instanceId'] : undefined;
   const node: PauseDetail['node'] = {

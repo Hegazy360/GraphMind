@@ -965,6 +965,9 @@
         },
         "editable": {
           "type": "boolean"
+        },
+        "instanceId": {
+          "type": "string"
         }
       },
       "required": [

@@ -29,7 +29,7 @@
  * (events, `finalMessage()`, `abort()`), and its request is still held at the
  * gate before anything reaches the network.
  */
-import { captureTools, pickParams, type GateNode, type RunContext } from '@graphmind-ai/client';
+import { captureTools, pickParams, withInstanceId, type GateNode, type RunContext } from '@graphmind-ai/client';
 import { gatedApiPromise } from './api-promise.js';
 import type { AdapterCore } from './core.js';
 import { LLM_NODE_ID, LLM_NODE_NAME, agentNodeId } from './ids.js';
@@ -161,7 +161,8 @@ function instrumentedCreate(
 
       reporter = beginStep(core, params, ctx, scopeId, streaming);
 
-      const decision = await core.session.gate('before', LLM_GATE_NODE);
+      // exec.paused names this step's execution (parallel steps stay apart).
+      const decision = await core.session.gate('before', withInstanceId(LLM_GATE_NODE, reporter?.instanceId));
       if (decision.action === 'abort') {
         reporter?.finish(undefined, undefined, 'aborted');
         throw core.abortError(ctx);

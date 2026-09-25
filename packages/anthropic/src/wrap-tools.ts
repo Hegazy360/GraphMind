@@ -42,6 +42,7 @@ import {
   isAbortError,
   isEditableToolInput,
   toolGateOptions,
+  withInstanceId,
   type GateNode,
   type RunStatus,
   type ToolEdit,
@@ -90,6 +91,8 @@ export function wrapToolFn<F extends AnyToolFn>(
     const ctx = core.session.currentRun();
     const scopeId = core.scopeId(ctx);
     const instanceId = core.takeToolUse(scopeId, toolName) ?? nextId('call');
+    // exec.paused names this call (parallel calls of one tool stay apart).
+    const gateNode = withInstanceId(node, instanceId);
     const startedAt = monotonicNow();
     core.startNode({
       nodeId: node.nodeId,
@@ -121,7 +124,7 @@ export function wrapToolFn<F extends AnyToolFn>(
     };
 
     for (;;) {
-      const pre = await core.session.gate('before', node, toolGateOptions(core.session, edit));
+      const pre = await core.session.gate('before', gateNode, toolGateOptions(core.session, edit));
       if (pre.action === 'abort') {
         finish(undefined, 'aborted');
         throw core.abortError(ctx);
@@ -143,7 +146,7 @@ export function wrapToolFn<F extends AnyToolFn>(
           throw error;
         }
         core.errorNode(node.nodeId, instanceId, error);
-        const dec = await core.session.gate('error', node, toolGateOptions(core.session, edit));
+        const dec = await core.session.gate('error', gateNode, toolGateOptions(core.session, edit));
         if (dec.action === 'inject') {
           finish(dec.output, 'ok', { injected: true });
           return dec.output as Awaited<ReturnType<F>>;
@@ -160,7 +163,7 @@ export function wrapToolFn<F extends AnyToolFn>(
         throw error; // 'continue': the host sees the original error
       }
 
-      const post = await core.session.gate('after', node, toolGateOptions(core.session, edit, { result }));
+      const post = await core.session.gate('after', gateNode, toolGateOptions(core.session, edit, { result }));
       if (post.action === 'inject') {
         finish(post.output, 'ok', { injected: true });
         return post.output as Awaited<ReturnType<F>>;

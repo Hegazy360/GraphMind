@@ -101,7 +101,7 @@ class TestShrink < Minitest::Test
     assert_equal S::MAX_TRIM_FIELDS, constants["MAX_TRIM_FIELDS"]
     assert_equal S::SKELETON_CHARS, constants["SKELETON_CHARS"]
     assert_equal S::SKELETON_MIN_CHARS, constants["SKELETON_MIN_CHARS"]
-    assert_equal 49, fixture["cases"].length
+    assert_equal 50, fixture["cases"].length
   end
 
   def test_skeleton_plans_equal_the_fixture_in_declaration_order

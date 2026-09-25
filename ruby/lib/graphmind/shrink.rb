@@ -93,7 +93,7 @@ module Graphmind
       },
       "exec.paused" => {
         "pauseId" => nil, "nodeId" => nil, "point" => nil, "reason" => :optional, "loop" => :optional,
-        "smart" => :optional, "editable" => :optional
+        "smart" => :optional, "editable" => :optional, "instanceId" => :optional
       },
       "exec.refused" => { "pauseId" => nil, "code" => nil, "message" => :optional, "requestId" => :optional },
       "exec.resumed" => {
@@ -685,7 +685,8 @@ module Graphmind
             optional(payload, "reason") { |v| enum?(v, PAUSE_REASONS) } &&
             optional(payload, "loop") { |v| loop_info?(v) } &&
             optional(payload, "smart") { |v| smart_info?(v) } &&
-            optional(payload, "editable") { |v| bool?(v) }
+            optional(payload, "editable") { |v| bool?(v) } &&
+            optional(payload, "instanceId") { |v| str?(v) }
         when "exec.refused"
           required(payload, "pauseId") { |v| str?(v) } &&
             required(payload, "code") { |v| enum?(v, REFUSAL_CODES) } &&

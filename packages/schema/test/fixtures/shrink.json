@@ -71,7 +71,8 @@
       "reason": "optional",
       "loop": "optional",
       "smart": "optional",
-      "editable": "optional"
+      "editable": "optional",
+      "instanceId": "optional"
     },
     "exec.refused": {
       "pauseId": null,
@@ -3043,6 +3044,34 @@
       "expected": {
         "truncated": true,
         "json": "{\"pauseId\":\"p1\",\"nodeId\":\"tool:t\",\"point\":\"error\",\"reason\":\"error\",\"__graphmindTruncated\":true,\"bytes\":6130,\"preview\":\"{\\\"pauseId\\\":\\\"p1\\\",\\\"nodeId\\\":\\\"tool:t\\\",\\\"point\\\":\\\"error\\\",\\\"reason\\\":\\\"error\\\",\\\"loop\\\":{\\\"repeats\\\":1,\\\"firstSeq\\\":1,\\\"lastSeq\\\":1,\\\"fingerprint\\\":\\\"fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"fields\":[\"loop\"]}"
+      }
+    },
+    {
+      "name": "exec-paused-skeleton-keeps-instance-id",
+      "note": "maxBytes 4096 (0.6.0 fields): the skeleton keeps the optional boolean editable and the optional string instanceId — which execution is held survives a shrink — and drops the optional OBJECT smart.",
+      "since": 2,
+      "type": "exec.paused",
+      "maxBytes": 4096,
+      "input": {
+        "pauseId": "p2",
+        "nodeId": "tool:t",
+        "point": "after",
+        "reason": "breakpoint",
+        "smart": {
+          "rule": "error-result",
+          "detail": {
+            "$repeat": [
+              "d",
+              6000
+            ]
+          }
+        },
+        "editable": true,
+        "instanceId": "call-7"
+      },
+      "expected": {
+        "truncated": true,
+        "json": "{\"pauseId\":\"p2\",\"nodeId\":\"tool:t\",\"point\":\"after\",\"reason\":\"breakpoint\",\"editable\":true,\"instanceId\":\"call-7\",\"__graphmindTruncated\":true,\"bytes\":6154,\"preview\":\"{\\\"pauseId\\\":\\\"p2\\\",\\\"nodeId\\\":\\\"tool:t\\\",\\\"point\\\":\\\"after\\\",\\\"reason\\\":\\\"breakpoint\\\",\\\"smart\\\":{\\\"rule\\\":\\\"error-result\\\",\\\"detail\\\":\\\"ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"fields\":[\"smart\"]}"
       }
     },
     {

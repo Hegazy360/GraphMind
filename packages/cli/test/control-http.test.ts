@@ -9,7 +9,7 @@ import { connect, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { MAX_CONCURRENT_WAITS, MAX_TOKENLESS_WAITS, applySecurityHeaders } from '../src/control-http.js';
+import { MAX_CONCURRENT_WAITS, MAX_TOKENLESS_WAITS, applySecurityHeaders, describePause } from '../src/control-http.js';
 import { readRunFile } from '../src/run-files.js';
 import type { ServerOptions } from '../src/server.js';
 import { getJson, heldApp, postResume, rawRequest, sleep } from './control-helpers.js';
@@ -359,6 +359,35 @@ describe('long-polls', () => {
     await held.app.close();
     const answer = await pending;
     expect(answer.body).toMatchObject({ outcome: 'timeout', code: 'app-disconnected' });
+  });
+});
+
+describe('the held call a pause describes (graphmind wait)', () => {
+  const RUN = 'run-parallel';
+  const ev = (seq: number, type: string, payload: Record<string, unknown>) => ({
+    runId: RUN,
+    seq,
+    ts: 1_000 + seq,
+    type,
+    nodeId: typeof payload['nodeId'] === 'string' ? payload['nodeId'] : null,
+    payload,
+  });
+  const events = (paused: Record<string, unknown>) => [
+    ev(1, 'node.started', { nodeId: 'tool:sql', kind: 'tool', name: 'sql', instanceId: 'a', input: { q: 'first' } }),
+    ev(2, 'node.started', { nodeId: 'tool:sql', kind: 'tool', name: 'sql', instanceId: 'b', input: { q: 'second' } }),
+    ev(3, 'exec.paused', { pauseId: 'p1', nodeId: 'tool:sql', point: 'before', ...paused }),
+  ];
+
+  it('two calls of one tool running: the call the pause names (exec.paused.instanceId), not the latest', () => {
+    const detail = describePause(events({ instanceId: 'a' }), RUN, 'p1', undefined);
+    expect(detail?.node).toMatchObject({ instanceId: 'a', input: { q: 'first' } });
+  });
+
+  it('a pause that names none (an older sender) still describes the latest call', () => {
+    const detail = describePause(events({}), RUN, 'p1', undefined);
+    expect(detail?.node).toMatchObject({ instanceId: 'b', input: { q: 'second' } });
+    const unknown = describePause(events({ instanceId: 'zzz' }), RUN, 'p1', undefined);
+    expect(unknown?.node).toMatchObject({ instanceId: 'b' });
   });
 });
 

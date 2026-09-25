@@ -613,15 +613,17 @@ export class ProxyReporter {
 
   /**
    * `session.gate`, plus a stderr notice if it actually holds. Every gate in
-   * this file goes through here.
+   * this file goes through here. `instanceId` names the held execution on
+   * `exec.paused` (parallel calls of one tool stay apart).
    */
   private async gate(
     point: PausePoint,
     node: MappedNode,
+    instanceId: string,
     label: string,
     options?: GateOptions,
   ): Promise<GateDecision> {
-    const decision = this.session.gate(point, toGateNode(node), options);
+    const decision = this.session.gate(point, toGateNode(node, instanceId), options);
     let held = false;
     const timer = setTimeout(() => {
       held = true;
@@ -668,6 +670,7 @@ export class ProxyReporter {
     const decision = await this.gate(
       'before',
       node,
+      instanceId,
       `${frame.method} #${String(frame.id)}`,
       toolGateOptions(this.session, () => this.toolEdit(entry)),
     );
@@ -733,7 +736,7 @@ export class ProxyReporter {
     });
     this.trace(direction, `~> ${frame.method} (notification)`);
 
-    const decision = await this.gate('before', node, `${frame.method} (notification)`);
+    const decision = await this.gate('before', node, instanceId, `${frame.method} (notification)`);
     const done = (status: RunStatus, extra?: Record<string, unknown>): void => {
       this.session.emit('node.finished', {
         nodeId: node.nodeId,
@@ -796,6 +799,7 @@ export class ProxyReporter {
     const decision = await this.gate(
       point,
       entry.node,
+      entry.instanceId,
       `${entry.method} #${String(frame.id)}`,
       toolGateOptions(
         this.session,
@@ -1199,8 +1203,8 @@ function isFrameObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function toGateNode(node: MappedNode): GateNode {
-  return { nodeId: node.nodeId, kind: node.kind, name: node.name };
+function toGateNode(node: MappedNode, instanceId: string): GateNode {
+  return { nodeId: node.nodeId, kind: node.kind, name: node.name, instanceId };
 }
 
 function pendingKey(origin: Direction, id: JsonRpcId): string {

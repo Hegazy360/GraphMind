@@ -250,6 +250,8 @@ class Span:
 
     def _begin(self) -> None:
         self._instance_id = next_id("span")
+        # exec.paused names this execution (parallel spans of one name stay apart).
+        self._node = GateNode(self._node.node_id, self._kind, self._name, self._instance_id)
         self._started = monotonic_ms()
         self._session.start_node(
             node_id=self._node.node_id,

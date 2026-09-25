@@ -269,6 +269,21 @@ const V2_CASES = [
     },
   },
   {
+    name: 'exec-paused-skeleton-keeps-instance-id',
+    note: 'maxBytes 4096 (0.6.0 fields): the skeleton keeps the optional boolean editable and the optional string instanceId — which execution is held survives a shrink — and drops the optional OBJECT smart.',
+    type: 'exec.paused',
+    maxBytes: 4096,
+    input: {
+      pauseId: 'p2',
+      nodeId: 'tool:t',
+      point: 'after',
+      reason: 'breakpoint',
+      smart: { rule: 'error-result', detail: { $repeat: ['d', 6000] } },
+      editable: true,
+      instanceId: 'call-7',
+    },
+  },
+  {
     name: 'run-finished-400-small-fields-trimmed',
     note: 'run.finished with 400 small loose fields and a 700 KB error.message: 400 <= MAX_TRIM_FIELDS, so the field trim runs and keeps every small field; only error is shrunk (its message cut to PREVIEW_CHARS). With the old 256-field gate this went to the skeleton and lost them.',
     type: 'run.finished',

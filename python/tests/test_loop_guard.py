@@ -801,7 +801,8 @@ class TestHold:
         plain = view.wait_for(
             lambda f: f.get("type") == "exec.paused" and f["payload"]["nodeId"] == "tool:other"
         )
-        assert set(plain["payload"]) == {"pauseId", "nodeId", "point"}
+        # No loop details; `instanceId` (0.6.0) names the held call.
+        assert set(plain["payload"]) == {"pauseId", "nodeId", "point", "instanceId"}
         view.resume(plain["payload"]["pauseId"], "continue")
         thread.join(5)
 

@@ -61,6 +61,7 @@ import {
   resultGateOptions,
   toolCall,
   withBinaryPlaceholders,
+  withInstanceId,
   type GateDecision,
   type GateNode,
   type RecordedToolCall,
@@ -248,8 +249,10 @@ async function instrumentStream<R extends StreamResultLike>(
   if (begun === undefined) return await doStream();
   const { instanceId } = begun;
   const startedAt = monotonicNow();
+  // exec.paused names this step's execution (parallel steps stay apart).
+  const gateNode = withInstanceId(LLM_GATE_NODE, instanceId);
 
-  const decision = await core.session.gate('before', LLM_GATE_NODE);
+  const decision = await core.session.gate('before', gateNode);
   if (decision.action === 'abort') {
     core.finishNode({
       nodeId: LLM_NODE_ID,
@@ -395,10 +398,12 @@ async function gateStreamedStep(
   core: AdapterCore,
   latch: FinishLatch,
   output: Record<string, unknown>,
+  instanceId: string,
 ): Promise<GateDecision['action']> {
   let action: GateDecision['action'] = 'continue';
   try {
-    action = (await core.session.gate('after', LLM_GATE_NODE, resultGateOptions(core.session, output))).action;
+    const gateNode = withInstanceId(LLM_GATE_NODE, instanceId);
+    action = (await core.session.gate('after', gateNode, resultGateOptions(core.session, output))).action;
     if (action === 'abort') {
       latch.release({ abort: core.abortError(core.session.currentRun()) });
       return action;
@@ -472,7 +477,7 @@ async function observeStream(
           usage = mapUsage(part.usage);
           finishReason = part.finishReason;
           if (latch !== undefined && !latch.abandoned && afterAction === undefined && !sawError) {
-            afterAction = await gateStreamedStep(core, latch, stepOutput(text, finishReason, calls.list()));
+            afterAction = await gateStreamedStep(core, latch, stepOutput(text, finishReason, calls.list()), instanceId);
           }
           break;
         case 'error':
@@ -547,10 +552,12 @@ async function instrumentGenerate<R extends GenerateResultLike>(
   // debugger retries it at the after gate; the attempt count rides along.
   let attempt = 0;
   const extra = (): Record<string, unknown> => (attempt > 1 ? { instanceId, attempts: attempt } : { instanceId });
+  // exec.paused names this step's execution (parallel steps stay apart).
+  const gateNode = withInstanceId(LLM_GATE_NODE, instanceId);
 
   for (;;) {
     attempt += 1;
-    const decision = await core.session.gate('before', LLM_GATE_NODE);
+    const decision = await core.session.gate('before', gateNode);
     if (decision.action === 'abort') {
       core.finishNode({
         nodeId: LLM_NODE_ID,
@@ -580,7 +587,7 @@ async function instrumentGenerate<R extends GenerateResultLike>(
 
     const step = summarizeGenerate(core, result);
     // Post-response, pre-return: the SDK has not seen this result yet.
-    const post = await core.session.gate('after', LLM_GATE_NODE, resultGateOptions(core.session, step?.output));
+    const post = await core.session.gate('after', gateNode, resultGateOptions(core.session, step?.output));
     if (post.action === 'retry') continue;
     if (post.action === 'abort') {
       core.finishNode({

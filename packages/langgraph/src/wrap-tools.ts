@@ -333,10 +333,11 @@ async function runGated(
   startExtra?: Record<string, unknown>,
 ): Promise<unknown> {
   const nodeId = site.link?.nodeId ?? toolNodeId(name);
-  const node: GateNode = { nodeId, kind: 'tool', name };
   // With a handler attached the node events are already the handler's job.
   const ownsEvents = site.link === undefined;
   const instanceId = site.link?.instanceId ?? nextId('call');
+  // exec.paused names this call (parallel calls of one tool stay apart).
+  const node: GateNode = { nodeId, kind: 'tool', name, instanceId };
   const startedAt = monotonicNow();
   const runIn = <T>(fn: () => T | Promise<T>): Promise<T> => core.runIn(site.runId, fn);
   // Resolved inside the run context so it picks up that run's abort reason.

@@ -541,6 +541,7 @@ def _exec_paused(p: dict[str, Any]) -> bool:
         and _optional(p, "loop", _loop_info)
         and _optional(p, "smart", _smart_info)
         and _optional(p, "editable", _is_bool)
+        and _optional(p, "instanceId", _is_str)
     )
 
 
@@ -633,6 +634,7 @@ SKELETON_PLANS: dict[str, dict[str, Any]] = {
         "loop": "optional",
         "smart": "optional",
         "editable": "optional",
+        "instanceId": "optional",
     },
     "exec.refused": {
         "pauseId": None,

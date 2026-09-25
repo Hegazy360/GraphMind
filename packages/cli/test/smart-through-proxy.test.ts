@@ -63,12 +63,15 @@ describe('error-result through the proxy: one isError result, one hold', () => {
     const { viewer: v, rig: r } = await attach();
     r.callTool(1, 'softfail', { n: 1 });
     const paused = await v.waitForPause('tool:softfail', 'error');
+    const call = v.ofType('node.started').find((f) => f.payload['nodeId'] === 'tool:softfail');
     expect(paused.payload).toEqual({
       pauseId: paused.payload['pauseId'],
       nodeId: 'tool:softfail',
       point: 'error',
       reason: 'breakpoint',
       smart: { rule: 'error-result', detail: 'the tool returned a result with isError: true' },
+      // The pause names the call it holds (exec.paused.instanceId, 0.6.0).
+      instanceId: call?.payload['instanceId'],
     });
     await tick(200);
     expect(r.out.toString('utf8')).not.toContain('"id":1');

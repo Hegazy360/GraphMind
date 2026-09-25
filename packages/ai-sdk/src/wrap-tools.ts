@@ -148,9 +148,10 @@ function makeExecute(
   return async (input: unknown, options: unknown): Promise<unknown> => {
     const attachWait = core.maybeWaitForAttach(); // waitForAttach: first-call gate
     if (attachWait !== undefined) await attachWait;
-    const node: GateNode = { nodeId: toolNodeId(toolName), kind: 'tool', name: toolName };
     const ctx = core.session.currentRun();
     const instanceId = instanceIdOf(options);
+    // exec.paused names this call (parallel calls of one tool stay apart).
+    const node: GateNode = { nodeId: toolNodeId(toolName), kind: 'tool', name: toolName, instanceId };
     const startedAt = monotonicNow();
     core.startNode({
       nodeId: node.nodeId,
@@ -271,9 +272,9 @@ function makeStreamingExecute(
     async function* run(): AsyncGenerator<unknown> {
       const attachWait = core.maybeWaitForAttach(); // waitForAttach: first-call gate
       if (attachWait !== undefined) await attachWait;
-      const node: GateNode = { nodeId: toolNodeId(toolName), kind: 'tool', name: toolName };
       const ctx = core.session.currentRun();
       const instanceId = instanceIdOf(options);
+      const node: GateNode = { nodeId: toolNodeId(toolName), kind: 'tool', name: toolName, instanceId };
       const startedAt = monotonicNow();
       core.startNode({
         nodeId: node.nodeId,

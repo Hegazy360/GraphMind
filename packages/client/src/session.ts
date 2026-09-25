@@ -982,7 +982,7 @@ class SessionImpl implements Session {
    * every hold (0.6.0): `loop` with `loop`, `breakpoint` with `smart` for a
    * smart hold, else `breakpoint` / `step` / `error` from what the debugger
    * armed (0.5 hubs accept all four) — then `editable`, present only when
-   * true.
+   * true, then `instanceId` when the adapter named the held execution.
    */
   private pausedPayload(
     pauseId: string,
@@ -1001,6 +1001,8 @@ class SessionImpl implements Session {
       payload.reason = pending.reason;
     }
     if (pending?.editable === true) payload.editable = true;
+    const instanceId = node.instanceId;
+    if (typeof instanceId === 'string' && instanceId !== '') payload.instanceId = instanceId;
     return payload;
   }
 

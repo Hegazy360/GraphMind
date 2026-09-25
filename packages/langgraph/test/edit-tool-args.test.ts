@@ -219,7 +219,18 @@ describe('retry + input at the error and after gates', () => {
     const paused = await pausedAt(viewer, 'tool:convertCurrency', 'after');
     expect(paused.payload['smart']).toEqual({ rule: 'error-result' });
     expect(paused.payload['editable']).toBe(true);
-    expect(seen[0]?.node).toEqual({ nodeId: 'tool:convertCurrency', kind: 'tool', name: 'convertCurrency' });
+    // The gate names the call it holds: exec.paused.instanceId is its node.started instanceId.
+    const callInstance = viewer
+      .ofType('node.started')
+      .find((f) => f.payload['nodeId'] === 'tool:convertCurrency')?.payload['instanceId'];
+    expect(typeof callInstance).toBe('string');
+    expect(paused.payload['instanceId']).toBe(callInstance);
+    expect(seen[0]?.node).toEqual({
+      nodeId: 'tool:convertCurrency',
+      kind: 'tool',
+      name: 'convertCurrency',
+      instanceId: callInstance,
+    });
     expect(seen[0]?.result).toEqual({ converted: 90, currency: 'XXX' });
     viewer.resumeWith({ pauseId: pauseIdOf(paused), action: 'retry', input: { to: 'USD' } });
     expect(await promise).toEqual({ converted: 90, currency: 'USD' });

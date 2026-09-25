@@ -145,12 +145,16 @@ describe('streamed step: truncated-tool-call holds the SDK at the finish part', 
     const consumed = result.consumeStream();
 
     const paused = await llmPause(viewer);
+    const stepInstance = llmFrames(viewer, 'node.started')[0]?.payload['instanceId'];
+    expect(typeof stepInstance).toBe('string');
     expect(paused.payload).toEqual({
       pauseId: paused.payload['pauseId'],
       nodeId: 'llm:step',
       point: 'after',
       reason: 'breakpoint',
       smart: { rule: 'truncated-tool-call', detail: TRUNCATED_DETAIL },
+      // The pause names the step's execution (exec.paused.instanceId, 0.6.0).
+      instanceId: stepInstance,
     });
 
     // Held for real: the SDK has not seen the finish part, so the step (and
@@ -187,7 +191,12 @@ describe('streamed step: truncated-tool-call holds the SDK at the finish part', 
     }
     await viewer.waitFor((f) => f.type === 'node.finished' && f.payload['nodeId'] === 'llm:step');
     expect(seen).toHaveLength(1);
-    expect(seen[0]?.node).toEqual({ nodeId: 'llm:step', kind: 'llm', name: 'step' });
+    expect(seen[0]?.node).toEqual({
+      nodeId: 'llm:step',
+      kind: 'llm',
+      name: 'step',
+      instanceId: llmFrames(viewer, 'node.started')[0]?.payload['instanceId'],
+    });
     expect(seen[0]?.result).toEqual(TRUNCATED_OUTPUT);
     expect(viewer.ofType('exec.paused')).toHaveLength(0);
   });

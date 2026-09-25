@@ -427,9 +427,10 @@ function applyExecPaused(
   const reason = pauseReasonField(payload);
   const loop = loopField(payload);
   const smart = smartField(payload);
-  // Which call is held: exact when the pause names its instance (a sender
-  // that knows it), else a guess — ambiguous once two calls of the node run.
-  const named = (payload as Record<string, unknown>)['instanceId'];
+  // Which call is held: exact when the pause names its instance
+  // (`exec.paused.instanceId`, 0.6.0 senders), else a guess — ambiguous once
+  // two calls of the node run.
+  const named: unknown = payload.instanceId;
   const held = run.nodes[payload.nodeId];
   const exactInstanceId =
     typeof named === 'string' && held?.executions.some((e) => e.instanceId === named) === true ? named : undefined;

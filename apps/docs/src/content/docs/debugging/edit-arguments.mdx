@@ -87,9 +87,10 @@ framework rebuilds the next request from its own history — which is not a fix 
 It needs a 0.6.0 app and a 0.6.0 server. An older server never marks a pause editable, and an
 older app never offers one.
 
-When the same tool runs several calls at once and the pause does not say which one is held, the
-viewer does not offer the editor — it would be guessing which call's arguments you are editing.
-Continue, Retry and Inject still work.
+Parallel calls of one tool can each be edited: every 0.6.0 SDK that offers edits names the call a
+pause holds (`exec.paused.instanceId`). A pause that does not say which call is held while several
+calls of the same tool run — from a custom adapter that leaves it out — gets no editor, because
+the viewer would be guessing whose arguments you are editing. Continue, Retry and Inject still work.
 
 ## Turning it off, and who may use it
 

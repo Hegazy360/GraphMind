@@ -173,6 +173,12 @@ export const EventPayloadSchemas = {
      * with `input`). Absent or false: offer no input editing here.
      */
     editable: z.boolean().optional(),
+    /**
+     * The execution this gate holds (its `node.started.instanceId`), when the
+     * sender knows it (0.6.0). Tells parallel calls of one node apart; absent:
+     * a receiver may guess (`after`: the oldest running, else the latest).
+     */
+    instanceId: z.string().optional(),
   }),
 
   /**

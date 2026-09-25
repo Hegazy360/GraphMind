@@ -23,6 +23,7 @@ export {
   CONTINUE_DECISION,
   matcherMatches,
   matcherEquals,
+  withInstanceId,
   type GateDecision,
   type GateNode,
 } from './gate-engine.js';

@@ -120,12 +120,16 @@ describe('messages.create: held before the Message is returned', () => {
         return message;
       });
     const paused = await llmPause(viewer);
+    const stepInstance = llm(viewer, 'node.started')[0]?.payload['instanceId'];
+    expect(typeof stepInstance).toBe('string');
     expect(paused.payload).toEqual({
       pauseId: paused.payload['pauseId'],
       nodeId: 'llm:step',
       point: 'after',
       reason: 'breakpoint',
       smart: { rule: 'truncated-tool-call', detail: DETAIL_PARSED },
+      // The pause names the step's execution (exec.paused.instanceId, 0.6.0).
+      instanceId: stepInstance,
     });
     expect(seen[0]?.result).toMatchObject({
       text: 'Writing.',

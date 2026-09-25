@@ -1488,7 +1488,8 @@ class Session:
     ) -> None:
         """``exec.paused``: the 0.5 fields in their 0.5 order, then why a loop
         hold held, then ``editable`` — present only when true, so a pause nobody
-        can edit, and every pause under a 0.5 debugger, is byte-identical to 0.5."""
+        can edit, and every pause under a 0.5 debugger, is byte-identical to 0.5 —
+        then ``instanceId`` when the integration named the held execution."""
         editable = isinstance(reason, _PendingPause)
         loop_info = reason.loop if editable else reason
         if editable:
@@ -1508,6 +1509,9 @@ class Session:
                 pass
         if editable:
             payload["editable"] = True
+        instance_id = getattr(node, "instance_id", None)
+        if isinstance(instance_id, str) and instance_id:
+            payload["instanceId"] = instance_id
         self._emit_or_warn("exec.paused", payload, run_id)
 
     def _on_resumed(

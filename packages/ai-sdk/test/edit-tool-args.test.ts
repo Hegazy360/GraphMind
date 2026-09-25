@@ -256,7 +256,9 @@ describe('retry + input at the error and after gates', () => {
     expect(paused.payload['reason']).toBe('breakpoint');
     expect(paused.payload['smart']).toEqual({ rule: 'error-result', detail: 'unknown currency' });
     expect(paused.payload['editable']).toBe(true);
-    expect(seen[0]?.node).toEqual({ nodeId: 'tool:convertCurrency', kind: 'tool', name: 'convertCurrency' });
+    // The gate names the call it holds (the tool call id): exec.paused.instanceId.
+    expect(seen[0]?.node).toEqual({ nodeId: 'tool:convertCurrency', kind: 'tool', name: 'convertCurrency', instanceId: 'c1' });
+    expect(paused.payload['instanceId']).toBe('c1');
     expect(seen[0]?.result).toEqual({ converted: 90, currency: 'XXX' });
 
     viewer.resumeWith({ pauseId: pauseIdOf(paused), action: 'retry', input: { to: 'USD' } });
@@ -279,12 +281,14 @@ describe('nothing changes without edit support', () => {
     const tools = gm.wrapTools({ convertCurrency: currencyTool(calls) });
     const promise = tools.convertCurrency.execute?.({ amount: 100, from: 'EUR', to: 'USD' }, toolExecutionOptions('c1'));
     const paused = await pausedAt(viewer, 'tool:convertCurrency', 'before');
-    // No `editable`; `reason` is on every hold since 0.6.0 (a 0.5 hub accepts all four values).
+    // No `editable`; `reason` is on every hold since 0.6.0 (a 0.5 hub accepts all four values),
+    // and `instanceId` (0.6.0) names the call — a 0.5 hub ignores the extra field.
     expect(paused.payload).toEqual({
       pauseId: pauseIdOf(paused),
       nodeId: 'tool:convertCurrency',
       point: 'before',
       reason: 'breakpoint',
+      instanceId: 'c1',
     });
     viewer.resumeWith({ pauseId: pauseIdOf(paused), action: 'continue', input: { amount: 5 } });
     await waitUntil(() => refusalsFor(viewer, pauseIdOf(paused)).length === 1, 8000, 'refusal');

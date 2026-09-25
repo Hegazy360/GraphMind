@@ -95,7 +95,7 @@ not know. The known set:
 | `node.token` | `{ nodeId, deltas: TokenDelta[], redaction? }` — batched by the sender |
 | `node.finished` | `{ nodeId, instanceId?, output?, usage?, durationMs, heldMs?, status, redaction? }` |
 | `node.error` | `{ nodeId, instanceId?, error, heldMs? }` |
-| `exec.paused` | `{ pauseId, nodeId, point, reason?, loop?, smart?, editable? }` |
+| `exec.paused` | `{ pauseId, nodeId, point, reason?, loop?, smart?, editable?, instanceId? }` |
 | `exec.resumed` | `{ pauseId, action, edited?, requestId?, principal? }` |
 | `exec.refused` | `{ pauseId, code, message?, requestId? }` — 0.6.0: a proposed edit was refused; the gate is **still held** |
 
@@ -107,7 +107,7 @@ Optional fields added in 0.5.0. Older receivers ignore them under the tolerance 
 | `node.finished.durationMs` | Wall-clock time from start to finish, **including** time held at gates. Since 0.5.0 SDKs measure it on a monotonic clock, rounded to 0.01 ms and never negative. Older SDKs send whole milliseconds. |
 | `node.finished.heldMs` | Milliseconds of that time the debugger held this execution: the union of its own holds and holds on its descendants. Ran time is `durationMs - heldMs`, floored at 0. It is `0` when the execution was never held, and absent when the sender never saw the execution start. |
 | `node.error.heldMs` | Held time so far, at the moment of the error. |
-| `exec.paused.reason` | `'loop'` on a [loop hold](/reference/environment/#loop-hold). Other holds carry no reason today. |
+| `exec.paused.reason` | `'loop'` on a [loop hold](/reference/environment/#loop-hold). Since 0.6.0 every hold carries one: `loop`, `breakpoint` (with `smart` for a [smart hold](/reference/environment/#smart-holds)), `step` or `error`. |
 | `exec.paused.loop` | `{ repeats, firstSeq, lastSeq, fingerprint }`: how many identical calls in a row, the `seq` of the first and of the held call's `node.started`, and a 32-hex-character digest of the arguments. The digest is `"__REDACTED__"` when inputs are hidden, and `graphmind record` replaces it with `"__REDACTED__"` unless you pass `--no-redact-secrets`. |
 | `redaction` | `{ count, keys }` on an event whose payload a `GRAPHMIND_HIDE_*` switch changed: how many values were replaced and which fields (`input`, `output`, `deltas`). `failed: true` with `count: 0` marks an event whose payload could not be read safely, so its hidden field was replaced without being read. |
 
@@ -117,7 +117,9 @@ Optional fields added in 0.6.0, for [editing a held call's arguments](/debugging
 | Field | Meaning |
 | --- | --- |
 | `exec.paused.editable` | `true` when the adapter can apply an edited input at this gate. Absent or `false`: offer no editing. |
+| `exec.paused.instanceId` | The execution the gate holds — its `node.started.instanceId` — when the sender knows it (every TypeScript adapter, `graphmind mcp-proxy`, the Python SDK). Tells parallel calls of one node apart; absent, a receiver can only guess which running call is held (the viewer then offers no argument editing while two calls of the node run). |
 | `exec.paused.smart` | `{ rule, detail? }` with `rule` `error-result` or `truncated-tool-call`, next to `reason: 'breakpoint'`, when a smart breakpoint raised the hold. `detail` never quotes values. |
+| `exec.paused.loop.kind` / `.period` / `.laps` | Which loop detector held: `repeat` (absent means `repeat`, the only 0.5 kind), `cycle` (with `period` calls per lap and the identical `laps` seen) or `error-repeat`. The four 0.5 fields stay filled, so a 0.5 viewer still shows the hold. |
 | `exec.resumed.edited` | `{ after }`: the input the call actually ran with (redacted like the node's own input). No `before` — that is the node's recorded input. |
 | `exec.resumed.requestId` / `exec.refused.requestId` | The `exec.resume.requestId` this answers, echoed as received. Absent when the client released the gate on its own. |
 | `exec.resumed.principal` | Who won the pause (`viewer`, `agent`, `anonymous`), stamped by the server from the resumer's credential — never by the app. |
@@ -166,7 +168,9 @@ What the `graphmind-ai` server adds from 0.6.0 (all optional fields; a 0.5 peer 
   (an echo of the app's own list), a client can rely on it.
 - Every `exec.resume` it relays carries a `requestId` (the resumer's, or one the server mints),
   and only `pauseId`, `action`, `requestId`, `output` (with `inject`) and `input`. A client that
-  echoes `requestId` on `exec.resumed` / `exec.refused` lets the server attribute the answer.
+  echoes `requestId` on `exec.resumed` / `exec.refused` — and says so with `request-id` (or
+  `edit-input`) — lets the server attribute the answer, and credit a release carrying none to
+  no one.
 - The stored `exec.resumed` carries `principal` (`viewer`, `agent` or `anonymous`: the credential
   of the resume that won the pause) and, when given, the resumer's sanitized `operator` label.
   The server removes `principal` and `operator` from any `exec.*` event an app sends.

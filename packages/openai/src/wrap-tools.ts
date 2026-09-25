@@ -145,9 +145,10 @@ function makeGatedTool(
     const attachWait = core.maybeWaitForAttach(); // waitForAttach: first-call gate
     if (attachWait !== undefined) await attachWait;
 
-    const node: GateNode = { nodeId: toolNodeId(toolName), kind: 'tool', name: toolName };
     const ctx = core.session.currentRun();
     const instanceId = instanceIdOf(args[1]);
+    // exec.paused names this call (parallel calls of one tool stay apart).
+    const node: GateNode = { nodeId: toolNodeId(toolName), kind: 'tool', name: toolName, instanceId };
     const startedAt = monotonicNow();
     const input = parseToolInput(args[0]);
     core.startNode({

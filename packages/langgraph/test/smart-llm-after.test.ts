@@ -147,12 +147,19 @@ describe('callback-gated tools: error-result at the handler after gate', () => {
 
     const promise = deploy.invoke({ ok: false }, { callbacks: [gm.handler()] });
     const paused = await pausedFor(viewer, 'tool');
+    // The second deploy run is the held one (the callback handler's instanceId).
+    const heldRun = viewer
+      .ofType('node.started')
+      .filter((f) => f.payload['nodeId'] === 'tool:deploy')
+      .at(-1)?.payload['instanceId'];
+    expect(typeof heldRun).toBe('string');
     expect(paused.payload).toEqual({
       pauseId: paused.payload['pauseId'],
       nodeId: 'tool:deploy',
       point: 'after',
       reason: 'breakpoint',
       smart: { rule: 'error-result', detail: 'the tool returned a result with success: false' },
+      instanceId: heldRun,
     });
     viewer.resume(paused.payload['pauseId'] as string, 'continue');
     expect(await promise).toEqual({ success: false, reason: 'quota' });

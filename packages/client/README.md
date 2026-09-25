@@ -30,6 +30,7 @@ await session.run('book-trip', async (ctx) => {
 
   const decision = await session.gate('before', {
     nodeId: 'tool:searchFlights', kind: 'tool', name: 'searchFlights',
+    instanceId: 'call-1', // 0.6: named on exec.paused (parallel calls stay apart)
   });
   if (decision.action === 'inject') return decision.output;   // skip execution
   if (decision.action === 'abort') throw ctx.signal.reason;   // see "Abort"

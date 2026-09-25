@@ -106,14 +106,20 @@ CONTINUE = GateDecision("continue")
 
 
 class GateNode:
-    """The logical node a gate belongs to."""
+    """The logical node a gate belongs to. ``instance_id``: the execution the
+    gate holds (its ``node.started`` ``instanceId``), when the integration
+    knows it — sent as ``exec.paused.instanceId`` (0.6.0) so a debugger can
+    tell parallel calls of one node apart. Breakpoints never match on it."""
 
-    __slots__ = ("kind", "name", "node_id")
+    __slots__ = ("instance_id", "kind", "name", "node_id")
 
-    def __init__(self, node_id: str, kind: str, name: str) -> None:
+    def __init__(
+        self, node_id: str, kind: str, name: str, instance_id: str | None = None
+    ) -> None:
         self.node_id = node_id
         self.kind = kind
         self.name = name
+        self.instance_id = instance_id
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"GateNode({self.node_id!r}, {self.kind!r}, {self.name!r})"

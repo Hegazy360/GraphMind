@@ -87,7 +87,7 @@ class _Node:
         self.started = monotonic_ms()
 
     def gate_node(self) -> GateNode:
-        return GateNode(self.node_id, self.kind, self.name)
+        return GateNode(self.node_id, self.kind, self.name, self.instance_id)
 
 
 def _name_of(serialized: Any, kwargs: dict[str, Any], fallback: str) -> str:

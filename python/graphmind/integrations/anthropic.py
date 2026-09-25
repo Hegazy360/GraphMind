@@ -320,8 +320,9 @@ class _Call:
         self.session = session
         self.hinter = hinter
         self.reply = reply
-        self.node = GateNode(LLM_NODE_ID, "llm", LLM_NODE_NAME)
         self.instance_id = next_id("step")
+        # exec.paused names this step's execution (parallel steps stay apart).
+        self.node = GateNode(LLM_NODE_ID, "llm", LLM_NODE_NAME, self.instance_id)
         self.started = monotonic_ms()
         self.model = "graphmind-injected"
         self.finished = False
