@@ -20,9 +20,13 @@ regexes, no callbacks.
   ``node.finished.output`` when the instance's kind is ``tool``, plus the
   deltas a tool node streams.
 
-Env values ``1`` / ``true`` (case-insensitive, surrounding whitespace ignored)
-turn a switch on; each is also a session option. Either source turning a
-switch on turns it on: an environment switch is a floor code cannot lower.
+Any env value except empty, ``0``, ``false``, ``off`` and ``no``
+(case-insensitive, surrounding whitespace ignored) turns a switch on, so an
+unexpected spelling such as ``yes`` errs towards hiding (:func:`env_flag_on`,
+the same rule as :func:`graphmind.env.kill_switch_on`). Each is also a session
+option, on for ``True``, ``1`` or a string the environment would count as on
+(:func:`option_flag_on`). Either source turning a switch on turns it on: an
+environment switch is a floor code cannot lower.
 
 Every affected event carries ``redaction: {count, keys}``. ``node.error`` is
 deliberately NOT redacted (error messages may echo data). A field that is
