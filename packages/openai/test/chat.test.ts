@@ -251,3 +251,74 @@ describe('graph.hint and node identity', () => {
     expect(toolStarts[0]?.payload['parentId']).toBe('llm:step');
   });
 });
+
+describe('custom (freeform) tool calls', () => {
+  const PATCH = '*** Begin Patch\n*** Update File: a.txt\n-old\n+new\n*** End Patch';
+  const base = { id: 'chatcmpl-c', object: 'chat.completion.chunk', created: 1, model: 'gpt-5' };
+  const choice = (delta: unknown, finish: string | null = null): unknown => ({
+    ...base,
+    choices: [{ index: 0, delta, finish_reason: finish, logprobs: null }],
+  });
+  /** openai@7 `ChatCompletionChunk.Choice.Delta.ToolCall` with `type: 'custom'` / `custom: {name, input}`. */
+  function customToolChunks(): unknown[] {
+    const events: unknown[] = [choice({ role: 'assistant', content: null })];
+    events.push(choice({ tool_calls: [{ index: 0, id: 'call_c1', type: 'custom', custom: { name: 'apply_patch', input: '' } }] }));
+    for (const piece of chunked(PATCH, 6)) events.push(choice({ tool_calls: [{ index: 0, custom: { input: piece } }] }));
+    events.push(choice({}, 'tool_calls'));
+    return events;
+  }
+  const EXPECTED_CALL = { id: 'call_c1', name: 'apply_patch', input: PATCH };
+
+  it('non-streaming: the custom call is recorded with its input text', async () => {
+    const server = new FakeOpenAI().onChat(() => ({
+      kind: 'json',
+      body: {
+        id: 'chatcmpl-c',
+        object: 'chat.completion',
+        created: 1,
+        model: 'gpt-5',
+        choices: [
+          {
+            index: 0,
+            finish_reason: 'tool_calls',
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [{ id: 'call_c1', type: 'custom', custom: { name: 'apply_patch', input: PATCH } }],
+            },
+          },
+        ],
+      },
+    }));
+    const { viewer, gm, client } = await setup(server, {}, {}, cleanups);
+    await attach(gm);
+    await client.chat.completions.create({ model: 'gpt-5', messages: [{ role: 'user', content: 'patch it' }] });
+    await waitUntil(() => framesFor(viewer, 'node.finished', 'llm:step').length === 1, 5000, 'finish');
+    const output = framesFor(viewer, 'node.finished', 'llm:step')[0]?.payload['output'] as Record<string, unknown>;
+    expect(output['finishReason']).toBe('tool-calls');
+    expect(output['toolCalls']).toEqual([EXPECTED_CALL]);
+  });
+
+  it('streaming: the same custom call is recorded, and its input streams on tool-args', async () => {
+    const server = new FakeOpenAI().onChat(() => ({ kind: 'sse', events: customToolChunks() }));
+    const { viewer, gm, client } = await setup(server, {}, {}, cleanups);
+    await attach(gm);
+    const stream = await client.chat.completions.create({
+      model: 'gpt-5',
+      messages: [{ role: 'user', content: 'patch it' }],
+      stream: true,
+    });
+    let hostInput = '';
+    for await (const chunk of stream) {
+      const call = chunk.choices[0]?.delta.tool_calls?.[0] as { custom?: { input?: string } } | undefined;
+      hostInput += call?.custom?.input ?? '';
+    }
+    expect(hostInput).toBe(PATCH); // the host's own stream is untouched
+    await waitUntil(() => framesFor(viewer, 'node.finished', 'llm:step').length === 1, 5000, 'finish');
+    const output = framesFor(viewer, 'node.finished', 'llm:step')[0]?.payload['output'] as Record<string, unknown>;
+    expect(output['finishReason']).toBe('tool-calls');
+    expect(output['rawFinishReason']).toBe('tool_calls');
+    expect(output['toolCalls']).toEqual([EXPECTED_CALL]);
+    expect(observedText(viewer, 'llm:step', 'tool-args')).toBe(PATCH);
+  });
+});

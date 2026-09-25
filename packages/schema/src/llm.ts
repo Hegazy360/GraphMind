@@ -40,7 +40,9 @@ const FINISH_REASON_MAP: Readonly<Record<string, FinishReason>> = Object.freeze(
   stop: 'stop',
   end_turn: 'stop',
   stop_sequence: 'stop',
-  pause_turn: 'stop',
+  // Anthropic: a long server-tool turn was paused and must be sent back to
+  // continue — the model did not finish, so not a `stop`.
+  pause_turn: 'other',
   eos: 'stop',
   eos_token: 'stop',
   complete: 'stop',

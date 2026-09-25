@@ -7,7 +7,7 @@ import { connect } from 'node:net';
 import type { MessagePayloadMap } from '@graphmind-ai/schema';
 import { FakeApp } from './helpers.js';
 
-export const ALL_CAPABILITIES = ['pause', 'step', 'inject', 'retry', 'abort', 'run-claim', 'edit-input'];
+export const ALL_CAPABILITIES = ['pause', 'step', 'inject', 'retry', 'abort', 'run-claim', 'edit-input', 'request-id'];
 
 export interface HeldAppOptions {
   runId?: string;

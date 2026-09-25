@@ -28,7 +28,9 @@
  * schema (`parameters`, `inputSchema`, `input_schema` or `schema`: zod, a
  * Standard Schema, or JSON Schema) has the merged arguments checked against
  * it first, and a failure keeps the gate held; without one they are accepted
- * as merged. The latest accepted edit stays the call's arguments for later
+ * as merged. Either way the function receives the MERGED arguments, never the
+ * schema's parsed output: it gets what your loop passes and parses it itself
+ * (or not), so a schema transform never runs twice. The latest accepted edit stays the call's arguments for later
  * attempts. `node.started` (and so the loop fingerprint) keeps what the model
  * asked for; `exec.resumed.edited` records what ran. The `after` gate also
  * hands the result to the session's after-gate detectors.
@@ -173,8 +175,11 @@ function makeGatedTool(
     let callArgs: unknown[] = args;
     let live = input;
     const asText = typeof args[0] === 'string';
+    // The function gets the arguments as your loop passed them (and does any
+    // parsing itself), so an edit runs MERGED: the schema only judges it, and
+    // its transforms never run on top of the function's own parsing.
     const edit = (): ToolEdit | undefined =>
-      args.length >= 1 && isEditableToolInput(live) ? { args: live, check } : undefined;
+      args.length >= 1 && isEditableToolInput(live) ? { args: live, check, runMerged: true } : undefined;
     const applyEdit = (decision: GateDecision): void => {
       const edited = editedArgs(decision);
       if (edited === undefined) return;

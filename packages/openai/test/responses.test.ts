@@ -98,6 +98,35 @@ describe('responses.create', () => {
     expect(finished?.payload['streamed']).toBe(true);
     expect(finished?.payload['usage']).toEqual(EXPECTED_USAGE);
   });
+
+  it('a stream that ends before its terminal event still records the requested calls (cut-off arguments as inputText)', async () => {
+    const all = responseEvents({
+      functionCalls: [
+        { id: 'fc_1', callId: 'call_a', name: 'checkWeather', args: { city: 'Lisbon' } },
+        { id: 'fc_2', callId: 'call_b', name: 'bookFlight', args: { from: 'VIE', to: 'LIS' } },
+      ],
+    }) as { type?: string; item_id?: string }[];
+    // The connection drops in the middle of the second call's arguments: no
+    // output_item.done for it and no response.completed.
+    const cut = all.findIndex((e) => e.type === 'response.function_call_arguments.delta' && e.item_id === 'fc_2');
+    const events = all.slice(0, cut + 1);
+    const server = new FakeOpenAI().onResponses(() => ({ kind: 'sse', events }));
+    const { viewer, gm, client } = await setup(server, {}, {}, cleanups);
+    await attach(gm);
+    const stream = await client.responses.create({ model: 'gpt-5.4', input: 'plan it', stream: true });
+    for await (const _event of stream) {
+      // consume
+    }
+    await waitUntil(() => framesFor(viewer, 'node.finished', 'llm:step').length === 1, 5000, 'finish');
+    const output = framesFor(viewer, 'node.finished', 'llm:step')[0]?.payload['output'] as Record<string, unknown>;
+    const secondText = observedText(viewer, 'llm:step', 'tool-args').slice(JSON.stringify({ city: 'Lisbon' }).length);
+    expect(secondText.length).toBeGreaterThan(0);
+    expect(output['toolCalls']).toEqual([
+      { id: 'call_a', name: 'checkWeather', input: { city: 'Lisbon' } },
+      { id: 'call_b', name: 'bookFlight', input: null, inputText: secondText },
+    ]);
+    expect(output).not.toHaveProperty('finishReason'); // nothing was reported
+  });
 });
 
 describe('provider-executed tools', () => {

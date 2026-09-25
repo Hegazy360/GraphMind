@@ -100,6 +100,8 @@ export interface ChatChunkLike {
         id?: string;
         type?: string;
         function?: { name?: string; arguments?: string };
+        /** A custom (freeform) tool call: `openai@7` streams its input as text. */
+        custom?: { name?: string; input?: string };
       }[];
     };
   }[];

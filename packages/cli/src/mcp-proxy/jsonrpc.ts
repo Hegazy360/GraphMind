@@ -105,6 +105,119 @@ export function encodeFrame(message: unknown): Buffer | undefined {
   }
 }
 
+// -- splicing one value into a frame's own bytes --------------------------------
+
+const WHITESPACE = new Set([' ', '\t', '\n', '\r']);
+
+function skipWhitespace(text: string, at: number): number {
+  let i = at;
+  while (i < text.length && WHITESPACE.has(text[i] as string)) i += 1;
+  return i;
+}
+
+/** The index just past the JSON string starting at `at` (a `"`), or -1. */
+function skipString(text: string, at: number): number {
+  for (let i = at + 1; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === '\\') i += 1;
+    else if (c === '"') return i + 1;
+  }
+  return -1;
+}
+
+/** The index just past the JSON value starting at `at`, or -1 when it is not one. */
+function skipValue(text: string, at: number): number {
+  const c = text[at];
+  if (c === '"') return skipString(text, at);
+  if (c === '{' || c === '[') {
+    let depth = 0;
+    for (let i = at; i < text.length; i += 1) {
+      const d = text[i];
+      if (d === '"') {
+        i = skipString(text, i) - 1;
+        if (i < 0) return -1;
+      } else if (d === '{' || d === '[') depth += 1;
+      else if (d === '}' || d === ']') {
+        depth -= 1;
+        if (depth === 0) return i + 1;
+      }
+    }
+    return -1;
+  }
+  let i = at;
+  while (i < text.length && !WHITESPACE.has(text[i] as string) && text[i] !== ',' && text[i] !== '}' && text[i] !== ']') i += 1;
+  return i > at ? i : -1;
+}
+
+interface MemberSpan {
+  key: string;
+  /** The member value's [start, end) in the text. */
+  start: number;
+  end: number;
+}
+
+/** The members of the JSON object starting at `open` (a `{`), and where it closes; undefined if malformed. */
+function objectMembers(text: string, open: number): { members: MemberSpan[]; close: number } | undefined {
+  const members: MemberSpan[] = [];
+  let i = skipWhitespace(text, open + 1);
+  if (text[i] === '}') return { members, close: i };
+  for (;;) {
+    if (text[i] !== '"') return undefined;
+    const keyEnd = skipString(text, i);
+    if (keyEnd < 0) return undefined;
+    let key: string;
+    try {
+      key = JSON.parse(text.slice(i, keyEnd)) as string;
+    } catch {
+      return undefined;
+    }
+    i = skipWhitespace(text, keyEnd);
+    if (text[i] !== ':') return undefined;
+    const start = skipWhitespace(text, i + 1);
+    const end = skipValue(text, start);
+    if (end < 0) return undefined;
+    members.push({ key, start, end });
+    i = skipWhitespace(text, end);
+    if (text[i] === '}') return { members, close: i };
+    if (text[i] !== ',') return undefined;
+    i = skipWhitespace(text, i + 1);
+  }
+}
+
+/**
+ * The frame `raw` with `params.arguments` replaced by `args` — spliced into
+ * the frame's OWN bytes, so every other value (the JSON-RPC `id`, `name`,
+ * `_meta`, key order, spelling) stays exactly as the client wrote it. A JSON
+ * round trip would not: an id above 2^53 or a `_meta` number like 1e400
+ * would change, and the client would never match the server's answer. A
+ * missing `arguments` is added at the end of `params`. Duplicate keys: the
+ * last one is the one JSON.parse reads, so it is the one replaced. Undefined
+ * when the frame is not an object with an object `params`, or `args` has no
+ * JSON form.
+ */
+export function spliceParamsArguments(raw: Buffer, args: unknown): Buffer | undefined {
+  try {
+    const json = JSON.stringify(args);
+    if (json === undefined) return undefined;
+    const text = raw.toString('utf8');
+    const open = skipWhitespace(text, 0);
+    if (text[open] !== '{') return undefined;
+    const top = objectMembers(text, open);
+    const params = top?.members.filter((m) => m.key === 'params').pop();
+    if (params === undefined || text[params.start] !== '{') return undefined;
+    const inner = objectMembers(text, params.start);
+    if (inner === undefined) return undefined;
+    const current = inner.members.filter((m) => m.key === 'arguments').pop();
+    const spliced =
+      current !== undefined
+        ? `${text.slice(0, current.start)}${json}${text.slice(current.end)}`
+        : `${text.slice(0, inner.close)}${inner.members.length > 0 ? ',' : ''}"arguments":${json}${text.slice(inner.close)}`;
+    return Buffer.from(spliced, 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
 /** Same, for frames we build ourselves and know are serializable. */
 function encodeOwnFrame(message: Record<string, unknown>): Buffer {
   return encodeFrame(message) ?? Buffer.from('{}', 'utf8');

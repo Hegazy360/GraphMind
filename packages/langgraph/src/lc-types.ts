@@ -179,8 +179,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
  *    added.
  *  - raw Anthropic `usage` (`response_metadata.usage`, `llmOutput.usage`):
  *    recognised by `cache_read_input_tokens` / `cache_creation_input_tokens`
- *    / `cache_creation`; `input_tokens` is the uncached tail, so the cache
- *    counts are added (the 5m/1h split summed when the total is absent).
+ *    / `cache_creation` / `output_tokens_details.thinking_tokens`;
+ *    `input_tokens` is the uncached tail, so the cache counts are added (the
+ *    5m/1h split summed when the total is absent), and the thinking count is
+ *    `reasoningTokens`.
  *  - raw OpenAI `token_usage` / `usage`: `prompt_tokens` is inclusive, cache
  *    reads in `prompt_tokens_details.cached_tokens`.
  *  - LangChain JS `llmOutput.tokenUsage`: `promptTokens` / `completionTokens`.
@@ -188,10 +190,12 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 export function usageFromRecord(record: unknown): TokenUsage | undefined {
   const source = asRecord(record);
   if (source === undefined) return undefined;
+  const thinking = asRecord(source['output_tokens_details'])?.['thinking_tokens'];
   const anthropicRaw =
     'cache_read_input_tokens' in source ||
     'cache_creation_input_tokens' in source ||
-    asRecord(source['cache_creation']) !== undefined;
+    asRecord(source['cache_creation']) !== undefined ||
+    typeof thinking === 'number';
   if (anthropicRaw) {
     const cacheRead = tokenCount(source['cache_read_input_tokens']);
     const split = asRecord(source['cache_creation']);
@@ -205,6 +209,7 @@ export function usageFromRecord(record: unknown): TokenUsage | undefined {
       output: tokenCount(source['output_tokens']),
       cacheRead,
       cacheWrite,
+      reasoning: tokenCount(thinking),
     });
   }
   if ('input_token_details' in source || 'output_token_details' in source || 'input_tokens' in source) {

@@ -6,14 +6,14 @@
  * the session's detectors; and nothing changes under a 0.5 debugger, with
  * edits disabled, or detached.
  */
-import { jsonSchema, tool } from 'ai';
+import { jsonSchema, simulateReadableStream, stepCountIs, streamText, tool } from 'ai';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { AfterGateContext, GateDetector, Session } from '@graphmind-ai/client';
 import { graphmind, type Graphmind, type GraphmindOptions } from '../src/index.js';
 import { FakeViewer, tick, waitUntil, type FakeViewerOptions, type ReceivedFrame } from './helpers/fake-viewer.js';
 import { attach, runScenario, Marks } from './helpers/scenario.js';
-import { toolExecutionOptions } from './helpers/sdk-compat.js';
+import { MockLanguageModel, toolExecutionOptions, type StreamPart, type Usage } from './helpers/sdk-compat.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -449,3 +449,137 @@ describe('edge cases', () => {
     expect(calls).toEqual([{ to: 3 }]);
   });
 });
+
+describe("an accepted edit never runs the schema's transforms twice", () => {
+  const usage: Usage = {
+    inputTokens: { total: 20, noCache: 20, cacheRead: undefined, cacheWrite: undefined },
+    outputTokens: { total: 10, text: 10, reasoning: undefined },
+  };
+
+  /** Step 0 calls `toolName` with `input`; step 1 answers with plain text. */
+  function mockModel(toolName: string, input: unknown): InstanceType<typeof MockLanguageModel> {
+    let call = 0;
+    return new MockLanguageModel({
+      doStream: async () => {
+        const index = call++;
+        const parts: StreamPart[] =
+          index === 0
+            ? [
+                { type: 'stream-start', warnings: [] },
+                { type: 'tool-call', toolCallId: 'call-1', toolName, input: JSON.stringify(input) },
+                { type: 'finish', usage, finishReason: { unified: 'tool-calls', raw: 'tool-calls' } },
+              ]
+            : [
+                { type: 'stream-start', warnings: [] },
+                { type: 'text-start', id: 't' },
+                { type: 'text-delta', id: 't', delta: 'done' },
+                { type: 'text-end', id: 't' },
+                { type: 'finish', usage, finishReason: { unified: 'stop', raw: 'stop' } },
+              ];
+        return { stream: simulateReadableStream<StreamPart>({ chunks: parts, initialDelayInMs: 1, chunkDelayInMs: 1 }) };
+      },
+    }) as InstanceType<typeof MockLanguageModel>;
+  }
+
+  async function run(gm: Graphmind, tools: Parameters<Graphmind['wrapTools']>[0], toolName: string, input: unknown) {
+    const result = streamText({
+      model: gm.wrapModel(mockModel(toolName, input)),
+      tools: gm.wrapTools(tools),
+      prompt: 'charge the customer',
+      stopWhen: stepCountIs(3),
+    });
+    await result.consumeStream();
+  }
+
+  /** dollars -> cents: NOT idempotent (applying it twice multiplies by 10 000). */
+  function chargeTool(calls: unknown[]) {
+    return tool({
+      description: 'Charge the customer',
+      inputSchema: z.object({ dollars: z.number().transform((d) => d * 100), memo: z.string() }),
+      execute: async (args) => {
+        calls.push(args);
+        return { chargedCents: args.dollars };
+      },
+    });
+  }
+
+  it('baseline (no hold): execute receives the transform applied once', async () => {
+    const { gm } = await setup();
+    const calls: unknown[] = [];
+    await gm.run('baseline', () => run(gm, { charge: chargeTool(calls) }, 'charge', { dollars: 5, memo: 'x' }));
+    expect(calls).toEqual([{ dollars: 500, memo: 'x' }]);
+  });
+
+  it('continue + input {memo} leaves dollars at 500 cents (the model sent 5 dollars)', async () => {
+    const { viewer, gm } = await setup({ breakpoints: [{ kind: 'tool' }] });
+    const calls: unknown[] = [];
+    const done = gm.run('edited', () => run(gm, { charge: chargeTool(calls) }, 'charge', { dollars: 5, memo: 'x' }));
+    const paused = await pausedAt(viewer, 'tool:charge', 'before');
+    expect(paused.payload['editable']).toBe(true);
+    viewer.resumeWith({ pauseId: pauseIdOf(paused), action: 'continue', input: { memo: 'fixed memo' } });
+    await done;
+    // The user only changed `memo`: `dollars` is what it is with no edit.
+    expect(calls).toEqual([{ dollars: 500, memo: 'fixed memo' }]);
+    expect((await resumedFor(viewer, pauseIdOf(paused))).payload['edited']).toEqual({
+      after: { dollars: 500, memo: 'fixed memo' },
+    });
+  });
+
+  it('a type-changing transform: editing an untouched sibling key is not refused', async () => {
+    const { viewer, gm } = await setup({ breakpoints: [{ kind: 'tool' }] });
+    const calls: unknown[] = [];
+    const tools = {
+      lookup: tool({
+        description: 'Look up an order',
+        // string -> number: the parsed value no longer satisfies the INPUT schema.
+        inputSchema: z.object({ orderId: z.string().transform((s) => Number.parseInt(s, 10)), note: z.string() }),
+        execute: async (args) => {
+          calls.push(args);
+          return 'ok';
+        },
+      }),
+    };
+    const done = gm.run('typed', () => run(gm, tools, 'lookup', { orderId: '42', note: 'a' }));
+    const paused = await pausedAt(viewer, 'tool:lookup', 'before');
+    const pauseId = pauseIdOf(paused);
+    viewer.resumeWith({ pauseId, action: 'continue', input: { note: 'b' } });
+    await viewer.waitFor((f) => (f.type === 'exec.refused' || f.type === 'exec.resumed') && f.payload['pauseId'] === pauseId);
+    const refusals = refusalsFor(viewer, pauseId);
+    if (refusals.length > 0) viewer.resume(pauseId, 'continue'); // unblock the run either way
+    await done;
+    expect(refusals.map((f) => f.payload['code'])).toEqual([]);
+    expect(calls).toEqual([{ orderId: 42, note: 'b' }]);
+  });
+
+  it('a retry after an accepted edit merges into the edited arguments, still parsing once', async () => {
+    const { viewer, gm } = await setup({ breakpoints: [{ kind: 'tool' }, { kind: 'tool', point: 'after' }] });
+    const calls: unknown[] = [];
+    const done = gm.run('twice', () => run(gm, { charge: chargeTool(calls) }, 'charge', { dollars: 5, memo: 'x' }));
+    viewer.resumeWith({ pauseId: pauseIdOf(await pausedAt(viewer, 'tool:charge', 'before')), action: 'continue', input: { memo: 'm1' } });
+    viewer.resumeWith({ pauseId: pauseIdOf(await pausedAt(viewer, 'tool:charge', 'after')), action: 'retry', input: { memo: 'm2' } });
+    viewer.resume(pauseIdOf(await pausedAt(viewer, 'tool:charge', 'before', 2)), 'continue');
+    viewer.resume(pauseIdOf(await pausedAt(viewer, 'tool:charge', 'after', 2)), 'continue');
+    await done;
+    expect(calls).toEqual([
+      { dollars: 500, memo: 'm1' },
+      { dollars: 500, memo: 'm2' },
+    ]);
+  });
+
+  it("without the model's own arguments (tools wrapped alone) a partial edit of a transformed call is refused, a full one runs", async () => {
+    const { viewer, gm } = await setup({ breakpoints: [{ kind: 'tool' }] });
+    const calls: unknown[] = [];
+    const tools = gm.wrapTools({ charge: chargeTool(calls) });
+    // What the SDK hands execute: the PARSED arguments (5 dollars -> 500).
+    const promise = tools.charge.execute?.({ dollars: 500, memo: 'x' } as never, toolExecutionOptions('c1'));
+    const pauseId = pauseIdOf(await pausedAt(viewer, 'tool:charge', 'before'));
+    viewer.resumeWith({ pauseId, action: 'continue', input: { memo: 'y' } });
+    await waitUntil(() => refusalsFor(viewer, pauseId).length === 1, 8000, 'refusal');
+    expect(refusalsFor(viewer, pauseId)[0]?.payload).toMatchObject({ code: 'unsupported' });
+    // Every argument given: parsed once, from what the user wrote.
+    viewer.resumeWith({ pauseId, action: 'continue', input: { dollars: 7, memo: 'y' } });
+    await promise;
+    expect(calls).toEqual([{ dollars: 700, memo: 'y' }]);
+  });
+});
+

@@ -164,7 +164,7 @@ describe('continue + input at the before gate', () => {
     expect(calls).toEqual([{ amount: 250, from: 'GBP', to: 'USD' }]);
   });
 
-  it("a tool object's zod parameters refuse a bad edit and parse a good one", async () => {
+  it("a tool object's zod parameters refuse a bad edit and accept a good one", async () => {
     const { viewer, gm } = await setup({ breakpoints: BEFORE });
     const calls: unknown[] = [];
     const tools = gm.wrapTools({
@@ -185,6 +185,31 @@ describe('continue + input at the before gate', () => {
     viewer.resumeWith({ pauseId, action: 'continue', input: { query: 'lis' } });
     expect(await promise).toBe('ok');
     expect(calls).toEqual([{ query: 'lis', limit: 5 }]);
+  });
+
+  it("the function gets the MERGED arguments, never the schema's parsed output (a transform never runs twice)", async () => {
+    const { viewer, gm } = await setup({ breakpoints: BEFORE });
+    const calls: unknown[] = [];
+    // dollars -> cents: NOT idempotent. The function parses what it is given
+    // itself, as a loop's tool function does.
+    const parameters = z.object({ dollars: z.number().transform((d) => d * 100), memo: z.string() });
+    const tools = gm.wrapTools({
+      charge: {
+        parameters,
+        execute: async (args: unknown) => {
+          const parsed = parameters.parse(args);
+          calls.push(parsed);
+          return `charged ${parsed.dollars} cents`;
+        },
+      },
+    });
+    const promise = tools.charge.execute({ dollars: 5, memo: 'x' });
+    const pauseId = pauseIdOf(await pausedAt(viewer, 'tool:charge', 'before'));
+    viewer.resumeWith({ pauseId, action: 'continue', input: { memo: 'fixed memo' } });
+    expect(await promise).toBe('charged 500 cents');
+    expect(calls).toEqual([{ dollars: 500, memo: 'fixed memo' }]);
+    // The record shows what the function was handed.
+    expect((await resumedFor(viewer, pauseId)).payload['edited']).toEqual({ after: { dollars: 5, memo: 'fixed memo' } });
   });
 });
 

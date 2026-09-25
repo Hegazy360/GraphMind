@@ -115,6 +115,45 @@ describe('node.started.input', () => {
     for (const secret of ['SECRET-USER', 'SECRET-TOKEN', 'SECRET-HEADER']) expect(all).not.toContain(secret);
     expectAllValid(viewer);
   });
+
+  it('a step shrunk by the 512 KB budget does not use up the run\'s one intact copy of a tool definition', async () => {
+    const { viewer, gm } = await setup();
+    const { client } = makeClient(gm, () => ({ message: assistantMessage('m', 'ok') }));
+    const runSql = {
+      name: 'run_sql',
+      description: 'Run a read-only SQL query',
+      input_schema: {
+        type: 'object',
+        properties: { query: { type: 'string' }, limit: { type: 'integer', enum: [10, 100, 1000] } },
+        required: ['query'],
+      },
+    };
+    const bigDocument = 'lorem ipsum dolor sit amet '.repeat(24_000); // ~650 KB > the 512 KB budget
+    await gm.run('r1', async () => {
+      for (const content of [`Summarise:\n${bigDocument}`, 'Now count the rows.', 'And again.']) {
+        await client.messages.create({ model: 'claude-sonnet-4-5', max_tokens: 256, messages: [{ role: 'user', content }], tools: [runSql] });
+      }
+    });
+    await viewer.waitFor(() => llm(viewer, 'node.finished').length >= 3, 8000);
+    expectAllValid(viewer);
+
+    const [first, second, third] = llm(viewer, 'node.started').map((f) => f.payload);
+    const hash = schemaHash(runSql);
+    // Step 1 was shrunk by the session (its arrays emptied: `required: []`).
+    expect(first?.['__graphmindTruncated']).toBe(true);
+    // So step 2 sends the definition again, intact; step 3 only references it.
+    const secondInput = second?.['input'] as Record<string, unknown>;
+    expect(secondInput['tools']).toEqual([{ name: 'run_sql', schemaHash: hash }]);
+    expect(secondInput['toolSchemas']).toEqual({ [hash]: runSql });
+    expect(third?.['input']).not.toHaveProperty('toolSchemas');
+    // A reader resolving the hash from every untruncated step of the run gets the intact definition.
+    const resolved: Record<string, unknown> = {};
+    for (const payload of [first, second, third]) {
+      if (payload?.['__graphmindTruncated'] === true) continue;
+      Object.assign(resolved, (payload?.['input'] as Record<string, unknown>)['toolSchemas'] ?? {});
+    }
+    expect(resolved[hash]).toEqual(runSql);
+  });
 });
 
 describe('streamed usage and tool calls', () => {
@@ -224,4 +263,116 @@ describe('streamed usage and tool calls', () => {
     expect(finished.payload['usage']).toEqual({ inputTokens: 30, outputTokens: 64, inclusive: true });
     expectAllValid(viewer);
   });
+
+  it('extended thinking: output_tokens_details.thinking_tokens is reasoningTokens (non-streaming)', async () => {
+    const { viewer, gm } = await setup();
+    const message = {
+      id: 'm35',
+      type: 'message',
+      role: 'assistant',
+      model: 'claude-sonnet-4-5',
+      content: [
+        { type: 'thinking', thinking: 'Let me think.', signature: 'sig' },
+        { type: 'text', text: 'Answer.', citations: null },
+      ],
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: {
+        input_tokens: 100,
+        output_tokens: 900,
+        cache_read_input_tokens: null,
+        cache_creation_input_tokens: null,
+        output_tokens_details: { thinking_tokens: 420 },
+      },
+    };
+    const { client } = makeClient(gm, () => ({ message }));
+    await client.messages.create({
+      model: 'claude-sonnet-4-5',
+      max_tokens: 2000,
+      thinking: { type: 'enabled', budget_tokens: 1024 },
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    const finished = await viewer.waitFor((f) => f.type === 'node.finished' && f.payload['nodeId'] === 'llm:step');
+    expect(finished.payload['usage']).toEqual({ inputTokens: 100, outputTokens: 900, inclusive: true, reasoningTokens: 420 });
+    expectAllValid(viewer);
+  });
+
+  it('extended thinking, streamed: the cumulative message_delta thinking count is reasoningTokens', async () => {
+    const { viewer, gm } = await setup();
+    const events = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'm35s',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-sonnet-4-5',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 12, output_tokens: 1, output_tokens_details: null },
+        },
+      },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Done.' } },
+      { type: 'content_block_stop', index: 0 },
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 700, output_tokens_details: { thinking_tokens: 420 } },
+      },
+      { type: 'message_stop' },
+    ];
+    const { client } = makeClient(gm, () => ({ events }));
+    const stream = await client.messages.create({ model: 'claude-sonnet-4-5', max_tokens: 1000, messages: [], stream: true });
+    for await (const _event of stream) {
+      // consume
+    }
+    const finished = await viewer.waitFor((f) => f.type === 'node.finished' && f.payload['nodeId'] === 'llm:step');
+    expect(finished.payload['usage']).toEqual({ inputTokens: 12, outputTokens: 700, inclusive: true, reasoningTokens: 420 });
+    expectAllValid(viewer);
+  });
+
+  it('a stream that fails mid-way (overloaded) keeps the usage message_start already reported', async () => {
+    const { viewer, gm } = await setup();
+    const events = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'm8',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-sonnet-4-5',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 50, output_tokens: 1, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 0 },
+        },
+      },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Partial' } },
+      { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } },
+    ];
+    const { client } = makeClient(gm, () => ({ events }));
+    const stream = await client.messages.create({ model: 'claude-sonnet-4-5', max_tokens: 64, messages: [], stream: true });
+    await expect(
+      (async () => {
+        for await (const _event of stream) {
+          // consume until the SDK throws
+        }
+      })(),
+    ).rejects.toThrow();
+    const finished = await viewer.waitFor((f) => f.type === 'node.finished' && f.payload['nodeId'] === 'llm:step');
+    expect(finished.payload['status']).toBe('error');
+    expect(finished.payload['usage']).toEqual({
+      inputTokens: 90_050,
+      outputTokens: 1,
+      inclusive: true,
+      cacheReadTokens: 90_000,
+      cacheWriteTokens: 0,
+      cacheCreationTokens: 0,
+    });
+    expectAllValid(viewer);
+  });
 });
+

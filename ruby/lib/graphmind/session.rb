@@ -5,6 +5,7 @@ require_relative "env"
 require_relative "errors"
 require_relative "gate_engine"
 require_relative "held_ledger"
+require_relative "integrations/support"
 require_relative "ids"
 require_relative "loop_guard"
 require_relative "protocol"
@@ -511,6 +512,7 @@ module Graphmind
     # whole envelope (`payload` is its last key and the generator writes no
     # whitespace).
     def emit_internal(type, payload, run_id, raw_input = NO_RAW_INPUT)
+      original = payload
       # Loop hold (W5 port): fingerprint a watched node's input exactly as the
       # caller handed it over — before redaction can replace it — and outside
       # the lock (it walks the whole input).
@@ -527,6 +529,7 @@ module Graphmind
         # provably the call right before the next one (loop rule 3), and a
         # hold's lastSeq must never point at an event that was never sent.
         @mutex.synchronize { record_loop(run_id, loop_call, nil, LoopGuard::UNREADABLE) } if loop_call
+        release_tool_schemas_of(original, raw_input) if type == "node.started"
         return nil
       end
       payload = with_held_time(type, payload, run_id)
@@ -537,14 +540,18 @@ module Graphmind
       begin
         # Payload budget, AFTER redaction and held time, BEFORE the ring
         # buffer: what is buffered and sent is exactly what the server stores.
-        payload_json = payload_json_within_budget(type, payload)
+        payload_json, whole = payload_json_within_budget(type, payload)
       rescue StandardError
         # Never sent (a NaN, a to_json that raises...): it takes no seq, and
         # like a dropped start it must not count; it clears the streak (loop
         # rule 3). emit rescues.
         @mutex.synchronize { record_loop(run_id, loop_call, nil, LoopGuard::UNREADABLE) } if loop_call
+        release_tool_schemas_of(original, raw_input) if type == "node.started"
         raise
       end
+      # Tool definitions go out once per run (Support.capture_tools): ones this
+      # shrink emptied (`required: []`) must be sent again next step.
+      release_tool_schemas_of(original, raw_input) if !whole && type == "node.started"
       @mutex.synchronize do
         seq = @seq
         @seq += 1
@@ -621,6 +628,8 @@ module Graphmind
     EXPONENT_RE = /\de[+-]/
     private_constant :EXPONENT_RE
 
+    # Returns [json, whole]: whole is false when the payload was shrunk or
+    # degraded (what capture_tools' once-per-run tool definitions must know).
     def payload_json_within_budget(type, payload)
       type_name = type.is_a?(Symbol) ? type.name : type
       degraded = nil
@@ -644,8 +653,8 @@ module Graphmind
         # (a cycle next to a 17 MB string), exactly as the server would see it.
       end
       bytes = json.bytesize
-      return json if bytes * 21 <= Shrink::MAX_PAYLOAD_BYTES * 5 ||
-                     (bytes <= Shrink::MAX_PAYLOAD_BYTES && !json.match?(EXPONENT_RE))
+      return [json, degraded.nil?] if bytes * 21 <= Shrink::MAX_PAYLOAD_BYTES * 5 ||
+                                      (bytes <= Shrink::MAX_PAYLOAD_BYTES && !json.match?(EXPONENT_RE))
 
       wire =
         begin
@@ -660,7 +669,7 @@ module Graphmind
           degraded
         end
       shrunk_json, shrunk, truncated = Shrink.serialize_payload(wire, Shrink::MAX_PAYLOAD_BYTES, type_name)
-      return json unless truncated
+      return [json, degraded.nil?] unless truncated
 
       size = shrunk.is_a?(Hash) && shrunk["bytes"].is_a?(Integer) ? shrunk["bytes"] : "unknown"
       limit = Shrink::MAX_PAYLOAD_BYTES / 1024
@@ -674,7 +683,19 @@ module Graphmind
                      "stores at most #{limit} KB per payload, and this payload is not a valid #{type_name} " \
                      "event); the debugger will drop it")
       end
-      shrunk_json
+      [shrunk_json, false]
+    end
+
+    # The input.toolSchemas of a node.started as the integration built it
+    # (start_node's input before sanitize copies it), handed back to
+    # Support.capture_tools' memory.
+    def release_tool_schemas_of(payload, raw_input)
+      input = raw_input.equal?(NO_RAW_INPUT) ? (payload.is_a?(Hash) ? payload["input"] : nil) : raw_input
+      return unless input.is_a?(Hash)
+
+      Integrations::Support.release_tool_schemas(input["toolSchemas"] || input[:toolSchemas])
+    rescue StandardError
+      nil
     end
 
     # JSON.generate(envelope with payload) from its head and the payload text.

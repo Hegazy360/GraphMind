@@ -7,7 +7,9 @@
  * keeps its id; the `after` gate hands the result to the session's detectors;
  * nothing changes under a 0.5 debugger, with edits disabled, or detached.
  */
+import { AIMessage, type ToolMessage } from '@langchain/core/messages';
 import { StructuredTool, tool } from '@langchain/core/tools';
+import { ToolNode } from '@langchain/langgraph/prebuilt';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { AfterGateContext, GateDetector, Session } from '@graphmind-ai/client';
@@ -301,3 +303,155 @@ describe('edge cases', () => {
     ]);
   });
 });
+
+/**
+ * What the viewer sends for a user who edits its editor, which it pre-fills
+ * from the held node's RECORDED input: the top-level keys whose value changed
+ * (apps/viewer/src/lib/editArgs.ts planEdit).
+ */
+function viewerEdit(recorded: unknown, mutate: (draft: Record<string, unknown>) => void): Record<string, unknown> {
+  const before = recorded as Record<string, unknown>;
+  const draft = JSON.parse(JSON.stringify(recorded)) as Record<string, unknown>;
+  mutate(draft);
+  const payload: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(draft)) {
+    if (JSON.stringify(value) !== JSON.stringify(before[key])) payload[key] = value;
+  }
+  return payload;
+}
+
+function recordedInput(viewer: FakeViewer, nodeId: string): unknown {
+  const started = viewer.ofType('node.started').filter((f) => f.payload['nodeId'] === nodeId);
+  return started[started.length - 1]?.payload['input'];
+}
+
+describe('a ToolCall-invoked class-based tool: the recorded input is the edit shape', () => {
+  class Lookup extends StructuredTool {
+    name = 'lookup';
+    description = 'look something up';
+    schema = z.object({ id: z.string(), verbose: z.boolean().default(false) });
+    constructor(private readonly calls: unknown[]) {
+      super();
+    }
+    async _call(args: { id: string; verbose: boolean }): Promise<string> {
+      this.calls.push(args);
+      return `found:${args.id}`;
+    }
+  }
+
+  it("records the ToolCall's args (its id as toolCallId), so the viewer's edit of args.id runs as asked", async () => {
+    const { viewer, gm } = await setup({ breakpoints: BEFORE });
+    const calls: unknown[] = [];
+    const wrapped = gm.wrapStructuredTool(new Lookup(calls));
+    const done = wrapped.invoke({ name: 'lookup', args: { id: 'a1' }, id: 'call_77', type: 'tool_call' }) as Promise<ToolMessage>;
+    const paused = await pausedAt(viewer, 'tool:lookup', 'before');
+    const started = viewer.ofType('node.started').find((f) => f.payload['nodeId'] === 'tool:lookup');
+    expect(started?.payload['input']).toEqual({ id: 'a1' });
+    expect(started?.payload['toolCallId']).toBe('call_77');
+    // The user changes the tool's `id` argument wherever the editor shows it.
+    const payload = viewerEdit(recordedInput(viewer, 'tool:lookup'), (draft) => {
+      ((draft['args'] ?? draft) as Record<string, unknown>)['id'] = 'b2';
+    });
+    expect(payload).toEqual({ id: 'b2' });
+    viewer.resumeWith({ pauseId: pauseIdOf(paused), action: 'continue', input: payload });
+    const message = await done;
+    expect(message.content).toBe('found:b2');
+    expect(message.tool_call_id).toBe('call_77');
+    expect(calls).toEqual([{ id: 'b2', verbose: false }]);
+    expect((await resumedFor(viewer, pauseIdOf(paused))).payload['edited']).toEqual({ after: { id: 'b2', verbose: false } });
+  });
+
+  it('the same through a real LangGraph ToolNode (which hands invoke a ToolCall)', async () => {
+    const { viewer, gm } = await setup({ breakpoints: BEFORE });
+    const calls: unknown[] = [];
+    const node = new ToolNode([gm.wrapStructuredTool(new Lookup(calls))]);
+    const ai = new AIMessage({ content: '', tool_calls: [{ name: 'lookup', args: { id: 'a1' }, id: 'call_77', type: 'tool_call' }] });
+    const done = node.invoke({ messages: [ai] }) as Promise<{ messages: ToolMessage[] }>;
+    const paused = await pausedAt(viewer, 'tool:lookup', 'before');
+    // The user changes the tool's `id` argument wherever the editor shows it.
+    const payload = viewerEdit(recordedInput(viewer, 'tool:lookup'), (draft) => {
+      ((draft['args'] ?? draft) as Record<string, unknown>)['id'] = 'b2';
+    });
+    viewer.resumeWith({ pauseId: pauseIdOf(paused), action: 'continue', input: payload });
+    const result = await done;
+    expect(result.messages[0]?.content).toBe('found:b2');
+    expect(calls).toEqual([{ id: 'b2', verbose: false }]);
+  });
+});
+
+describe("an accepted edit never runs the schema's transforms twice", () => {
+  /** dollars -> cents: NOT idempotent. */
+  const chargeSchema = z.object({ dollars: z.number().transform((d) => d * 100), memo: z.string() });
+
+  function chargeFuncTool(calls: unknown[]) {
+    return tool(
+      async (args: { dollars: number; memo: string }) => {
+        calls.push(args);
+        return `charged ${args.dollars} cents`;
+      },
+      { name: 'charge', description: 'Charge the customer', schema: chargeSchema },
+    );
+  }
+
+  class ChargeTool extends StructuredTool {
+    name = 'charge';
+    description = 'Charge the customer';
+    schema = chargeSchema;
+    constructor(private readonly calls: unknown[]) {
+      super();
+    }
+    async _call(args: { dollars: number; memo: string }): Promise<string> {
+      this.calls.push(args);
+      return `charged ${args.dollars} cents`;
+    }
+  }
+
+  it('baseline (no hold): both paths run the transform once', async () => {
+    const { gm } = await setup();
+    const a: unknown[] = [];
+    await gm.wrapStructuredTool(chargeFuncTool(a)).invoke({ dollars: 5, memo: 'x' });
+    const b: unknown[] = [];
+    await gm.wrapStructuredTool(new ChargeTool(b)).invoke({ name: 'charge', args: { dollars: 5, memo: 'x' }, id: 'c1', type: 'tool_call' });
+    expect(a).toEqual([{ dollars: 500, memo: 'x' }]);
+    expect(b).toEqual([{ dollars: 500, memo: 'x' }]);
+  });
+
+  it('tool() func path: continue + input {memo} leaves dollars at 500 cents', async () => {
+    const { viewer, gm } = await setup({ breakpoints: BEFORE });
+    const calls: unknown[] = [];
+    const promise = gm.wrapStructuredTool(chargeFuncTool(calls)).invoke({ dollars: 5, memo: 'x' });
+    const paused = await pausedAt(viewer, 'tool:charge', 'before');
+    viewer.resumeWith({ pauseId: pauseIdOf(paused), action: 'continue', input: { memo: 'fixed memo' } });
+    await promise;
+    expect(calls).toEqual([{ dollars: 500, memo: 'fixed memo' }]);
+    expect((await resumedFor(viewer, pauseIdOf(paused))).payload['edited']).toEqual({ after: { dollars: 500, memo: 'fixed memo' } });
+  });
+
+  it('class invoke(ToolCall) path: continue + input {memo} leaves dollars at 500 cents', async () => {
+    const { viewer, gm } = await setup({ breakpoints: BEFORE });
+    const calls: unknown[] = [];
+    const promise = gm
+      .wrapStructuredTool(new ChargeTool(calls))
+      .invoke({ name: 'charge', args: { dollars: 5, memo: 'x' }, id: 'c1', type: 'tool_call' });
+    const paused = await pausedAt(viewer, 'tool:charge', 'before');
+    viewer.resumeWith({ pauseId: pauseIdOf(paused), action: 'continue', input: { memo: 'fixed memo' } });
+    await promise;
+    expect(calls).toEqual([{ dollars: 500, memo: 'fixed memo' }]);
+  });
+
+  it('a retry after an accepted edit on the func path still parses once', async () => {
+    const { viewer, gm } = await setup({ breakpoints: [...BEFORE, { kind: 'tool', point: 'after' }] });
+    const calls: unknown[] = [];
+    const promise = gm.wrapStructuredTool(chargeFuncTool(calls)).invoke({ dollars: 5, memo: 'x' });
+    viewer.resumeWith({ pauseId: pauseIdOf(await pausedAt(viewer, 'tool:charge', 'before')), action: 'continue', input: { memo: 'm1' } });
+    viewer.resumeWith({ pauseId: pauseIdOf(await pausedAt(viewer, 'tool:charge', 'after')), action: 'retry', input: { memo: 'm2' } });
+    viewer.resume(pauseIdOf(await pausedAt(viewer, 'tool:charge', 'before', 2)), 'continue');
+    viewer.resume(pauseIdOf(await pausedAt(viewer, 'tool:charge', 'after', 2)), 'continue');
+    await promise;
+    expect(calls).toEqual([
+      { dollars: 500, memo: 'm1' },
+      { dollars: 500, memo: 'm2' },
+    ]);
+  });
+});
+

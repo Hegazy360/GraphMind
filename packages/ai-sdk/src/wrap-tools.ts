@@ -21,7 +21,12 @@
  * re-validated with `asSchema(tool.inputSchema).validate`, because the SDK
  * validated the MODEL's arguments before `execute` ran and an edit bypasses
  * that. The schema's parsed value is what runs; a refusal keeps the gate
- * held. The latest accepted edit stays the call's arguments for later
+ * held. `execute` receives arguments the schema already PARSED, so the edit
+ * is merged into the model's own arguments (kept from the model step by the
+ * middleware, per toolCallId) and parsed once from there — a transform never
+ * runs twice on a key the user did not touch. Without them (tools wrapped but
+ * the model not), a partial edit is accepted only when the schema leaves the
+ * parsed arguments unchanged (see toolArgsValidator). The latest accepted edit stays the call's arguments for later
  * attempts. `node.started` (and so the loop fingerprint) keeps what the model
  * asked for; `exec.resumed.edited` records what ran. The `after` gate also
  * hands the result to the session's after-gate detectors.
@@ -112,9 +117,17 @@ function schemaCheckFor(core: AdapterCore, toolName: string, tool: unknown): Sch
   };
 }
 
+function toolCallIdOf(options: unknown): string | undefined {
+  try {
+    const toolCallId = (options as ToolCallOptionsLike | null | undefined)?.toolCallId;
+    return typeof toolCallId === 'string' ? toolCallId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function instanceIdOf(options: unknown): string {
-  const toolCallId = (options as ToolCallOptionsLike | null | undefined)?.toolCallId;
-  return typeof toolCallId === 'string' ? toolCallId : nextId('call');
+  return toolCallIdOf(options) ?? nextId('call');
 }
 
 function safeChunkPreview(chunk: unknown): string {
@@ -158,9 +171,19 @@ function makeExecute(
         extra: { instanceId, ...extra },
       });
 
-    // What the call runs with: the model's arguments until an edit is accepted.
+    // What the call runs with: the model's arguments (as the SDK parsed them
+    // with the tool's schema) until an edit is accepted. An edit merges into
+    // `raw` — the same arguments as the model sent them — so the schema's
+    // transforms never run twice on keys the user did not touch.
     let args = input;
-    const edit = (): ToolEdit | undefined => (isEditableToolInput(args) ? { args, check } : undefined);
+    let raw = core.takeToolInput(toolCallIdOf(options));
+    const edit = (): ToolEdit | undefined =>
+      isEditableToolInput(args) ? { args, check, parsed: true, input: raw } : undefined;
+    const applyEdit = (edited: { args: unknown; input?: unknown } | undefined): void => {
+      if (edited === undefined) return;
+      args = edited.args;
+      raw = edited.input;
+    };
 
     for (;;) {
       const pre = await core.session.gate('before', node, toolGateOptions(core.session, edit));
@@ -173,8 +196,7 @@ function makeExecute(
         return pre.output;
       }
       // 'retry' before execution is equivalent to continue.
-      const preEdit = editedArgs(pre);
-      if (preEdit !== undefined) args = preEdit.args;
+      applyEdit(editedArgs(pre));
 
       let result: unknown;
       try {
@@ -201,8 +223,7 @@ function makeExecute(
           return dec.output;
         }
         if (dec.action === 'retry') {
-          const retryEdit = editedArgs(dec);
-          if (retryEdit !== undefined) args = retryEdit.args;
+          applyEdit(editedArgs(dec));
           continue;
         }
         if (dec.action === 'abort') {
@@ -219,8 +240,7 @@ function makeExecute(
         return post.output;
       }
       if (post.action === 'retry') {
-        const retryEdit = editedArgs(post);
-        if (retryEdit !== undefined) args = retryEdit.args;
+        applyEdit(editedArgs(post));
         continue;
       }
       if (post.action === 'abort') {
@@ -275,10 +295,13 @@ function makeStreamingExecute(
           extra: { instanceId, streaming: true, ...extra },
         });
 
+      const raw = core.takeToolInput(toolCallIdOf(options));
       const pre = await core.session.gate(
         'before',
         node,
-        toolGateOptions(core.session, () => (isEditableToolInput(input) ? { args: input, check } : undefined)),
+        toolGateOptions(core.session, () =>
+          isEditableToolInput(input) ? { args: input, check, parsed: true, input: raw } : undefined,
+        ),
       );
       if (pre.action === 'abort') {
         finish(undefined, 'aborted');

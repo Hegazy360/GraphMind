@@ -113,13 +113,15 @@ const final = await helper.finalMessage();
   `rawFinishReason`, and **inclusive** usage: Anthropic's `input_tokens` is only
   the uncached tail, so `inputTokens` = `input_tokens + cache_read_input_tokens
   + cache_creation_input_tokens`, with `inclusive: true` and `cacheReadTokens` /
-  `cacheWriteTokens` (5-minute and 1-hour writes summed) when reported.
+  `cacheWriteTokens` (5-minute and 1-hour writes summed) and `reasoningTokens`
+  (`output_tokens_details.thinking_tokens`, extended thinking) when reported.
   `cacheCreationTokens` (= `cacheWriteTokens`) and `stopReason` (=
   `rawFinishReason`) stay as aliases through 0.6.x.
 - `node.started` with the request as sent: every message and the system prompt
   in full, the sampling parameters (`max_tokens`, `temperature`, `tool_choice`,
   `thinking`, …) and `tools` as `{name, schemaHash}`, each definition once per
-  run as `toolSchemas`.
+  run as `toolSchemas` (its schema verbatim; any credential-like key outside
+  the schema — `authorization`, `headers`, `*token*`, `*key*` — dropped).
 - `graph.hint` on the first call of an invocation, from the request's `tools`
   array, so the viewer pre-renders the whole roster in grey.
 - (0.6.0) An **`after` gate** before you have the whole message: before a

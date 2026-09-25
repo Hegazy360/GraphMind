@@ -145,6 +145,51 @@ describe('node.started.input', () => {
   });
 });
 
+describe('node.started.input: provider tools', () => {
+  it('an openai.mcp provider tool (ai prepareTools shape): its authorization / headers args are never recorded', async () => {
+    const { viewer, gm } = await setup();
+    const mock = new MockLanguageModel({
+      doGenerate: async () => ({
+        content: [{ type: 'text' as const, text: 'ok' }],
+        finishReason: { unified: 'stop' as const, raw: 'stop' },
+        usage: {
+          inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined },
+        },
+        warnings: [],
+      }),
+    });
+    const model = gm.wrapModel(mock);
+    // What `ai` hands the model for `openai.tools.mcp({...})` (prepareTools).
+    const mcpTool = {
+      type: 'provider',
+      id: 'openai.mcp',
+      name: 'mcp',
+      args: {
+        serverLabel: 'stripe',
+        serverUrl: 'https://mcp.stripe.com',
+        authorization: 'sk_live_OAUTH_TOKEN_SECRET',
+        headers: { Authorization: 'Bearer sk_live_HEADER_SECRET' },
+      },
+    };
+    await gm.run('provider-tool', async () => {
+      await model.doGenerate({ prompt: [{ role: 'user', content: [{ type: 'text', text: 'refund' }] }], tools: [searchTool, mcpTool] } as unknown as CallOptions);
+    });
+    await viewer.waitFor(() => llmFrames(viewer, 'node.finished').length >= 1, 5000);
+    const input = llmFrames(viewer, 'node.started')[0]?.payload['input'] as Record<string, unknown>;
+    const recorded = { type: 'provider', id: 'openai.mcp', name: 'mcp', args: { serverLabel: 'stripe', serverUrl: 'https://mcp.stripe.com' } };
+    expect(input['tools']).toEqual([
+      { name: 'search', schemaHash: schemaHash(searchTool) },
+      { name: 'mcp', schemaHash: schemaHash(recorded) },
+    ]);
+    expect(input['toolSchemas']).toEqual({ [schemaHash(searchTool)]: searchTool, [schemaHash(recorded)]: recorded });
+    const all = JSON.stringify(viewer.received);
+    expect(all).not.toContain('sk_live_OAUTH_TOKEN_SECRET');
+    expect(all).not.toContain('sk_live_HEADER_SECRET');
+    expectAllValid(viewer);
+  });
+});
+
 describe('node.finished', () => {
   it('streaming: inclusive usage with cache and reasoning from the last (finish) part, finish reason, tool calls', async () => {
     const { viewer, gm } = await setup();
@@ -190,6 +235,35 @@ describe('node.finished', () => {
       rawFinishReason: 'tool_use',
       toolCalls: [{ id: 'call-1', name: 'search', input: { q: 'lisbon' } }],
     });
+    expectAllValid(viewer);
+  });
+
+  it('streaming: a step with an error part keeps the usage and tool calls it reported', async () => {
+    const { viewer, gm } = await setup();
+    const parts = [
+      { type: 'stream-start', warnings: [] },
+      { type: 'tool-call', toolCallId: 'call-1', toolName: 'search', input: '{"q":"lisbon"}' },
+      { type: 'error', error: new Error('overloaded') },
+      {
+        type: 'finish',
+        usage: {
+          inputTokens: { total: 90_050, noCache: 50, cacheRead: 90_000, cacheWrite: undefined },
+          outputTokens: { total: 12, text: 12, reasoning: undefined },
+        },
+        finishReason: { unified: 'error', raw: 'error' },
+      },
+    ] as StreamPart[];
+    const mock = new MockLanguageModel({
+      doStream: async () => ({ stream: simulateReadableStream<StreamPart>({ chunks: parts }) }),
+    });
+    const res = await gm.wrapModel(mock).doStream({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+    } as CallOptions);
+    await drain(res.stream);
+    const finished = await viewer.waitFor((f) => f.type === 'node.finished' && f.payload['nodeId'] === 'llm:step');
+    expect(finished.payload['status']).toBe('error');
+    expect(finished.payload['usage']).toEqual({ inputTokens: 90_050, outputTokens: 12, inclusive: true, cacheReadTokens: 90_000 });
+    expect(finished.payload['output']).toEqual({ text: '', toolCalls: [{ id: 'call-1', name: 'search', input: { q: 'lisbon' } }] });
     expectAllValid(viewer);
   });
 

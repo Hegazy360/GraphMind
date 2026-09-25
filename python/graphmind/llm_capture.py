@@ -19,7 +19,10 @@ Port of ``packages/client/src/llm-capture.ts`` and ``packages/schema/src/llm.ts`
 * :func:`capture_tools` — ``tools: [{name, schemaHash}]`` plus
   ``toolSchemas: {hash: definition}`` the first time a run sees a definition
   (sha256 of the canonical JSON, first 16 hex chars; the memory is per session,
-  bounded to 256 runs x 1024 hashes).
+  bounded to 256 runs x 1024 hashes). A definition is recorded (and hashed) as
+  :func:`sanitize_tool_definition` leaves it: its schema verbatim, never a
+  credential it carries (an OpenAI ``type: "mcp"`` tool's ``authorization``
+  and ``headers``).
 * :func:`pick_params` — the allow-listed sampling parameters actually sent.
 * :func:`record_value` — a prompt made JSON-safe WITHOUT the length/width caps
   of ``safe_value`` (bytes become ``{"type": "binary", "bytes": n}``): the
@@ -59,7 +62,9 @@ __all__ = [
     "openai_responses_usage",
     "pick_params",
     "record_value",
+    "release_tool_schemas",
     "reset_tool_schema_memory",
+    "sanitize_tool_definition",
     "schema_hash",
     "sum_reported",
     "token_count",
@@ -76,7 +81,7 @@ _FINISH_REASON_MAP = {
     "stop": "stop",
     "end_turn": "stop",
     "stop_sequence": "stop",
-    "pause_turn": "stop",
+    "pause_turn": "other",  # a paused server-tool turn: the model did not finish
     "eos": "stop",
     "eos_token": "stop",
     "complete": "stop",
@@ -125,10 +130,14 @@ def normalize_finish_reason(raw: Any, has_tool_calls: bool = False) -> str | Non
     return "tool-calls" if mapped == "stop" and has_tool_calls else mapped
 
 
-def finish_fields(raw: Any, has_tool_calls: bool) -> dict[str, str]:
-    """``finishReason`` (normalized) and ``rawFinishReason`` (as reported)."""
+def finish_fields(raw: Any, has_tool_calls: bool, refused: bool = False) -> dict[str, str]:
+    """``finishReason`` (normalized) and ``rawFinishReason`` (as reported). A
+    ``refused`` step (OpenAI: a plain stop carrying a refusal) is
+    ``content-filter``, as Anthropic's ``refusal`` stop reason is."""
     out: dict[str, str] = {}
     normalized = normalize_finish_reason(raw, has_tool_calls)
+    if refused and normalized == "stop":
+        normalized = "content-filter"
     if normalized is not None:
         out["finishReason"] = normalized
     if isinstance(raw, str) and raw:
@@ -234,7 +243,9 @@ def _anthropic_cache_write(source: Any) -> int | None:
 def anthropic_usage(usage: Any) -> dict[str, Any] | None:
     """Anthropic ``Usage``: ``input_tokens`` is the UNCACHED tail, so the total is
     ``input_tokens + cache_read_input_tokens + cache_creation_input_tokens``
-    (the 5m/1h ``cache_creation`` split summed when only it was reported)."""
+    (the 5m/1h ``cache_creation`` split summed when only it was reported);
+    ``output_tokens_details.thinking_tokens`` (extended thinking) is the
+    reasoning count when reported."""
     if usage is None:
         return None
     cache_read = token_count(_get(usage, "cache_read_input_tokens"))
@@ -244,6 +255,7 @@ def anthropic_usage(usage: Any) -> dict[str, Any] | None:
         output=token_count(_get(usage, "output_tokens")),
         cache_read=cache_read,
         cache_write=cache_write,
+        reasoning=token_count(_get(_get(usage, "output_tokens_details"), "thinking_tokens")),
     )
 
 
@@ -322,6 +334,7 @@ def _looks_anthropic(usage: Any) -> bool:
         _has(usage, "cache_read_input_tokens")
         or _has(usage, "cache_creation_input_tokens")
         or _get(usage, "cache_creation") is not None
+        or token_count(_get(_get(usage, "output_tokens_details"), "thinking_tokens")) is not None
     )
 
 
@@ -396,6 +409,10 @@ class AnthropicUsageAccumulator:
                     current[key] = value
             if current:
                 self.raw["cache_creation"] = current
+        # Cumulative on message_delta, like output_tokens.
+        thinking = token_count(_get(_get(usage, "output_tokens_details"), "thinking_tokens"))
+        if thinking is not None:
+            self.raw["output_tokens_details"] = {"thinking_tokens": thinking}
 
     def usage(self) -> dict[str, Any] | None:
         return anthropic_usage(self.raw) if self.raw else None
@@ -479,6 +496,72 @@ def tool_def_name(entry: Any) -> str | None:
     return None
 
 
+#: Keys of a tool definition that hold its SCHEMA: recorded verbatim (a schema's
+#: property names are the tool's parameter names). Same list as TypeScript.
+TOOL_SCHEMA_KEYS = frozenset(
+    (
+        "parameters",
+        "input_schema",
+        "inputSchema",
+        "output_schema",
+        "outputSchema",
+        "schema",
+        "format",
+    )
+)
+
+#: A key of a tool definition (outside its schema) that may carry a credential
+#: or transport configuration: never recorded. Same pattern as TypeScript.
+TOOL_SECRET_KEY_RE = re.compile(
+    r"authori[sz]ation|header|token|secret|passw(?:or)?d|key|cookie|credential|bearer",
+    re.IGNORECASE,
+)
+_TOOL_URL_KEY_RE = re.compile(r"url$", re.IGNORECASE)
+_URL_USERINFO_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/?#@]*@")
+_MAX_TOOL_DEFINITION_DEPTH = 16
+
+
+def _without_url_secrets(url: str) -> str:
+    cut = len(url)
+    for mark in ("?", "#"):
+        index = url.find(mark)
+        if index != -1 and index < cut:
+            cut = index
+    return _URL_USERINFO_RE.sub(r"\1", url[:cut], count=1)
+
+
+def _sanitize_definition_value(value: Any, depth: int) -> Any:
+    if isinstance(value, list):
+        if depth >= _MAX_TOOL_DEFINITION_DEPTH:
+            return []
+        return [_sanitize_definition_value(item, depth + 1) for item in value]
+    if not isinstance(value, dict):
+        return value
+    if depth >= _MAX_TOOL_DEFINITION_DEPTH:
+        return {}
+    out: dict[str, Any] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            continue
+        if key in TOOL_SCHEMA_KEYS:
+            out[key] = item
+        elif TOOL_SECRET_KEY_RE.search(key):
+            continue
+        elif isinstance(item, str) and _TOOL_URL_KEY_RE.search(key):
+            out[key] = _without_url_secrets(item)
+        else:
+            out[key] = _sanitize_definition_value(item, depth + 1)
+    return out
+
+
+def sanitize_tool_definition(definition: Any) -> Any:
+    """A (JSON-safe) tool definition as it is hashed and recorded: the schema keys
+    verbatim, every key matching ``TOOL_SECRET_KEY_RE`` dropped at any depth
+    outside them, a ``*url`` value cut to ``scheme://host/path``. A function
+    tool is unchanged. Held to the fixture's ``toolDefinitions``."""
+    return _sanitize_definition_value(definition, 0)
+
+
 def _run_memory(owner: Any, run_key: str) -> set[str]:
     runs = _schema_memory.get(owner)
     if runs is None:
@@ -493,6 +576,38 @@ def _run_memory(owner: Any, run_key: str) -> set[str]:
     return hashes
 
 
+class ToolSchemas(dict):  # type: ignore[type-arg]
+    """``toolSchemas`` as :func:`capture_tools` returns it: a plain ``dict`` on the
+    wire, remembering the run memory its hashes were added to, so the session can
+    :func:`release_tool_schemas` it when the event carrying it was shrunk."""
+
+    __slots__ = ("_hashes", "_sent")
+
+    def __init__(self, sent: set[str]) -> None:
+        super().__init__()
+        self._sent = sent
+        self._hashes: list[str] | None = []
+
+
+def release_tool_schemas(tool_schemas: Any) -> None:
+    """The definitions in ``tool_schemas`` (a :func:`capture_tools` result's, as it
+    sits in a ``node.started`` input) did NOT reach the wire whole: the payload
+    budget shrank that event (emptying every array inside them, ``required: []``)
+    or it was dropped. Forget the run was sent them, so its next step that uses
+    them sends them again, intact. The session calls this. Never raises."""
+    try:
+        if not isinstance(tool_schemas, ToolSchemas):
+            return
+        with _schema_lock:
+            hashes = tool_schemas._hashes
+            tool_schemas._hashes = None
+            if hashes:
+                for digest in hashes:
+                    tool_schemas._sent.discard(digest)
+    except Exception:
+        pass
+
+
 def capture_tools(
     owner: Any,
     run_key: str,
@@ -500,18 +615,19 @@ def capture_tools(
     describe: Callable[[Any], str | None] = tool_def_name,
 ) -> dict[str, Any] | None:
     """``{"tools": [...], "toolSchemas"?: {...}}`` for one LLM step, or ``None``.
-    The definitions are recorded JSON-safe (:func:`record_value`) and hashed in
-    that form, so the hash names exactly what is sent. Never raises."""
+    The definitions are recorded JSON-safe (:func:`record_value`) and without
+    credentials (:func:`sanitize_tool_definition`), and hashed in that form, so
+    the hash names exactly what is sent. Never raises."""
     try:
         if not isinstance(definitions, (list, tuple)) or not definitions:
             return None
         tools: list[dict[str, str]] = []
-        schemas: dict[str, Any] = {}
         with _schema_lock:
             try:
                 sent = _run_memory(owner, run_key)
             except TypeError:  # an owner that cannot be weakly referenced
                 sent = set()
+            schemas = ToolSchemas(sent)
             for definition in definitions:
                 try:
                     name = describe(definition)
@@ -519,7 +635,7 @@ def capture_tools(
                     name = None
                 if name is None:
                     continue
-                plain = record_value(definition)
+                plain = sanitize_tool_definition(record_value(definition))
                 digest = schema_hash(plain)
                 tools.append({"name": name, "schemaHash": digest})
                 if digest in sent:
@@ -528,6 +644,8 @@ def capture_tools(
                     sent.clear()
                 sent.add(digest)
                 schemas[digest] = plain
+                if schemas._hashes is not None:
+                    schemas._hashes.append(digest)
         if not tools:
             return None
         out: dict[str, Any] = {"tools": tools}

@@ -31,6 +31,8 @@ import {
 } from './sdk-types.js';
 
 const MAX_TRACKED_PROVIDER_CALLS = 1000;
+/** How many requested tool calls keep the model's raw arguments until their `execute` runs. */
+const MAX_TRACKED_TOOL_INPUTS = 1000;
 /** How many runs keep a record of the `graph.hint` nodes they were sent. */
 const MAX_HINTED_RUNS = 256;
 
@@ -60,6 +62,14 @@ export class AdapterCore {
   readonly warner: OnceWarner;
 
   private readonly providerToolStarts = new Map<string, number>();
+
+  /**
+   * The model's own arguments for each requested client tool call, by
+   * toolCallId, as the model step's output carried them — `execute` receives
+   * the schema's PARSED copy, and an edit must be merged into these instead
+   * (so a transform never runs twice). See `noteToolInput`.
+   */
+  private readonly toolInputs = new Map<string, unknown>();
 
   /**
    * The `graph.hint` nodes each run has already been told about (see
@@ -212,6 +222,31 @@ export class AdapterCore {
     if (keys.every((key) => announced.has(key))) return false;
     for (const key of keys) announced.add(key);
     return true;
+  }
+
+  // -- client tool calls' raw arguments ---------------------------------------
+
+  /** Keep a requested call's raw (JSON-parsed) arguments until its `execute` takes them. */
+  noteToolInput(toolCallId: string, input: unknown): void {
+    try {
+      this.toolInputs.delete(toolCallId);
+      while (this.toolInputs.size >= MAX_TRACKED_TOOL_INPUTS) {
+        const oldest = this.toolInputs.keys().next();
+        if (oldest.done === true) break;
+        this.toolInputs.delete(oldest.value);
+      }
+      this.toolInputs.set(toolCallId, input);
+    } catch {
+      // bookkeeping only
+    }
+  }
+
+  /** The raw arguments noted for this call (once), or undefined. */
+  takeToolInput(toolCallId: string | undefined): unknown {
+    if (toolCallId === undefined) return undefined;
+    const input = this.toolInputs.get(toolCallId);
+    this.toolInputs.delete(toolCallId);
+    return input;
   }
 
   // -- provider-executed tools (observe-only, decisions.md #4) --------------

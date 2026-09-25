@@ -103,6 +103,17 @@ describe('Anthropic shape mapping', () => {
     expect(mergeUsage({ input_tokens: 1 }, undefined)).toEqual({ input_tokens: 1 });
   });
 
+  it('mergeUsage carries the cumulative thinking count of message_delta (reasoningTokens)', () => {
+    const merged = mergeUsage(
+      { input_tokens: 12, output_tokens: 1, output_tokens_details: null },
+      { output_tokens: 700, output_tokens_details: { thinking_tokens: 420 } },
+    );
+    expect(merged?.output_tokens_details?.thinking_tokens).toBe(420);
+    expect(mapUsage(merged)).toMatchObject({ outputTokens: 700, reasoningTokens: 420 });
+    // A later delta without details keeps the reported count.
+    expect(mapUsage(mergeUsage(merged, { output_tokens: 710 }))).toMatchObject({ reasoningTokens: 420 });
+  });
+
   it('mergeUsage keeps the 5m/1h split and lets a cumulative message_delta update every count', () => {
     const merged = mergeUsage(
       {

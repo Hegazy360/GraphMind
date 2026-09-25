@@ -88,6 +88,109 @@ const schemaInputs = [
 ];
 const schemaHashes = schemaInputs.map((input) => ({ in: input, hash: client.schemaHash(input) }));
 
+// Tool definitions as captureTools records (and hashes) them: the schema
+// verbatim, never a credential the definition carries.
+const toolDefinitionInputs = [
+  {
+    name: 'Anthropic function tool: unchanged',
+    in: {
+      name: 'get_weather',
+      description: 'Weather for a city',
+      input_schema: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+      cache_control: { type: 'ephemeral' },
+    },
+  },
+  {
+    name: 'a schema property named like a secret is a parameter: kept',
+    in: {
+      type: 'function',
+      function: {
+        name: 'login',
+        description: 'Log in',
+        parameters: {
+          type: 'object',
+          properties: { api_key: { type: 'string' }, token: { type: 'string' }, password: { type: 'string' } },
+          required: ['api_key'],
+        },
+        strict: true,
+      },
+    },
+  },
+  {
+    name: 'OpenAI Responses mcp tool: authorization and headers dropped, url cut to scheme://host/path',
+    in: {
+      type: 'mcp',
+      server_label: 'stripe',
+      server_url: 'https://user:pw@mcp.stripe.com/v1/sse?api_key=sk_live_QUERY#frag',
+      authorization: 'sk_live_OAUTH',
+      headers: { Authorization: 'Bearer sk_live_HEADER', 'X-Trace': 'ok' },
+      require_approval: 'never',
+      allowed_tools: { tool_names: ['refund'], read_only: true },
+      server_description: 'Stripe',
+    },
+  },
+  {
+    name: 'OpenAI Responses connector: authorization dropped',
+    in: { type: 'mcp', server_label: 'gmail', connector_id: 'connector_gmail', authorization: 'ya29.OAUTH' },
+  },
+  {
+    name: 'AI SDK openai.mcp provider tool: credentials in args dropped',
+    in: {
+      type: 'provider',
+      id: 'openai.mcp',
+      name: 'mcp',
+      args: {
+        serverLabel: 'stripe',
+        serverUrl: 'https://mcp.stripe.com?token=sk_live_Q',
+        authorization: 'sk_live_OAUTH',
+        headers: { Authorization: 'Bearer sk_live_HEADER' },
+        requireApproval: 'never',
+      },
+    },
+  },
+  {
+    name: 'AI SDK function tool: unchanged',
+    in: {
+      type: 'function',
+      name: 'search',
+      description: 'Search',
+      inputSchema: { type: 'object', properties: { q: { type: 'string' } }, additionalProperties: false },
+      providerOptions: { openai: { strict: true } },
+    },
+  },
+  {
+    name: 'OpenAI custom tool with a grammar format: unchanged',
+    in: {
+      type: 'custom',
+      name: 'apply_patch',
+      description: 'Apply a patch',
+      format: { type: 'grammar', syntax: 'lark', definition: 'start: /.+/' },
+    },
+  },
+  {
+    name: 'Anthropic server tool: unchanged',
+    in: { type: 'web_search_20250305', name: 'web_search', max_uses: 3, allowed_domains: ['example.com'] },
+  },
+  {
+    name: 'secret-named keys dropped at any depth outside the schema, arrays walked',
+    in: {
+      type: 'x_tool',
+      name: 'x',
+      config: {
+        client_secret: 's3cret',
+        nested: [{ api_key: 'k', region: 'eu' }, { accessToken: 't', mode: 'fast' }],
+        endpoint_url: 'wss://host.example/ws?sig=abc',
+        count: 2,
+      },
+      password: 'pw',
+    },
+  },
+];
+const toolDefinitions = toolDefinitionInputs.map(({ name, in: input }) => {
+  const out = client.sanitizeToolDefinition(input);
+  return { name, in: input, out, hash: client.schemaHash(out) };
+});
+
 const u = (inputTokens, outputTokens, extra = {}) => ({ inputTokens, outputTokens, inclusive: true, ...extra });
 
 const usage = [
@@ -144,6 +247,30 @@ const usage = [
     name: 'output only (a message_delta seen alone): the required input count is 0',
     raw: { output_tokens: 42 },
     out: u(0, 42),
+  },
+  {
+    provider: 'anthropic',
+    name: 'extended thinking: output_tokens_details.thinking_tokens is the reasoning count',
+    raw: {
+      input_tokens: 100,
+      output_tokens: 900,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      output_tokens_details: { thinking_tokens: 420 },
+    },
+    out: u(100, 900, { cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 420 }),
+  },
+  {
+    provider: 'anthropic',
+    name: 'a reported thinking count of 0 stays 0',
+    raw: { input_tokens: 10, output_tokens: 5, output_tokens_details: { thinking_tokens: 0 } },
+    out: u(10, 5, { reasoningTokens: 0 }),
+  },
+  {
+    provider: 'anthropic',
+    name: 'null output_tokens_details: no reasoning count',
+    raw: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: null, output_tokens_details: null },
+    out: u(10, 5),
   },
   { provider: 'anthropic', name: 'nothing reported', raw: {}, out: null },
   {
@@ -280,6 +407,12 @@ const usage = [
   },
   {
     provider: 'langchain',
+    name: 'raw Anthropic usage with extended thinking: thinking_tokens is the reasoning count',
+    raw: { input_tokens: 50, output_tokens: 40, cache_read_input_tokens: 0, output_tokens_details: { thinking_tokens: 12 } },
+    out: u(50, 40, { cacheReadTokens: 0, reasoningTokens: 12 }),
+  },
+  {
+    provider: 'langchain',
     name: 'raw OpenAI token_usage',
     raw: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105, prompt_tokens_details: { cached_tokens: 64 } },
     out: u(100, 5, { cacheReadTokens: 64 }),
@@ -322,10 +455,11 @@ const usage = [
 
 const fixture = {
   $comment:
-    'Conformance fixture for LLM-step capture (contract C1, 0.6.0). Shared by the TypeScript adapters, the Python integrations and the Ruby integrations; each runs the parts for the providers it supports. finishReasons: [raw, hasToolCalls, normalized-or-null] — normalizeFinishReason lower-cases, trims and folds `-`/spaces to `_`, maps known provider spellings, anything else is "other", a non-string or empty value is null, and "stop" on a step that requested tool calls is "tool-calls". toolCalls: one requested call {id, name, args} -> {id?, name, input, inputText?} or null (no name): an id is kept only when a non-empty string; args that are a string are JSON-parsed, an empty/blank string or a missing/null value is {}, text that does not parse gives input null plus inputText (the raw text); args that are not a string are the input as they are. schemaHashes: sha256 of the canonical JSON (the loop guard canon: sorted keys by UTF-16 code units, JS number and escape rules) of a tool definition, first 16 hex chars. usage: provider-reported usage -> the wire TokenUsage (without the legacy aliases a sender may add: cacheCreationTokens, cachedInputTokens, totalTokens). inputTokens is the TOTAL prompt (cached reads and cache writes included), inclusive is always true, cacheReadTokens / cacheWriteTokens / reasoningTokens appear only when the provider reported them (a reported 0 stays 0), a count is a finite number >= 0 rounded to an integer (strings and booleans are not counts), and when neither input nor output was reported the result is null; when only one was, the other is 0 (the wire requires both). samplingParams: the allow-list of request parameters recorded on node.started.input under the SDK\'s own names.',
+    'Conformance fixture for LLM-step capture (contract C1, 0.6.0). Shared by the TypeScript adapters, the Python integrations and the Ruby integrations; each runs the parts for the providers it supports. finishReasons: [raw, hasToolCalls, normalized-or-null] — normalizeFinishReason lower-cases, trims and folds `-`/spaces to `_`, maps known provider spellings, anything else is "other", a non-string or empty value is null, and "stop" on a step that requested tool calls is "tool-calls". toolCalls: one requested call {id, name, args} -> {id?, name, input, inputText?} or null (no name): an id is kept only when a non-empty string; args that are a string are JSON-parsed, an empty/blank string or a missing/null value is {}, text that does not parse gives input null plus inputText (the raw text); args that are not a string are the input as they are. schemaHashes: sha256 of the canonical JSON (the loop guard canon: sorted keys by UTF-16 code units, JS number and escape rules) of a tool definition, first 16 hex chars. toolDefinitions: a tool definition as captureTools records and hashes it (out, hash = the schema hash of out): the schema keys (parameters, input_schema, inputSchema, output_schema, outputSchema, schema, format) are kept verbatim; outside them, at any depth (objects and arrays walked, at most 16 levels), a key matching /authori[sz]ation|header|token|secret|passw(or)?d|key|cookie|credential|bearer/i is dropped and a string under a key ending in "url" (any case) is cut before its first "?" or "#" and loses its "user:pass@" part; everything else is kept as it is. usage: provider-reported usage -> the wire TokenUsage (without the legacy aliases a sender may add: cacheCreationTokens, cachedInputTokens, totalTokens). inputTokens is the TOTAL prompt (cached reads and cache writes included), inclusive is always true, cacheReadTokens / cacheWriteTokens / reasoningTokens appear only when the provider reported them (a reported 0 stays 0), a count is a finite number >= 0 rounded to an integer (strings and booleans are not counts), and when neither input nor output was reported the result is null; when only one was, the other is 0 (the wire requires both). samplingParams: the allow-list of request parameters recorded on node.started.input under the SDK\'s own names.',
   finishReasons,
   toolCalls,
   schemaHashes,
+  toolDefinitions,
   usage,
   samplingParams: [...client.SAMPLING_PARAM_KEYS],
 };

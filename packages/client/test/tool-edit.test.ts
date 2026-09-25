@@ -166,6 +166,32 @@ describe('checkJsonSchemaLite', () => {
     expect(performance.now() - started).toBeLessThan(500);
   });
 
+  it('an enum costs its size once, never once per value checked against it', () => {
+    // A tools/list schema with a huge enum, and an edit with many items.
+    const values = Array.from({ length: 200_000 }, (_, i) => `v${i}`);
+    let reads = 0;
+    const counted = new Proxy(values, {
+      get(target, key, receiver) {
+        if (typeof key === 'string' && /^\d+$/.test(key)) reads += 1;
+        return Reflect.get(target, key, receiver) as unknown;
+      },
+    });
+    const schema = { type: 'array', items: { enum: counted } };
+    const edit = Array.from({ length: 1_000 }, (_, i) => `v${i * 7}`);
+    const started = performance.now();
+    checkJsonSchemaLite(schema, edit);
+    // Indexed once (not 1,000 x 200,000 reads); a later check reuses the index
+    // and checks every item.
+    expect(reads).toBeLessThanOrEqual(2 * values.length);
+    const before = reads;
+    expect(checkJsonSchemaLite(schema, edit)).toBeUndefined();
+    expect(checkJsonSchemaLite(schema, [...edit.slice(0, 500), 'nope'])).toBe('field "[500]" is not one of the allowed values');
+    expect(reads).toBe(before);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    // A small enum still refuses on the first check.
+    expect(checkJsonSchemaLite({ enum: ['fast', 'slow'] }, 'medium')).toBe('the arguments object is not one of the allowed values');
+  });
+
   it('never throws, even on a schema whose getters throw', () => {
     const hostile = new Proxy(
       {},
@@ -346,6 +372,66 @@ describe('toolArgsValidator', () => {
       { value: { keep: 2 }, hidden: true },
       { value: { secret: 'hunter2', keep: 2 }, hidden: false },
     ]);
+  });
+});
+
+describe("toolArgsValidator: a schema's transforms never run twice", () => {
+  /** dollars -> cents, the way zod's `.transform(d => d * 100)` parses. */
+  const cents = (value: unknown): InputValidation => {
+    const v = value as { dollars?: unknown; memo?: unknown };
+    if (typeof v.dollars !== 'number' || typeof v.memo !== 'string') return { ok: false, code: 'schema' };
+    return { ok: true, value: { dollars: v.dollars * 100, memo: v.memo } };
+  };
+  const decisionFor = (verdict: InputValidation) =>
+    ({ action: 'continue', input: (verdict as { value: unknown }).value }) as const;
+
+  it('parsed live arguments with their raw input: the edit merges into the raw input and parses once', async () => {
+    const validate = toolArgsValidator({ dollars: 500, memo: 'x' }, cents, { parsed: true, input: { dollars: 5, memo: 'x' } });
+    const verdict = await validate({ memo: 'y' }, VISIBLE);
+    expect(verdict).toEqual({ ok: true, value: { dollars: 500, memo: 'y' } });
+    // editedArgs hands back what runs AND the merged raw input, for the next edit.
+    expect(editedArgs(decisionFor(verdict))).toEqual({
+      args: { dollars: 500, memo: 'y' },
+      input: { dollars: 5, memo: 'y' },
+    });
+  });
+
+  it('a raw input the schema does not parse into the live arguments is not trusted', async () => {
+    // Stale (or repaired by the host) copy: 7 dollars would parse to 700, not 500.
+    const validate = toolArgsValidator({ dollars: 500, memo: 'x' }, cents, { parsed: true, input: { dollars: 7, memo: 'x' } });
+    expect(await validate({ memo: 'y' }, VISIBLE)).toMatchObject({ ok: false, code: 'unsupported' });
+  });
+
+  it('parsed live arguments without a raw input: a partial edit is refused unless the schema leaves them unchanged', async () => {
+    const validate = toolArgsValidator({ dollars: 500, memo: 'x' }, cents, { parsed: true });
+    const refused = await validate({ memo: 'y' }, VISIBLE);
+    expect(refused).toMatchObject({ ok: false, code: 'unsupported' });
+    expect(JSON.stringify(refused)).not.toContain('500');
+    // A full replacement never keeps a live value: parsed once, from the edit.
+    expect(await validate({ dollars: 7, memo: 'y' }, VISIBLE)).toEqual({ ok: true, value: { dollars: 700, memo: 'y' } });
+    // An idempotent schema (defaults, trims) takes partial edits as before.
+    const trim = (value: unknown): InputValidation => ({
+      ok: true,
+      value: { ...(value as object), q: String((value as { q: unknown }).q).trim() },
+    });
+    expect(await toolArgsValidator({ q: 'a', n: 1 }, trim, { parsed: true })({ q: ' b ' }, VISIBLE)).toEqual({
+      ok: true,
+      value: { q: 'b', n: 1 },
+    });
+  });
+
+  it('a hidden input stays a full replacement: the live values decide nothing', async () => {
+    const validate = toolArgsValidator({ dollars: 500, memo: 'x' }, cents, { parsed: true });
+    expect(await validate({ dollars: 1, memo: 'y' }, { inputHidden: true })).toEqual({ ok: true, value: { dollars: 100, memo: 'y' } });
+    expect(await validate({ memo: 'y' }, { inputHidden: true })).toMatchObject({ ok: false, code: 'schema' });
+  });
+
+  it('runMerged: the check only judges, the merged arguments run', async () => {
+    const validate = toolArgsValidator({ dollars: 5, memo: 'x' }, cents, { runMerged: true });
+    const verdict = await validate({ memo: 'y' }, VISIBLE);
+    expect(verdict).toEqual({ ok: true, value: { dollars: 5, memo: 'y' } });
+    expect(editedArgs(decisionFor(verdict))).toEqual({ args: { dollars: 5, memo: 'y' }, input: { dollars: 5, memo: 'y' } });
+    expect(await validate({ dollars: 'five' }, VISIBLE)).toMatchObject({ ok: false, code: 'schema' });
   });
 });
 

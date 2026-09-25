@@ -1,9 +1,10 @@
 /**
  * `graphmind mcp-proxy`: edited tool arguments (0.6.0, contract C2 / W2).
  *
- *  - continue + input at a tools/call `before` gate re-serializes ONLY that
- *    frame, with `params.arguments` replaced by the merged edit (id, name,
- *    `_meta` and key order kept), and relays it in place of the original;
+ *  - continue + input at a tools/call `before` gate rewrites ONLY that
+ *    frame: its `params.arguments` value is replaced by the merged edit in
+ *    the frame's own bytes (id, name, `_meta`, spacing and key order kept),
+ *    and it is relayed in place of the original;
  *  - retry + input at `after` / `error` sends the rewritten request down the
  *    retry path (and a later plain retry re-sends what last ran);
  *  - an edit is checked against the tool's `inputSchema` from the server's
@@ -130,6 +131,20 @@ describe('continue + input at the before gate', () => {
     expect(finished.payload['status']).toBe('ok');
   });
 
+  it('only the arguments are rewritten: an id above 2^53 and _meta numbers reach the server as the client wrote them', async () => {
+    const { viewer: v, rig: r } = await attach({ breakpoints: [{ kind: 'tool', name: 'echoArgs' }] });
+    const sent =
+      '{"jsonrpc":"2.0","id":9007199254740993,"method":"tools/call","params":{"name":"echoArgs","arguments":{"text":"a"},"_meta":{"progressToken":1e400}}}';
+    r.sendRaw(`${sent}\n`);
+    const paused = await pausedAt(v, 'tool:echoArgs', 'before');
+    v.resumeWith({ pauseId: pauseIdOf(paused), action: 'continue', input: { arguments: { text: 'b' } } });
+    // (A JS client cannot tell 9007199254740993 from ...992: both are the same number.)
+    const reached = receivedLine(await r.response(9007199254740993));
+    expect(reached).toBe(
+      '{"jsonrpc":"2.0","id":9007199254740993,"method":"tools/call","params":{"name":"echoArgs","arguments":{"text":"b"},"_meta":{"progressToken":1e400}}}',
+    );
+  });
+
   it('the recorded input sent back whole (as a viewer pre-fills it) works; name and _meta are locked', async () => {
     const { viewer: v, rig: r } = await attach({ breakpoints: [{ kind: 'tool', name: 'echoArgs' }] });
     r.request(1, 'tools/call', { name: 'echoArgs', arguments: { text: 'a', times: 1 }, _meta: { progressToken: 7 } });
@@ -197,8 +212,9 @@ describe('continue + input at the before gate', () => {
 
     r.sendRaw(`${odd(2, 'second')}\n`);
     v.resumeWith({ pauseId: pauseIdOf(await pausedAt(v, 'tool:echoArgs', 'before', 2)), action: 'continue', input: { arguments: { text: 'EDITED' } } });
+    // Only the arguments value is re-encoded; the rest keeps the client's bytes.
     expect(receivedLine(await r.response(2))).toBe(
-      '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"arguments":{"times":1.5,"text":"EDITED"},"name":"echoArgs"}}',
+      '{"jsonrpc":"2.0",  "id":2,"method":"tools/call","params":{"arguments":{"times":1.5,"text":"EDITED"},"name":"echoArgs"}}',
     );
 
     r.sendRaw(`${odd(3, 'third')}\n`);

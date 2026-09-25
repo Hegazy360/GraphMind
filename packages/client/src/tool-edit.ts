@@ -9,7 +9,11 @@
  *   - `toolArgsValidator`: `mergeToolInput(live, proposed)` (top-level keys
  *     replace the live ones) followed by the tool's own schema. The verdict's
  *     `value` is what the call then runs with — the schema's PARSED output
- *     (zod defaults and transforms applied), not the raw edit.
+ *     (zod defaults and transforms applied), not the raw edit — unless the
+ *     host parses the arguments itself (`runMerged`). The schema's transforms
+ *     never run twice: arguments a host already parsed (`parsed`) take the
+ *     edit on the raw arguments they came from (`input`), or only when the
+ *     schema leaves them unchanged.
  *   - `toolSchemaCheck`: a check for whatever schema a tool carries — zod
  *     (`safeParseAsync` / `safeParse`), any Standard Schema
  *     (`~standard.validate`), or a plain JSON Schema object, which gets
@@ -37,6 +41,7 @@ import {
   type ValidateInputContext,
 } from './edit-input.js';
 import type { GateDecision } from './gate-engine.js';
+import { canonicalize } from './loop-guard.js';
 import type { GateOptions } from './session.js';
 
 /** Checks (and parses) merged tool arguments. `value` on success is what runs. */
@@ -75,22 +80,138 @@ export function isEditableToolInput(value: unknown): boolean {
 }
 
 /**
+ * How a tool's arguments relate to its schema check (see ToolEdit): whether
+ * the live arguments are the check's parsed OUTPUT, the same call's
+ * arguments as the schema TAKES them when known, and what an accepted edit
+ * runs with.
+ */
+export interface ToolArgsOptions {
+  /**
+   * The live arguments are the schema's parsed OUTPUT: the host parsed the
+   * model's arguments before the tool got them (AI SDK `execute`, an
+   * McpServer tool callback, a LangChain `tool()` func). Transforms and
+   * coercions have already run on them, so an edit is merged into `input`
+   * instead and parsed from there.
+   */
+  parsed?: boolean | undefined;
+  /**
+   * With `parsed`: the same call's arguments as the schema takes them (the
+   * model's raw arguments, or the last accepted edit's merged ones), when
+   * the host still has them. Used only when the schema parses them into the
+   * live arguments (a stale or repaired copy is not trusted).
+   */
+  input?: unknown;
+  /**
+   * The accepted edit runs as MERGED, `check` only judging it: for a host
+   * that hands the arguments to code that does its own parsing, or whose
+   * parsing the wrapper cannot see (an OpenAI loop's function). Default: the
+   * check's parsed output runs.
+   */
+  runMerged?: boolean | undefined;
+}
+
+/** The merged arguments (schema input) behind an accepted edit's value, for `editedArgs`. */
+const mergedInputs = new WeakMap<object, unknown>();
+
+function rememberMerged(verdict: InputValidation, merged: unknown): InputValidation {
+  if (verdict.ok && typeof verdict.value === 'object' && verdict.value !== null) {
+    mergedInputs.set(verdict.value, merged);
+  }
+  return verdict;
+}
+
+/** Two argument values with the same canonical JSON (key order ignored). */
+function sameArguments(a: unknown, b: unknown): boolean {
+  const left = canonicalize(a);
+  return left !== UNSERIALIZABLE && left === canonicalize(b);
+}
+/** What `canonicalize` says for a value it cannot read. */
+const UNSERIALIZABLE = '"[unserializable]"';
+
+const PARSED_ONLY_MESSAGE =
+  "this tool's schema changes arguments it has already parsed (a transform or coercion) and the " +
+  "model's original arguments are not available here: edit every argument, or none";
+
+/**
  * The validator for a tool gate: merge the proposed arguments into the live
  * ones (`mergeToolInput`), then run `check` on the result when there is one.
+ * The verdict's value is the check's parsed output (what the tool receives),
+ * or the merged arguments themselves with `runMerged`; `editedArgs` also
+ * returns the merged arguments, which a later edit of the same call merges
+ * into.
+ *
+ * An accepted edit must never run the schema's transforms twice on keys the
+ * user did not touch (a `dollars -> cents` transform applied again is a
+ * charge 100 times too large). So with `parsed` live arguments the edit is
+ * merged into `input` — once the schema is seen to parse `input` into the
+ * live arguments. Without such an input it is merged into the live arguments
+ * only when the schema leaves them unchanged (parse(live) equals live: plain
+ * fields, defaults already filled in); otherwise only a full replacement —
+ * every live key given — is accepted, and anything else is refused as
+ * `unsupported` with the gate still held.
  */
-export function toolArgsValidator(live: unknown, check?: SchemaCheck): ValidateInput {
+export function toolArgsValidator(
+  live: unknown,
+  check?: SchemaCheck,
+  options: ToolArgsOptions = {},
+): ValidateInput {
   // `context` MUST reach mergeToolInput: when a HIDE switch covers the input,
   // the edit is judged as a full replacement, never completed from the hidden
   // live values (otherwise refuse-or-run answers leak them, one guess per edit).
-  return (proposed, context) => {
-    const merged = mergeToolInput(live, proposed, context);
-    if (!merged.ok || check === undefined) return merged;
-    return check(merged.value, context);
+  const judge = (base: unknown, proposed: unknown, context: ValidateInputContext | undefined) => {
+    const merged = mergeToolInput(base, proposed, context);
+    if (!merged.ok) return merged;
+    if (check === undefined) return rememberMerged(merged, merged.value);
+    const finish = (verdict: InputValidation): InputValidation =>
+      rememberMerged(verdict.ok && options.runMerged === true ? merged : verdict, merged.value);
+    const verdict = check(merged.value, context);
+    return isThenable(verdict) ? Promise.resolve(verdict).then(finish) : finish(verdict);
   };
+  if (options.parsed !== true || check === undefined || options.runMerged === true) {
+    return (proposed, context) => judge(live, proposed, context);
+  }
+  return async (proposed, context) => {
+    // Hidden input: the edit is a full replacement anyway (mergeToolInput),
+    // and nothing about the live values may decide the answer.
+    if (context?.inputHidden === true) return judge(live, proposed, context);
+    if (options.input !== undefined && (await parsesInto(options.input, live, context))) {
+      return judge(options.input, proposed, context);
+    }
+    if (await parsesInto(live, live, context)) return judge(live, proposed, context);
+    if (fullReplacement(live, proposed)) return judge(live, proposed, context);
+    return { ok: false, code: 'unsupported', message: PARSED_ONLY_MESSAGE };
+  };
+
+  async function parsesInto(
+    candidate: unknown,
+    parsed: unknown,
+    context: ValidateInputContext | undefined,
+  ): Promise<boolean> {
+    try {
+      const probe = await (check as SchemaCheck)(candidate, context);
+      return probe.ok && sameArguments(probe.value, parsed);
+    } catch {
+      return false;
+    }
+  }
+}
+
+function isThenable(value: unknown): value is PromiseLike<InputValidation> {
+  return (
+    ((typeof value === 'object' && value !== null) || typeof value === 'function') &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
+}
+
+/** Does `proposed` give every key the live arguments have (so nothing live is kept)? */
+function fullReplacement(live: unknown, proposed: unknown): boolean {
+  if (!isRecord(proposed)) return false;
+  if (!isRecord(live)) return true;
+  return Object.keys(live).every((key) => Object.prototype.hasOwnProperty.call(proposed, key));
 }
 
 /** What a tool gate can do with an edit: the live arguments and how to check an edit of them. */
-export interface ToolEdit {
+export interface ToolEdit extends ToolArgsOptions {
   /** The arguments the call runs with now (the model's, or the last accepted edit). */
   args: unknown;
   /** The tool's schema check; omitted: the merged edit is accepted as it is. */
@@ -116,7 +237,7 @@ export function toolGateOptions(
   const options: GateOptions = {};
   if (plan !== undefined) {
     options.editable = true;
-    options.validateInput = toolArgsValidator(plan.args, plan.check);
+    options.validateInput = toolArgsValidator(plan.args, plan.check, plan);
   }
   if (after !== undefined) options.result = after.result;
   return options;
@@ -126,11 +247,19 @@ export function toolGateOptions(
  * The arguments an accepted edit hands the call — `decision.input` on a
  * `continue` (at `before`) or `retry` (at `after` / `error`) — or undefined
  * when the decision carries none (then the call keeps its arguments).
+ *
+ * `args` is the verdict's value: the schema's parsed output (what a tool that
+ * receives parsed arguments runs with), or the merged arguments with
+ * `runMerged`. `input` is the merged arguments as the schema TAKES them —
+ * what a host that parses them itself is handed (LangChain `invoke`), and
+ * what a later edit of the same call merges into (`ToolEdit.input`).
+ * Undefined when the validator was not `toolArgsValidator`.
  */
-export function editedArgs(decision: GateDecision): { args: unknown } | undefined {
-  return (decision.action === 'continue' || decision.action === 'retry') && 'input' in decision
-    ? { args: decision.input }
-    : undefined;
+export function editedArgs(decision: GateDecision): { args: unknown; input?: unknown } | undefined {
+  if (!((decision.action === 'continue' || decision.action === 'retry') && 'input' in decision)) return undefined;
+  const args = decision.input;
+  const input = typeof args === 'object' && args !== null ? mergedInputs.get(args) : undefined;
+  return input === undefined ? { args } : { args, input };
 }
 
 // -- schema checks -----------------------------------------------------------
@@ -223,7 +352,7 @@ export function jsonSchemaLiteCheck(schema: unknown): SchemaCheck {
 
 /** Deeper than this, a schema (or a value) is not checked any further: it passes. */
 const LITE_MAX_DEPTH = 32;
-/** Work budget per check (schema nodes visited, array elements included). */
+/** Work budget per check (schema nodes visited, array elements included, enum entries indexed). */
 const LITE_MAX_STEPS = 20_000;
 /** An array longer than this is checked only up to here. */
 const LITE_MAX_ITEMS = 1_000;
@@ -337,8 +466,10 @@ function liteCheck(
   if (typeProblem !== undefined) return typeProblem;
 
   const enumValues = schema['enum'];
-  if (Array.isArray(enumValues) && enumValues.length > 0 && enumValues.every(isPrimitive)) {
-    if (!isPrimitive(value) || !enumValues.some((allowed) => allowed === value)) {
+  if (Array.isArray(enumValues) && enumValues.length > 0) {
+    const allowed = enumSet(enumValues, state);
+    if (state.steps > LITE_MAX_STEPS) return undefined;
+    if (allowed !== null && (!isPrimitive(value) || !allowed.has(value))) {
       return problem(path, 'is not one of the allowed values');
     }
   }
@@ -377,6 +508,24 @@ function liteCheck(
   }
   return undefined;
 }
+
+/**
+ * An `enum` of primitives as a Set (null when it holds anything else: not
+ * checked), built once per enum array and cached. Building it is charged to
+ * the work budget by the enum's length, so a huge enum costs its size once —
+ * never once per value checked against it (1,000 array items against a
+ * 200,000-entry enum used to take seconds of synchronous proxy time).
+ */
+function enumSet(values: unknown[], state: LiteState): Set<unknown> | null {
+  let set = enumSets.get(values);
+  if (set === undefined) {
+    state.steps += values.length;
+    set = values.every(isPrimitive) ? new Set<unknown>(values) : null;
+    enumSets.set(values, set);
+  }
+  return set;
+}
+const enumSets = new WeakMap<unknown[], Set<unknown> | null>();
 
 function checkType(type: unknown, value: unknown, path: Segment[]): string | undefined {
   let types: string[] | undefined;

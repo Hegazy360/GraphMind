@@ -5,6 +5,7 @@
  * gates, and a real @graphmind-ai/client session receiving an edited input
  * through every surface.
  */
+import { connect, createServer, type Server, type Socket } from 'node:net';
 import { createSession, mergeToolInput, type GateDecision, type Session } from '@graphmind-ai/client';
 import { TRUNCATION_SUFFIX, type MessagePayloadMap } from '@graphmind-ai/schema';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -761,3 +762,135 @@ describe('a real @graphmind-ai/client session holding an editable gate', () => {
     expect(answer.body).toMatchObject({ outcome: 'refused', code: 'edit-refused' });
   });
 });
+
+describe('echo detection: a 0.6 client with GRAPHMIND_DISABLE_EDIT_INPUT still echoes requestId', () => {
+  /** TCP proxy app <-> server whose server -> app direction can be held. */
+  async function holdingProxy(targetPort: number): Promise<{ port: number; hold(): void; release(): void }> {
+    let holding = false;
+    const held: { to: Socket; chunk: Buffer | string }[] = [];
+    const sockets = new Set<Socket>();
+    const server: Server = createServer((app) => {
+      const upstream = connect(targetPort, '127.0.0.1');
+      sockets.add(app);
+      sockets.add(upstream);
+      app.on('data', (chunk) => upstream.write(chunk));
+      upstream.on('data', (chunk) => {
+        if (holding) held.push({ to: app, chunk });
+        else app.write(chunk);
+      });
+      const end = (): void => {
+        app.destroy();
+        upstream.destroy();
+      };
+      for (const socket of [app, upstream]) {
+        socket.on('close', end);
+        socket.on('error', end);
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    cleanups.push(
+      () =>
+        new Promise<void>((resolve) => {
+          for (const socket of sockets) socket.destroy();
+          server.close(() => resolve());
+        }),
+    );
+    return {
+      port: typeof address === 'object' && address !== null ? address.port : 0,
+      hold() {
+        holding = true;
+      },
+      release() {
+        holding = false;
+        for (const { to, chunk } of held.splice(0)) if (!to.destroyed) to.write(chunk);
+      },
+    };
+  }
+
+  async function appHoldingATool(
+    port: number,
+    env: Record<string, string>,
+    pauseTimeoutMs?: number,
+  ): Promise<{ runId: string; decision: Promise<GateDecision> }> {
+    const session = createSession({
+      url: `ws://127.0.0.1:${port}/ingest`,
+      appName: 'echo-app',
+      enabled: true,
+      env,
+      retryIntervalMs: 60_000,
+      ...(pauseTimeoutMs === undefined ? {} : { pauseTimeoutMs }),
+    });
+    cleanups.push(() => session.dispose());
+    expect(await session.ready({ timeoutMs: 5_000 })).toBe(true);
+    let runId = '';
+    let resolveDecision!: (d: GateDecision) => void;
+    const decision = new Promise<GateDecision>((resolve) => {
+      resolveDecision = resolve;
+    });
+    void session.run('echo', async (ctx) => {
+      runId = ctx.runId;
+      session.emit('node.started', { nodeId: 'tool:shell', kind: 'tool', name: 'shell', instanceId: 'i-1', input: { cmd: 'rm -rf build' } });
+      resolveDecision(await session.gate('before', { nodeId: 'tool:shell', kind: 'tool', name: 'shell' }));
+    });
+    await waitUntil(() => runId !== '', 'run started');
+    return { runId, decision };
+  }
+
+  /** The agent's abort is forwarded (the pause is `resolving`), but the app's pause timeout releases the gate first. */
+  async function abortRacingPauseTimeout(env: Record<string, string>) {
+    const ts = await boot({ allowControl: 'resume' });
+    ts.server.hub.state.set({ kind: 'tool', point: 'before' });
+    const proxy = await holdingProxy(ts.port);
+    const run = await appHoldingATool(proxy.port, env, 1_500);
+    await waitUntil(async () => (await pauses(ts, run.runId)).length === 1, 'held');
+    const pauseId = (await pauses(ts, run.runId))[0]?.pauseId as string;
+    proxy.hold(); // the forwarded abort sits in the proxy: "in flight"
+    const answer = postResume(
+      ts.port,
+      run.runId,
+      pauseId,
+      { action: 'abort', requestId: 'agent-abort-R', timeoutMs: 8_000 },
+      ts.server.tokens.agent,
+    );
+    await waitUntil(async () => (await pauses(ts, run.runId))[0]?.state === 'resolving', 'abort forwarded');
+    const decision = await run.decision; // the app's pause timeout fired
+    const result = await answer;
+    proxy.release(); // the abort now reaches an app whose gate is gone: ignored
+    await waitUntil(async () => (await storedResumed(ts, run.runId)).length === 1, 'stored exec.resumed');
+    return { decision, result, stored: await storedResumed(ts, run.runId) };
+  }
+
+  it('the kill switch drops edit-input from hello, but the client still says it echoes (request-id) and does', async () => {
+    const ts = await boot({ allowControl: 'resume' });
+    ts.server.hub.state.set({ kind: 'tool', point: 'before' });
+    const run = await appHoldingATool(ts.port, { GRAPHMIND_DISABLE_EDIT_INPUT: '1' });
+    await waitUntil(async () => (await pauses(ts, run.runId)).length === 1, 'held');
+    const pauseId = (await pauses(ts, run.runId))[0]?.pauseId as string;
+    const edit = await postResume(ts.port, run.runId, pauseId, { action: 'continue', input: { cmd: 'ls' } }, ts.server.tokens.viewer);
+    expect(edit.body).toMatchObject({ outcome: 'refused', code: 'edit-refused' });
+    const ok = await postResume(ts.port, run.runId, pauseId, { action: 'continue', requestId: 'agent-req-1' }, ts.server.tokens.agent);
+    expect(ok.body).toMatchObject({ outcome: 'resumed', requestId: 'agent-req-1' });
+    await waitUntil(async () => (await storedResumed(ts, run.runId)).length === 1, 'stored');
+    expect((await storedResumed(ts, run.runId))[0]).toMatchObject({ requestId: 'agent-req-1' });
+  });
+
+  for (const [label, env] of [
+    ['edits on', {}],
+    ['GRAPHMIND_DISABLE_EDIT_INPUT', { GRAPHMIND_DISABLE_EDIT_INPUT: '1' }],
+  ] as const) {
+    it(`${label}: a pause-timeout release racing an agent abort is not credited to the agent`, async () => {
+      const { decision, result, stored } = await abortRacingPauseTimeout(env);
+      expect(decision.action).toBe('continue'); // the run continued: the abort was never applied
+      expect(stored[0]).toMatchObject({ action: 'continue' });
+      expect({
+        status: result.status,
+        outcome: result.body.outcome,
+        code: result.body.code,
+        answeredPrincipal: result.body.principal,
+        storedPrincipal: stored[0]?.['principal'],
+      }).toEqual({ status: 409, outcome: 'taken', code: 'superseded', answeredPrincipal: undefined, storedPrincipal: undefined });
+    });
+  }
+});
+

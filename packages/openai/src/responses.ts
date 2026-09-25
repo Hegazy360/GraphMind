@@ -93,7 +93,8 @@ function functionCalls(response: ResponseLike): RecordedToolCall[] {
  * Responses has no single finish reason: `status`, plus
  * `incomplete_details.reason` when it stopped early. The raw value is the
  * reason when there is one (`max_output_tokens`, `content_filter`), else the
- * status (`completed`, `failed`, `cancelled`, ...).
+ * status (`completed`, `failed`, `cancelled`, ...); a `refusal` content part
+ * makes a completed response `content-filter`.
  */
 function finishFields(
   response: ResponseLike,
@@ -106,11 +107,24 @@ function finishFields(
       : typeof response.status === 'string' && response.status.length > 0
         ? response.status
         : undefined;
-  const finishReason = normalizeFinishReason(raw, hasToolCalls);
+  // A refusal is a `completed` response with a `refusal` content part:
+  // normalized as `content-filter`, as Anthropic's `refusal` stop reason is.
+  const normalized = normalizeFinishReason(raw, hasToolCalls);
+  const finishReason = normalized === 'stop' && hasRefusal(response) ? 'content-filter' : normalized;
   return {
     ...(finishReason !== undefined ? { finishReason } : {}),
     ...(raw !== undefined ? { rawFinishReason: raw } : {}),
   };
+}
+
+/** Does a Response's output carry a `refusal` content part? */
+function hasRefusal(response: ResponseLike): boolean {
+  for (const item of response.output ?? []) {
+    for (const part of item.content ?? []) {
+      if (part?.type === 'refusal') return true;
+    }
+  }
+  return false;
 }
 
 /** Emit observe-only nodes for the built-in tools OpenAI ran server-side. */
@@ -193,6 +207,12 @@ export const responsesFlavor: LlmFlavor = {
     let terminal: ResponseLike | undefined;
     let streamError: unknown;
     const openItems = new Map<string, string>();
+    const requested = new RequestedCalls();
+    /** The output of a stream that ended without a terminal response. */
+    const partial = (): Record<string, unknown> => {
+      const calls = requested.list();
+      return { text, ...(calls.length > 0 ? { toolCalls: calls } : {}) };
+    };
 
     try {
       for await (const raw of stream) {
@@ -211,12 +231,14 @@ export const responsesFlavor: LlmFlavor = {
         }
         if (TOOL_ARGS_DELTA_EVENTS.has(type) && typeof event.delta === 'string') {
           reporter.token('tool-args', event.delta);
+          requested.delta(event.item_id, event.delta);
           continue;
         }
 
         switch (type) {
           case 'response.output_item.added': {
             const item = event.item;
+            requested.added(item);
             if (item !== undefined && isProviderExecutedItem(item.type)) {
               const name = outputItemName(item);
               if (typeof item.id === 'string') openItems.set(item.id, name);
@@ -226,6 +248,7 @@ export const responsesFlavor: LlmFlavor = {
           }
           case 'response.output_item.done': {
             const item = event.item;
+            requested.done(item);
             if (item !== undefined && isProviderExecutedItem(item.type)) {
               const id = typeof item.id === 'string' ? item.id : undefined;
               const name = (id !== undefined ? openItems.get(id) : undefined) ?? outputItemName(item);
@@ -250,7 +273,7 @@ export const responsesFlavor: LlmFlavor = {
 
       if (streamError !== undefined) {
         reporter.error(streamError);
-        reporter.finish({ text }, 'error', usage, { streamed: true });
+        reporter.finish(partial(), 'error', usage, { streamed: true });
         return;
       }
       if (terminal !== undefined) {
@@ -262,19 +285,73 @@ export const responsesFlavor: LlmFlavor = {
         });
         return;
       }
-      reporter.finish({ text }, reporter.endStatus(), usage, { streamed: true });
+      // Aborted, or the connection dropped before a terminal event: the calls
+      // the model had requested so far are still recorded (cut-off arguments
+      // as `inputText`), as the chat / Anthropic / AI SDK observers do.
+      reporter.finish(partial(), reporter.endStatus(), usage, { streamed: true });
     } catch (error) {
       // The observer runs detached from the host: report, never rethrow.
       try {
         const aborted = isAbortLikeError(error);
         if (!aborted) reporter.error(error);
-        reporter.finish({ text }, aborted ? 'aborted' : 'error', usage, { streamed: true });
+        reporter.finish(partial(), aborted ? 'aborted' : 'error', usage, { streamed: true });
       } catch {
         // never throw out of the observer
       }
     }
   },
 };
+
+/**
+ * The locally-executed calls a Responses stream announced, by output item id
+ * (`response.output_item.added`), with their argument text accumulated from
+ * `response.function_call_arguments.delta` / `custom_tool_call_input.delta`
+ * and made whole by `response.output_item.done`. Only read when the stream
+ * never delivered its terminal response (which carries the calls itself).
+ */
+class RequestedCalls {
+  private readonly items = new Map<string, { id?: string; name?: string; text: string; custom: boolean }>();
+
+  added(item: ResponseOutputItemLike | undefined): void {
+    if (item === undefined || typeof item.id !== 'string') return;
+    if (item.type !== 'function_call' && item.type !== 'custom_tool_call') return;
+    const custom = item.type === 'custom_tool_call';
+    const initial = custom ? item.input : item.arguments;
+    this.items.set(item.id, {
+      ...(typeof item.call_id === 'string' ? { id: item.call_id } : {}),
+      ...(typeof item.name === 'string' ? { name: item.name } : {}),
+      text: typeof initial === 'string' ? initial : '',
+      custom,
+    });
+  }
+
+  delta(itemId: string | undefined, delta: string): void {
+    const entry = itemId === undefined ? undefined : this.items.get(itemId);
+    if (entry !== undefined) entry.text += delta;
+  }
+
+  done(item: ResponseOutputItemLike | undefined): void {
+    if (item === undefined || typeof item.id !== 'string') return;
+    const entry = this.items.get(item.id);
+    if (entry === undefined) return;
+    const whole = entry.custom ? item.input : item.arguments;
+    if (typeof whole === 'string') entry.text = whole;
+  }
+
+  list(): RecordedToolCall[] {
+    const out: RecordedToolCall[] = [];
+    for (const entry of this.items.values()) {
+      if (entry.custom) {
+        if (typeof entry.name !== 'string' || entry.name.length === 0) continue;
+        out.push({ ...(entry.id !== undefined && entry.id.length > 0 ? { id: entry.id } : {}), name: entry.name, input: entry.text });
+        continue;
+      }
+      const call = toolCall(entry.id, entry.name, entry.text);
+      if (call !== undefined) out.push(call);
+    }
+    return out;
+  }
+}
 
 function streamEventError(event: ResponseEventLike): Error {
   const error = new Error(event.message ?? 'OpenAI responses stream error');

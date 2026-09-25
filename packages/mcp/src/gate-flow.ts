@@ -25,7 +25,9 @@
  * `editable`, and `continue` + input at `before` / `retry` + input at `after`
  * or `error` invokes the handler with the edited arguments (merged into the
  * live ones, checked by the tool's schema when it has one; a refusal keeps
- * the gate held). The latest accepted edit stays the call's arguments for
+ * the gate held). The schema's transforms never run twice: arguments the SDK
+ * already parsed take a partial edit only when the schema leaves them
+ * unchanged (see toolArgsValidator). The latest accepted edit stays the call's arguments for
  * later attempts. With `reportResult`, the `after` gate hands the handler's
  * result to the session's after-gate detectors.
  */
@@ -56,6 +58,12 @@ export interface GateFlowEdit {
   check: SchemaCheck | undefined;
   /** Invoke the handler with other arguments (called again on `retry`). */
   invokeWith: (args: unknown) => unknown | Promise<unknown>;
+  /**
+   * `live` is the SDK's PARSED copy of the client's arguments (an McpServer
+   * tool callback): the schema's transforms already ran on it, so an edit is
+   * accepted only as toolArgsValidator allows for parsed arguments.
+   */
+  parsed?: boolean | undefined;
 }
 
 export interface GateFlowOptions {
@@ -126,12 +134,17 @@ export async function gateFlow(options: GateFlowOptions): Promise<unknown> {
   const editSite = options.edit;
   let invoke = options.invoke;
   let live = editSite?.live;
+  // The arguments as the schema takes them, once an accepted edit gave them.
+  let rawInput: unknown;
   const edit = (): ToolEdit | undefined =>
-    editSite !== undefined && isEditableToolInput(live) ? { args: live, check: editSite.check } : undefined;
+    editSite !== undefined && isEditableToolInput(live)
+      ? { args: live, check: editSite.check, parsed: editSite.parsed, input: rawInput }
+      : undefined;
   const applyEdit = (decision: GateDecision): void => {
     const edited = editSite === undefined ? undefined : editedArgs(decision);
     if (editSite === undefined || edited === undefined) return;
     live = edited.args;
+    rawInput = edited.input;
     invoke = () => editSite.invokeWith(edited.args);
   };
 

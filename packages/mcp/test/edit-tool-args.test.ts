@@ -169,6 +169,46 @@ describe('continue + input at the before gate (1.x McpServer)', () => {
   });
 });
 
+describe("an accepted edit never runs the schema's transforms twice (1.x McpServer)", () => {
+  it("the handler gets the SDK's PARSED arguments: a partial edit of a transformed call is refused, a full one parses once", async () => {
+    const { viewer, gm } = await setup({ breakpoints: BEFORE });
+    const calls: unknown[] = [];
+    const raw = new McpServer({ name: 'charge-server', version: '1.0.0' });
+    const server = gm.wrapServer(raw);
+    server.registerTool(
+      'charge',
+      {
+        description: 'Charge the customer',
+        // dollars -> cents: NOT idempotent (applied twice = 100 times the charge).
+        inputSchema: { dollars: z.number().transform((d) => d * 100), memo: z.string() },
+      },
+      async (args) => {
+        calls.push(args);
+        return { content: [{ type: 'text', text: `charged ${args.dollars} cents` }] };
+      },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'charge-client', version: '1.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    cleanups.push(async () => {
+      await client.close().catch(() => undefined);
+      await raw.close().catch(() => undefined);
+    });
+
+    const call = client.callTool({ name: 'charge', arguments: { dollars: 5, memo: 'x' } });
+    const pauseId = pauseIdOf(await pausedAt(viewer, 'tool:charge', 'before'));
+    // The live arguments are already {dollars: 500}: merging {memo} onto them
+    // and parsing again would charge 50000 cents.
+    viewer.resumeWith({ pauseId, action: 'continue', input: { memo: 'fixed memo' } });
+    expect((await refusal(viewer, pauseId)).payload['code']).toBe('unsupported');
+    expect(calls).toHaveLength(0);
+    // Every argument given: parsed once, from what the user wrote.
+    viewer.resumeWith({ pauseId, action: 'continue', input: { dollars: 7, memo: 'fixed memo' } });
+    expect(toolText(await call)).toBe('charged 700 cents');
+    expect(calls).toEqual([{ dollars: 700, memo: 'fixed memo' }]);
+  });
+});
+
 describe('retry + input at the error and after gates', () => {
   it('retry + input at the error gate fixes a throwing handler', async () => {
     const { viewer, gm } = await setup({ breakpoints: [{ kind: 'tool', point: 'error' }] });

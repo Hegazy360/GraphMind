@@ -65,13 +65,14 @@
  * only when the app and the debugger both enabled edits). The edit comes in
  * the shape of the node's recorded input — the request's `params`, `{name,
  * arguments, _meta}` — and only `arguments` may differ (see `toolEdit`).
- *     continue + input  at `before`: the held frame is re-serialized with its
- *                       `params.arguments` replaced by the edited arguments
- *                       merged into the live ones — `name`, `_meta`, the id
- *                       and every other key keep their values and order —
- *                       and relayed in place of the original bytes. It is the
- *                       only frame that is re-serialized; every other frame
- *                       stays byte-for-byte.
+ *     continue + input  at `before`: the held frame's `params.arguments`
+ *                       value is replaced, in the frame's own bytes, by the
+ *                       edited arguments merged into the live ones — `name`,
+ *                       `_meta`, the id and every other key keep their exact
+ *                       bytes (an id above 2^53 survives) — and the frame is
+ *                       relayed in place of the original. It is the only
+ *                       frame that changes; every other frame stays
+ *                       byte-for-byte.
  *     retry + input     at `after` / `error`: the same rewrite, re-sent down
  *                       the retry path; the rewritten bytes become what a
  *                       later plain `retry` re-sends.
@@ -136,6 +137,7 @@ import {
   injectedResponse,
   isErrorResult,
   parseFrame,
+  spliceParamsArguments,
   type ClassifiedFrame,
   type JsonRpcErrorBody,
   type JsonRpcId,
@@ -1084,9 +1086,9 @@ export class ProxyReporter {
 
   /**
    * Rewrite the request's `params.arguments` to those of `edited` (the
-   * validated effective params, see `toolEdit`): the frame is parsed from its
-   * exact bytes, only `arguments` is replaced — the id, `name`, `_meta` and
-   * every other key keep their values and order — and it is re-serialized.
+   * validated effective params, see `toolEdit`): only the `arguments` value
+   * is spliced into the frame's exact bytes (`spliceParamsArguments`) — the
+   * id, `name`, `_meta` and every other key keep their bytes and order.
    * `entry.raw` / `entry.params` become the edited request, so a later retry
    * re-sends what last ran. False (nothing changed, one line on stderr) if the
    * frame cannot be rewritten, which a request the proxy already parsed and
@@ -1097,7 +1099,10 @@ export class ProxyReporter {
     const params = isFrameObject(message) ? message['params'] : undefined;
     const args = isFrameObject(edited) ? edited['arguments'] : undefined;
     const nextParams = { ...(isFrameObject(params) ? params : {}), arguments: args };
-    const raw = isFrameObject(message) ? encodeFrame({ ...message, params: nextParams }) : undefined;
+    // Spliced into the frame's own bytes: a JSON round trip of the whole
+    // frame would rewrite an id above 2^53 (the client would never match the
+    // answer) or a `_meta` number, not just the arguments.
+    const raw = isFrameObject(message) ? spliceParamsArguments(entry.raw, args) : undefined;
     if (raw === undefined) {
       this.options.log(
         `graphmind mcp-proxy: could not rewrite ${entry.method} #${String(entry.id)} with the edited arguments; ` +

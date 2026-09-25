@@ -26,9 +26,14 @@
  * `schema` (zod `safeParseAsync`, a Standard Schema, or JSON Schema) checks
  * the merged input first — LangChain parsed the MODEL's arguments before
  * `func` ran, and an edit arrives after that — and its parsed value is what
- * runs; a refusal keeps the gate held. A plain `gm.tool` function carries no
- * schema, so its merged input is not checked further. A `ToolCall` handed to
- * a class-based tool's `invoke` has its `args` edited and keeps its id. The
+ * runs; a refusal keeps the gate held. The schema's transforms never run
+ * twice: `func` gets LangChain's PARSED copy, so the edit is merged into the
+ * arguments the tool was called with (kept by the clone's `call`), and a
+ * class-based tool's `invoke` — which parses again itself — is handed the
+ * merged arguments. A plain `gm.tool` function carries no schema, so its
+ * merged input is not checked further. A `ToolCall` handed to a class-based
+ * tool's `invoke` is recorded as its `args` (the id as `toolCallId`) — the
+ * shape an edit is merged into — and keeps its id and name. The
  * latest accepted edit stays the call's input for later attempts; the node's
  * recorded input (and so the loop fingerprint) keeps what the model asked
  * for, and `exec.resumed.edited` records what ran. The `after` gate also
@@ -40,6 +45,7 @@
  * the handler's `node.finished`. With no handler attached the wrapper emits the
  * node events itself, so a wrapped tool is useful on its own.
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { monotonicNow, elapsedMs } from '@graphmind-ai/client';
 import {
   CONTINUE_DECISION,
@@ -85,6 +91,20 @@ interface EditSite {
   live: unknown;
   check: SchemaCheck | undefined;
   callWith: (args: unknown) => unknown;
+  /**
+   * `live` is what LangChain PARSED with the tool's schema (a `tool()` func):
+   * an edit is merged into `input`, the arguments as they were passed, so
+   * the schema's transforms never run twice (see toolArgsValidator).
+   */
+  parsed?: boolean;
+  /** With `parsed`: the arguments LangChain parsed `live` from, when known. */
+  input?: unknown;
+  /**
+   * The call parses what it is handed itself (a class-based tool's
+   * `invoke`): it is handed the MERGED arguments, never the schema's parsed
+   * output (which would be parsed a second time).
+   */
+  parsesItself?: boolean;
 }
 
 /**
@@ -138,11 +158,37 @@ function invokeSite(
       live,
       check,
       callWith: (edited) => invoke([{ ...first, args: edited }, ...args.slice(1)]),
+      parsesItself: true,
     };
   } catch {
     return undefined;
   }
 }
+
+/**
+ * What a class-based tool's `invoke` records as the node's input: a
+ * `ToolCall`'s `args` — the same shape an edit is merged into (the viewer
+ * pre-fills its editor from the record), never the `{name, args, id, type}`
+ * envelope — with its id as `toolCallId`, as the callback handler records a
+ * tool run.
+ */
+function invokeRecord(first: unknown): { input: unknown; extra?: Record<string, unknown> } {
+  try {
+    if (!isToolCall(first)) return { input: first };
+    const id = first['id'];
+    return typeof id === 'string' && id.length > 0 ? { input: first.args, extra: { toolCallId: id } } : { input: first.args };
+  } catch {
+    return { input: first };
+  }
+}
+
+/**
+ * The arguments a wrapped `tool()` was CALLED with, for its func (which gets
+ * LangChain's parsed copy): the clone's `call` stores them for the duration
+ * of the call. Keyed by the clone, so a func reached any other way finds
+ * nothing.
+ */
+const callInputs = new AsyncLocalStorage<{ tool: object; input: unknown }>();
 
 /** The schema a LangChain tool carries (`tool.schema`), as a check for edits. */
 function schemaCheckOf(tool: object): SchemaCheck | undefined {
@@ -195,18 +241,38 @@ export function wrapStructuredTool<T extends StructuredToolLike>(core: AdapterCo
     // find each other. `input` is what LangChain parsed with `schema`.
     const original = tool.func as (...args: unknown[]) => unknown;
     (clone as { func: unknown }).func = async (...args: unknown[]): Promise<unknown> => {
+      const called = callInputs.getStore();
       const attachWait = core.maybeWaitForAttach();
       if (attachWait !== undefined) await attachWait;
       const runId = readRunId(args[1]);
+      const site = firstArgumentSite(args, check, (next) => original.apply(clone, next));
       return runGated(
         core,
         name,
         { runId, link: core.toolLink(runId) },
         args[0],
         () => original.apply(clone, args),
-        firstArgumentSite(args, check, (next) => original.apply(clone, next)),
+        site === undefined
+          ? undefined
+          : { ...site, parsed: true, input: called?.tool === clone ? called.input : undefined },
       );
     };
+    // `call` (which `invoke` goes through) has the arguments as passed; func
+    // only gets the parsed copy. Keep them for the func's edit site.
+    const originalCall = (tool as { call?: unknown }).call;
+    if (typeof originalCall === 'function') {
+      (clone as unknown as { call: unknown }).call = function (this: unknown, ...args: unknown[]): unknown {
+        let input: unknown;
+        try {
+          input = isToolCall(args[0]) ? args[0].args : args[0];
+        } catch {
+          input = undefined;
+        }
+        return callInputs.run({ tool: clone, input }, () =>
+          (originalCall as (...a: unknown[]) => unknown).apply(this, args),
+        );
+      };
+    }
     return clone;
   }
 
@@ -218,13 +284,15 @@ export function wrapStructuredTool<T extends StructuredToolLike>(core: AdapterCo
     (clone as { invoke: unknown }).invoke = async (...args: unknown[]): Promise<unknown> => {
       const attachWait = core.maybeWaitForAttach();
       if (attachWait !== undefined) await attachWait;
+      const record = invokeRecord(args[0]);
       return runGated(
         core,
         name,
         { runId: undefined, link: undefined },
-        args[0],
+        record.input,
         () => original.apply(clone, args),
         invokeSite(args, check, (next) => original.apply(clone, next)),
+        record.extra,
       );
     };
     return clone;
@@ -262,6 +330,7 @@ async function runGated(
   input: unknown,
   originalCall: () => unknown,
   editSite?: EditSite,
+  startExtra?: Record<string, unknown>,
 ): Promise<unknown> {
   const nodeId = site.link?.nodeId ?? toolNodeId(name);
   const node: GateNode = { nodeId, kind: 'tool', name };
@@ -277,12 +346,23 @@ async function runGated(
   // What runs: the call as it came, until an edit is accepted.
   let call = originalCall;
   let live = editSite?.live;
+  let rawInput = editSite?.input;
   const edit = (): ToolEdit | undefined =>
-    editSite !== undefined && isEditableToolInput(live) ? { args: live, check: editSite.check } : undefined;
+    editSite !== undefined && isEditableToolInput(live)
+      ? { args: live, check: editSite.check, parsed: editSite.parsed, input: rawInput }
+      : undefined;
   const applyEdit = (decision: GateDecision): void => {
     const edited = editSite === undefined ? undefined : editedArgs(decision);
     if (editSite === undefined || edited === undefined) return;
+    if (editSite.parsesItself === true) {
+      // `invoke` parses what it gets: hand it the merged arguments.
+      const merged = edited.input ?? edited.args;
+      live = merged;
+      call = () => editSite.callWith(merged);
+      return;
+    }
     live = edited.args;
+    rawInput = edited.input;
     call = () => editSite.callWith(edited.args);
   };
 
@@ -294,7 +374,7 @@ async function runGated(
         name,
         instanceId,
         input,
-        extra: { gates: 'full' },
+        extra: { gates: 'full', ...startExtra },
       }),
     );
   }

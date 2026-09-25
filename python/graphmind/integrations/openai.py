@@ -198,11 +198,15 @@ def _summarize(flavor: str, result: Any) -> dict[str, Any]:
             texts: list[str] = []
             tool_calls: list[dict[str, Any]] = []
             finish_reason: str | None = None
+            refused = False
             for choice in choices:
                 message = getattr(choice, "message", None)
                 content = getattr(message, "content", None)
                 if isinstance(content, str) and content:
                     texts.append(content)
+                refusal = getattr(message, "refusal", None)
+                if isinstance(refusal, str) and refusal:
+                    refused = True
                 parsed = getattr(message, "parsed", None)
                 if parsed is not None:
                     out["parsed"] = safe_value(parsed)
@@ -212,7 +216,7 @@ def _summarize(flavor: str, result: Any) -> dict[str, Any]:
             out["text"] = "".join(texts)
             if tool_calls:
                 out["toolCalls"] = tool_calls
-            out.update(finish_fields(finish_reason, bool(tool_calls)))
+            out.update(finish_fields(finish_reason, bool(tool_calls), refused))
         else:
             text = getattr(result, "output_text", None)
             if isinstance(text, str):
@@ -224,7 +228,12 @@ def _summarize(flavor: str, result: Any) -> dict[str, Any]:
             status = getattr(result, "status", None)
             reason = getattr(getattr(result, "incomplete_details", None), "reason", None)
             raw = reason if isinstance(reason, str) and reason else status
-            out.update(finish_fields(raw, bool(calls)))
+            refused = any(
+                _field(part, "type") == "refusal"
+                for item in output or []
+                for part in (_field(item, "content") or [])
+            )
+            out.update(finish_fields(raw, bool(calls), refused))
             if isinstance(status, str):
                 out["status"] = status
             if output is not None:
@@ -423,7 +432,7 @@ _REPLY_BUILDERS: dict[str, Callable[[Any, str], dict[str, Any] | None]] = {
 
 
 class _StreamState:
-    __slots__ = ("calls", "chunks", "final", "finish_reason", "text", "usage")
+    __slots__ = ("calls", "chunks", "final", "finish_reason", "refused", "text", "usage")
 
     def __init__(self) -> None:
         self.text: list[str] = []
@@ -432,13 +441,23 @@ class _StreamState:
         self.chunks = 0
         #: The terminal ``Response`` of a Responses-API stream, when one arrived.
         self.final: Any = None
-        #: Streamed chat tool calls by index: [id, name, argument text].
+        #: Streamed chat tool calls by index: [id, name, argument text, custom?].
         self.calls: dict[int, list[Any]] = {}
+        #: A chat stream carried refusal deltas (a stop that is a refusal).
+        self.refused = False
 
     def tool_calls(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         for index in sorted(self.calls):
-            call_id, name, text = self.calls[index]
+            call_id, name, text, custom = self.calls[index]
+            if custom:
+                # A custom (freeform) tool's input is text by design: recorded
+                # as the string, as _chat_tool_calls does.
+                if not isinstance(name, str) or not name:
+                    continue
+                entry: dict[str, Any] = {"name": name, "input": text}
+                out.append({"id": call_id, **entry} if call_id else entry)
+                continue
             recorded = tool_call(call_id, name, text)
             if recorded is not None:
                 out.append(recorded)
@@ -449,8 +468,16 @@ class _StreamState:
         calls = self.tool_calls()
         if calls:
             out["toolCalls"] = calls
-        out.update(finish_fields(self.finish_reason, bool(calls)))
+        out.update(finish_fields(self.finish_reason, bool(calls), self.refused))
         return out
+
+
+def _field(source: Any, key: str) -> Any:
+    """``source.key``, or ``source[key]`` for a dict (a field the installed SDK
+    does not model yet arrives as the raw dict)."""
+    if isinstance(source, dict):
+        return source.get(key)
+    return getattr(source, key, None)
 
 
 def _observe_chat_chunk(session: Session, node_id: str, state: _StreamState, chunk: Any) -> None:
@@ -468,18 +495,28 @@ def _observe_chat_chunk(session: Session, node_id: str, state: _StreamState, chu
         if isinstance(content, str) and content:
             state.text.append(content)
             session.push_token(node_id, "text", content)
+        refusal = getattr(delta, "refusal", None)
+        if isinstance(refusal, str) and refusal:
+            state.refused = True
         reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
         if isinstance(reasoning, str) and reasoning:
             session.push_token(node_id, "reasoning", reasoning)
         for call in getattr(delta, "tool_calls", None) or []:
             function = getattr(call, "function", None)
-            arguments = getattr(function, "arguments", None)
+            # A custom (freeform) tool streams ``custom: {name, input}`` (openai 2.x+).
+            custom = getattr(call, "custom", None)
             index = getattr(call, "index", None)
-            entry = state.calls.setdefault(index if isinstance(index, int) else 0, [None, None, ""])
+            entry = state.calls.setdefault(
+                index if isinstance(index, int) else 0, [None, None, "", False]
+            )
+            if getattr(call, "type", None) == "custom" or custom is not None:
+                entry[3] = True
+            source = custom if entry[3] else function
+            arguments = _field(source, "input" if entry[3] else "arguments")
             call_id = getattr(call, "id", None)
             if isinstance(call_id, str) and call_id:
                 entry[0] = call_id
-            name = getattr(function, "name", None)
+            name = _field(source, "name")
             if isinstance(name, str) and name:
                 entry[1] = name
             if isinstance(arguments, str) and arguments:

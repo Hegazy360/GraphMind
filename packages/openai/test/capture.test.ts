@@ -263,4 +263,96 @@ describe('responses', () => {
     });
     expectAllValid(viewer);
   });
+
+  it('an mcp tool (documented Tool.Mcp shape): its authorization / headers never reach the wire', async () => {
+    const OAUTH = 'sk_live_OAUTH_TOKEN_SECRET_2';
+    const BEARER = 'Bearer sk_live_HEADER_SECRET_2';
+    const stripeMcp = {
+      type: 'mcp' as const,
+      server_label: 'stripe',
+      server_url: 'https://mcp.stripe.com',
+      authorization: OAUTH,
+      headers: { Authorization: BEARER },
+      require_approval: 'never' as const,
+    };
+    const server = new FakeOpenAI().onResponses(() => ({ kind: 'json', body: responseObject({ text: 'ok' }) }));
+    const { viewer, gm, client } = await setup(server, {}, {}, cleanups);
+    await attach(gm);
+    await gm.run('mcp-run', async () => {
+      await client.responses.create({ model: 'gpt-5.4', input: 'refund order 42', tools: [stripeMcp] });
+    });
+    await waitUntil(() => framesFor(viewer, 'node.finished', 'llm:step').length === 1, 5000, 'finish');
+    const input = framesFor(viewer, 'node.started', 'llm:step')[0]!.payload['input'] as Record<string, unknown>;
+    // The step is recorded (tools by hash, the definition once) ...
+    const recorded = { type: 'mcp', server_label: 'stripe', server_url: 'https://mcp.stripe.com', require_approval: 'never' };
+    expect(input['tools']).toEqual([{ name: 'mcp', schemaHash: schemaHash(recorded) }]);
+    expect(input['toolSchemas']).toEqual({ [schemaHash(recorded)]: recorded });
+    // ... but no frame the hub receives (storage, viewer, replay, `graphmind mcp` get_node) holds the token.
+    const all = JSON.stringify(viewer.received);
+    expect(all, 'mcp authorization recorded').not.toContain(OAUTH);
+    expect(all, 'mcp headers.Authorization recorded').not.toContain('sk_live_HEADER_SECRET_2');
+    expectAllValid(viewer);
+  });
 });
+
+describe("refusals normalize like Anthropic's (content-filter), the raw value kept", () => {
+  it('chat, non-streaming: stop + message.refusal -> content-filter', async () => {
+    const server = new FakeOpenAI().onChat(() => ({
+      kind: 'json',
+      body: {
+        id: 'chatcmpl-r',
+        object: 'chat.completion',
+        created: 1,
+        model: 'gpt-5',
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: null, refusal: 'I cannot help with that.' } }],
+      },
+    }));
+    const { viewer, gm, client } = await setup(server, {}, {}, cleanups);
+    await attach(gm);
+    await client.chat.completions.create({ model: 'gpt-5', messages: [{ role: 'user', content: 'x' }] });
+    await waitUntil(() => framesFor(viewer, 'node.finished', 'llm:step').length === 1, 5000, 'finish');
+    expect(framesFor(viewer, 'node.finished', 'llm:step')[0]!.payload['output']).toMatchObject({
+      refusal: 'I cannot help with that.',
+      finishReason: 'content-filter',
+      rawFinishReason: 'stop',
+    });
+    expectAllValid(viewer);
+  });
+
+  it('chat, streaming: refusal deltas -> content-filter', async () => {
+    const base = { id: 'chatcmpl-r', object: 'chat.completion.chunk', created: 1, model: 'gpt-5' };
+    const events = [
+      { ...base, choices: [{ index: 0, delta: { role: 'assistant', refusal: 'I cannot' }, finish_reason: null }] },
+      { ...base, choices: [{ index: 0, delta: { refusal: ' help.' }, finish_reason: null }] },
+      { ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+    ];
+    const server = new FakeOpenAI().onChat(() => ({ kind: 'sse', events }));
+    const { viewer, gm, client } = await setup(server, {}, {}, cleanups);
+    await attach(gm);
+    const stream = await client.chat.completions.create({ model: 'gpt-5', messages: [{ role: 'user', content: 'x' }], stream: true });
+    for await (const _chunk of stream) {
+      // consume
+    }
+    await waitUntil(() => framesFor(viewer, 'node.finished', 'llm:step').length === 1, 5000, 'finish');
+    expect(framesFor(viewer, 'node.finished', 'llm:step')[0]!.payload['output']).toMatchObject({
+      finishReason: 'content-filter',
+      rawFinishReason: 'stop',
+    });
+  });
+
+  it('responses: a completed response with a refusal part -> content-filter; a plain one stays stop', async () => {
+    const refused = responseObject({ text: 'ignored' });
+    (refused['output'] as { content: unknown[] }[])[0]!.content = [{ type: 'refusal', refusal: 'I cannot help with that.' }];
+    let turn = 0;
+    const server = new FakeOpenAI().onResponses(() => ({ kind: 'json', body: turn++ === 0 ? refused : responseObject({ text: 'ok' }) }));
+    const { viewer, gm, client } = await setup(server, {}, {}, cleanups);
+    await attach(gm);
+    await client.responses.create({ model: 'gpt-5.4', input: 'x' });
+    await client.responses.create({ model: 'gpt-5.4', input: 'y' });
+    await waitUntil(() => framesFor(viewer, 'node.finished', 'llm:step').length === 2, 5000, 'finish');
+    const [first, second] = framesFor(viewer, 'node.finished', 'llm:step').map((f) => f.payload['output']);
+    expect(first).toMatchObject({ finishReason: 'content-filter', rawFinishReason: 'completed' });
+    expect(second).toMatchObject({ finishReason: 'stop', rawFinishReason: 'completed' });
+  });
+});
+

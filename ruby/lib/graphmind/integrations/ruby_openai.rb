@@ -64,6 +64,9 @@ module Graphmind
 
         def seen? = @seen
 
+        # The stream carried refusal deltas (a stop that is a refusal).
+        def refused? = @refused == true
+
         def observe(chunk)
           return unless chunk.is_a?(Hash)
 
@@ -83,19 +86,31 @@ module Graphmind
 
           content = delta["content"]
           @text << content if content.is_a?(String)
+          @refused = true if delta["refusal"].is_a?(String) && !delta["refusal"].empty?
           Array(delta["tool_calls"]).each do |call|
             next unless call.is_a?(Hash)
 
-            entry = (@calls[call["index"].is_a?(Integer) ? call["index"] : 0] ||= [nil, nil, +""])
+            entry = (@calls[call["index"].is_a?(Integer) ? call["index"] : 0] ||= [nil, nil, +"", false])
             entry[0] = call["id"] if call["id"].is_a?(String) && !call["id"].empty?
-            function = call["function"].is_a?(Hash) ? call["function"] : {}
-            entry[1] = function["name"] if function["name"].is_a?(String) && !function["name"].empty?
-            entry[2] << function["arguments"] if function["arguments"].is_a?(String)
+            # A custom (freeform) tool streams `custom: {name, input}`.
+            entry[3] = true if call["type"] == "custom" || call["custom"].is_a?(Hash)
+            source_key, text_key = entry[3] ? %w[custom input] : %w[function arguments]
+            source = call[source_key].is_a?(Hash) ? call[source_key] : {}
+            entry[1] = source["name"] if source["name"].is_a?(String) && !source["name"].empty?
+            entry[2] << source[text_key] if source[text_key].is_a?(String)
           end
         end
 
+        # A custom tool's input is text by design: recorded as the string, as
+        # chat_tool_calls does for a non-streamed one.
         def tool_calls
-          @calls.keys.sort.filter_map { |index| Support.tool_call(*@calls[index]) }
+          @calls.keys.sort.filter_map do |index|
+            id, name, text, custom = @calls[index]
+            next Support.tool_call(id, name, text) unless custom
+            next nil unless name.is_a?(String) && !name.empty?
+
+            id.nil? ? { "name" => name, "input" => text.dup } : { "id" => id, "name" => name, "input" => text.dup }
+          end
         end
       end
 
@@ -253,7 +268,9 @@ module Graphmind
         out = {}
         out["text"] = text if text.is_a?(String)
         out["toolCalls"] = calls unless calls.empty?
-        out.merge!(Support.finish_fields(choice.is_a?(Hash) ? choice["finish_reason"] : nil, !calls.empty?))
+        refusal = message.is_a?(Hash) ? message["refusal"] : nil
+        out.merge!(Support.finish_fields(choice.is_a?(Hash) ? choice["finish_reason"] : nil, !calls.empty?,
+                                         refusal.is_a?(String) && !refusal.empty?))
       end
 
       def chat_tool_calls(calls)
@@ -272,9 +289,15 @@ module Graphmind
 
       def responses_output(response)
         calls = Array(response["output"]).filter_map do |item|
-          next nil unless item.is_a?(Hash) && item["type"] == "function_call"
+          next nil unless item.is_a?(Hash)
 
-          Support.tool_call(item["call_id"], item["name"], item["arguments"])
+          if item["type"] == "function_call"
+            Support.tool_call(item["call_id"], item["name"], item["arguments"])
+          elsif item["type"] == "custom_tool_call" && item["name"].is_a?(String) && !item["name"].empty?
+            # A custom (freeform) tool's input is text by design.
+            entry = { "name" => item["name"], "input" => item["input"] || "" }
+            item["call_id"].is_a?(String) ? { "id" => item["call_id"] }.merge(entry) : entry
+          end
         end
         text = output_text(response)
         reason = response.dig("incomplete_details", "reason")
@@ -282,7 +305,10 @@ module Graphmind
         out = {}
         out["text"] = text if text.is_a?(String)
         out["toolCalls"] = calls unless calls.empty?
-        out.merge!(Support.finish_fields(raw, !calls.empty?))
+        refused = Array(response["output"]).any? do |item|
+          item.is_a?(Hash) && Array(item["content"]).any? { |part| part.is_a?(Hash) && part["type"] == "refusal" }
+        end
+        out.merge!(Support.finish_fields(raw, !calls.empty?, refused))
         out["status"] = response["status"] if response["status"].is_a?(String)
         out
       end
@@ -291,7 +317,7 @@ module Graphmind
         calls = stream.tool_calls
         out = { "text" => stream.text.dup }
         out["toolCalls"] = calls unless calls.empty?
-        out.merge!(Support.finish_fields(stream.finish_reason, !calls.empty?))
+        out.merge!(Support.finish_fields(stream.finish_reason, !calls.empty?, stream.refused?))
         out["streamed"] = true
         out
       end

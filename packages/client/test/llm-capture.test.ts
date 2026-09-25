@@ -16,7 +16,9 @@ import {
   makeUsage,
   normalizeFinishReason,
   pickParams,
+  releaseToolSchemas,
   resetToolSchemaMemory,
+  sanitizeToolDefinition,
   schemaHash,
   sumReported,
   tokenCount,
@@ -30,6 +32,7 @@ interface LlmFixture {
   finishReasons: [unknown, boolean, string | null][];
   toolCalls: { in: { id?: unknown; name?: unknown; args?: unknown }; out: unknown }[];
   schemaHashes: { in: unknown; hash: string }[];
+  toolDefinitions: { name: string; in: unknown; out: unknown; hash: string }[];
   samplingParams: string[];
 }
 
@@ -61,6 +64,26 @@ describe('conformance fixture (shared with the Python and Ruby ports)', () => {
     );
   });
 
+  it.each(fixture.toolDefinitions.map((row) => [row.name, row] as const))(
+    'tool definition: %s',
+    (_label, row) => {
+      expect(sanitizeToolDefinition(row.in)).toEqual(row.out);
+      expect(schemaHash(row.out)).toBe(row.hash);
+      // captureTools records exactly that, under exactly that hash.
+      const captured = captureTools({}, 'run-1', [row.in], () => 'tool');
+      expect(captured).toEqual({ tools: [{ name: 'tool', schemaHash: row.hash }], toolSchemas: { [row.hash]: row.out } });
+    },
+  );
+
+  it('never records a credential a tool definition carries (OpenAI mcp, AI SDK openai.mcp)', () => {
+    const recorded = JSON.stringify(fixture.toolDefinitions.map((row) => row.out));
+    for (const secret of ['sk_live', 'ya29.', 'Bearer', 's3cret', 'api_key=', 'sig=abc', 'user:pw', '"pw"']) {
+      expect(recorded).not.toContain(secret);
+    }
+    // ...while a schema property named like a secret is a parameter, kept.
+    expect(recorded).toContain('"api_key":{"type":"string"}');
+  });
+
   it('key order never changes a hash', () => {
     expect(fixture.schemaHashes[0]?.hash).toBe(fixture.schemaHashes[1]?.hash);
   });
@@ -74,6 +97,7 @@ describe('conformance fixture (shared with the Python and Ruby ports)', () => {
     expect(new Set(fixture.finishReasons.map((r) => r[2])).size).toBe(7); // six values + null
     expect(fixture.toolCalls.some((r) => r.out === null)).toBe(true);
     expect(fixture.toolCalls.some((r) => (r.out as { inputText?: string } | null)?.inputText)).toBe(true);
+    expect(fixture.toolDefinitions.filter((r) => JSON.stringify(r.in) !== JSON.stringify(r.out)).length).toBeGreaterThan(3);
   });
 });
 
@@ -164,6 +188,20 @@ describe('captureTools', () => {
     // Another run starts from scratch; another session too.
     expect(captureTools(session, 'run-2', [def('a')], nameOf)?.toolSchemas).toEqual({ [hashA]: def('a') });
     expect(captureTools({}, 'run-1', [def('a')], nameOf)?.toolSchemas).toEqual({ [hashA]: def('a') });
+  });
+
+  it('releaseToolSchemas: definitions whose event did not reach the wire whole are sent again', () => {
+    const session = {};
+    const first = captureTools(session, 'run-1', [def('a'), def('b')], nameOf);
+    expect(Object.keys(first?.toolSchemas ?? {})).toHaveLength(2);
+    // The session shrank (or dropped) the event carrying them.
+    releaseToolSchemas(first?.toolSchemas);
+    const again = captureTools(session, 'run-1', [def('a'), def('b')], nameOf);
+    expect(again?.toolSchemas).toEqual(first?.toolSchemas);
+    // Once they went out whole, they are not sent again; a foreign object changes nothing.
+    releaseToolSchemas({ [schemaHash(def('a'))]: def('a') });
+    releaseToolSchemas(undefined);
+    expect(captureTools(session, 'run-1', [def('a'), def('b')], nameOf)?.toolSchemas).toBeUndefined();
   });
 
   it('skips definitions without a name and returns undefined when nothing is left', () => {

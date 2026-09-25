@@ -150,11 +150,20 @@ class ToolCallCollector {
   private readonly calls = new Map<string, RecordedToolCall>();
   private readonly partial = new Map<string, { name: string | undefined; text: string }>();
 
-  /** A `tool-call` part (stream or generate). Provider-executed calls are skipped. */
+  constructor(private readonly core: AdapterCore) {}
+
+  /**
+   * A `tool-call` part (stream or generate). Provider-executed calls are
+   * skipped. The model's arguments are also kept for the call's `execute`
+   * (see AdapterCore.noteToolInput).
+   */
   onCall(part: StreamPartLike): void {
     if (part.providerExecuted === true) return;
     const call = toolCall(part.toolCallId, part.toolName, part.input);
     if (call === undefined) return;
+    if (typeof part.toolCallId === 'string' && call.inputText === undefined) {
+      this.core.noteToolInput(part.toolCallId, call.input);
+    }
     const key = typeof part.toolCallId === 'string' ? part.toolCallId : `#${this.calls.size}`;
     this.partial.delete(key);
     this.calls.set(key, call);
@@ -424,7 +433,7 @@ async function observeStream(
   let sawError = false;
   /** The step's `after` gate decision; undefined = not gated (detached, or no finish part). */
   let afterAction: GateDecision['action'] | undefined;
-  const calls = new ToolCallCollector();
+  const calls = new ToolCallCollector(core);
   try {
     const reader = stream.getReader();
     for (;;) {
@@ -476,9 +485,13 @@ async function observeStream(
     }
     if (sawError) {
       core.errorNode(LLM_NODE_ID, errorPart);
+      // What the step reported before (or despite) the error is kept: the
+      // usage already billed and the tool calls it requested.
+      const requested = calls.list();
       core.finishNode({
         nodeId: LLM_NODE_ID,
-        output: { text },
+        output: { text, ...(requested.length > 0 ? { toolCalls: requested } : {}) },
+        usage,
         durationMs: elapsedMs(startedAt),
         status: 'error',
         extra: { instanceId },
@@ -497,9 +510,11 @@ async function observeStream(
     try {
       const aborted = isAbortError(error) || afterAction === 'abort';
       if (!aborted) core.errorNode(LLM_NODE_ID, error);
+      const requested = calls.list();
       core.finishNode({
         nodeId: LLM_NODE_ID,
-        output: { text },
+        output: { text, ...(requested.length > 0 ? { toolCalls: requested } : {}) },
+        usage,
         durationMs: elapsedMs(startedAt),
         status: aborted ? 'aborted' : 'error',
         extra: { instanceId },
@@ -608,7 +623,7 @@ function summarizeGenerate(
 ): { output: Record<string, unknown>; usage: ReturnType<typeof mapUsage> } | undefined {
   try {
     let text = '';
-    const calls = new ToolCallCollector();
+    const calls = new ToolCallCollector(core);
     for (const part of result.content ?? []) {
       if (part.type === 'text' && typeof part.text === 'string') text += part.text;
       else if (part.type === 'tool-call' && part.providerExecuted === true) {

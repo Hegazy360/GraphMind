@@ -35,6 +35,7 @@ from .errors import GraphMindAbortError, is_abort_error, to_error_info
 from .gate import CONTINUE, GateDecision, GateEngine, GateNode
 from .held import HeldLedger
 from .ids import agent_node_id, new_id, next_id
+from .llm_capture import release_tool_schemas
 from .loop_guard import UNREADABLE, LoopGuard, LoopInfo, resolve_loop_guard
 from .protocol import (
     EVENT_TYPES,
@@ -117,6 +118,17 @@ _current_run: contextvars.ContextVar[RunContext | None] = contextvars.ContextVar
 #: How every event frame from :meth:`Session._serialize_within_budget` begins:
 #: ``serialize_envelope`` of an envelope with ``seq`` 0 and ``ts`` 0.
 _PLACEHOLDER_HEAD = f'{{"gm": {PROTOCOL_VERSION}, "seq": 0, "ts": 0, '
+
+
+def _release_tool_schemas_of(payload: Any) -> None:
+    """``input.toolSchemas`` of a node.started the integration built (llm_capture)."""
+    try:
+        if isinstance(payload, dict):
+            tool_input = payload.get("input")
+            if isinstance(tool_input, dict):
+                release_tool_schemas(tool_input.get("toolSchemas"))
+    except Exception:
+        pass
 
 
 def _with_seq(body: str, seq: int) -> str | None:
@@ -627,6 +639,7 @@ class Session:
         self._transport.start()
 
     def _emit_internal(self, type: str, payload: dict[str, Any], run_id: str) -> None:
+        original = payload
         # Loop hold (W5 port): fingerprint a watched node's input exactly as the
         # integration handed it over — before redaction can replace it with the
         # placeholder — and outside the lock (it walks the whole input).
@@ -642,6 +655,8 @@ class Session:
         payload = self._redactor.apply(type, payload, run_id)
         dropped = payload is DROP
         if dropped:
+            if type == "node.started":
+                _release_tool_schemas_of(original)
             if loop_call is not None:
                 try:
                     kind, node_id, name, _ = loop_call
@@ -659,7 +674,11 @@ class Session:
         # the debugger stores. Serialised OUTSIDE the lock (a multi-megabyte
         # payload must not stall other threads' events and gates) with a
         # placeholder seq, which the lock below splices in. Never raises.
-        body = self._serialize_within_budget(type, payload, run_id)
+        body, whole = self._serialize_within_budget(type, payload, run_id)
+        if not whole and type == "node.started":
+            # Tool definitions go out once per run (llm_capture): ones this
+            # shrink emptied (``required: []``) must be sent again next step.
+            _release_tool_schemas_of(original)
         record = None
         with self._lock:
             seq = self._seq
@@ -686,10 +705,11 @@ class Session:
 
     # -- payload budget (SHRINK-V2 port) ----------------------------------------
 
-    def _serialize_within_budget(self, type: str, payload: Any, run_id: str) -> str:
+    def _serialize_within_budget(self, type: str, payload: Any, run_id: str) -> tuple[str, bool]:
         """The event's frame with placeholder ``seq``/``ts`` (see :func:`_with_seq`),
         its payload held to the protocol's budget (``MAX_PAYLOAD_BYTES``, 512 KB
-        of UTF-8 JSON) — ``serializeWithinBudget`` in the TypeScript client.
+        of UTF-8 JSON) — ``serializeWithinBudget`` in the TypeScript client — and
+        whether the payload went out whole (neither shrunk nor degraded).
 
         The debugger shrinks a larger payload anyway (``serializePayload``, the
         one algorithm, ported in :mod:`graphmind.shrink`); doing it only there
@@ -703,6 +723,7 @@ class Session:
         Never raises: on an internal failure the unshrunk frame is sent, with a
         warning. Warnings are one per event type per interval, never content."""
         frame = serialize_envelope(create_envelope(type, payload, 0, run_id, ts=0))
+        whole = True
         try:
             wire_payload: Any = None
             parsed = False
@@ -711,6 +732,7 @@ class Session:
                 # (a cyclic container): say so, once per type per interval.
                 wire_payload = json.loads(frame).get("payload")
                 parsed = True
+                whole = False
                 if (
                     isinstance(wire_payload, dict)
                     and wire_payload.get("_graphmindSerializationError") is True
@@ -722,16 +744,16 @@ class Session:
             # frame; the longest number re-spelling, "1e+20" -> 21 digits, is 4.2
             # per character) and the payload's text is part of the frame.
             if len(frame) * 6 <= MAX_PAYLOAD_BYTES:
-                return frame
+                return frame, whole
             # (2) With no number JavaScript spells differently, the payload's
             # compact text is no longer than its part of the frame.
             if js_compatible_json(frame) and utf8_length(frame) <= MAX_PAYLOAD_BYTES:
-                return frame
+                return frame, whole
             if not parsed:
                 wire_payload = json.loads(frame).get("payload")
             text, shrunk, truncated = serialize_payload(wire_payload, MAX_PAYLOAD_BYTES, type)
             if not truncated:
-                return frame
+                return frame, whole
             size = shrunk.get("bytes") if isinstance(shrunk, dict) else None
             size_text = (
                 str(size) if isinstance(size, int) and not isinstance(size, bool) else "unknown"
@@ -755,10 +777,10 @@ class Session:
                 )
             head = serialize_envelope(create_envelope(type, {}, 0, run_id, ts=0))
             if not head.endswith("{}}"):  # pragma: no cover - payload is the last key
-                return frame
+                return frame, whole
             # The shrink's own JSON text, spliced in: it is JSON.stringify's
             # (lone surrogates escaped), exactly what the debugger will store.
-            return f"{head[:-3]}{text}}}"
+            return f"{head[:-3]}{text}}}", False
         except Exception as exc:
             self._warner.warn(
                 f"payload-budget-error:{type}",
@@ -766,7 +788,7 @@ class Session:
                 "it was sent unshrunk",
                 exc.__class__.__name__,
             )
-            return frame
+            return frame, whole
 
     def _warn_unserializable(self, type: str, wire_payload: dict[str, Any]) -> None:
         if type in EVENT_TYPES and not is_valid_event_payload(type, wire_payload):

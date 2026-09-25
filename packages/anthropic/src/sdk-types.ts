@@ -59,6 +59,8 @@ export interface UsageLike {
       }
     | null
     | undefined;
+  /** Extended thinking: `thinking_tokens` is the part of `output_tokens` spent thinking. */
+  output_tokens_details?: { thinking_tokens?: number | null | undefined } | null | undefined;
 }
 
 /** Any `ContentBlock` (assistant output) the adapter looks at. */
@@ -144,7 +146,8 @@ export function isBuiltinToolDef(def: ToolDefLike): boolean {
  * Map an Anthropic `Usage` to the wire `TokenUsage` (contract C1):
  * `inputTokens` = uncached tail + cache reads + cache writes, `inclusive:
  * true`; `cacheWriteTokens` is `cache_creation_input_tokens`, or the sum of
- * the 5m/1h split when only the split was reported. `cacheCreationTokens`
+ * the 5m/1h split when only the split was reported; `reasoningTokens` is
+ * `output_tokens_details.thinking_tokens` when reported. `cacheCreationTokens`
  * stays as a documented alias of `cacheWriteTokens` through 0.6.x (0.5 events
  * carried it next to an UNCACHED `inputTokens` — readers recompute those).
  */
@@ -158,12 +161,14 @@ export function mapUsage(usage: UsageLike | undefined | null): WireUsage | undef
     (split !== null && typeof split === 'object'
       ? sumReported(tokenCount(split.ephemeral_5m_input_tokens), tokenCount(split.ephemeral_1h_input_tokens))
       : undefined);
+  const details = usage.output_tokens_details;
   return makeUsage(
     {
       input: sumReported(uncached, cacheRead, cacheWrite),
       output: tokenCount(usage.output_tokens),
       cacheRead,
       cacheWrite,
+      reasoning: details !== null && typeof details === 'object' ? tokenCount(details.thinking_tokens) : undefined,
     },
     { cacheCreationTokens: cacheWrite },
   );
@@ -198,6 +203,11 @@ export function mergeUsage(
       const value = split[key];
       if (typeof value === 'number') merged.cache_creation[key] = value;
     }
+  }
+  // Cumulative on message_delta, like output_tokens.
+  const details = next.output_tokens_details;
+  if (details !== null && typeof details === 'object' && typeof details.thinking_tokens === 'number') {
+    merged.output_tokens_details = { ...(merged.output_tokens_details ?? {}), thinking_tokens: details.thinking_tokens };
   }
   return merged;
 }

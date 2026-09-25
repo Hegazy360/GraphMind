@@ -15,6 +15,7 @@ import {
   injectedResponse,
   isErrorResult,
   parseFrame,
+  spliceParamsArguments,
 } from '../src/mcp-proxy/jsonrpc.js';
 import { commandLabel, mapMethod, otherSide } from '../src/mcp-proxy/mapping.js';
 import { FrameRelay, FORWARD, type FrameAction } from '../src/mcp-proxy/relay.js';
@@ -148,6 +149,38 @@ describe('JSON-RPC classification', () => {
     };
     expect(frame.error.code).toBe(-32099);
     expect([-32000, -32001, -32042]).not.toContain(frame.error.code);
+  });
+});
+
+describe('spliceParamsArguments', () => {
+  const text = (b: Buffer | undefined): string | undefined => b?.toString('utf8');
+
+  it('replaces only params.arguments: an id above 2^53, _meta numbers, spacing and escapes keep their bytes', () => {
+    const before =
+      '{"jsonrpc":"2.0", "id":9007199254740993,"method":"tools/call","params":{"name":"n\\u0061me","arguments": {"a":1, "b":[1,2]} ,"_meta":{"progressToken":1e400,"x":"}{\\""}}}';
+    const after =
+      '{"jsonrpc":"2.0", "id":9007199254740993,"method":"tools/call","params":{"name":"n\\u0061me","arguments": {"a":2} ,"_meta":{"progressToken":1e400,"x":"}{\\""}}}';
+    expect(text(spliceParamsArguments(buf(before), { a: 2 }))).toBe(after);
+  });
+
+  it('adds missing arguments at the end of params; replaces the LAST of duplicate keys (what JSON.parse reads)', () => {
+    expect(text(spliceParamsArguments(buf('{"id":1,"params":{"name":"t"}}'), { q: 'x' }))).toBe(
+      '{"id":1,"params":{"name":"t","arguments":{"q":"x"}}}',
+    );
+    expect(text(spliceParamsArguments(buf('{"id":1,"params":{ }}'), {}))).toBe('{"id":1,"params":{ "arguments":{}}}');
+    expect(text(spliceParamsArguments(buf('{"params":{"arguments":1,"arguments":{"a":1}}}'), { a: 2 }))).toBe(
+      '{"params":{"arguments":1,"arguments":{"a":2}}}',
+    );
+    expect(text(spliceParamsArguments(buf('{"params":{"x":1},"params":{"arguments":{}}}'), { a: 1 }))).toBe(
+      '{"params":{"x":1},"params":{"arguments":{"a":1}}}',
+    );
+  });
+
+  it('is undefined for a frame it cannot splice into', () => {
+    expect(spliceParamsArguments(buf('[1,2]'), {})).toBeUndefined();
+    expect(spliceParamsArguments(buf('{"params":[1]}'), {})).toBeUndefined();
+    expect(spliceParamsArguments(buf('{"params":{"a":}}'), {})).toBeUndefined();
+    expect(spliceParamsArguments(buf('{"params":{}}'), undefined)).toBeUndefined();
   });
 });
 

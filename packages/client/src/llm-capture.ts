@@ -11,8 +11,11 @@
  *    does not parse (the truncated-by-max-tokens case).
  *  - `captureTools`: `tools: [{name, schemaHash}]` for `node.started.input`,
  *    plus `toolSchemas: {hash: definition}` the first time a definition is
- *    seen in a run. The hash is SHA-256 of the canonical JSON (sorted keys,
- *    the loop guard's canon) of the definition, first 16 hex chars. The
+ *    seen in a run. A definition is recorded (and hashed) as
+ *    `sanitizeToolDefinition` leaves it: its schema verbatim, never a
+ *    credential it carries (an OpenAI `type: 'mcp'` tool's `authorization`
+ *    and `headers`). The hash is SHA-256 of the canonical JSON (sorted keys,
+ *    the loop guard's canon) of that definition, first 16 hex chars. The
  *    per-run memory hangs off the session object (bounded: 256 runs x 1024
  *    hashes), so every adapter sharing a session shares it.
  *  - `pickParams`: the sampling parameters actually sent, under the SDK's own
@@ -172,6 +175,29 @@ export interface CapturedTools {
 /** session -> runKey -> hashes already sent. Insertion order = recency. */
 const sentByRun = new WeakMap<object, Map<string, Set<string>>>();
 
+/** A returned `toolSchemas` object -> the run memory its hashes were added to. */
+const pendingSchemas = new WeakMap<object, { sent: Set<string>; hashes: string[] }>();
+
+/**
+ * The definitions in `toolSchemas` (a `captureTools` result's, as it sits in
+ * a `node.started.input`) did NOT reach the wire whole — the session's
+ * payload budget shrank that event (which empties every array inside them:
+ * `required: []`), or the event was dropped. Forget that the run was sent
+ * them, so its next step that uses them sends them again, intact. The
+ * session calls this; anything else is ignored. Never throws.
+ */
+export function releaseToolSchemas(toolSchemas: unknown): void {
+  try {
+    if (typeof toolSchemas !== 'object' || toolSchemas === null) return;
+    const pending = pendingSchemas.get(toolSchemas);
+    if (pending === undefined) return;
+    pendingSchemas.delete(toolSchemas);
+    for (const hash of pending.hashes) pending.sent.delete(hash);
+  } catch {
+    // bookkeeping only
+  }
+}
+
 function runMemory(owner: object, runKey: string): Set<string> {
   let runs = sentByRun.get(owner);
   if (runs === undefined) {
@@ -195,8 +221,8 @@ function runMemory(owner: object, runKey: string): Set<string> {
 
 /**
  * The `tools` / `toolSchemas` fields for one LLM step. `describe` names a
- * definition (undefined skips it); the whole definition is what is hashed and
- * sent. `owner` is the session (the memory's scope) and `runKey` the run the
+ * definition (undefined skips it); the definition as `sanitizeToolDefinition`
+ * leaves it is what is hashed and sent. `owner` is the session (the memory's scope) and `runKey` the run the
  * step belongs to. Undefined when there is nothing to record. Never throws.
  */
 export function captureTools(
@@ -218,19 +244,108 @@ export function captureTools(
         name = undefined;
       }
       if (name === undefined) continue;
-      const hash = schemaHash(definition);
+      // What is hashed is what is recorded: never a credential (see
+      // sanitizeToolDefinition).
+      const recorded = sanitizeToolDefinition(definition);
+      const hash = schemaHash(recorded);
       tools.push({ name, schemaHash: hash });
       if (sent.has(hash)) continue;
       if (sent.size >= MAX_SCHEMA_HASHES_PER_RUN) sent.clear();
       sent.add(hash);
       toolSchemas ??= {};
-      toolSchemas[hash] = definition;
+      toolSchemas[hash] = recorded;
     }
     if (tools.length === 0) return undefined;
-    return toolSchemas === undefined ? { tools } : { tools, toolSchemas };
+    if (toolSchemas === undefined) return { tools };
+    pendingSchemas.set(toolSchemas, { sent, hashes: Object.keys(toolSchemas) });
+    return { tools, toolSchemas };
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Keys of a tool definition that hold its SCHEMA: recorded verbatim, since a
+ * schema's property names are the tool's parameter names (a tool may well
+ * take a `token` argument) and the schema is what `toolSchemas` is for.
+ */
+export const TOOL_SCHEMA_KEYS: readonly string[] = Object.freeze([
+  'parameters',
+  'input_schema',
+  'inputSchema',
+  'output_schema',
+  'outputSchema',
+  'schema',
+  'format',
+]);
+
+/**
+ * A key of a tool definition (outside its schema) that may carry a
+ * credential or transport configuration — OpenAI's `type: 'mcp'` tool
+ * `authorization` and `headers`, the AI SDK's `openai.mcp` provider-tool
+ * args, a connector's `api_key`. Never recorded.
+ */
+export const TOOL_SECRET_KEY_RE =
+  /authori[sz]ation|header|token|secret|passw(?:or)?d|key|cookie|credential|bearer/i;
+
+/** A key naming a URL: its value is recorded without userinfo, query or fragment. */
+const TOOL_URL_KEY_RE = /url$/i;
+
+/** Deeper than this (outside a schema), a tool definition's value is not recorded. */
+const MAX_TOOL_DEFINITION_DEPTH = 16;
+
+const URL_USERINFO_RE = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/?#@]*@/;
+
+/** `scheme://user:pass@host/path?query#fragment` -> `scheme://host/path`. */
+function withoutUrlSecrets(url: string): string {
+  let cut = url.length;
+  const query = url.indexOf('?');
+  const fragment = url.indexOf('#');
+  if (query !== -1) cut = query;
+  if (fragment !== -1 && fragment < cut) cut = fragment;
+  return url.slice(0, cut).replace(URL_USERINFO_RE, '$1');
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function sanitizeDefinitionValue(value: unknown, depth: number): unknown {
+  if (Array.isArray(value)) {
+    if (depth >= MAX_TOOL_DEFINITION_DEPTH) return [];
+    return value.map((item) => sanitizeDefinitionValue(item, depth + 1));
+  }
+  if (!isPlainRecord(value)) return value;
+  if (depth >= MAX_TOOL_DEFINITION_DEPTH) return {};
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    const item = value[key];
+    if (TOOL_SCHEMA_KEYS.includes(key)) {
+      out[key] = item;
+    } else if (TOOL_SECRET_KEY_RE.test(key)) {
+      continue;
+    } else if (typeof item === 'string' && TOOL_URL_KEY_RE.test(key)) {
+      out[key] = withoutUrlSecrets(item);
+    } else {
+      out[key] = sanitizeDefinitionValue(item, depth + 1);
+    }
+  }
+  return out;
+}
+
+/**
+ * A tool definition as it is hashed and recorded in `toolSchemas`: the
+ * schema keys (TOOL_SCHEMA_KEYS) verbatim, every key matching
+ * TOOL_SECRET_KEY_RE dropped at any depth outside them (an OpenAI Responses
+ * `type: 'mcp'` tool's `authorization` / `headers`, an AI SDK provider
+ * tool's `args.authorization`), and a `*url` value cut to
+ * `scheme://host/path`. A function tool is unchanged. Shared with the Python
+ * and Ruby ports through the conformance fixture.
+ */
+export function sanitizeToolDefinition(definition: unknown): unknown {
+  return sanitizeDefinitionValue(definition, 0);
 }
 
 /** Forget what a session was sent (tests). */

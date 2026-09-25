@@ -93,6 +93,8 @@ interface RequestEdit {
   /** Read at validation time; undefined, or no schema there: the merged edit runs as it is. */
   schema?: (() => unknown) | undefined;
   invokeWith: (extra: RequestTrailer | undefined, args: unknown) => unknown;
+  /** `live` is the SDK's parsed copy of the arguments (see GateFlowEdit.parsed). */
+  parsed?: boolean | undefined;
 }
 
 /** A check that reads the tool's schema when an edit arrives (it may have been updated). */
@@ -329,6 +331,9 @@ function wrapHandlerCallback(
       shape === 'tool' && extra !== undefined && handlerArgs.length >= 1 && isEditableToolInput(handlerArgs[0])
         ? {
             live: handlerArgs[0],
+            // McpServer parsed the client's arguments with this schema
+            // (validateToolInput) before calling back.
+            parsed: true,
             schema: () => (ref.registration as { inputSchema?: unknown } | undefined)?.inputSchema,
             invokeWith: (nextExtra, edited) =>
               original.apply(
@@ -542,6 +547,7 @@ async function runInstrumentedRequest(
                 live: edit.live,
                 check: lazySchemaCheck(edit.schema),
                 invokeWith: (args) => edit.invokeWith(handlerExtra, args),
+                parsed: edit.parsed,
               },
         reportResult: descriptor.kind === 'tool',
       });

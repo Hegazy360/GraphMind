@@ -206,12 +206,25 @@ after-gate detectors (smart holds); it is never sent through this option.
 
 Tool wrappers build these options with `toolGateOptions(session, edit, {result})`
 (undefined while detached, so the detached path is untouched), read an accepted
-edit with `editedArgs(decision)`, and check the merged arguments with
+edit with `editedArgs(decision)` (`args`: what runs — the schema's parsed
+output; `input`: the merged arguments as the schema takes them), and check the merged arguments with
 `toolSchemaCheck(schema)` — zod `safeParseAsync`/`safeParse`, any Standard
 Schema, or a plain JSON Schema through `checkJsonSchemaLite`, a conservative
 checker that refuses only what the schema clearly forbids and never evaluates
 `pattern`. Refusal messages come from `describeIssues`: the field and the
 problem, never the value (a validator's own message is never used).
+
+A schema's transforms must never run twice on arguments the user did not
+touch (a `dollars -> cents` transform applied again is a charge 100 times too
+large). So a `ToolEdit` says how its arguments relate to the schema: `parsed`
+when the host already parsed the model's arguments before the tool got them
+(AI SDK `execute`, an McpServer callback, a LangChain `tool()` func) — the edit
+is then merged into `input`, the raw arguments, when the host still has them,
+and otherwise accepted only when the schema leaves the parsed arguments
+unchanged or every argument is given (else `unsupported`, gate held); and
+`runMerged` when the code that receives the arguments parses them itself (an
+OpenAI loop's function), so the merged arguments run and the schema only
+judges them.
 
 ### Smart holds and loop kinds (0.6.0)
 

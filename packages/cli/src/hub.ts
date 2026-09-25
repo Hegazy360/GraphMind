@@ -188,13 +188,18 @@ function stripHubStamps(payload: unknown): unknown {
   return copy;
 }
 
+/** The client capability that says it echoes `exec.resume.requestId`. */
+const CLIENT_CAPABILITY_REQUEST_ID = 'request-id';
+
 /**
- * A client that announced `edit-input` speaks the 0.6 protocol, which echoes
- * `exec.resume.requestId` on its answer — so its answer without one was not
- * an answer to anybody's resume (see PauseRegistry, "Correlation").
+ * A client that echoes `exec.resume.requestId` on its answer — so its answer
+ * without one was not an answer to anybody's resume (see PauseRegistry,
+ * "Correlation"). It says so with `request-id`, whatever its edit kill switch
+ * (GRAPHMIND_DISABLE_EDIT_INPUT drops only `edit-input` from its hello); a
+ * client that announced `edit-input` speaks the 0.6 protocol, which echoes too.
  */
 function echoesRequestIds(conn: IngestConn): boolean {
-  return conn.capabilities.has(HUB_CAPABILITY_EDIT_INPUT);
+  return conn.capabilities.has(CLIENT_CAPABILITY_REQUEST_ID) || conn.capabilities.has(HUB_CAPABILITY_EDIT_INPUT);
 }
 
 /** HTTP-ish status for an outcome: used by the REST endpoint and in tests. */

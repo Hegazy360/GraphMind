@@ -44,6 +44,13 @@ export const KNOWN_CAPABILITIES = [
    * where its `exec.paused` says `editable` (0.6.0+).
    */
   'edit-input',
+  /**
+   * The client echoes `exec.resume.requestId` on the `exec.resumed` /
+   * `exec.refused` that answers it (0.6.0+) — announced whatever
+   * GRAPHMIND_DISABLE_EDIT_INPUT says, so the debugger can tell a release
+   * that answered nobody (a pause timeout) from one that answered a resume.
+   */
+  'request-id',
 ] as const;
 
 export type KnownCapability = (typeof KNOWN_CAPABILITIES)[number];

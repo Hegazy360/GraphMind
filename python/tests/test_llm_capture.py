@@ -29,6 +29,7 @@ from graphmind.llm_capture import (
     pick_params,
     record_value,
     reset_tool_schema_memory,
+    sanitize_tool_definition,
     schema_hash,
     token_count,
     tool_call,
@@ -82,6 +83,36 @@ def test_schema_hashes(row: dict[str, Any]) -> None:
     assert schema_hash(row["in"]) == row["hash"]
     canonical = canonicalize(row["in"]).encode("utf-8", "surrogatepass")
     assert hashlib.sha256(canonical).hexdigest()[:16] == row["hash"]
+
+
+@pytest.mark.parametrize("row", FIXTURE["toolDefinitions"], ids=lambda r: r["name"])
+def test_tool_definitions_are_recorded_without_credentials(row: dict[str, Any]) -> None:
+    assert sanitize_tool_definition(row["in"]) == row["out"]
+    assert schema_hash(row["out"]) == row["hash"]
+    # capture_tools records exactly that, under exactly that hash.
+    captured = capture_tools(object.__new__(_Owner), "run-1", [row["in"]], lambda _d: "tool")
+    assert captured == {"tools": [{"name": "tool", "schemaHash": row["hash"]}], "toolSchemas": {row["hash"]: row["out"]}}
+
+
+def test_an_openai_mcp_tool_never_records_its_token() -> None:
+    stripe = {
+        "type": "mcp",
+        "server_label": "stripe",
+        "server_url": "https://mcp.stripe.com",
+        "authorization": "sk_live_OAUTH_TOKEN_SECRET_2",
+        "headers": {"Authorization": "Bearer sk_live_HEADER_SECRET_2"},
+        "require_approval": "never",
+    }
+    captured = capture_tools(object.__new__(_Owner), "run-1", [stripe])
+    assert captured is not None
+    assert captured["tools"][0]["name"] == "mcp"
+    recorded = json.dumps(captured)
+    assert "sk_live_OAUTH_TOKEN_SECRET_2" not in recorded
+    assert "sk_live_HEADER_SECRET_2" not in recorded
+
+
+class _Owner:
+    """A weakly referenceable stand-in for a session."""
 
 
 @pytest.mark.parametrize("case", USAGE_CASES, ids=_label)
@@ -152,6 +183,32 @@ def test_the_anthropic_accumulator_merges_raw_pieces() -> None:
         "inclusive": True,
         "cacheReadTokens": 4000,
         "cacheWriteTokens": 500,
+    }
+
+
+def test_anthropic_thinking_tokens_are_the_reasoning_count() -> None:
+    from anthropic.types import Usage
+
+    # The SDK object (anthropic-python 1.x types output_tokens_details).
+    sdk = Usage.model_validate(
+        {"input_tokens": 100, "output_tokens": 900, "output_tokens_details": {"thinking_tokens": 420}}
+    )
+    assert anthropic_usage(sdk) == {
+        "inputTokens": 100,
+        "outputTokens": 900,
+        "inclusive": True,
+        "reasoningTokens": 420,
+    }
+    # Streamed: message_delta carries the cumulative count.
+    acc = AnthropicUsageAccumulator()
+    acc.add({"input_tokens": 12, "output_tokens": 1, "output_tokens_details": None})
+    acc.add({"output_tokens": 700, "output_tokens_details": {"thinking_tokens": 420}})
+    acc.add({"output_tokens": 710})
+    assert acc.usage() == {
+        "inputTokens": 12,
+        "outputTokens": 710,
+        "inclusive": True,
+        "reasoningTokens": 420,
     }
 
 
@@ -299,6 +356,92 @@ def test_openai_chat_records_the_request_and_a_truncated_tool_call(
     _all_valid(viewer, validate_frame)
 
 
+def test_openai_chat_streamed_custom_tool_call_is_recorded_like_the_non_streaming_one(
+    attached: Any, validate_frame: Any
+) -> None:
+    instance, viewer = attached()
+    patch = "*** Begin Patch\n*** Update File: a.txt\n-old\n+new\n*** End Patch"
+    base = {"id": "c1", "object": "chat.completion.chunk", "created": 1, "model": "gpt-5"}
+
+    def choice(delta: dict[str, Any], finish: str | None = None) -> dict[str, Any]:
+        return {**base, "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+
+    chunks = [
+        choice({"role": "assistant", "content": None}),
+        choice({"tool_calls": [{"index": 0, "id": "call_c1", "type": "custom",
+                                "custom": {"name": "apply_patch", "input": ""}}]}),
+        *[choice({"tool_calls": [{"index": 0, "custom": {"input": patch[i : i + 6]}}]})
+          for i in range(0, len(patch), 6)],
+        choice({}, "tool_calls"),
+    ]
+    body = sse(chunks)
+    client, _ = make_openai(
+        lambda request, recorder: __import__("httpx").Response(
+            200, headers={"content-type": "text/event-stream"}, content=body
+        )
+    )
+    instance.instrument_openai(client)
+    with instance.run("agent"):
+        stream = client.chat.completions.create(
+            model="gpt-5", messages=[{"role": "user", "content": "patch it"}], stream=True
+        )
+        for _ in stream:
+            pass
+    output = _finished(viewer)["payload"]["output"]
+    assert output["finishReason"] == "tool-calls"
+    assert output["toolCalls"] == [{"id": "call_c1", "name": "apply_patch", "input": patch}]
+    streamed = "".join(
+        delta["v"]
+        for f in viewer.frames()
+        if f.get("type") == "node.token"
+        for delta in f["payload"]["deltas"]
+        if delta.get("t") == "tool-args"
+    )
+    assert streamed == patch
+    _all_valid(viewer, validate_frame)
+
+
+def test_openai_refusals_normalize_to_content_filter(attached: Any, validate_frame: Any) -> None:
+    instance, viewer = attached()
+    httpx = __import__("httpx")
+    completion = {
+        "id": "c1", "object": "chat.completion", "created": 1, "model": "gpt-5",
+        "choices": [{"index": 0, "finish_reason": "stop",
+                     "message": {"role": "assistant", "content": None, "refusal": "I cannot help."}}],
+    }
+    base = {"id": "c2", "object": "chat.completion.chunk", "created": 1, "model": "gpt-5"}
+    chunks = [
+        {**base, "choices": [{"index": 0, "delta": {"refusal": "I cannot"}, "finish_reason": None}]},
+        {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+    ]
+    responses = [
+        httpx.Response(200, json=completion),
+        httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse(chunks)),
+    ]
+    client, _ = make_openai(lambda request, recorder: responses.pop(0))
+    instance.instrument_openai(client)
+    with instance.run("agent"):
+        client.chat.completions.create(model="gpt-5", messages=[{"role": "user", "content": "x"}])
+        for _ in client.chat.completions.create(
+            model="gpt-5", messages=[{"role": "user", "content": "y"}], stream=True
+        ):
+            pass
+    viewer.wait_for(
+        lambda f: sum(
+            1 for g in viewer.frames()
+            if g.get("type") == "node.finished" and g["payload"]["nodeId"] == "llm:step"
+        ) >= 2
+    )
+    outputs = [
+        f["payload"]["output"] for f in viewer.frames()
+        if f.get("type") == "node.finished" and f["payload"]["nodeId"] == "llm:step"
+    ]
+    for output in outputs:
+        assert output["finishReason"] == "content-filter"
+        assert output["rawFinishReason"] == "stop"
+    _all_valid(viewer, validate_frame)
+
+
 def test_anthropic_stream_usage_is_inclusive_and_a_cut_tool_use_keeps_its_text(
     attached: Any, validate_frame: Any
 ) -> None:
@@ -357,6 +500,53 @@ def test_anthropic_stream_usage_is_inclusive_and_a_cut_tool_use_keeps_its_text(
         {"id": "toolu_ok", "name": "ls", "input": {}},
         {"id": "toolu_cut", "name": "write", "input": None, "inputText": '{"path":"a'},
     ]
+    _all_valid(viewer, validate_frame)
+
+
+def test_a_step_shrunk_by_the_budget_does_not_use_up_the_runs_intact_tool_definition(
+    attached: Any, validate_frame: Any
+) -> None:
+    instance, viewer = attached()
+    message = {
+        "id": "m", "type": "message", "role": "assistant", "model": "claude-test",
+        "content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn",
+        "stop_sequence": None, "usage": {"input_tokens": 5, "output_tokens": 1},
+    }
+    client, _ = make_anthropic(lambda request, recorder: ANTHROPIC_HTTPX.Response(200, json=message))
+    instance.instrument_anthropic(client)
+    run_sql = {
+        "name": "run_sql",
+        "description": "Run a read-only SQL query",
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}, "limit": {"type": "integer", "enum": [10, 100]}},
+            "required": ["query"],
+        },
+    }
+    big_document = "lorem ipsum dolor sit amet " * 24_000  # ~650 KB > the 512 KB budget
+    with instance.run("agent"):
+        for content in (f"Summarise:\n{big_document}", "Now count the rows.", "And again."):
+            client.messages.create(
+                model="claude-test", max_tokens=64, messages=[{"role": "user", "content": content}],
+                tools=[run_sql],
+            )
+    viewer.wait_for(
+        lambda f: sum(
+            1 for g in viewer.frames()
+            if g.get("type") == "node.finished" and g["payload"]["nodeId"] == "llm:step"
+        ) >= 3
+    )
+    started = [
+        f["payload"] for f in viewer.frames()
+        if f.get("type") == "node.started" and f["payload"]["nodeId"] == "llm:step"
+    ]
+    digest = schema_hash(run_sql)
+    # Step 1 was shrunk (its arrays emptied), so step 2 sends the definition
+    # again, intact; step 3 only references it.
+    assert started[0].get("__graphmindTruncated") is True
+    assert started[1]["input"]["tools"] == [{"name": "run_sql", "schemaHash": digest}]
+    assert started[1]["input"]["toolSchemas"] == {digest: run_sql}
+    assert "toolSchemas" not in started[2]["input"]
     _all_valid(viewer, validate_frame)
 
 

@@ -51,6 +51,53 @@ class TestLlmCapture < Minitest::Test
     end
   end
 
+  def test_tool_definitions_are_recorded_without_credentials
+    refute_empty FIXTURE["toolDefinitions"]
+    FIXTURE["toolDefinitions"].each do |row|
+      assert_equal row["out"], S.sanitize_tool_definition(row["in"]), row["name"]
+      assert_equal row["hash"], S.schema_hash(row["out"]), row["name"]
+      # capture_tools records exactly that, under exactly that hash.
+      captured = S.capture_tools(Object.new, "run-1", [row["in"]]) { "tool" }
+      assert_equal({ "tools" => [{ "name" => "tool", "schemaHash" => row["hash"] }],
+                     "toolSchemas" => { row["hash"] => row["out"] } }, captured, row["name"])
+    end
+  end
+
+  def test_an_openai_mcp_tool_never_records_its_token
+    stripe = { type: "mcp", server_label: "stripe", server_url: "https://mcp.stripe.com",
+               authorization: "sk_live_OAUTH_TOKEN_SECRET_2",
+               headers: { "Authorization" => "Bearer sk_live_HEADER_SECRET_2" }, require_approval: "never" }
+    captured = S.capture_tools(Object.new, "run-1", [stripe])
+    assert_equal "mcp", captured["tools"][0]["name"]
+    recorded = JSON.generate(captured)
+    refute_includes recorded, "sk_live_OAUTH_TOKEN_SECRET_2"
+    refute_includes recorded, "sk_live_HEADER_SECRET_2"
+  end
+
+  def test_a_step_shrunk_by_the_budget_does_not_use_up_the_runs_intact_tool_definition
+    session, viewer = attached_session
+    run_sql = { "name" => "run_sql", "description" => "Run a read-only SQL query",
+                "input_schema" => { "type" => "object",
+                                    "properties" => { "query" => { "type" => "string" },
+                                                      "limit" => { "type" => "integer", "enum" => [10, 100] } },
+                                    "required" => ["query"] } }
+    big_document = "lorem ipsum dolor sit amet " * 24_000 # ~650 KB > the 512 KB budget
+    session.run("agent") do |run|
+      ["Summarise:\n#{big_document}", "Now count the rows.", "And again."].each_with_index do |prompt, i|
+        input = { "prompt" => prompt }.merge(S.capture_tools(session, run.run_id, [run_sql]))
+        session.start_node(node_id: "llm:step", kind: "llm", name: "step", instance_id: "s#{i}", input: input)
+      end
+    end
+    started = viewer.wait_for_frame("node.started", count: 3).select { |f| f["payload"]["nodeId"] == "llm:step" }
+    digest = S.schema_hash(run_sql)
+    # Step 1 was shrunk (its arrays emptied), so step 2 sends the definition
+    # again, intact; step 3 only references it.
+    assert_equal true, started[0]["payload"]["__graphmindTruncated"]
+    assert_equal [{ "name" => "run_sql", "schemaHash" => digest }], started[1]["payload"]["input"]["tools"]
+    assert_equal({ digest => run_sql }, started[1]["payload"]["input"]["toolSchemas"])
+    refute started[2]["payload"]["input"].key?("toolSchemas")
+  end
+
   def test_openai_usage
     { "openai-chat" => :openai_chat_usage, "openai-responses" => :openai_responses_usage }.each do |provider, mapper|
       cases = FIXTURE["usage"].select { |c| c["provider"] == provider }
@@ -210,6 +257,53 @@ class TestLlmCapture < Minitest::Test
                    "finishReason" => "tool-calls", "rawFinishReason" => "tool_calls", "streamed" => true }, output)
     assert_equal({ "usage" => { "inputTokens" => 9, "outputTokens" => 2, "inclusive" => true, "cacheReadTokens" => 4 } },
                  Graphmind::Integrations::RubyOpenAI.extra_for({}, stream))
+  end
+
+  def test_ruby_openai_streamed_custom_tool_call_is_recorded_like_a_non_streamed_one
+    skip("ruby-openai is not installed") unless LLM_CAPTURE_OPENAI
+    patch = "*** Begin Patch\n*** Update File: a.txt\n-old\n+new\n*** End Patch"
+    stream = Graphmind::Integrations::RubyOpenAI::StreamState.new
+    stream.observe({ "choices" => [{ "delta" => { "tool_calls" => [
+                     { "index" => 0, "id" => "call_c1", "type" => "custom",
+                       "custom" => { "name" => "apply_patch", "input" => "" } }
+                   ] } }] })
+    patch.chars.each_slice(6).map(&:join).each do |piece|
+      stream.observe({ "choices" => [{ "delta" => { "tool_calls" => [{ "index" => 0, "custom" => { "input" => piece } }] } }] })
+    end
+    stream.observe({ "choices" => [{ "delta" => {}, "finish_reason" => "tool_calls" }] })
+    output = Graphmind::Integrations::RubyOpenAI.summarize_response({}, stream)
+    assert_equal [{ "id" => "call_c1", "name" => "apply_patch", "input" => patch }], output["toolCalls"]
+    assert_equal "tool-calls", output["finishReason"]
+  end
+
+  def test_ruby_openai_responses_custom_tool_call_item_is_recorded
+    skip("ruby-openai is not installed") unless LLM_CAPTURE_OPENAI
+    output = Graphmind::Integrations::RubyOpenAI.summarize_response(
+      { "id" => "resp_1", "status" => "completed",
+        "output" => [{ "type" => "custom_tool_call", "call_id" => "call_c1", "name" => "apply_patch",
+                       "input" => "*** Begin Patch" }] }
+    )
+    assert_equal [{ "id" => "call_c1", "name" => "apply_patch", "input" => "*** Begin Patch" }], output["toolCalls"]
+    assert_equal "tool-calls", output["finishReason"]
+  end
+
+  def test_ruby_openai_refusals_normalize_to_content_filter
+    skip("ruby-openai is not installed") unless LLM_CAPTURE_OPENAI
+    mod = Graphmind::Integrations::RubyOpenAI
+    chat = mod.summarize_response(
+      { "choices" => [{ "finish_reason" => "stop",
+                        "message" => { "role" => "assistant", "content" => nil, "refusal" => "I cannot help." } }] }
+    )
+    assert_equal %w[content-filter stop], [chat["finishReason"], chat["rawFinishReason"]]
+    responses = mod.summarize_response(
+      { "id" => "resp_1", "status" => "completed",
+        "output" => [{ "type" => "message", "content" => [{ "type" => "refusal", "refusal" => "I cannot help." }] }] }
+    )
+    assert_equal %w[content-filter completed], [responses["finishReason"], responses["rawFinishReason"]]
+    stream = mod::StreamState.new
+    stream.observe({ "choices" => [{ "delta" => { "refusal" => "I cannot" } }] })
+    stream.observe({ "choices" => [{ "delta" => {}, "finish_reason" => "stop" }] })
+    assert_equal "content-filter", mod.summarize_response({}, stream)["finishReason"]
   end
 
   def test_ruby_openai_responses_incomplete_is_length

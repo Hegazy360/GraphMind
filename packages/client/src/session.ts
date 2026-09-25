@@ -60,6 +60,7 @@ import {
   type ValidationTicket,
 } from './gate-engine.js';
 import { HeldLedger } from './held-ledger.js';
+import { releaseToolSchemas } from './llm-capture.js';
 import {
   LoopGuard,
   UNREADABLE_INPUT,
@@ -449,6 +450,8 @@ class SessionImpl implements Session {
   /** Which smart breakpoints are on (option > env > on); see smart.ts. */
   private readonly smartBreakpoints: ResolvedSmartBreakpoints;
   private readonly als = new AsyncLocalStorage<RunContext>();
+  /** The last serialized payload was shrunk or degraded (see serializeWithinBudget). */
+  private lastPayloadShrunk = false;
   private readonly newPauseId = makeCounterIds('pause');
 
   private readonly appName: string;
@@ -677,10 +680,15 @@ class SessionImpl implements Session {
       // call right before" the next one, so it clears its kind's streak
       // (rule 3), and a hold's firstSeq/lastSeq always name an emitted event.
       let seq: number | undefined;
+      this.lastPayloadShrunk = false;
       try {
         seq = this.emitInternal(type, payload, runId);
       } finally {
         this.noteNodeStarted(payload as EventPayloadMap['node.started'], runId, seq);
+        // Tool definitions go out once per run (llm-capture): ones that did
+        // not reach the wire whole — the budget shrank this event (emptying
+        // their arrays) or it was dropped — must be sent again next step.
+        if (seq === undefined || this.lastPayloadShrunk) this.releaseToolSchemasOf(payload);
       }
     });
   }
@@ -1389,6 +1397,18 @@ class SessionImpl implements Session {
     return seq;
   }
 
+  /** The `input.toolSchemas` of a node.started the adapter built (see llm-capture). */
+  private releaseToolSchemasOf(payload: unknown): void {
+    try {
+      const input = (payload as { input?: unknown } | null)?.input;
+      if (typeof input === 'object' && input !== null) {
+        releaseToolSchemas((input as { toolSchemas?: unknown }).toolSchemas);
+      }
+    } catch {
+      // a payload that cannot be read carried nothing to release
+    }
+  }
+
   /**
    * Serialize an event envelope with its payload held to the protocol's
    * payload budget (MAX_PAYLOAD_BYTES, 512 KB of UTF-8 JSON).
@@ -1429,6 +1449,7 @@ class SessionImpl implements Session {
     try {
       json = serializeEnvelope(envelope);
     } catch (error) {
+      this.lastPayloadShrunk = true;
       // A cycle, a BigInt, or JSON longer than the engine's maximum string
       // length. Here the payload only has to become serializable — and, with
       // its type, stay a valid event; the budget is applied below, to the
@@ -1459,6 +1480,7 @@ class SessionImpl implements Session {
     const wirePayload = (JSON.parse(json) as { payload?: unknown }).payload;
     const shrunk = serializePayload(wirePayload, MAX_PAYLOAD_BYTES, type);
     if (!shrunk.truncated) return json;
+    this.lastPayloadShrunk = true;
     const bytes = (shrunk.payload as { bytes?: unknown }).bytes;
     const size = typeof bytes === 'number' ? bytes : 'unknown';
     const shrunkEnvelope = { ...envelope, payload: shrunk.payload as never };
@@ -1660,7 +1682,8 @@ class SessionImpl implements Session {
   private buildHello(): string {
     const payload: MessagePayloadMap['hello'] = {
       versions: { protocol: PROTOCOL_VERSION, client: CLIENT_VERSION },
-      // `edit-input` unless GRAPHMIND_DISABLE_EDIT_INPUT is on (C2 condition a).
+      // `edit-input` unless GRAPHMIND_DISABLE_EDIT_INPUT is on (C2 condition a);
+      // `request-id` always: every resume's requestId is echoed either way.
       capabilities: this.editInputEnabled
         ? [...KNOWN_CAPABILITIES]
         : KNOWN_CAPABILITIES.filter((capability) => capability !== 'edit-input'),

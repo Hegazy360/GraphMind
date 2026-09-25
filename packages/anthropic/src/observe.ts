@@ -122,12 +122,15 @@ export class StepReporter {
     return false;
   }
 
-  /** Report a failed step. Aborts are terminal, not errors. */
-  fail(error: unknown, output?: unknown): void {
+  /**
+   * Report a failed step. Aborts are terminal, not errors. `usage` is what the
+   * stream reported before it failed (message_start's billed prompt): kept.
+   */
+  fail(error: unknown, output?: unknown, usage?: UsageLike): void {
     if (this.settled) return;
     const aborted = isAbortError(error) || this.ctx?.signal.aborted === true;
     if (!aborted) this.core.errorNode(LLM_NODE_ID, this.instanceId, error);
-    this.finish(output, undefined, aborted ? 'aborted' : 'error');
+    this.finish(output, usage, aborted ? 'aborted' : 'error');
   }
 
   /**
@@ -421,10 +424,10 @@ async function* teeIterator(
       yield event;
     }
     await gateOnce(); // a stream that ended without `message_stop`
-    if (streamError !== undefined) reporter.fail(streamError, output());
+    if (streamError !== undefined) reporter.fail(streamError, output(), usage);
     else reporter.finish(output(), usage, reporter.endStatus());
   } catch (error) {
-    reporter.fail(error, output());
+    reporter.fail(error, output(), usage);
     throw error; // the host's own error — always propagates untouched
   } finally {
     // The host broke out early (or threw): the step is over either way.

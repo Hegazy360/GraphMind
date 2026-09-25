@@ -20,8 +20,9 @@ module Graphmind
     #   tool_call        {id?, name, input, inputText?} — inputText only when the
     #                    argument text does not parse
     #   capture_tools    tools: [{name, schemaHash}], each definition sent once
-    #                    per run as toolSchemas (sha256 of canonical JSON, 16 hex)
-    #   pick_params      the allow-listed sampling parameters actually sent
+    #                    per run as toolSchemas (sha256 of canonical JSON, 16 hex),
+    #                    as sanitize_tool_definition leaves it (never a credential)
+    #   pick_params     the allow-listed sampling parameters actually sent
     #   record           a prompt made JSON-safe in FULL: no message-count or
     #                    length trim (the session's 512 KB shrink is the bound)
     module Support
@@ -29,7 +30,7 @@ module Graphmind
       MAX_CONTENT_CHARS = 2000
 
       FINISH_REASON_MAP = {
-        "stop" => "stop", "end_turn" => "stop", "stop_sequence" => "stop", "pause_turn" => "stop",
+        "stop" => "stop", "end_turn" => "stop", "stop_sequence" => "stop", "pause_turn" => "other",
         "eos" => "stop", "eos_token" => "stop", "complete" => "stop", "completed" => "stop",
         "finished" => "stop",
         "length" => "length", "max_tokens" => "length", "max_output_tokens" => "length",
@@ -61,6 +62,16 @@ module Graphmind
       MAX_SCHEMA_RUNS = 256
       MAX_SCHEMA_HASHES_PER_RUN = 1024
       MAX_RECORD_DEPTH = 64
+
+      # Keys of a tool definition that hold its SCHEMA: recorded verbatim (a
+      # schema's property names are the tool's parameter names).
+      TOOL_SCHEMA_KEYS = %w[parameters input_schema inputSchema output_schema outputSchema schema format].freeze
+      # A key of a tool definition (outside its schema) that may carry a
+      # credential or transport configuration: never recorded.
+      TOOL_SECRET_KEY_RE = /authori[sz]ation|header|token|secret|passw(?:or)?d|key|cookie|credential|bearer/i
+      TOOL_URL_KEY_RE = /url\z/i
+      URL_USERINFO_RE = %r{\A([A-Za-z][A-Za-z0-9+.-]*://)[^/?#@]*@}
+      MAX_TOOL_DEFINITION_DEPTH = 16
 
       SCHEMA_MEMORY = ObjectSpace::WeakMap.new
       SCHEMA_LOCK = Mutex.new
@@ -194,9 +205,12 @@ module Graphmind
         mapped == "stop" && has_tool_calls ? "tool-calls" : mapped
       end
 
-      def finish_fields(raw, has_tool_calls)
+      # A `refused` step (OpenAI: a plain stop carrying a refusal) is
+      # content-filter, as Anthropic's `refusal` stop reason is.
+      def finish_fields(raw, has_tool_calls, refused = false)
         out = {}
         normalized = normalize_finish_reason(raw, has_tool_calls)
+        normalized = "content-filter" if refused && normalized == "stop"
         out["finishReason"] = normalized unless normalized.nil?
         raw = raw.name if raw.is_a?(Symbol)
         out["rawFinishReason"] = String.new(raw) if raw.is_a?(String) && !raw.empty?
@@ -252,9 +266,48 @@ module Graphmind
         nil
       end
 
+      # A (JSON-safe) tool definition as it is hashed and recorded: the schema
+      # keys verbatim, every key matching TOOL_SECRET_KEY_RE dropped at any
+      # depth outside them (an OpenAI `type: "mcp"` tool's authorization and
+      # headers), a `*url` value cut to scheme://host/path. A function tool is
+      # unchanged. Held to the fixture's toolDefinitions.
+      def sanitize_tool_definition(definition, depth = 0)
+        case definition
+        when Array
+          return [] if depth >= MAX_TOOL_DEFINITION_DEPTH
+
+          definition.map { |item| sanitize_tool_definition(item, depth + 1) }
+        when Hash
+          return {} if depth >= MAX_TOOL_DEFINITION_DEPTH
+
+          definition.each_with_object({}) do |(key, item), out|
+            next unless key.is_a?(String)
+
+            if TOOL_SCHEMA_KEYS.include?(key)
+              out[key] = item
+            elsif key.match?(TOOL_SECRET_KEY_RE)
+              next
+            elsif item.is_a?(String) && key.match?(TOOL_URL_KEY_RE)
+              out[key] = without_url_secrets(item)
+            else
+              out[key] = sanitize_tool_definition(item, depth + 1)
+            end
+          end
+        else
+          definition
+        end
+      end
+
+      # scheme://user:pass@host/path?query#fragment -> scheme://host/path
+      def without_url_secrets(url)
+        cut = [url.index("?"), url.index("#")].compact.min || url.length
+        url[0, cut].sub(URL_USERINFO_RE) { Regexp.last_match(1) }
+      end
+
       # {"tools" => [...], "toolSchemas" => {...}} for one LLM step, or nil. The
       # block names a definition (default: tool_def_name). The definition is
-      # recorded JSON-safe and hashed in that form. Never raises.
+      # recorded JSON-safe and without credentials (sanitize_tool_definition),
+      # and hashed in that form. Never raises.
       def capture_tools(owner, run_key, definitions, &describe)
         return nil unless definitions.is_a?(Array) && !definitions.empty?
 
@@ -263,6 +316,9 @@ module Graphmind
         schemas = {}
         SCHEMA_LOCK.synchronize do
           sent = run_memory(owner, run_key.to_s)
+          # So the session can hand the hashes back (release_tool_schemas) when
+          # the event carrying them does not reach the wire whole.
+          schemas.instance_variable_set(:@graphmind_sent, sent)
           definitions.each do |definition|
             name = begin
               describe.call(definition)
@@ -271,7 +327,7 @@ module Graphmind
             end
             next if name.nil?
 
-            plain = record(definition)
+            plain = sanitize_tool_definition(record(definition))
             digest = schema_hash(plain)
             tools << { "name" => name, "schemaHash" => digest }
             next if sent.include?(digest)
@@ -286,6 +342,24 @@ module Graphmind
         out = { "tools" => tools }
         out["toolSchemas"] = schemas unless schemas.empty?
         out
+      rescue StandardError
+        nil
+      end
+
+      # The definitions in `tool_schemas` (a capture_tools result's, as it sits
+      # in a node.started input) did NOT reach the wire whole: the payload
+      # budget shrank that event (emptying every array inside them, `required:
+      # []`) or it was dropped. Forget the run was sent them, so its next step
+      # that uses them sends them again, intact. The session calls this. Never
+      # raises.
+      def release_tool_schemas(tool_schemas)
+        return unless tool_schemas.is_a?(Hash) && tool_schemas.instance_variable_defined?(:@graphmind_sent)
+
+        SCHEMA_LOCK.synchronize do
+          sent = tool_schemas.instance_variable_get(:@graphmind_sent)
+          tool_schemas.remove_instance_variable(:@graphmind_sent)
+          tool_schemas.each_key { |digest| sent.delete(digest) } if sent.is_a?(Set)
+        end
       rescue StandardError
         nil
       end

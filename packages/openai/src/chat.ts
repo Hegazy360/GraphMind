@@ -8,13 +8,16 @@
  *   choices[].delta.reasoning_content  -> `reasoning` deltas (OpenAI-compatible
  *                                         reasoning models; absent upstream)
  *   choices[].delta.tool_calls[].function.arguments -> `tool-args` deltas
+ *   choices[].delta.tool_calls[].custom.input       -> `tool-args` deltas (a
+ *                                         custom tool; `openai@7` types it)
  *   choices[].finish_reason            -> reported on node.finished
  *   usage                              -> only present with
  *                                         `stream_options: {include_usage:true}`
  *                                         (the LAST chunk, with empty choices)
  *
- * `node.finished.output` (contract C1): `finishReason` normalized, the API's
- * own `finish_reason` as `rawFinishReason`, and `toolCalls: [{id, name,
+ * `node.finished.output` (contract C1): `finishReason` normalized (a refusal
+ * — `stop` with `message.refusal` — is `content-filter`), the API's own
+ * `finish_reason` as `rawFinishReason`, and `toolCalls: [{id, name,
  * input, inputText?}]`. A function call's arguments are JSON text; when they
  * do not parse (cut off by `length`), `input` is null and `inputText` keeps
  * the text. A custom (freeform) tool's input is text by design and is
@@ -58,8 +61,13 @@ function mapToolCalls(calls: ToolCallLike[] | undefined): RecordedToolCall[] {
 function finishFields(
   raw: string | null | undefined,
   hasToolCalls: boolean,
+  refused = false,
 ): { finishReason?: string; rawFinishReason?: string } {
-  const finishReason = normalizeFinishReason(raw, hasToolCalls);
+  // A refusal arrives as a plain `stop` plus `message.refusal`: normalized as
+  // `content-filter`, as Anthropic's `refusal` stop reason is (the raw value
+  // stays as reported).
+  const normalized = normalizeFinishReason(raw, hasToolCalls);
+  const finishReason = refused && normalized === 'stop' ? 'content-filter' : normalized;
   return {
     ...(finishReason !== undefined ? { finishReason } : {}),
     ...(typeof raw === 'string' && raw.length > 0 ? { rawFinishReason: raw } : {}),
@@ -96,7 +104,11 @@ export const chatFlavor: LlmFlavor = {
         ...(message?.refusal != null ? { refusal: message.refusal } : {}),
         ...(message?.reasoning_content != null ? { reasoning: message.reasoning_content } : {}),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
-        ...finishFields(choice?.finish_reason, toolCalls.length > 0),
+        ...finishFields(
+          choice?.finish_reason,
+          toolCalls.length > 0,
+          typeof message?.refusal === 'string' && message.refusal.length > 0,
+        ),
       },
       usage: mapChatUsage(completion.usage),
       status: 'ok',
@@ -110,11 +122,20 @@ export const chatFlavor: LlmFlavor = {
     let usage = mapChatUsage(undefined);
     let id: string | undefined;
     let model: string | undefined;
-    const toolCalls = new Map<number, { id?: string; name?: string; args: string }>();
-    /** The streamed calls in index order; unparseable (cut-off) args kept as text. */
+    const toolCalls = new Map<number, { id?: string; name?: string; args: string; custom?: boolean }>();
+    /**
+     * The streamed calls in index order; unparseable (cut-off) args kept as
+     * text. A custom tool's input is text by design: recorded as the `input`
+     * string, as the non-streaming mapper does.
+     */
     const collected = (): RecordedToolCall[] => {
       const out: RecordedToolCall[] = [];
       for (const [, entry] of [...toolCalls.entries()].sort((a, b) => a[0] - b[0])) {
+        if (entry.custom === true) {
+          if (typeof entry.name !== 'string' || entry.name.length === 0) continue;
+          out.push({ ...(entry.id !== undefined && entry.id.length > 0 ? { id: entry.id } : {}), name: entry.name, input: entry.args });
+          continue;
+        }
         const call = toolCall(entry.id, entry.name, entry.args);
         if (call !== undefined) out.push(call);
       }
@@ -148,7 +169,10 @@ export const chatFlavor: LlmFlavor = {
             const entry = toolCalls.get(index) ?? { args: '' };
             if (typeof call.id === 'string') entry.id = call.id;
             if (typeof call.function?.name === 'string') entry.name = call.function.name;
-            const args = call.function?.arguments;
+            const custom = call.custom;
+            if (call.type === 'custom' || (custom !== null && typeof custom === 'object')) entry.custom = true;
+            if (typeof custom?.name === 'string') entry.name = custom.name;
+            const args = entry.custom === true ? custom?.input : call.function?.arguments;
             if (typeof args === 'string' && args.length > 0) {
               entry.args += args;
               reporter.token('tool-args', args);
@@ -167,7 +191,7 @@ export const chatFlavor: LlmFlavor = {
           text,
           ...(refusal.length > 0 ? { refusal } : {}),
           ...(observed.length > 0 ? { toolCalls: observed } : {}),
-          ...finishFields(finishReason, observed.length > 0),
+          ...finishFields(finishReason, observed.length > 0, refusal.length > 0),
         },
         reporter.endStatus(),
         usage,
@@ -183,7 +207,7 @@ export const chatFlavor: LlmFlavor = {
           {
             text,
             ...(observed.length > 0 ? { toolCalls: observed } : {}),
-            ...finishFields(finishReason, observed.length > 0),
+            ...finishFields(finishReason, observed.length > 0, refusal.length > 0),
           },
           aborted ? 'aborted' : 'error',
           usage,
