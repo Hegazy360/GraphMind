@@ -257,8 +257,13 @@ ever re-serialized); `retry` at `after` / `error` re-sends that rewritten
 request instead of the original, and a later plain `retry` re-sends what last
 ran. An edit is first checked against the tool's `inputSchema` from the
 server's last `tools/list` (a conservative shape check; with no schema known,
-the server judges), and a refused edit keeps the frame held. A JSON-RPC result
-with `isError: true` holds at the `error` gate, like a thrown error.
+the server judges), and a refused edit keeps the frame held. A tool result
+with `isError: true` goes to the `error` gate with the result, where the
+`error-result` smart hold holds it once (`reason: 'breakpoint'`, `smart.rule:
+'error-result'`) whether or not the error breakpoint is armed
+(`GRAPHMIND_BREAK_ON_ERROR_RESULT=0` turns that off); a JSON-RPC `error` holds
+there only when the error breakpoint is armed. Three identical `isError`
+results of one tool in a row hold its 4th call (`loop.kind: 'error-repeat'`).
 
 `error` is armed by default (see `--pause-on-error`), so a broken MCP server
 holds at the failure with no setup at all. A hold is indistinguishable from a

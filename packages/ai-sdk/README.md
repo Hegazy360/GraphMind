@@ -120,9 +120,9 @@ the viewer is told why (field and problem, never the value). A `jsonSchema()`
 tool without a validator runs the merged arguments as they are (warned once).
 This call only: the model still sees the arguments it asked for. Streaming
 tools can be edited at their `before` gate. Model steps are not editable. The
-`after` gate also passes the tool's result to the session's after-gate
-detectors — the hook smart holds use; the result does not hold the call by
-itself unless a detector is registered.
+`after` gate also passes the tool's result to the smart holds: while a debugger
+is attached, an error-shaped result holds the call there (`smart.rule:
+'error-result'`; `GRAPHMIND_BREAK_ON_ERROR_RESULT=0` turns it off).
 
 **What an abort looks like to your app.** The throw above is what the tool's
 *caller* sees — the SDK's tool-call machinery, or your own code if you invoke

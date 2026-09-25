@@ -143,9 +143,9 @@ passed through unchanged. A tool object carrying its own schema (`parameters`,
 Schema) checks the merged arguments first, and a refused edit keeps the gate
 held; a bare function runs them as merged. This call only: the model still sees
 the arguments it asked for. Model requests are not editable. The `after` gate
-also passes the result to the session's after-gate detectors (the smart-hold
-hook; the result does not hold the call by itself unless a detector is
-registered).
+also passes the result to the smart holds: while a debugger is attached, an
+error-shaped result holds the call there (`smart.rule: 'error-result'`;
+`GRAPHMIND_BREAK_ON_ERROR_RESULT=0` turns it off).
 
 **Gating a model request on error.** When a request fails (a 500, a rate limit,
 a connection error), the `error` gate fires before the SDK's error reaches your

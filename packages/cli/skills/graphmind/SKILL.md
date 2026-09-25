@@ -7,9 +7,11 @@ description: Debug an AI agent (Vercel AI SDK, Anthropic or OpenAI SDK, LangGrap
 
 GraphMind records every agent run (LLM steps, tool calls, errors) into a local
 SQLite database, shows it as a live graph in a browser viewer, and can HOLD the
-agent at a gate (before or after a tool call, on an error, or on a repeating
-loop) until someone resumes it. Everything stays on this machine:
-the server binds 127.0.0.1 only.
+agent at a gate (before or after a tool call, on an error, on a repeating
+loop, and — in TypeScript apps and the MCP proxy — on an error-shaped tool
+result, a tool call cut off by the token limit, the same error again and
+again, or a repeating cycle of calls) until someone resumes it. Everything
+stays on this machine: the server binds 127.0.0.1 only.
 
 You (the coding agent) can drive the holds with four commands: `graphmind
 serve --json`, `graphmind pauses`, `graphmind wait`, `graphmind resume`. The

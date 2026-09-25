@@ -157,8 +157,9 @@ function has no schema, so the merged object is passed as it is — your functio
 is the validator, and a throw lands on the error gate. Calls with a string or
 several arguments are not editable. This call only: the model still sees the
 `tool_use` it produced. Model requests are not editable. The `after` gate also
-passes the result to the session's after-gate detectors (the smart-hold hook;
-the result does not hold the call by itself unless a detector is registered).
+passes the result to the smart holds: while a debugger is attached, an
+error-shaped result holds the call there (`smart.rule: 'error-result'`;
+`GRAPHMIND_BREAK_ON_ERROR_RESULT=0` turns it off).
 
 **Server-executed tools** (`server_tool_use`: web search, web fetch, code
 execution, ...) run on Anthropic's side and cannot be held. They are observed
