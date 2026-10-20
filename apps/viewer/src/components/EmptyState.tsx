@@ -128,6 +128,15 @@ export function EmptyState({
           <a className="gm-action" href="?stress=300" title="Generate a 300-node synthetic run">
             Load a 300-node stress run
           </a>
+          {!connecting && !detached && (
+            <button
+              className="gm-action"
+              onClick={() => useUiStore.getState().setPage('build')}
+              title="Describe an agent, get the instrumented code in your language, create and run it from here"
+            >
+              Build a workflow
+            </button>
+          )}
         </div>
 
         <div className="gm-empty-foot">

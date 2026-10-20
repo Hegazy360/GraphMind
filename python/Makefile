@@ -1,7 +1,15 @@
 # GraphMind Python SDK — development tasks.
 # Everything runs inside python/.venv so the host interpreter stays untouched.
 
-PY      ?= python3
+# The package needs Python >= 3.10 and macOS ships 3.9 as `python3`, so pick
+# an interpreter that qualifies: `make PY=...` beats everything; otherwise
+# `uv` (its interpreters are user-level and never touch the system one),
+# then the newest `python3.X` on PATH, then plain `python3`. Nothing here
+# installs or changes a system interpreter.
+PY      ?= $(shell for c in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do \
+             if command -v $$c >/dev/null 2>&1 && $$c -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then echo $$c; exit 0; fi; \
+           done; echo python3)
+UV      := $(shell command -v uv 2>/dev/null)
 VENV    := .venv
 BIN     := $(VENV)/bin
 PYTHON  := $(BIN)/python
@@ -14,8 +22,15 @@ help: ## Show this help
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 $(BIN)/python:
+ifneq ($(UV),)
+	$(UV) venv --quiet --python '>=3.10' $(VENV)
+	$(UV) pip install --quiet --python $(PYTHON) pip
+else
+	@$(PY) -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' || \
+	  { echo "need Python >= 3.10: install uv (https://docs.astral.sh/uv/) or pass PY=python3.12"; exit 1; }
 	$(PY) -m venv $(VENV)
 	$(PYTHON) -m pip install --upgrade pip
+endif
 
 install: $(BIN)/python ## Create the venv and install the package + dev deps (editable)
 	$(PYTHON) -m pip install -e ".[dev]" pytest-timeout

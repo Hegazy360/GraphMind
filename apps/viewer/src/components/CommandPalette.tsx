@@ -215,6 +215,14 @@ function useActionItems(runId: string | undefined): PaletteItem[] {
         },
       },
       {
+        id: 'act:build',
+        group: 'Actions',
+        title: 'Build a workflow',
+        subtitle: 'Describe an agent, get the instrumented code in your language, create and run it',
+        keywords: 'new create scaffold generate project agent code builder',
+        run: () => ui.setPage('build'),
+      },
+      {
         id: 'act:theme',
         group: 'Actions',
         title: `Theme: ${theme} → ${theme === 'system' ? 'dark' : theme === 'dark' ? 'light' : 'system'}`,
@@ -323,7 +331,10 @@ export function CommandPalette() {
           subtitle: run.runId,
           hint: run.meta.startedTs !== undefined ? fmtRelative(run.meta.startedTs) : undefined,
           keywords: runBadgeStatus(run),
-          run: () => useUiStore.getState().selectRun(run.runId),
+          run: () => {
+            useUiStore.getState().selectRun(run.runId);
+            useUiStore.getState().setPage('debug');
+          },
         })),
     [runs],
   );

@@ -25,6 +25,33 @@ node packages/cli/dist/cli.js demo       # the real CLI, replaying the bundled s
 pnpm --filter e2e-smoke e2e              # full-stack check against a running server
 ```
 
+### Python and Ruby
+
+Both SDKs live in this repository and neither needs the system interpreter
+changed. macOS ships Python 3.9 and Ruby 2.6; the SDKs need Python >= 3.10 and
+Ruby >= 3.1, so use a user-level install of each:
+
+```sh
+# Python: everything lands in python/.venv. `make` picks uv when installed
+# (its interpreters stay under ~/.local/share/uv), else the newest python3.X
+# on PATH that is >= 3.10. Never the system python3.
+cd python && make install && make test
+# or name one: make install PY=python3.12
+
+# Ruby: a keg-only Homebrew ruby (brew install ruby) does not shadow
+# /usr/bin/ruby; put it first on PATH for this shell only.
+cd ruby && PATH=/opt/homebrew/opt/ruby/bin:$PATH bundle install && \
+  PATH=/opt/homebrew/opt/ruby/bin:$PATH bundle exec rake test
+```
+
+The viewer's Build page uses the same rule for the Python projects it runs:
+`GRAPHMIND_PYTHON` if set, else `uv`, else the newest `python3.X` >= 3.10.
+Running from a checkout, generated projects get the GraphMind adapters from
+local tarballs (`$GRAPHMIND_HOME/workflows/.packages/`), because the
+checkout's version is not published yet; the packages must be built first
+(`pnpm -r --filter './packages/**' build`). `GRAPHMIND_BUILDER_REGISTRY=1`
+forces the registry pins.
+
 ## Writing an adapter
 
 This is the highest-leverage contribution, and the protocol is small on

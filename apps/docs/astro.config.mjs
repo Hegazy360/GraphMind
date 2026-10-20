@@ -105,7 +105,7 @@ export default defineConfig({
         },
         {
           label: 'Guides',
-          items: [{ slug: 'guides/remote-development' }],
+          items: [{ slug: 'guides/build-a-workflow' }, { slug: 'guides/remote-development' }],
         },
         {
           label: 'Integrations',

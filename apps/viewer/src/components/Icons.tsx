@@ -262,6 +262,12 @@ export const IconKindCustom = (p: SVGProps<SVGSVGElement>) => (
   </svg>
 );
 
+export const IconPlus = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+
 export const IconKeyboard = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base(p)}>
     <rect x="2.5" y="6" width="19" height="12" rx="2.2" />

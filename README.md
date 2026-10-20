@@ -98,6 +98,11 @@ code location; executions light it up.
   first. Or **inject** a result instead and skip the call; retry it, continue
   with the original error, or abort the run (cooperative cancellation via
   `AbortSignal`, so SDK retry logic doesn't fight you).
+- **Build a workflow in the viewer** *(unreleased)* - describe an agent and
+  its tools, pick TypeScript or Python and the SDK you use, read the
+  instrumented project the server generates, write it to disk with your key
+  in a private `.env`, and run it from the same page, with the run appearing
+  live beside the log.
 - **Drive it from your coding agent** *(0.6)* - `graphmind wait` blocks until
   a call is held and `graphmind resume` releases it (with an edit or an
   injected result, as far as `serve --allow-control` allows; off by default).
@@ -198,6 +203,20 @@ return value, which is why tool wrapping is offered alongside them;
 provider-executed tools are observe-only. Each integration page carries its own
 capability matrix rather than a checkmark grid.
 
+### Or build one in the viewer
+
+Starting from nothing? Click **Build a workflow** in the viewer (or open
+`#/build`). Describe the agent — name, language and framework (TypeScript
+with the Vercel AI SDK, Anthropic SDK or OpenAI SDK; Python with the OpenAI
+or Anthropic SDK), provider and model, prompts, tools with typed parameters —
+and read the project it becomes, file by file, already instrumented.
+**Create** writes it to `~/.graphmind/workflows/<name>` (or a path you pick),
+your API key goes into an owner-only `.env` that is never shown again, and
+**Run** installs and starts it with its output streaming into the page and
+the run appearing live next to it. The code is plain files that are yours
+from then on; GraphMind never edits them again. Needs the viewer token. See
+[build a workflow](https://graphmind.ai/docs/guides/build-a-workflow/).
+
 ### 3. Import traces from any other framework
 
 ```sh
@@ -266,7 +285,9 @@ workflow you already know from stepping through code, applied to agents.
 GraphMind is **not**:
 
 - an eval or prompt-management platform - no datasets, scores, or A/B tests
-- a visual agent builder - it never generates or owns your workflow code
+- a hosted agent builder - the viewer's Build page writes a *starter* project
+  to your own disk and then steps away; GraphMind never owns or runs your
+  workflow code for you, and there is nothing to deploy to
 - a hosted service - there is no cloud, no dashboard login, no data retention
   to think about
 

@@ -268,6 +268,7 @@ The viewer's routes are plain hash URLs:
 ```text
 http://127.0.0.1:4747/#/run/<runId>
 http://127.0.0.1:4747/#/run/<runId>/node/<nodeId>
+http://127.0.0.1:4747/#/build
 ```
 
 Both segments are URI-component encoded, so `tool:issueRefund` appears as `tool%3AissueRefund`.
@@ -282,6 +283,15 @@ see the same debug state, and a change in one broadcasts to the other — which 
 "open the good run and the bad run side by side" work. See
 [comparing runs](/debugging/comparing-runs/).
 </Aside>
+
+## The Build page
+
+`#/build`, the **Build a workflow** button in the run list, or "Build a workflow" in the
+palette. Describe one agent and its tools, pick the language and SDK, read the instrumented
+project the server generates, write it to disk with your key in a private `.env`, and run it
+from the page; the run appears in the list beside the log. It needs the viewer token, and the
+page says so when a tab has none. The whole flow, and where its boundaries are, is on
+[build a workflow](/guides/build-a-workflow/).
 
 ## Built-in fixtures
 

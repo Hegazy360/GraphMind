@@ -10,6 +10,8 @@
  *   POST /api/demo/start     replay the bundled demo run (in-process client)
  *   GET/POST /api/session, /api/pauses, /api/runs/:id/pauses/...
  *                            the control plane (control-http.ts)
+ *   GET/POST /api/builder/*  the workflow builder: generate, write and run a
+ *                            project from a spec (builder/routes.ts; viewer token only)
  *   GET /*                   built viewer (or placeholder page)
  *
  * Local-first: binds 127.0.0.1 only. Never expose this port. Reading is
@@ -42,6 +44,8 @@ import {
   type ControlTokens,
 } from './control-auth.js';
 import { credentialOf, registerControlRoutes, securityHeaderLines, securityHeaders } from './control-http.js';
+import { registerBuilderRoutes } from './builder/routes.js';
+import { ProjectRunner } from './builder/runner.js';
 import { parsePauseOnError } from './debug-state.js';
 import { startBundledDemoReplay, type DemoReplay } from './demo/replayer.js';
 import { Hub, type LogFn } from './hub.js';
@@ -283,6 +287,10 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
   // Control plane + the credential check on every non-GET /api route. Must
   // come before any other /api route (see registerControlRoutes).
   const controlRoutes = registerControlRoutes(app, { hub, storage, verifier });
+  // The workflow builder (viewer token only). Projects it runs stream into
+  // this server's own /ingest, so the port must be known: read lazily.
+  const runner = new ProjectRunner({ ingestUrl: () => `ws://${host}:${boundPort}/ingest`, log });
+  registerBuilderRoutes(app, { verifier, runner, env, log });
   app.get('/health', (c) => c.json({ ok: true, name: 'graphmind-ai', version: VERSION }));
   app.get('/api/runs', (c) => c.json({ runs: hub.listRunInfos() }));
   app.get('/api/runs/:id/events', (c) => {
@@ -499,6 +507,7 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
     if (runFiles !== undefined) process.removeListener('exit', removeRunFiles);
     controlRoutes.closeWaits();
     activeDemo?.stop();
+    runner.dispose();
     await hub.closeAll(500);
     // After closeAll: closing the ingest sockets arms one reconciliation
     // timer per open run, and a server going down is not the moment to

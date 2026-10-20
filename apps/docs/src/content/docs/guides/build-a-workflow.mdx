@@ -1,0 +1,135 @@
+---
+title: Build a workflow in the viewer
+description: Describe an agent in the Build page, get an instrumented starter project in TypeScript or Python for the Anthropic or OpenAI SDK, write it to disk with your key in a private .env, and run it from the same page. Local only; the code is yours.
+sidebar:
+  label: Build a workflow
+  order: 1
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Instrumenting an agent you already have is a few lines. Starting one from nothing is more
+typing than that, and most of it is the same every time: a client, a tool loop, tool schemas,
+a `.env` for the key, a manifest. The **Build page** does that part for you, in the language
+and framework you work in, with GraphMind already wired in, so the first run of a new agent is
+also its first debugging session.
+
+It is deliberately small. One agent: a model, a system prompt, a task, and a list of tools with
+typed parameters. Each tool starts as a stub that returns a fixed value, so the project runs end
+to end before you have written any code, and you replace the stubs in your editor. After that
+GraphMind has nothing to do with the code: it is plain files in a plain directory, instrumented
+with the public adapters, and the Build page never edits them again unless you ask it to.
+
+## Open it
+
+Start the debugger as usual and open the viewer **from the link it prints**:
+
+```sh
+npx graphmind-ai
+```
+
+Then click **Build a workflow** in the run list (or press <kbd>⌘</kbd><kbd>K</kbd> and type
+"build", or open `http://127.0.0.1:4747/#/build`).
+
+<Aside type="caution" title="It needs the viewer token">
+The Build page writes files and starts processes, so every one of its requests carries the
+viewer token: the `#token=…` link `graphmind serve` printed, or its private redirect file. A
+tab opened without it shows the form and the diagram, but the code preview, **Create** and
+**Run** are disabled and the page says why. The agent token (`graphmind resume`) is refused
+too; a coding agent has `graphmind init`.
+</Aside>
+
+## Describe, read, create, run
+
+<Steps>
+
+1. **Describe the agent.** A name (it becomes the directory and the `app` label on every run),
+   the language and framework (TypeScript with the Vercel AI SDK, the Anthropic SDK or the
+   OpenAI SDK; Python with the OpenAI or Anthropic SDK), the provider and model, a system prompt,
+   the task, and the tools. Tool and parameter names must be valid identifiers in both languages,
+   so a spec can switch target without renaming anything; the form says so inline when one is not.
+
+2. **Read what it becomes.** The diagram is the run's shape on the canvas: one `agent` node, one
+   `llm:step`, one node per tool. The code panel is the project, file by file, produced by the
+   server's own generator from the current form, so what you read is byte for byte what Create
+   writes. Copy a file, or everything, if you would rather paste it into a repository of your own
+   and never press Create.
+
+3. **Create the project.** By default it goes to `~/.graphmind/workflows/<name>` (`$GRAPHMIND_HOME`
+   if you set one), or an absolute path you type. A directory that already has files is refused
+   unless you tick **overwrite generated files**, and even then only the generated files are
+   rewritten: your `.env` and anything you added stay as they were.
+
+4. **Add your key.** The credentials fields are password fields. What you type is sent once, to
+   the loopback server, with the viewer token, and written to the project's `.env` with owner-only
+   permissions. It is not stored in the browser, not written into the spec file next to the code,
+   and never sent back: the page only ever learns that a variable is *set*. Edit `.env` by hand
+   later if you prefer; `.env` is in the generated `.gitignore`.
+
+5. **Run it.** **Install & run** does the install once (`npm install`, or a virtualenv plus
+   `pip install`) and then starts the project with `GRAPHMIND_URL` pointing at this server. Its
+   output streams into the page with every `.env` value, and every secret-named variable the
+   process inherited, replaced by `__REDACTED__` before a line is kept. The run itself appears in
+   the run list as it happens; **Open the run** takes you to it. Errors pause before your code
+   sees them, exactly as for an agent you instrumented by hand.
+
+</Steps>
+
+## What gets written
+
+| Target | Files |
+| --- | --- |
+| TypeScript, any framework | `package.json`, `tsconfig.json`, `src/main.ts`, `src/tools.ts` (+ `src/schemas.ts` for the Anthropic and OpenAI SDKs) |
+| Python | `requirements.txt`, `main.py`, `tools.py` |
+| Every target | `README.md`, `.gitignore`, `.env.example`, `graphmind.workflow.json` (the spec, so the page can list the project; never a secret) |
+
+The GraphMind adapter is pinned at the CLI's own version (`^0.6.0` from a 0.6.x CLI), so a project
+and the server that made it speak the same wire protocol. The provider SDKs are pinned at the
+floors the adapters are tested against. Node 22.13 or newer; Python 3.10 or newer.
+
+Two things the page handles for you:
+
+- **A server running from a GraphMind checkout** has a version that may not be published yet,
+  so its projects would fail at `npm install`. In that case the adapters come from local tarballs
+  of the checkout's built packages (`$GRAPHMIND_HOME/workflows/.packages/`) and the Python SDK
+  from `file://<checkout>/python`; the preview and the generated README say so.
+  `GRAPHMIND_BUILDER_REGISTRY=1` forces the registry pins.
+- **Python 3.10 or newer is found, not assumed.** macOS ships 3.9 as `python3`. Run uses
+  `GRAPHMIND_PYTHON` if you set it, else [uv](https://docs.astral.sh/uv/) (which finds or
+  fetches an interpreter under its own directory, never touching the system one), else the
+  newest `python3.X` on your PATH that qualifies. With none, the job fails before anything is
+  spawned and tells you what to install. The page shows which interpreter it will use.
+
+Everything the engineer typed (prompts, descriptions, the stub result) is emitted as a string
+literal of the language, never interpolated into code, and the generated TypeScript is checked
+by the test suite against the real `ai`, `@ai-sdk/*`, `@anthropic-ai/sdk` and `openai` packages.
+
+## Where the boundary is
+
+- **Local only.** The Build page talks to the `graphmind serve` that served it, on loopback, with
+  the viewer token. Nothing is sent anywhere else; there is no account and no hosted side.
+- **One agent per project.** Multi-agent graphs, routing and retrieval are things you write in the
+  generated code. The page is a starting point, not an editor for what you built from it.
+- **Run runs only what it wrote.** The job route starts the fixed install and start commands of a
+  directory that carries `graphmind.workflow.json`; a directory the builder did not create is
+  refused, and the commands are chosen by the target, not by the request.
+- **The key is yours to manage.** It lives in the project's `.env` and nowhere else. Rotate it by
+  typing a new one (or editing the file); clear it with an empty value from the **Save credentials**
+  button, or by deleting the line.
+
+## The API, for the curious
+
+Every route is under `/api/builder` and requires the viewer token, GETs included:
+
+| Route | Does |
+| --- | --- |
+| `GET /api/builder/targets` | The targets, the default spec, where projects go |
+| `POST /api/builder/preview` | `{spec}` → the files Create would write, plus the commands and the variables they need |
+| `GET /api/builder/projects` | Projects the builder made (and running jobs); variable names only |
+| `POST /api/builder/projects` | `{spec, dir?, secrets?, overwrite?}` → writes the project (and `.env`) |
+| `GET /api/builder/projects/env?dir=` · `POST` | Which variables `.env` sets (names only) · merge new values in |
+| `POST /api/builder/jobs` · `GET /api/builder/jobs/:id?after=` · `POST …/stop` | Run a project; page its scrubbed output; stop it |
+
+The spec's validation lives in `packages/cli/src/builder/spec.ts`, the generators under
+`packages/cli/src/builder/codegen/`. A new target is one generator file plus one entry in the
+target table.

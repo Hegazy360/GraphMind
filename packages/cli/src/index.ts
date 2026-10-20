@@ -85,4 +85,44 @@ export {
   DEFAULT_PORT,
   packageRoot,
 } from './paths.js';
+export {
+  TARGETS,
+  TARGET_IDS,
+  PROVIDERS,
+  PROVIDER_ENV_KEY,
+  DEFAULT_MODEL,
+  WorkflowSpecSchema,
+  parseSpec,
+  defaultSpec,
+  type TargetId,
+  type TargetMeta,
+  type Provider,
+  type WorkflowSpec,
+  type WorkflowSpecInput,
+  type ToolSpec,
+  type ToolParam,
+  type SpecIssue,
+} from './builder/spec.js';
+export {
+  generateProject,
+  commandsFor,
+  type GeneratedProject,
+  type GeneratedFile,
+  type Command,
+  type EnvKey,
+} from './builder/codegen/index.js';
+export {
+  createProject,
+  listProjects,
+  readProject,
+  resolveWorkflowsDir,
+  SPEC_FILE,
+  ProjectError,
+  type CreateProjectOptions,
+  type CreateProjectResult,
+  type ProjectSummary,
+} from './builder/projects.js';
+export { ProjectRunner, RunnerError, type JobInfo, type JobLine, type JobPhase } from './builder/runner.js';
+export { detectCheckout, resolveLocalPackages, packLocalPackages, LocalPackagesError, type LocalPackages } from './builder/local-packages.js';
+export { resolvePython, pythonCommands, NO_PYTHON_MESSAGE, MIN_PYTHON, type PythonToolchain } from './builder/toolchain.js';
 export { VERSION } from './version.js';

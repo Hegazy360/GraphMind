@@ -404,6 +404,7 @@ disclosure, including the exact JSON record and delivery mechanics, is in
 | `GET /api/runs/:runId/pauses/:pauseId` | One pause with the held node's recorded input |
 | `POST /api/runs/:runId/pauses/:pauseId/resume` | Bearer + `application/json`; `{action, output?, input?, requestId?, operator?, timeoutMs?}` → `{outcome: resumed\|refused\|taken\|timeout\|no-such-pause, code?, message?, requestId}`; waits ≤ 30 s by default (cap 120 s, ≤ 16 at once); other methods 405 |
 | `POST /api/demo/start` | Replay the bundled demo (Bearer) |
+| `/api/builder/*` | The workflow builder (viewer token only, GETs included): `GET targets`, `POST preview`, `GET/POST projects`, `GET/POST projects/env` (variable names only, never values), `POST jobs`, `GET jobs/:id?after=`, `POST jobs/:id/stop`. Writes projects under `$GRAPHMIND_HOME/workflows/` and runs only those. |
 | `GET /*` | Built viewer from `viewer-dist/` (placeholder page when absent) |
 
 ### `GET /api/runs`

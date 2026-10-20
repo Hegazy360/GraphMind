@@ -7,6 +7,7 @@ import { useMemo, useRef, useState } from 'react';
 import { authHeaders } from '../connection/auth.js';
 import { resolveHttpBase } from '../connection/ServerConnection.js';
 import { INTEGRATION_SNIPPET } from '../lib/firstRun.js';
+import { useUiStore } from '../store/uiStore.js';
 import { GraphMindMark } from './Mark.js';
 
 type DemoState = 'idle' | 'starting' | 'error' | 'unauthorized';
@@ -113,11 +114,20 @@ export function WelcomeCard() {
         </div>
       )}
 
+      <button
+        className="gm-action"
+        style={{ flex: 'none', marginTop: 8, padding: '8px 20px', fontSize: 12, width: '100%' }}
+        onClick={() => useUiStore.getState().setPage('build')}
+        title="Describe an agent, get the instrumented code in your language, create and run it from here"
+      >
+        Or build a workflow here — pick your language, get the code, run it
+      </button>
+
       <div
         className="gm-section-label"
         style={{ marginTop: 22, alignSelf: 'flex-start' }}
       >
-        Or instrument your app
+        Or instrument your own app
       </div>
       <div
         style={{

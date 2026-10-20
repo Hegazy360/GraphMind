@@ -11,7 +11,7 @@ import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';
 import { runBadgeStatus, type RunBadgeStatus, type RunState } from '../store/types.js';
 import { GraphMindMark } from './Mark.js';
-import { IconClose, IconSearch } from './Icons.js';
+import { IconClose, IconPlus, IconSearch } from './Icons.js';
 
 export { GraphMindMark };
 
@@ -65,7 +65,11 @@ function RunItem({ run, now }: { run: RunState; now: number }) {
   return (
     <button
       className={`gm-run-item${selected ? ' gm-run-item--selected' : ''}`}
-      onClick={() => useUiStore.getState().selectRun(run.runId)}
+      onClick={() => {
+        const ui = useUiStore.getState();
+        ui.selectRun(run.runId);
+        ui.setPage('debug');
+      }}
       aria-current={selected}
     >
       <div className="gm-run-item-top">
@@ -96,6 +100,7 @@ function RunItem({ run, now }: { run: RunState; now: number }) {
 
 export function RunsList({ onCollapse }: { onCollapse?: () => void }) {
   const runs = useRunStore((s) => s.runs);
+  const page = useUiStore((s) => s.page);
   const [now, setNow] = useState(() => Date.now());
   const [query, setQuery] = useState('');
 
@@ -147,6 +152,16 @@ export function RunsList({ onCollapse }: { onCollapse?: () => void }) {
           />
         </div>
       )}
+
+      <button
+        className={`gm-rail-build${page === 'build' ? ' gm-rail-build--on' : ''}`}
+        onClick={() => useUiStore.getState().setPage(page === 'build' ? 'debug' : 'build')}
+        title="Describe an agent, get the instrumented code in your language, create and run it from here"
+        aria-pressed={page === 'build'}
+      >
+        <IconPlus />
+        Build a workflow
+      </button>
 
       <div className="gm-rail-list">
         <div className="gm-section-label gm-rail-label">

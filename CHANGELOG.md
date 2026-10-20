@@ -6,6 +6,54 @@ this repo (`graphmind-ai`, `@graphmind-ai/sdk`, `@graphmind-ai/client`,
 `@graphmind-ai/langgraph`, `@graphmind-ai/mcp`, the Python `graphmind-ai`
 distribution, and the Ruby `graphmind` gem).
 
+## Unreleased
+
+### Added — build a workflow in the viewer
+
+- **The Build page** (`#/build`, the "Build a workflow" button in the run
+  list, or the palette). Describe one agent — name, language and framework,
+  provider and model, system prompt, task, and tools with typed parameters and
+  a stub result — and the server's own generator shows the project it becomes,
+  file by file, already instrumented with the matching GraphMind adapter. Five
+  targets: TypeScript with the Vercel AI SDK, the Anthropic SDK or the OpenAI
+  SDK; Python with the OpenAI or Anthropic SDK. Every value typed into the form
+  is emitted as a string literal, never as code; the generated TypeScript is
+  checked in the test suite against the real provider packages.
+- **Create** writes the project to `$GRAPHMIND_HOME/workflows/<name>` (or an
+  absolute path), with `graphmind.workflow.json` beside the code so the page
+  can list it again. A non-empty directory is refused unless overwrite is
+  chosen, and overwrite rewrites only the generated files. The API key goes
+  into the project's `.env`, created owner-only and written atomically; the
+  server reports which variable names are set and never a value, and the spec
+  file never carries one.
+- **Run** installs once (`npm install`, or a virtualenv and `pip install`) and
+  starts the project with `GRAPHMIND_URL` pointing at this server. Output
+  streams into the page with every `.env` value and every secret-named
+  inherited variable replaced by `__REDACTED__` before a line is kept; the run
+  appears live in the run list, one click away. Only directories the builder
+  created can be run, with commands fixed by the target.
+- **Access**: every `/api/builder/*` route, GETs included, needs the viewer
+  token; the agent token and tokenless callers are refused. This is the first
+  server route that spawns a process from a request, and the security page
+  says so.
+- A security test plants a key through the builder and asserts it reaches
+  `.env` and nothing else: no response, listing, spec file, source file or
+  server log line.
+- **From a checkout, generated projects install.** A CLI running from the
+  repository (whose version may be unpublished) packs the built adapters
+  into `$GRAPHMIND_HOME/workflows/.packages/` and generates `file:` tarball
+  dependencies (with `overrides` for `@graphmind-ai/client` and `schema`)
+  and `graphmind-ai @ file://<checkout>/python`; a published CLI pins the
+  registry. `GRAPHMIND_BUILDER_REGISTRY=1` forces the pins. The preview and
+  the generated README say which one a project got.
+- **Python >= 3.10 is found, not assumed.** macOS ships 3.9 as `python3`.
+  The runner uses `GRAPHMIND_PYTHON` if set, else `uv` (`uv venv --python
+  '>=3.10'`, interpreters kept under uv's own directory, the system Python
+  untouched), else the newest `python3.X` on PATH that qualifies; with none,
+  the job fails before anything is spawned and names the fix. The Build page
+  shows which Python a project will run with. The Python SDK's own `Makefile`
+  follows the same rule.
+
 ## 0.6.0
 
 The release for the failures that don't throw. GraphMind now holds an agent on

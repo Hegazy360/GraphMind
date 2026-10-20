@@ -235,8 +235,21 @@ viewer sockets are deprecated rather than removed: an agent with a shell can ope
 **continue, retry or abort** a held call at any level (never inject, edit, or change
 breakpoints — those need a token).
 
-**Does it execute anything?** The server never spawns a process from network input. The MCP proxy
+**Does it execute anything?** In one case. The viewer's Build page can **run a project the
+builder itself wrote**: a `POST /api/builder/jobs` carrying the viewer token starts that
+project's fixed install and start commands (`npm install` / `npm start`, or a virtualenv and
+`pip install` / `python main.py`) in its directory. The directory must carry the builder's own
+`graphmind.workflow.json`; the commands are chosen by the target, never taken from the request;
+tokenless callers and the agent token are refused. No other route spawns anything. The MCP proxy
 spawns exactly the command you pass it, and nothing else.
+
+**Does the builder see our API key?** It passes through once. The key you type on the Build page
+is sent to the loopback server with the viewer token and written to the project's `.env`
+(created `0600`, written atomically, in the generated `.gitignore`). It is not kept in the
+browser, not written into the spec file or any generated source, never returned by any route
+(the server reports variable *names* only), and the run log is scrubbed of every `.env` value
+and every secret-named inherited variable before a line is stored. A test in `security/` plants
+a key through the builder and greps every one of those surfaces for it.
 
 **Can it break our production application?** It is off by default under `NODE_ENV=production` and
 unconditionally off with `GRAPHMIND_DISABLED=1`. When on but detached it is a synchronous no-op.

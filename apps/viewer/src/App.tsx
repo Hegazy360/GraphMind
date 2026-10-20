@@ -10,7 +10,7 @@ import {
 import { useLiveConnection } from './connection/useLiveConnection.js';
 import { resolveServerUrl } from './connection/ServerConnection.js';
 import { parseStressParams, useStressRun } from './connection/StressConnection.js';
-import { formatHash, parseHash } from './router.js';
+import { BUILD_HASH, formatHash, parseHash } from './router.js';
 import { canvasActions, copyText, deepLink } from './lib/commands.js';
 import { controlAllows } from './lib/control.js';
 import { canEditArgs } from './lib/editArgs.js';
@@ -28,6 +28,7 @@ import { RunsList } from './components/RunsList.js';
 import { EmptyState } from './components/EmptyState.js';
 import { Timeline } from './components/Timeline.js';
 import { TopBar } from './components/TopBar.js';
+import { BuilderPage } from './builder/BuilderPage.js';
 
 /** The draggable divider between the graph and the waterfall. */
 function TimelineSplitter({ onResize }: { onResize: (height: number) => void }) {
@@ -96,6 +97,7 @@ export default function App() {
   const selectedNodeId = useUiStore((s) => s.selectedNodeId);
   const paletteOpen = useUiStore((s) => s.paletteOpen);
   const view = useUiStore((s) => s.view);
+  const page = useUiStore((s) => s.page);
   const timelineHeight = useUiStore((s) => s.timelineHeight);
   const theme = useUiStore((s) => s.theme);
   const runExists = useRunStore((s) =>
@@ -130,8 +132,13 @@ export default function App() {
   useEffect(() => {
     const apply = () => {
       const route = parseHash(location.hash);
-      if (route.runId === undefined) return;
       const ui = useUiStore.getState();
+      if (route.page === 'build') {
+        ui.setPage('build');
+        return;
+      }
+      if (route.page === 'debug') ui.setPage('debug');
+      if (route.runId === undefined) return;
       if (route.nodeId !== undefined) {
         ui.selectNode(route.runId, route.nodeId);
         ui.requestFocus(route.nodeId);
@@ -146,10 +153,10 @@ export default function App() {
 
   // state → hash
   useEffect(() => {
-    const next = formatHash(selectedRunId, selectedNodeId);
+    const next = page === 'build' ? BUILD_HASH : formatHash(selectedRunId, selectedNodeId);
     if (next === location.hash) return;
     history.replaceState(null, '', next === '' ? location.pathname + location.search : next);
-  }, [selectedRunId, selectedNodeId]);
+  }, [page, selectedRunId, selectedNodeId]);
 
   // auto-select the first run to arrive (deep links win — they select first)
   useEffect(() => {
@@ -205,6 +212,12 @@ export default function App() {
         return;
       }
       if (typing || meta || e.altKey) return;
+      // The builder is a form: its text fields already return above, and the
+      // canvas shortcuts have nothing to act on. Only the rail toggle stays.
+      if (useUiStore.getState().page === 'build') {
+        if (e.key === 'b' && !e.shiftKey) setRailOpen((open) => !open);
+        return;
+      }
 
       // ── while a gate is held, the decision owns the keyboard ─────────────
       // c/s/r/i (and e, on an editable pause) are unbound the rest of the
@@ -318,6 +331,10 @@ export default function App() {
       <div className="gm-app-body">
         {railOpen && <RunsList onCollapse={() => setRailOpen(false)} />}
         <main className="gm-main">
+          {page === 'build' ? (
+            <BuilderPage />
+          ) : (
+            <>
           {showRun && <TopBar runId={selectedRunId} />}
           <div className="gm-workspace">
             {/*
@@ -371,6 +388,8 @@ export default function App() {
             </div>
             <InspectorPanel />
           </div>
+            </>
+          )}
         </main>
       </div>
       <RunBar onToggleRail={() => setRailOpen((open) => !open)} railOpen={railOpen} />

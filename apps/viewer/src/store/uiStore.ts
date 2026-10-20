@@ -11,6 +11,7 @@ import { create } from 'zustand';
 import type { BreakpointMatcher, NodeKind, RunMode } from '@graphmind-ai/schema';
 import { EMPTY_FILTER, type FilterSpec, type StatusFilter } from './filters.js';
 import { loadTheme, type ThemeChoice } from '../lib/theme.js';
+import type { Page } from '../router.js';
 
 export type ConnectionStatus = 'connecting' | 'live' | 'detached' | 'replaying' | 'off';
 
@@ -143,6 +144,8 @@ export interface InjectRequest {
 }
 
 interface UiState {
+  /** The debugger (runs, canvas, inspector) or the workflow builder. */
+  page: Page;
   selectedRunId: string | undefined;
   selectedNodeId: string | undefined;
   /** Selected execution index in the inspector (per-instance selector). */
@@ -188,6 +191,7 @@ interface UiState {
   filters: FilterSpec;
   theme: ThemeChoice;
 
+  setPage: (page: Page) => void;
   selectRun: (runId: string | undefined) => void;
   selectNode: (runId: string, nodeId: string | undefined) => void;
   setInstanceIdx: (idx: number | undefined) => void;
@@ -243,6 +247,7 @@ export const MIN_TIMELINE_HEIGHT = 132;
 export const DEFAULT_TIMELINE_HEIGHT = 268;
 
 export const useUiStore = create<UiState>((set) => ({
+  page: 'debug',
   selectedRunId: undefined,
   selectedNodeId: undefined,
   selectedInstanceIdx: undefined,
@@ -272,6 +277,7 @@ export const useUiStore = create<UiState>((set) => ({
   // would race the "persist on change" effect and wipe the stored choice.
   theme: loadTheme(),
 
+  setPage: (page) => set((s) => (s.page === page ? s : { page })),
   selectRun: (runId) =>
     set({ selectedRunId: runId, selectedNodeId: undefined, selectedInstanceIdx: undefined }),
   selectNode: (runId, nodeId) =>
