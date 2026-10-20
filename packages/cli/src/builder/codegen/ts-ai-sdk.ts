@@ -66,9 +66,20 @@ function toolsFile(spec: WorkflowSpec): string {
 function mainFile(spec: WorkflowSpec): string {
   const providerImport =
     spec.provider === 'anthropic'
-      ? "import { anthropic } from '@ai-sdk/anthropic';"
+      ? "import { createAnthropic } from '@ai-sdk/anthropic';"
       : "import { openai } from '@ai-sdk/openai';";
   const providerCall = spec.provider === 'anthropic' ? 'anthropic' : 'openai';
+  // A key that is not scoped to a workspace must name one per request (the
+  // ANTHROPIC_WORKSPACE_ID line in .env); a scoped key needs no header.
+  const providerSetup =
+    spec.provider === 'anthropic'
+      ? `// An unscoped Anthropic key needs the workspace named per request; a scoped
+// key leaves ANTHROPIC_WORKSPACE_ID unset and sends no header.
+const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID;
+const anthropic = createAnthropic(workspaceId ? { headers: { 'anthropic-workspace-id': workspaceId } } : {});
+
+`
+      : '';
   const system =
     spec.systemPrompt !== undefined && spec.systemPrompt.trim() !== ''
       ? `      system: SYSTEM,\n`
@@ -98,7 +109,7 @@ const MODEL = ${tsString(spec.model)};
 const MAX_STEPS = ${spec.maxSteps};
 ${systemConst}const PROMPT = ${tsString(spec.prompt)};
 
-const gm = graphmind({ app: ${tsString(spec.name)} });
+${providerSetup}const gm = graphmind({ app: ${tsString(spec.name)} });
 // Wait for the debugger so pause-on-error is armed before the first step.
 // Fails open: no debugger within the timeout just means an undebugged run.
 const attached = await gm.ready();

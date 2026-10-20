@@ -70,6 +70,17 @@ export function envKeysFor(spec: WorkflowSpec): EnvKey[] {
       required: true,
       hint: `Your ${spec.provider === 'anthropic' ? 'Anthropic' : 'OpenAI'} API key. Written to .env (owner-only, git-ignored); never shown again.`,
     },
+    // An Anthropic key that is not scoped to a workspace must name one per
+    // request; the generated code sends it as the anthropic-workspace-id header.
+    ...(spec.provider === 'anthropic'
+      ? [
+          {
+            name: 'ANTHROPIC_WORKSPACE_ID',
+            required: false,
+            hint: 'Only for an API key that is not scoped to a workspace: the workspace to use (sent as the anthropic-workspace-id header).',
+          },
+        ]
+      : []),
     {
       name: 'GRAPHMIND_URL',
       required: false,

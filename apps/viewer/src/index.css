@@ -1264,9 +1264,15 @@ button {
   border-radius: 5px;
   padding: 4px 7px;
   margin-bottom: 7px;
-  white-space: nowrap;
+  /* A provider error body is long and its message is in the middle: clamp to
+     a few lines rather than one, so "what failed" is readable on the card.
+     The inspector shows it in full. */
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 /* An exported run's gate: a fact, not a control surface. */
 .gm-pause-note {
@@ -3130,7 +3136,9 @@ button {
   margin-bottom: 7px;
 }
 .gm-inspect-held .gm-pause-error {
-  white-space: normal;
+  /* The inspector has room: no clamp, the whole error. */
+  display: block;
+  -webkit-line-clamp: unset;
   line-height: 1.5;
 }
 /* Five verbs in a 320px column: let them size to their words and wrap when

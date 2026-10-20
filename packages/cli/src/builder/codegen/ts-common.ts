@@ -138,9 +138,17 @@ export function tsPlainToolsFile(spec: WorkflowSpec): string {
 
 export function envExample(spec: WorkflowSpec): string {
   const key = PROVIDER_ENV_KEY[spec.provider];
+  const workspace =
+    spec.provider === 'anthropic'
+      ? `
+# Only for a key that is NOT scoped to a workspace: the workspace to use
+# (sent as the anthropic-workspace-id header). A scoped key needs nothing here.
+# ANTHROPIC_WORKSPACE_ID=
+`
+      : '';
   return `# Copy to .env and fill in. .env is git-ignored and must stay that way.
 ${key}=
-
+${workspace}
 # Where the GraphMind debugger listens (the default is fine for a local server).
 # GRAPHMIND_URL=ws://127.0.0.1:4747/ingest
 `;
@@ -176,7 +184,14 @@ plain code: edit anything, and keep editing it in your editor from here on.
    \`\`\`
    ${key}=...
    \`\`\`
-
+${
+    spec.provider === 'anthropic'
+      ? `
+   A key that is not scoped to a workspace also needs \`ANTHROPIC_WORKSPACE_ID=...\`
+   there (sent as the \`anthropic-workspace-id\` header). A scoped key does not.
+`
+      : ''
+  }
 2. Start the debugger in another terminal and leave it open:
 
    \`\`\`sh

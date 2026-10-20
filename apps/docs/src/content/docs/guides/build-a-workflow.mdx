@@ -66,6 +66,10 @@ too; a coding agent has `graphmind init`.
    and never sent back: the page only ever learns that a variable is *set*. Edit `.env` by hand
    later if you prefer; `.env` is in the generated `.gitignore`.
 
+   An Anthropic key that is **not scoped to a workspace** needs one named: put the workspace's ID
+   in the optional `ANTHROPIC_WORKSPACE_ID` field (or `.env` line) and the generated code sends it
+   as the `anthropic-workspace-id` header. A workspace-scoped key leaves it empty.
+
 5. **Run it.** **Install & run** does the install once (`npm install`, or a virtualenv plus
    `pip install`) and then starts the project with `GRAPHMIND_URL` pointing at this server. Its
    output streams into the page with every `.env` value, and every secret-named variable the

@@ -11,6 +11,7 @@ import {
   issueFor,
   localIssues,
   previewGraph,
+  runErrorOf,
   slugify,
   withProvider,
   withTarget,
@@ -107,6 +108,41 @@ describe('job <-> run matching', () => {
     expect(isJobRun({ meta: { app: 'my-agent', startedTs: 8_500 } }, 'my-agent', 9_000)).toBe(true);
     expect(isJobRun({ meta: { app: 'my-agent', startedTs: 1_000 } }, 'my-agent', 9_000)).toBe(false);
     expect(isJobRun({ meta: { app: 'other', startedTs: 10_000 } }, 'my-agent', 9_000)).toBe(false);
+  });
+});
+
+describe('the run error the Build page shows', () => {
+  const apiError = { name: 'Error', message: '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}' };
+
+  it('leads with the error an active error gate holds (the process is paused, the log is silent)', () => {
+    const run = {
+      meta: { status: 'running' as const },
+      nodes: { 'llm:step': { lastError: apiError } },
+      pauses: { p1: { active: true, point: 'error', nodeId: 'llm:step' } },
+    };
+    expect(runErrorOf(run)).toEqual({ text: `Error: ${apiError.message}`, held: true });
+  });
+
+  it('falls back to the error the run ended with', () => {
+    const run = {
+      meta: { status: 'error', error: apiError },
+      nodes: {},
+      pauses: { p1: { active: false, point: 'error', nodeId: 'llm:step' } },
+    };
+    expect(runErrorOf(run)).toEqual({ text: `Error: ${apiError.message}`, held: false });
+  });
+
+  it('says nothing for a clean or merely running run', () => {
+    expect(runErrorOf({ meta: { status: 'running' }, nodes: {}, pauses: {} })).toBeUndefined();
+    expect(runErrorOf({ meta: { status: 'ok' }, nodes: {}, pauses: {} })).toBeUndefined();
+    // a gate held before a call runs is not an error
+    expect(
+      runErrorOf({
+        meta: { status: 'running' },
+        nodes: { t: {} },
+        pauses: { p1: { active: true, point: 'before', nodeId: 't' } },
+      }),
+    ).toBeUndefined();
   });
 });
 

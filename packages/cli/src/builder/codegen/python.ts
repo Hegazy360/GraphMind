@@ -198,7 +198,12 @@ gm = graphmind.init(app=${pyString(spec.name)})
 attached = gm.ready()
 print("attached to GraphMind" if attached else "no GraphMind server found; running undebugged", file=sys.stderr)
 
-client = gm.instrument_anthropic(Anthropic())
+# An unscoped Anthropic key needs the workspace named per request (the
+# ANTHROPIC_WORKSPACE_ID line in .env); a scoped key sends no header.
+workspace_id = os.environ.get("ANTHROPIC_WORKSPACE_ID")
+client = gm.instrument_anthropic(
+    Anthropic(default_headers={"anthropic-workspace-id": workspace_id} if workspace_id else None)
+)
 # Gated: the debugger can hold a call before it runs, edit its arguments, or
 # inject a result. The index is by the name the model chose.
 tools = gm.wrap_tools(TOOLS)

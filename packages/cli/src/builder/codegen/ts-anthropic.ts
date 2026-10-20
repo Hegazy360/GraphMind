@@ -52,7 +52,12 @@ const gm = graphmind({ app: ${tsString(spec.name)} });
 const attached = await gm.ready();
 console.error(attached ? 'attached to GraphMind' : 'no GraphMind server found; running undebugged');
 
-const client = gm.wrapClient(new Anthropic());
+// A key that is not scoped to a workspace must name one per request (the
+// ANTHROPIC_WORKSPACE_ID line in .env); a scoped key needs no header.
+const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID;
+const client = gm.wrapClient(
+  new Anthropic(workspaceId ? { defaultHeaders: { 'anthropic-workspace-id': workspaceId } } : {}),
+);
 // Gated: the debugger can hold a call before it runs, edit its arguments, or
 // inject a result. The index is by the name the model chose.
 const tools = gm.wrapTools(workflowTools) as Record<string, (input: unknown) => Promise<unknown>>;

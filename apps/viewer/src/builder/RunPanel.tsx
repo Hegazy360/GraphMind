@@ -13,7 +13,7 @@ import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';
 import { BuilderApiError, createProject, pollJob, startJob, stopJob, writeEnv } from './api.js';
 import { useBuilderStore } from './builderStore.js';
-import { isJobRun } from './model.js';
+import { isJobRun, runErrorOf } from './model.js';
 import type { EnvKey, PreviewResponse } from './types.js';
 
 const POLL_MS = 600;
@@ -81,6 +81,17 @@ export function RunPanel({
       if (isJobRun(run, job.name, job.startedAt)) return run.runId;
     }
     return undefined;
+  });
+  // The error that run is sitting on. A held error pauses the process, so the
+  // job log says nothing — this is the only place the Build page can say it.
+  // Two primitive selectors (not one object) so the store's equality check holds.
+  const runError = useRunStore((s) => {
+    const run = runId === undefined ? undefined : s.runs[runId];
+    return run === undefined ? undefined : runErrorOf(run)?.text;
+  });
+  const runErrorHeld = useRunStore((s) => {
+    const run = runId === undefined ? undefined : s.runs[runId];
+    return run !== undefined && runErrorOf(run)?.held === true;
   });
 
   // Poll the job while it is live.
@@ -329,6 +340,15 @@ export function RunPanel({
           </span>
         )}
       </div>
+
+      {runError !== undefined && (
+        <div className="gm-bnotice gm-bnotice--error" role="status" data-testid="run-error">
+          {runErrorHeld ? 'The run is paused on an error (your code has not seen it yet): ' : 'The run failed: '}
+          {runError}
+          {runId !== undefined &&
+            (runErrorHeld ? ' Open the run to retry, edit the call, or abort.' : ' Open the run to see what happened.')}
+        </div>
+      )}
 
       {notice !== undefined && (
         <div className={`gm-bnotice gm-bnotice--${notice.tone}`} role="status">

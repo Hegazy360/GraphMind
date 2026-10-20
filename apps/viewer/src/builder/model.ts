@@ -207,3 +207,30 @@ export function previewGraph(spec: WorkflowSpec): PreviewGraph {
 export function isJobRun(run: { meta: { app: string; startedTs?: number } }, name: string, jobStartedAt: number): boolean {
   return run.meta.app === name && (run.meta.startedTs ?? 0) >= jobStartedAt - 2_000;
 }
+
+interface ErrorLike {
+  name: string;
+  message: string;
+}
+
+/**
+ * The error a run is currently sitting on, for the Build page: the one an
+ * active error gate holds (the process is paused, so the job log says
+ * nothing), or the one the run ended with. `held` = a gate is waiting.
+ */
+export function runErrorOf(run: {
+  meta: { status: string; error?: ErrorLike | undefined };
+  nodes: Record<string, { lastError?: ErrorLike | undefined } | undefined>;
+  pauses: Record<string, { active: boolean; point: string; nodeId: string } | undefined>;
+}): { text: string; held: boolean } | undefined {
+  for (const id of Object.keys(run.pauses)) {
+    const pause = run.pauses[id];
+    if (pause === undefined || !pause.active || pause.point !== 'error') continue;
+    const error = run.nodes[pause.nodeId]?.lastError ?? run.meta.error;
+    if (error !== undefined) return { text: `${error.name}: ${error.message}`, held: true };
+  }
+  if (run.meta.status === 'error' && run.meta.error !== undefined) {
+    return { text: `${run.meta.error.name}: ${run.meta.error.message}`, held: false };
+  }
+  return undefined;
+}

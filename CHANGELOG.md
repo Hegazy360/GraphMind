@@ -53,6 +53,16 @@ distribution, and the Ruby `graphmind` gem).
   the job fails before anything is spawned and names the fix. The Build page
   shows which Python a project will run with. The Python SDK's own `Makefile`
   follows the same rule.
+- **Unscoped Anthropic keys.** An API key not scoped to a workspace must name
+  one per request. Anthropic projects get an optional `ANTHROPIC_WORKSPACE_ID`
+  (a field on the Build page, a commented line in `.env.example`); when set,
+  the generated code sends it as the `anthropic-workspace-id` header. A
+  workspace-scoped key needs nothing.
+- **Errors are readable where you are.** The error on a paused node's card
+  clamps at five lines instead of one (the inspector still shows it in full),
+  and the Build page now states the error its run is held on — a held error
+  pauses the process, so it never reaches the job log — with a pointer to the
+  run.
 
 ## 0.6.0
 

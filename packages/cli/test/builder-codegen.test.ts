@@ -255,6 +255,24 @@ describe('generated projects', () => {
     expect(example).toMatch(new RegExp(`^${PROVIDER_ENV_KEY[provider]}=$`, 'm'));
   });
 
+  it.each(COMBOS)('$target / $provider: an unscoped Anthropic key can name its workspace', ({ target, provider }) => {
+    const spec = specFor(target, provider);
+    const project = generateProject(spec, 'posix');
+    const entry = project.files.find((f) => f.path === TARGETS[target].entry)?.content ?? '';
+    const example = project.files.find((f) => f.path === '.env.example')?.content ?? '';
+    const workspaceKey = project.envKeys.find((k) => k.name === 'ANTHROPIC_WORKSPACE_ID');
+    if (provider === 'anthropic') {
+      // optional, offered by the Build page, sent as the header when set
+      expect(workspaceKey?.required).toBe(false);
+      expect(entry).toContain('ANTHROPIC_WORKSPACE_ID');
+      expect(entry).toContain('anthropic-workspace-id');
+      expect(example).toContain('# ANTHROPIC_WORKSPACE_ID=');
+    } else {
+      expect(workspaceKey).toBeUndefined();
+      expect(entry).not.toContain('workspace');
+    }
+  });
+
   it('turns a JSON stub into a literal of the language, and non-JSON into a string', () => {
     const tsSpec = specFor('ts-ai-sdk', 'anthropic', {
       tools: [
