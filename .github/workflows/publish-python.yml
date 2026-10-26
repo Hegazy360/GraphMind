@@ -42,11 +42,11 @@ jobs:
     permissions:
       id-token: write # required for Trusted Publishing; nothing else is granted
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
 
@@ -54,7 +54,7 @@ jobs:
         # Lockstep is the whole point of scripts/set-version.mjs; a tag that
         # names a version pyproject.toml does not carry must not upload.
         if: github.ref_type == 'tag'
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.x'
       - name: Check versions
@@ -139,7 +139,7 @@ jobs:
       # https://pypi.org/integrity/graphmind-ai/<version>/<filename>/provenance
       - name: Publish to PyPI
         if: steps.existing.outputs.published == 'false'
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.2/v1
         with:
           packages-dir: python/dist
           # A re-run of an already-published version should be a no-op, not a
