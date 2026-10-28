@@ -33,7 +33,7 @@ import { dirname, join, resolve } from 'node:path';
 const DEFAULT_ENDPOINT = 'https://graphmind.ai/api/telemetry';
 const TIMEOUT_MS = 3000;
 
-/** Events are short command names only ('serve', 'demo', 'run-ingested', ...). */
+/** Events are short command names only ('serve', 'demo', 'record', ...). */
 const EVENT_RE = /^[a-z][a-z-]{0,31}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 

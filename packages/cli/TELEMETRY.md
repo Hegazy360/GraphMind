@@ -19,9 +19,11 @@ about what it did:
 }
 ```
 
-- **event** — a short command name only (`serve`, `demo`, `import`, `mcp`,
-  `record`, `run-ingested`). Never arguments, file paths, prompts, traces,
-  run data, or payloads of any kind.
+- **event** — a short command name only (`serve`, `demo`, `init`, `import`,
+  `mcp`, `mcp-proxy`, `runs`, `record`, `pauses`, `wait`, `resume`, `skill`,
+  `help`). Never arguments, file paths, prompts, traces, run data, or
+  payloads of any kind — `graphmind help record` and `graphmind help` both
+  send exactly `"event":"help"`.
 - **installId** — a random UUID generated on this machine the first time
   telemetry fires, stored in `~/.graphmind/telemetry-id` (mode `0600`). It
   identifies an *installation*, not a person: it is not derived from your

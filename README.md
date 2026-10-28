@@ -357,6 +357,9 @@ trace export into the importer
 post-hoc graphs immediately.
 
 Issues and PRs welcome. Keep it small and honest - this is a solo project.
+[CONTRIBUTING.md](./CONTRIBUTING.md) covers what to contribute;
+[DEVELOPMENT.md](./DEVELOPMENT.md) covers how to run the repo (`pnpm start`
+is an interactive menu of everything, `pnpm dev` the whole dev loop).
 
 <br/>
 

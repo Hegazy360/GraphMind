@@ -4,15 +4,41 @@
  * distinct days (the W1-return proxy from internal/decisions.md).
  *
  * Usage (from apps/web): pnpm telemetry
+ *        pnpm telemetry --html [file]   also write a chart dashboard
+ *                                       (default telemetry-report.html,
+ *                                       self-contained, safe to share — it
+ *                                       carries only the aggregates)
+ * From the repo root both spellings work: pnpm telemetry:report [--html].
  * Token: BLOB_READ_WRITE_TOKEN from the environment or .env.local.
  *
  * Reads only blob pathnames (telemetry/<event>/<yyyy-mm-dd>/<installId>-<hex>.json)
  * — no blob bodies are fetched.
  */
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { list } from '@vercel/blob';
+import { renderDashboard } from './telemetry-charts.mjs';
+
+const args = process.argv.slice(2);
+const htmlFlag = args.indexOf('--html');
+let htmlPath;
+const consumed = new Set();
+if (htmlFlag !== -1) {
+  consumed.add(htmlFlag);
+  const next = args[htmlFlag + 1];
+  if (next !== undefined && !next.startsWith('-')) {
+    consumed.add(htmlFlag + 1);
+    htmlPath = resolve(next);
+  } else {
+    htmlPath = resolve('telemetry-report.html');
+  }
+}
+const leftover = args.filter((_, i) => !consumed.has(i));
+if (leftover.length > 0) {
+  console.error(`telemetry-report: unknown argument ${leftover[0]} (takes --html [file])`);
+  process.exit(1);
+}
 
 function resolveToken() {
   if (process.env.BLOB_READ_WRITE_TOKEN) return process.env.BLOB_READ_WRITE_TOKEN;
@@ -88,4 +114,25 @@ console.log('');
 console.log(`Events total:      ${totalEvents}`);
 console.log(`Unique installs:   ${uniqueInstalls}`);
 console.log(`Active >=2 days:   ${returning}  (W1-return proxy)`);
+
+if (htmlPath !== undefined) {
+  /** event -> count, across all days */
+  const totals = new Map();
+  for (const events of perDay.values()) {
+    for (const [event, count] of events) totals.set(event, (totals.get(event) ?? 0) + count);
+  }
+  const html = renderDashboard({
+    dates,
+    perDay,
+    installsPerDay: new Map([...installsPerDay].map(([date, ids]) => [date, ids.size])),
+    totals,
+    totalEvents,
+    uniqueInstalls,
+    returningInstalls: returning,
+    generatedAt: new Date().toISOString(),
+  });
+  writeFileSync(htmlPath, html);
+  console.log('');
+  console.log(`Charts: ${htmlPath}  (self-contained — open it in a browser)`);
+}
 if (unparseable > 0) console.log(`Skipped ${unparseable} blob(s) with unexpected pathnames.`);

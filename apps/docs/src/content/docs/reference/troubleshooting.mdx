@@ -155,7 +155,8 @@ Since 0.3.0 the server checks the `Origin` of every request and upgrade, and req
 browser page from another origin gets a 403.
 
 You will hit this in one ordinary situation: **running the viewer from its own dev server**
-(`apps/viewer` on Vite port 5199). Allow it explicitly:
+(`apps/viewer` on Vite port 5199). In the GraphMind checkout, `pnpm dev` sets this up for you;
+wiring it by hand, allow the Vite origin explicitly:
 
 ```sh
 GRAPHMIND_ALLOWED_ORIGINS=http://localhost:5199,http://127.0.0.1:5199 graphmind

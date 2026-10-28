@@ -336,6 +336,14 @@ prompt is exported as recorded — use the client's `GRAPHMIND_HIDE_*` switches
 for that. `--no-redact-secrets` keeps the values; `--redact-secrets`
 re-enables. The same applies to `--html`.
 
+### `graphmind help [command]`
+
+The command list above, from the terminal: `graphmind help` prints every
+command with its one-line summary, `graphmind help <command>` one of them
+(`help mcp-proxy` prints the proxy's dedicated setup page). A mistyped
+command — `graphmind sevre`, `graphmind rnus` — answers with the nearest real
+one: `did you mean "serve"?`.
+
 ### Global flags
 
 | Flag | Meaning |

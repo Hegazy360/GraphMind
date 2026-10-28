@@ -17,6 +17,7 @@ import { runSkill } from './commands/skill.js';
 import { MCP_PROXY_SUMMARY } from './mcp-proxy/help.js';
 import { DEFAULT_PORT } from './paths.js';
 import { startServer } from './server.js';
+import { unknownCommandLines } from './suggest.js';
 import { recordTelemetry } from './telemetry.js';
 import { VERSION } from './version.js';
 
@@ -86,6 +87,10 @@ const commands: Record<string, CommandDef> = {
     summary: 'Print the GraphMind Agent Skill, or --install it here',
     run: runSkill,
   },
+  help: {
+    summary: 'Show this list, or one command: help <command>',
+    run: runHelp,
+  },
 };
 
 function printHelp(): void {
@@ -104,6 +109,34 @@ function printHelp(): void {
     ...EXIT_CODE_HELP,
   ];
   console.log(lines.join('\n'));
+}
+
+/**
+ * `graphmind help [command]`. With a command it prints that command's one
+ * line (or its dedicated help page when it has one — mcp-proxy); with a typo
+ * it suggests the nearest real command instead of a dead end.
+ */
+async function runHelp(parsed: ParsedCli): Promise<number> {
+  recordTelemetry('help');
+  const topic = parsed.positionals[0];
+  if (topic === undefined) {
+    printHelp();
+    return 0;
+  }
+  const def = commands[topic];
+  if (def === undefined) {
+    for (const line of unknownCommandLines(topic, Object.keys(commands))) console.error(line);
+    return 1;
+  }
+  if (def.help !== undefined) {
+    def.help(parsed);
+    return 0;
+  }
+  console.log(`graphmind ${topic} — ${def.summary}`);
+  console.log('');
+  console.log(`Usage: graphmind ${topic} [options]`);
+  console.log(`Run "graphmind --help" for every option; the ones marked (${topic}) apply here.`);
+  return 0;
 }
 
 async function runServe(parsed: ParsedCli): Promise<number> {
@@ -211,8 +244,9 @@ async function main(): Promise<number> {
   }
   const command = commands[parsed.command];
   if (command === undefined) {
-    console.error(`graphmind: unknown command "${parsed.command}"`);
-    console.error('Run "graphmind --help" for usage.');
+    for (const line of unknownCommandLines(parsed.command, Object.keys(commands))) {
+      console.error(line);
+    }
     return 1;
   }
   return command.run(parsed);

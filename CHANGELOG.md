@@ -64,6 +64,22 @@ distribution, and the Ruby `graphmind` gem).
   pauses the process, so it never reaches the job log — with a pointer to the
   run.
 
+### Added — `graphmind help`, and a hand back up after a typo
+
+- **`graphmind help`** lists every command with its one-line summary (the same
+  list as `--help`); `graphmind help <command>` shows that command alone, and
+  `graphmind help mcp-proxy` prints the proxy's dedicated setup page.
+- **A mistyped command suggests the real one.** `graphmind sevre` answers
+  `did you mean "serve"?`; an unambiguous prefix (`rec`) counts as a match. A
+  transposition costs one edit; short names tolerate one edit, longer ones
+  two, and nothing close enough means no guess at all.
+- `graphmind help` records a `help` telemetry event — the name alone, like
+  every command; `help record` and `help` send the identical payload.
+  TELEMETRY.md's event list now names all thirteen commands (and no longer
+  mentions `run-ingested`, which was never implemented). The maintainers'
+  report gained charts: `telemetry-report.mjs --html` writes a
+  self-contained SVG dashboard of the same aggregates it prints.
+
 ## 0.6.0
 
 The release for the failures that don't throw. GraphMind now holds an agent on

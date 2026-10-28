@@ -10,18 +10,22 @@ reports from real agent code.
 git clone https://github.com/Hegazy360/GraphMind.git
 cd GraphMind
 pnpm install
-pnpm -r --filter './packages/**' build   # packages must build before typecheck
+pnpm build:packages                      # packages must build before typecheck
 pnpm typecheck && pnpm test
 ```
 
 Node >= 22.13 (SQLite is built in, so there is nothing to compile).
 
-Useful loops:
+Useful loops — [DEVELOPMENT.md](./DEVELOPMENT.md) has the full command
+reference and explains how the pieces fit together:
 
 ```sh
-pnpm --filter viewer dev                 # the debugger UI, with ?fixture=1 for a canned run
-pnpm --filter docs dev                   # the documentation site
-node packages/cli/dist/cli.js demo       # the real CLI, replaying the bundled session
+pnpm start                               # interactive menu of all of the below
+pnpm dev                                 # server (demo data) + viewer with hot reload
+pnpm dev:viewer                          # viewer only, with ?fixture=1 for a canned run
+pnpm dev:docs                            # the documentation site
+pnpm demo                                # the real CLI, replaying the bundled session
+pnpm cli <command>                       # any CLI command against this checkout
 pnpm --filter e2e-smoke e2e              # full-stack check against a running server
 ```
 
@@ -49,7 +53,7 @@ The viewer's Build page uses the same rule for the Python projects it runs:
 Running from a checkout, generated projects get the GraphMind adapters from
 local tarballs (`$GRAPHMIND_HOME/workflows/.packages/`), because the
 checkout's version is not published yet; the packages must be built first
-(`pnpm -r --filter './packages/**' build`). `GRAPHMIND_BUILDER_REGISTRY=1`
+(`pnpm build:packages`). `GRAPHMIND_BUILDER_REGISTRY=1`
 forces the registry pins.
 
 ## Writing an adapter
