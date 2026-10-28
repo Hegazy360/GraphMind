@@ -14,19 +14,19 @@
     "gen:fixture": "tsx scripts/gen-fixture.ts"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.42",
-    "@ai-sdk/openai": "^4.0.47",
+    "@ai-sdk/anthropic": "^4.0.88",
+    "@ai-sdk/openai": "^4.0.102",
     "@graphmind-ai/sdk": "workspace:*",
-    "ai": "^7.0.79",
-    "zod": "^4.0.0"
+    "ai": "^7.0.153",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@graphmind-ai/schema": "workspace:*",
-    "@types/node": "^26.3.0",
-    "@types/ws": "^8.18.1",
+    "@types/node": "^26.6.5",
+    "@types/ws": "^8.18.2",
     "graphmind-ai": "workspace:*",
     "tsx": "^4.19.0",
     "typescript": "^7.0.2",
-    "ws": "^8.21.3"
+    "ws": "^8.22.0"
   }
 }

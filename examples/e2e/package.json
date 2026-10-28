@@ -8,14 +8,14 @@
   "dependencies": {
     "@graphmind-ai/sdk": "workspace:*",
     "@graphmind-ai/schema": "workspace:*",
-    "ai": "^7.0.79",
-    "ws": "^8.18.0",
-    "zod": "^4.0.0"
+    "ai": "^7.0.153",
+    "ws": "^8.22.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@ai-sdk/provider": "^3.0.0",
-    "@types/node": "^24.0.0",
-    "@types/ws": "^8.5.0",
+    "@types/node": "^26.6.5",
+    "@types/ws": "^8.18.2",
     "tsx": "^4.19.0"
   }
 }

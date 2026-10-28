@@ -9,7 +9,7 @@
     "telemetry": "node scripts/telemetry-report.mjs"
   },
   "dependencies": {
-    "@vercel/blob": "^2.8.0",
-    "@types/node": "^24.13.3"
+    "@vercel/blob": "^2.8.2",
+    "@types/node": "^26.6.5"
   }
 }
