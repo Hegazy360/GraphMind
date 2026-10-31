@@ -60,23 +60,54 @@ for (const theme of ['dark', 'light'] as const) {
   test(`${theme} theme: nothing is clipped, overlapping, or invisible`, async ({
     page,
   }, testInfo) => {
-    await openFixtureRun(page, { theme, colorScheme: theme });
+    await openFixtureRun(page, { theme, colorScheme: theme, workspace: 'everything' });
     await waitForPlantedPause(page);
-
-    // Put every information-carrying surface on screen at once.
-    await nodeCard(page, FIXTURE_NODES.currency).locator('.gm-node-title').click();
-    await page.keyboard.press('Shift+T');
-    await expect(page.locator('.gm-timeline')).toBeVisible();
-    await expect(page.getByRole('complementary', { name: 'Node inspector' })).toBeVisible();
-
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
 
-    const report = await audit(page);
-    await testInfo.attach(`audit-${theme}.json`, {
-      body: summarize(report),
+    // One place at a time is the whole point of the layout, so the audit
+    // visits them in turn instead of cramming four regions onto one screen.
+    // The run place first: header, hold band, summary, graph, waterfall.
+    await page.keyboard.press('Shift+T');
+    await expect(page.locator('.gm-timeline')).toBeVisible();
+    const onRun = await audit(page);
+    await testInfo.attach(`audit-${theme}-run.json`, {
+      body: summarize(onRun),
       contentType: 'application/json',
     });
-    await testInfo.attach(`screenshot-${theme}.png`, {
+    await testInfo.attach(`screenshot-${theme}-run.png`, {
+      body: await page.screenshot({ fullPage: false }),
+      contentType: 'image/png',
+    });
+
+    // …then the call, where the evidence and the decision live.
+    await nodeCard(page, FIXTURE_NODES.currency).locator('.gm-node-title').click();
+    await expect(page.getByRole('region', { name: 'Call detail' })).toBeVisible();
+    const onNode = await audit(page);
+
+    // …and the connect page, which is the first screen most people ever see
+    // and the one most likely to drift away from the rest of the theme.
+    await page.locator('.gm-header-brand').click();
+    await page.getByRole('menuitem', { name: 'Connect an agent' }).click();
+    await expect(page.getByRole('heading', { name: 'Connect an agent' })).toBeVisible();
+    await settleAnimations(page);
+    const onConnect = await audit(page);
+    await testInfo.attach(`screenshot-${theme}-connect.png`, {
+      body: await page.screenshot({ fullPage: false }),
+      contentType: 'image/png',
+    });
+
+    const report = {
+      ...onNode,
+      inspected: onRun.inspected + onNode.inspected + onConnect.inspected,
+      clipped: [...onRun.clipped, ...onNode.clipped, ...onConnect.clipped],
+      overlapping: [...onRun.overlapping, ...onNode.overlapping, ...onConnect.overlapping],
+      contrast: [...onRun.contrast, ...onNode.contrast, ...onConnect.contrast],
+    };
+    await testInfo.attach(`audit-${theme}-node.json`, {
+      body: summarize(onNode),
+      contentType: 'application/json',
+    });
+    await testInfo.attach(`screenshot-${theme}-node.png`, {
       body: await page.screenshot({ fullPage: false }),
       contentType: 'image/png',
     });

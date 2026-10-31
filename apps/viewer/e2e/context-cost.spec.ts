@@ -81,7 +81,7 @@ function envelopes(): unknown[] {
 }
 
 function inspector(page: import('@playwright/test').Page) {
-  return page.getByRole('complementary', { name: 'Node inspector' });
+  return page.getByRole('region', { name: 'Call detail' });
 }
 
 test('a run without token usage never fetches the price table', async ({ page }) => {
@@ -94,13 +94,14 @@ test('a run without token usage never fetches the price table', async ({ page })
     delete copy.payload['usage'];
     return copy;
   });
-  await openViewer(page, { embeddedRun: noUsage });
+  await openViewer(page, { embeddedRun: noUsage, workspace: 'everything' });
   await expect(nodeCard(page, 'llm:step')).toBeVisible();
+  // No usage anywhere in the run, so the summary never grows a cost.
+  await expect(page.locator('.gm-topbar-stats')).not.toContainText('est. cost');
   await nodeCard(page, 'llm:step').locator('.gm-node-title').click();
   await expect(inspector(page).getByTestId('context-cost')).toContainText('This step reported no token usage.');
   await page.waitForTimeout(300);
   expect(priceRequests).toEqual([]);
-  await expect(page.locator('.gm-topbar-stats')).not.toContainText('est. cost');
 });
 
 test('prices load lazily, then the step shows usage, cost, the held-cache note and the diff', async ({ page }) => {
@@ -109,7 +110,7 @@ test('prices load lazily, then the step shows usage, cost, the held-cache note a
     if (/data_slim/.test(request.url())) priceRequests.push(request.url());
   });
 
-  await openViewer(page, { embeddedRun: envelopes() });
+  await openViewer(page, { embeddedRun: envelopes(), workspace: 'everything' });
   await expect(nodeCard(page, 'llm:step')).toBeVisible();
 
   // The run has usage: its priced total reaches the top bar (one fetch of the chunk).
@@ -151,7 +152,7 @@ test('prices load lazily, then the step shows usage, cost, the held-cache note a
 
 test('the bundled demo: inclusive usage, and each step shows what changed since the one before', async ({ page }) => {
   const demo = JSON.parse(readFileSync(new URL('../src/fixtures/demo-run.json', import.meta.url), 'utf8')) as unknown[];
-  await openViewer(page, { embeddedRun: demo });
+  await openViewer(page, { embeddedRun: demo, workspace: 'everything' });
   await expect(page.locator('.react-flow__node')).toHaveCount(7, { timeout: 10_000 });
   await page.getByRole('button', { name: 'Fit view' }).click();
   await page.waitForTimeout(700);
@@ -201,7 +202,7 @@ test('an OPEN before-gate hold: the held-cache note appears once it crosses the 
     e(1_100, 'exec.paused', { pauseId: 'p1', nodeId: 'llm:step', instanceId: 'i:s1', point: 'before', reason: 'breakpoint' }),
   ];
   await page.clock.install({ time: new Date(prevFinished + 296_000) });
-  await openViewer(page, { embeddedRun: run });
+  await openViewer(page, { embeddedRun: run, workspace: 'everything' });
   await expect(nodeCard(page, 'llm:step')).toBeVisible();
   // The price table lands first, so no later prop change re-runs the view by accident.
   await expect(page.locator('.gm-topbar-stats')).toContainText('est. cost');
@@ -296,15 +297,14 @@ for (const [width, withError] of [
   [1440, true],
   [1200, true],
 ] as const) {
-  test(`the est. cost stays whole in the top bar: ${width} px, runs rail open${withError ? ', with an error count' : ''}`, async ({ page }) => {
+  test(`the est. cost stays whole in the run summary: ${width} px, with the run summary${withError ? ', with an error count' : ''}`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await openViewer(page, { embeddedRun: parallelRun(`run-topbar-${width}-${String(withError)}`, withError) });
     await expect(nodeCard(page, 'agent:orchestrator')).toBeVisible();
-    await expect(page.locator('.gm-rail')).toBeVisible();
     const cost = page.locator('.gm-topbar-stats .gm-stat').filter({ hasText: 'est. cost' });
     await expect(cost).toBeVisible();
     await expect(cost.locator('.gm-stat-value')).toHaveText('$0.900');
-    if (withError) await expect(page.locator('.gm-topbar-stats .gm-stat').filter({ hasText: 'errors' })).toBeVisible();
+    if (withError) await expect(page.locator('.gm-topbar-stats .gm-stat').filter({ hasText: /errors?$/ })).toBeVisible();
     // Geometry, not text content: nothing in the stats row sits past the
     // box's clip edge — the lowest-priority stats were shed instead.
     const g = await page.evaluate(() => {

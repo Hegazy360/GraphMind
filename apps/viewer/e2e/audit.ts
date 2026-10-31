@@ -62,17 +62,27 @@ export const DEFAULT_TEXT_SELECTORS = [
   '.gm-pause-error',
   '.gm-action',
   '.gm-token-tail',
-  '.gm-inspect-head .gm-node-title',
+  '.gm-nodehead-name',
   '.gm-inspect-stat-value',
   '.gm-inspect-stat-label',
   '.gm-section-label',
   '.gm-why-error-name',
   '.gm-why-error-message',
   '.gm-conn-label',
-  '.gm-run-item-app',
+  '.gm-crumb',
+  '.gm-runcard-app',
+  '.gm-runcard-meta',
   '.gm-timeline-name',
   '.gm-palette-title',
   '.gm-palette-sub',
+  // connect page
+  '.gm-connect-head h1',
+  '.gm-connect-lede',
+  '.gm-connect-chip',
+  '.gm-connect-blurb',
+  '.gm-connect-gate',
+  '.gm-connect-next',
+  '.gm-connect-foot',
 ];
 
 export const DEFAULT_ROW_SELECTORS = [
@@ -82,8 +92,12 @@ export const DEFAULT_ROW_SELECTORS = [
   '.gm-node-head',
   '.gm-node-meta',
   '.gm-actions',
-  '.gm-inspect-head',
-  '.gm-runbar',
+  '.gm-nodehead',
+  '.gm-header',
+  '.gm-runsummary',
+  '.gm-connect-head',
+  '.gm-connect-group',
+  '.gm-connect-chips',
 ];
 
 /**

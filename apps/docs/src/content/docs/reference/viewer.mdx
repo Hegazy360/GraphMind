@@ -10,6 +10,42 @@ import { Aside } from '@astrojs/starlight/components';
 The viewer is the bundled UI the CLI serves at `http://127.0.0.1:4747`. This page is the map: if
 you learn one thing from it, learn <kbd>⌘</kbd><kbd>K</kbd>.
 
+## One header, one section
+
+The viewer is a stack of places with exactly one on screen at a time:
+
+```text
+runs  →  run  →  node
+```
+
+The **breadcrumb in the header is the navigation** — `Runs › trip-planner › currencyConvert`,
+every ancestor a link. <kbd>Esc</kbd> steps up one, and so does the browser's back button,
+because each place is a hash URL.
+
+**Connect an agent** and **Build a workflow** are side trips rather than steps: you take one
+from wherever you are and come back. They extend the trail instead of replacing it — `Runs ›
+trip-planner › currencyConvert › Connect an agent` — so every ancestor stays a link and
+<kbd>Esc</kbd> returns you to the exact call you left. Both are in the menu under the
+GraphMind mark, from any place.
+
+That is the whole frame: a 46px header, and the place under it. There is no run rail, no
+toolbar, no debug bar and no docked inspector — a seven-node run gets the window, a
+three-hundred-node one gets all of it, and a stack trace is read across a reading column
+instead of down a 392px gutter.
+
+| Place | What it is for |
+| --- | --- |
+| **Runs** | Which run? A card per run with how it ended, how big, how long, what it cost, and the error it stopped on |
+| **Run** | What happened? The summary line and the graph (or the waterfall), edge to edge |
+| **Node** | One call. The decision if it is held, then why it failed, the payloads, the timings |
+
+A run that is **held** gets a band directly under the header, on every place, naming the call
+and why — a stopped process outranks wherever you happen to be standing. It never moves you:
+seeing *where* in the shape a run stopped is most of the value of stopping it, so the graph
+stays and the band offers the way in. <kbd>C</kbd>, <kbd>S</kbd> and <kbd>R</kbd> release the
+hold from the graph without navigating at all; <kbd>I</kbd> and <kbd>E</kbd> step into the call,
+because injecting and editing need the payload on screen.
+
 ## The command palette
 
 <kbd>⌘</kbd><kbd>K</kbd> (or <kbd>Ctrl</kbd><kbd>K</kbd>) opens a palette over everything. It is
@@ -43,8 +79,13 @@ always works.
 | <kbd>⇧</kbd><kbd>E</kbd> | Show only the error path |
 | <kbd>⇧</kbd><kbd>C</kbd> | Collapse / expand all groups |
 | <kbd>⇧</kbd><kbd>L</kbd> | Copy a deep link to this view |
-| <kbd>B</kbd> | Toggle the run list rail |
+| <kbd>Esc</kbd> | Step up one place (node → run → runs) |
+| <kbd>[</kbd> / <kbd>]</kbd> | On a call: the previous / next call in execution order |
 | <kbd>D</kbd> | Cycle the theme (system → dark → light) |
+
+The toolbar's **View** menu holds the same three: which panes are open, how much of the graph
+is folded, and the theme. The button carries the folded count, so a graph that is hiding part
+of itself says so without being opened.
 
 ### While a gate is held
 
@@ -255,21 +296,79 @@ while you scroll horizontally. **Timeline only** hides the graph when you want t
 Click any node to open it: input, output, error with stack, duration, token usage, status, and
 every instance of that node newest-first. See [inspecting a run](/debugging/inspecting/).
 
-## The run bar
+## How much is on screen
 
-Connection status, the run picker, the **Run / Step** toggle, **Pause all**, and a removable chip
-for every armed breakpoint — including the default pause-on-error one. See
-[breakpoints & step mode](/debugging/breakpoints-and-step/).
+The run page ships as **Essentials**: the graph, the four figures in the top
+bar, and an inspector that answers what happened, what went in, what came out
+and how long it took. Five more panels exist and start switched off, because a
+panel you have not needed yet is indistinguishable from clutter.
+
+Open the chooser from the **View** menu, from the line at the bottom of a
+call, or with <kbd>⌘</kbd><kbd>K</kbd> → "Customize the run page".
+
+| Panel | Base | What it adds |
+| --- | --- | --- |
+| Why it failed | ✅ | The error, its stack, the input that caused it, the siblings that did not fail |
+| Input and output | ✅ | The values this call received and returned |
+| Timing and tokens | ✅ | Duration, held time, token counts for this one execution |
+| Minimap and size readout | ✅ | Only ever drawn on a graph big enough to need them |
+| Context and cost | — | What the model saw, how it changed since the previous step, the estimate |
+| History | — | Totals across every execution of this node, and who released its holds |
+| Streamed text | — | The tokens as they arrived, plus any reasoning trace |
+| Node id | — | The logical id and a deep link to this exact node |
+| Connection detail | — | Who this tab is to the server, what a coding agent may do, the endpoint |
+
+**Essentials** and **Everything** are shortcuts, not modes: change any single
+toggle and you are in `custom`, with nothing lost and nothing to undo. The
+choice is stored in the browser and applies to every run.
+
+<Aside type="caution" title="What a preset can never hide">
+Why a run is held, and the row that releases it. The pause banner, the hold
+evidence (loop streaks, repeated errors, error-shaped results) and
+Continue / Step / Retry / Inject / Edit / Abort are not panels — a debugger
+that could be configured into not telling you it had stopped would be worse
+than no debugger.
+</Aside>
+
+## The header
+
+The breadcrumb, whether anything is attached, and three menus.
+
+The connection light never flatters the connection: an open socket is not a live tail, so a
+server still replaying history says `catching up 12,048/72,144` and a stream that has fallen
+behind says `behind 34s`.
+
+- **Debug** — Run / Step, **Break everywhere**, and a removable chip for every armed
+  breakpoint, including the default pause-on-error one. Session state, not per-run, so it
+  lives behind a menu; the button carries the armed count and reads `Step` when stepping. See
+  [breakpoints & step mode](/debugging/breakpoints-and-step/). In a run exported by
+  `graphmind record --html`, or in a tab without the viewer token, these are disabled and say
+  why. The endpoint and the control chip are the **Connection detail** panel, off in the base.
+- **View** — how much detail, which panes, how much is folded, the theme.
+- **Search** — the palette.
+
+## The run summary
+
+One line above the graph: the status, then the four figures you want before you look at it —
+**nodes**, **errors** (only when there are any), **wall** time and the **est. cost**.
+Everything else the run reported — llm steps, tool calls, running vs held time, the token
+breakdown with cache reads and writes — is under **Totals**, whole, and never truncated to
+fit. **Filter** dims what it excludes rather than hiding it.
 
 ## Deep links
 
 The viewer's routes are plain hash URLs:
 
 ```text
+http://127.0.0.1:4747/#/runs
 http://127.0.0.1:4747/#/run/<runId>
 http://127.0.0.1:4747/#/run/<runId>/node/<nodeId>
 http://127.0.0.1:4747/#/build
+http://127.0.0.1:4747/#/connect
 ```
+
+These are the places, so the browser's history is the stack: going back from a call lands on
+its run, and back again on the list.
 
 Both segments are URI-component encoded, so `tool:issueRefund` appears as `tool%3AissueRefund`.
 
@@ -283,6 +382,22 @@ see the same debug state, and a change in one broadcasts to the other — which 
 "open the good run and the bad run side by side" work. See
 [comparing runs](/debugging/comparing-runs/).
 </Aside>
+
+## Connect an agent
+
+`#/connect`, the header menu, or "Connect an agent" in the palette. A viewer that opens with
+nothing attached and no runs lands here on its own, once.
+
+One screen: pick the SDK your agent already uses, and copy the install command and the two
+lines it needs. The page also states what a gate can actually do for that stack *before* you
+wire it up — LangChain callbacks can hold a node but not change what it returns — and whether
+anything is currently listening, in the same dot-and-label the header carries. Your choice of
+stack is remembered.
+
+There is deliberately no wizard here. It was five steps, and four of them were ceremony: a
+menu in front of a menu, a Next button between two code blocks that belong together, and a
+step whose content was "now run your app, and leave this tab open" — which is what the rest
+of the viewer is for.
 
 ## The Build page
 

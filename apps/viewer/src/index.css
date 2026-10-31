@@ -259,15 +259,19 @@ button {
 }
 
 /* ═══ app shell ══════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════════════
+   LAYOUT — one header, one section.
+
+   The viewer used to frame its canvas on three sides: a run rail, a toolbar,
+   a debug bar and a docked inspector, all at once, on every screen. It is
+   now a stack of places (runs → run → node) with exactly one on screen, so
+   the only persistent chrome is a 46px header and, when a run is held, the
+   band under it.
+   ═══════════════════════════════════════════════════════════════════════ */
 .gm-app {
   display: flex;
   flex-direction: column;
   height: 100%;
-}
-.gm-app-body {
-  display: flex;
-  flex: 1;
-  min-height: 0;
 }
 .gm-main {
   position: relative;
@@ -277,32 +281,157 @@ button {
   min-width: 0;
   min-height: 0;
 }
-/*
- * Two panes side by side: the graph/waterfall column, and the inspector.
- * The inspector used to float over the whole workspace, which is how it
- * ended up covering the timeline's zoom controls and the inject button of
- * the very node it was explaining.
- */
-.gm-workspace {
-  position: relative;
+
+/* ── the header ──────────────────────────────────────────────────────── */
+.gm-header {
   display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: 46px;
+  flex-shrink: 0;
+  padding: 0 var(--sp-4) 0 var(--sp-4);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.gm-header-brand {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--radius-sm);
+  color: inherit;
+}
+.gm-header-brand:hover {
+  background: var(--surface-2);
+}
+.gm-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* ── the breadcrumb: this is the navigation ──────────────────────────── */
+.gm-crumbs {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+.gm-crumb-slot {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.gm-crumb-sep {
+  flex: none;
+  margin: 0 1px;
+  color: var(--text-faint);
+  opacity: 0.55;
+}
+.gm-crumb {
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-base);
+  font-weight: 560;
+  color: var(--text-faint);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+a.gm-crumb:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.gm-crumb--current {
+  color: var(--text);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+/* ── the hold band ───────────────────────────────────────────────────── */
+.gm-holdstrip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+  padding: 8px var(--sp-4);
+  background: var(--amber-tint);
+  border-bottom: 1px solid color-mix(in srgb, var(--amber) 45%, var(--border));
+  color: var(--amber-text);
+  font-size: var(--fs-md);
+}
+.gm-holdstrip-what {
+  flex: none;
+  font-weight: 560;
+}
+.gm-holdstrip-why {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* `.gm-action` flexes to fill, which is right inside a node card and wrong
+   in a full-width band: two classes so it beats it on specificity. */
+.gm-holdstrip .gm-holdstrip-go {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  font-size: var(--fs-md);
+}
+
+/* ── the run place ───────────────────────────────────────────────────── */
+.gm-runpage {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
 }
-.gm-workspace-panes {
+.gm-runsummary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  height: 40px;
+  flex-shrink: 0;
+  padding: 0 var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+/* The figures sit with the run they describe, not pushed to the far edge:
+   the strip is read left to right, status then shape then cost. */
+.gm-runsummary .gm-topbar-stats {
+  flex: 0 1 auto;
+  justify-content: flex-start;
+}
+.gm-runsummary-end {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.gm-runpage-body {
   position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
-  min-width: 0;
   min-height: 0;
 }
-.gm-workspace-graph {
+.gm-runpage-graph {
   position: relative;
   flex: 1;
   min-height: 0;
 }
-.gm-workspace-timeline {
+.gm-runpage-timeline {
   position: relative;
   min-height: 0;
   background: var(--surface);
@@ -318,6 +447,251 @@ button {
 .gm-splitter:hover,
 .gm-splitter:focus-visible {
   background: var(--accent);
+}
+
+/* ── the runs place ──────────────────────────────────────────────────── */
+.gm-runs {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg-canvas);
+}
+.gm-runs-inner {
+  width: min(880px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: var(--sp-6) 0 48px;
+}
+.gm-runs-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-5);
+}
+.gm-runs-head h1 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+.gm-runs-count {
+  font-size: var(--fs-md);
+  color: var(--text-faint);
+}
+.gm-runs-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-faint);
+}
+.gm-runs-search input {
+  border: none;
+  background: transparent;
+  outline: none;
+  color: var(--text);
+  font-size: var(--fs-md);
+  width: 190px;
+}
+.gm-runs-empty {
+  padding: var(--sp-6);
+  text-align: center;
+  color: var(--text-faint);
+  font-size: var(--fs-md);
+}
+.gm-runs-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.gm-runcard {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.gm-runcard:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+.gm-runcard--error {
+  border-left-color: var(--err);
+}
+.gm-runcard--paused {
+  border-left-color: var(--amber);
+}
+.gm-runcard--running {
+  border-left-color: var(--accent);
+}
+.gm-runcard--ok {
+  border-left-color: var(--ok);
+}
+.gm-runcard-top {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+.gm-runcard-app {
+  font-size: var(--fs-base);
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gm-runcard-status {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.gm-runcard-status--error {
+  color: var(--err);
+}
+.gm-runcard-status--paused {
+  color: var(--amber-text);
+}
+.gm-runcard-status--running {
+  color: var(--accent);
+}
+.gm-runcard-when {
+  margin-left: auto;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.gm-runcard-go {
+  flex: none;
+  color: var(--text-faint);
+  opacity: 0;
+}
+.gm-runcard:hover .gm-runcard-go {
+  opacity: 1;
+}
+.gm-runcard-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+}
+.gm-runcard-errors {
+  color: var(--err);
+}
+.gm-runcard-held {
+  color: var(--amber-text);
+}
+.gm-runcard-error {
+  margin-top: 2px;
+  padding: 6px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--err-soft);
+  color: var(--err-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.gm-runcard-error--held {
+  background: var(--amber-tint);
+  color: var(--amber-text);
+}
+
+/* ── the node place ──────────────────────────────────────────────────── */
+.gm-nodepage {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-canvas);
+}
+.gm-nodehead {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+  padding: 10px var(--sp-5);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.gm-nodehead-name {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gm-nodehead-id {
+  border: none;
+  padding: 0;
+  background: none;
+}
+.gm-nodehead-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.gm-nodehead-pos {
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.gm-nodepage-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-5) var(--sp-5) 48px;
+}
+/* A reading column, not a 392px gutter: a stack trace and a 60-line tool
+   result are the two things this page exists to show. */
+.gm-nodepage-column {
+  width: min(920px, 100%);
+  margin: 0 auto;
+}
+.gm-nodedetail {
+  display: flex;
+  flex-direction: column;
+}
+.gm-nodepage-missing {
+  margin: auto;
+  padding: var(--sp-6);
+  text-align: center;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+}
+.gm-nodepage-missing .gm-action {
+  margin-top: var(--sp-4);
+}
+
+/* Input and output are read against each other; side by side when there is
+   room for both, stacked when there is not. */
+@media (min-width: 1100px) {
+  .gm-nodepage-column .gm-inspect-section--pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-4);
+  }
 }
 
 /* ═══ top bar ════════════════════════════════════════════════════════════ */
@@ -367,6 +741,13 @@ button {
 .gm-linkbtn:hover {
   color: var(--text);
   background: var(--surface-2);
+}
+.gm-linkbtn--icon {
+  padding: 5px;
+}
+.gm-linkbtn-flash {
+  font-family: var(--font-sans);
+  color: var(--accent);
 }
 
 /*
@@ -473,6 +854,18 @@ button {
 .gm-popover-host {
   position: relative;
 }
+/* A disclosure that expands something already on screen, rather than an
+   action: it should not compete with Filter or Search for attention. */
+.gm-toolbtn--quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-faint);
+}
+.gm-toolbtn--quiet:hover {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
 .gm-popover {
   position: absolute;
   top: calc(100% + 7px);
@@ -485,6 +878,13 @@ button {
   border-radius: var(--radius);
   box-shadow: var(--shadow-pop);
   animation: gm-pop 140ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* Run totals: wider than a filter list, and anchored under the summary it
+   expands rather than at the bar's right edge. */
+.gm-popover--totals {
+  width: 342px;
+  right: auto;
+  left: 0;
 }
 @keyframes gm-pop {
   from {
@@ -543,143 +943,6 @@ button {
 }
 
 /* ═══ left rail ══════════════════════════════════════════════════════════ */
-.gm-rail {
-  display: flex;
-  flex-direction: column;
-  width: 244px;
-  flex-shrink: 0;
-  background: var(--bg);
-  border-right: 1px solid var(--border);
-}
-.gm-rail-head {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  height: 50px;
-  flex-shrink: 0;
-  padding: 0 var(--sp-4) 0 var(--sp-5);
-  border-bottom: 1px solid var(--border);
-}
-.gm-wordmark {
-  font-weight: 650;
-  font-size: 14px;
-  letter-spacing: -0.02em;
-}
-.gm-rail-search {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  margin: var(--sp-3) var(--sp-3) 0;
-  padding: 0 var(--sp-3);
-  height: 28px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-faint);
-}
-.gm-rail-search input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  outline: none;
-  background: transparent;
-  color: var(--text);
-  font-size: var(--fs-md);
-}
-.gm-rail-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--sp-2);
-}
-.gm-rail-label {
-  display: flex;
-  justify-content: space-between;
-  padding: var(--sp-2) 10px var(--sp-3);
-}
-.gm-rail-empty {
-  padding: var(--sp-1) 10px;
-  font-size: var(--fs-md);
-  color: var(--text-faint);
-}
-.gm-rail-items {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.gm-rail-foot {
-  display: flex;
-  gap: var(--sp-4);
-  padding: 10px var(--sp-5);
-  border-top: 1px solid var(--border);
-  font-size: var(--fs-xs);
-  color: var(--text-faint);
-}
-
-.gm-run-item {
-  width: 100%;
-  text-align: left;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  padding: 7px 9px;
-  cursor: pointer;
-  background: transparent;
-  transition: background 140ms ease, border-color 140ms ease;
-}
-.gm-run-item:hover {
-  background: var(--surface);
-}
-.gm-run-item--selected {
-  background: var(--surface);
-  border-color: var(--border-strong);
-}
-.gm-run-item-top {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-.gm-run-item-app {
-  flex: 1;
-  min-width: 0;
-  font-weight: 600;
-  font-size: var(--fs-md);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.gm-run-item-meta {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 3px;
-  font-size: var(--fs-xs);
-  color: var(--text-faint);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-}
-.gm-run-item-status {
-  font-weight: 620;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.gm-run-item-status--running {
-  color: var(--accent);
-}
-.gm-run-item-status--paused {
-  color: var(--amber);
-}
-.gm-run-item-status--error {
-  color: var(--err);
-}
-.gm-run-item-errors {
-  color: var(--err);
-}
-.gm-run-item-when {
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
 /* ═══ canvas ═════════════════════════════════════════════════════════════ */
 .gm-canvas {
   position: absolute;
@@ -1856,32 +2119,6 @@ button {
 }
 
 /* ═══ inspector ══════════════════════════════════════════════════════════ */
-.gm-panel {
-  background: var(--surface);
-  border-left: 1px solid var(--border);
-  box-shadow: var(--shadow-pop);
-}
-.gm-inspector {
-  position: relative;
-  flex-shrink: 0;
-  z-index: 30;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.gm-panel-resize {
-  position: absolute;
-  left: -3px;
-  top: 0;
-  bottom: 0;
-  width: 6px;
-  cursor: col-resize;
-  z-index: 31;
-}
-.gm-panel-resize:hover {
-  background: var(--accent);
-  opacity: 0.6;
-}
 .gm-inspect-head {
   display: flex;
   align-items: center;
@@ -2645,12 +2882,19 @@ button {
   border-style: dashed;
   background: transparent;
 }
+/*
+ * Disabled must not mean unreadable: these controls still have to say what
+ * they are and why they are off. `--text-faint` clears 3:1 on the canvas but
+ * not on `--surface`, which is what the Debug menu's popover is drawn on, so
+ * the dead and locked states carry the dimmer-but-legible tone and let the
+ * dashed border and the cursor say "off".
+ */
 .gm-seg--dead button,
 .gm-seg--dead button.gm-seg--on,
 .gm-seg--dead button:hover {
   background: transparent;
   box-shadow: none;
-  color: var(--text-faint);
+  color: var(--text-dim);
 }
 .gm-seg button:disabled,
 .gm-toolbtn:disabled {
@@ -2661,7 +2905,15 @@ button {
   border-style: dashed;
   background: transparent;
   border-color: var(--border);
-  color: var(--text-faint);
+  color: var(--text-dim);
+}
+/* The same, for a disabled row inside a popover. */
+.gm-filter-row:disabled,
+.gm-filter-row:disabled:hover {
+  border-style: dashed;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: not-allowed;
 }
 /*
  * A tab without the token (0.6): the server has a current mode and it is
@@ -2674,7 +2926,7 @@ button {
 .gm-seg--locked button:not(.gm-seg--on),
 .gm-seg--locked button:not(.gm-seg--on):hover {
   background: transparent;
-  color: var(--text-faint);
+  color: var(--text-dim);
 }
 .gm-chip button:disabled,
 .gm-chip button:disabled:hover {
@@ -2761,17 +3013,6 @@ button {
 }
 
 /* ═══ run bar ════════════════════════════════════════════════════════════ */
-.gm-runbar {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-4);
-  height: 44px;
-  flex-shrink: 0;
-  padding: 0 var(--sp-4);
-  background: color-mix(in srgb, var(--bg) 86%, transparent);
-  backdrop-filter: blur(14px);
-  border-top: 1px solid var(--border);
-}
 .gm-conn-group {
   display: flex;
   align-items: center;
@@ -2781,25 +3022,6 @@ button {
   font-size: var(--fs-sm);
   color: var(--text-dim);
   font-weight: 560;
-}
-.gm-runbar-divider {
-  width: 1px;
-  height: 20px;
-  background: var(--border);
-}
-.gm-runbar-chips {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-  overflow-x: auto;
-}
-.gm-runbar-endpoint {
-  font-size: var(--fs-xs);
-  color: var(--text-faint);
-  white-space: nowrap;
-  font-family: var(--font-mono);
 }
 
 /* ═══ empty states ═══════════════════════════════════════════════════════ */
@@ -3190,9 +3412,6 @@ button {
  * The inspector's own scroll gets bottom room for the pinned footer, so the
  * last section is readable rather than tucked behind it.
  */
-.gm-inspector--held .gm-inspect-body {
-  padding-bottom: var(--sp-3);
-}
 
 /* A key hint that does not become part of a button's accessible name. */
 .gm-kbd--inline {
@@ -3223,23 +3442,28 @@ button {
    the inspector takes the width it is given rather than the width it wants.
    ═══════════════════════════════════════════════════════════════════════ */
 @media (max-width: 860px) {
-  .gm-app-body {
-    position: relative;
+  /* One section was already the plan; a narrow window just tightens it. */
+  .gm-header {
+    gap: var(--sp-2);
+    padding: 0 var(--sp-3);
   }
-  .gm-rail {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    z-index: 60;
-    width: min(280px, 82vw);
-    box-shadow: var(--shadow-pop);
-    animation: gm-rail-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  .gm-conn-label {
+    display: none;
   }
-  @keyframes gm-rail-in {
-    from {
-      transform: translateX(-100%);
-    }
+  .gm-runs-inner {
+    width: calc(100% - 28px);
+    padding-top: var(--sp-5);
+  }
+  .gm-runs-search input {
+    width: 120px;
+  }
+  .gm-nodepage-body,
+  .gm-nodehead {
+    padding-left: var(--sp-4);
+    padding-right: var(--sp-4);
+  }
+  .gm-minimap {
+    display: none;
   }
   .gm-topbar {
     gap: var(--sp-3);
@@ -3251,39 +3475,22 @@ button {
   .gm-topbar-actions {
     margin-left: auto;
   }
-  .gm-inspector {
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(100%, 100vw) !important;
-    max-width: 100%;
-  }
-  .gm-runbar {
-    gap: var(--sp-3);
-    padding: 0 var(--sp-3);
-    overflow-x: auto;
-  }
-  .gm-runbar > * {
-    flex-shrink: 0;
-  }
-  .gm-runbar-endpoint,
-  .gm-runbar-divider {
-    display: none;
-  }
-  .gm-minimap {
-    display: none;
-  }
 }
 @media (max-width: 620px) {
   /*
-   * At phone width the toolbar cannot hold seven controls and a run name.
-   * What survives is what only the toolbar can do — say what you are looking
-   * at, filter it, and search it. Folding and the waterfall are still one
-   * ⌘K away, which is where a cramped screen should send you anyway.
+   * At phone width even one row of controls is too many. What survives is
+   * where you are and how to search; the menus keep their icons and drop
+   * their words.
    */
-  .gm-narrow-hide {
+  .gm-narrow-hide,
+  .gm-header-actions .gm-toolbtn-label {
     display: none !important;
+  }
+  .gm-crumb-slot:not(:last-child) .gm-crumb {
+    max-width: 72px;
+  }
+  .gm-runsummary {
+    gap: var(--sp-3);
   }
   .gm-topbar-title h1 {
     max-width: none;
@@ -3316,8 +3523,7 @@ button {
   .gm-node--paused::before,
   .gm-node--settled::after,
   .gm-node--struck::after,
-  .gm-node--held::after,
-  .gm-rail {
+  .gm-node--held::after {
     animation: none;
   }
   /* The two ongoing states still have to be visible standing still. */
@@ -3367,13 +3573,19 @@ span.gm-pause-instance {
    (section labels, chips, pills, actions) so the page reads as the same
    tool; the only new colour is none — kind tints come from --kind-*.
    ═══════════════════════════════════════════════════════════════════════ */
-.gm-rail-build {
+/* The rail's non-run navigation: the setup guide and the builder. */
+.gm-rail-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: var(--sp-3) var(--sp-2) var(--sp-2);
+}
+.gm-rail-link {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  margin: var(--sp-3) var(--sp-3) 0;
-  padding: 7px 10px;
-  border: 1px dashed var(--border-strong);
+  padding: 7px 9px;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-dim);
@@ -3382,13 +3594,11 @@ span.gm-pause-instance {
   cursor: pointer;
   text-align: left;
 }
-.gm-rail-build:hover {
+.gm-rail-link:hover {
   color: var(--text);
-  border-color: var(--text-faint);
-  background: var(--surface);
+  background: var(--surface-2);
 }
-.gm-rail-build--on {
-  border-style: solid;
+.gm-rail-link--on {
   color: var(--accent-strong);
   border-color: color-mix(in srgb, var(--accent) 50%, var(--border-strong));
   background: var(--accent-soft);
@@ -3868,3 +4078,466 @@ textarea.gm-binput {
     gap: 4px;
   }
 }
+
+/* ═══ connect page atoms ════════════════════════════════════════════════
+   A copyable command, the supporting note under it, and the attachment
+   line. The only parts of the five-step guide worth keeping.
+   ═══════════════════════════════════════════════════════════════════════ */
+.gm-code {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-canvas);
+}
+.gm-code pre {
+  margin: 0;
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  line-height: 1.75;
+  color: var(--text);
+  overflow-x: auto;
+  white-space: pre;
+}
+.gm-code[data-lang='sh'] pre {
+  color: var(--accent-strong);
+}
+.gm-note {
+  margin-top: var(--sp-5);
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.gm-note-dim {
+  margin: var(--sp-3) 0 0;
+  font-size: var(--fs-md);
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+.gm-note-dim code,
+.gm-note-ok code,
+.gm-note-warn code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+.gm-note-ok,
+.gm-note-warn {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--fs-md);
+  line-height: 1.6;
+}
+.gm-note-ok {
+  color: var(--ok);
+}
+.gm-note-warn {
+  color: var(--amber-text);
+}
+.gm-link {
+  display: inline-block;
+  margin-top: var(--sp-3);
+  color: var(--accent);
+  text-decoration: none;
+  font-size: var(--fs-md);
+}
+.gm-link:hover {
+  text-decoration: underline;
+}
+
+/* ═══ customize the run page ═════════════════════════════════════════════
+   A dialog, not a popover: it is reachable from the View menu, the bottom of
+   the inspector and the palette, and it holds a nine-item checklist that
+   would only have moved the crowding if it lived inside another menu.
+   ═══════════════════════════════════════════════════════════════════════ */
+.gm-cz-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 10vh var(--sp-5) var(--sp-5);
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
+  backdrop-filter: blur(2px);
+  overflow-y: auto;
+}
+.gm-cz {
+  width: min(520px, 100%);
+  padding: var(--sp-5);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  animation: gm-pop 140ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.gm-cz:focus {
+  outline: none;
+}
+.gm-cz-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-5);
+}
+.gm-cz-head h2 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.gm-cz-head p {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-md);
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+.gm-cz-head .gm-iconbtn {
+  margin-left: auto;
+  flex: none;
+}
+.gm-cz-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--sp-2);
+}
+.gm-cz-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.gm-cz-row:hover {
+  background: var(--surface-2);
+}
+.gm-cz-row--on {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.gm-cz-box {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  margin-top: 1px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--bg);
+}
+.gm-cz-row--on .gm-cz-box {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.gm-cz-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.gm-cz-label {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.gm-cz-row--on .gm-cz-label {
+  color: var(--text);
+}
+.gm-cz-hint {
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--text-faint);
+}
+.gm-cz-foot {
+  margin-top: var(--sp-5);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+/* The one place the base admits it is a base: the end of a panel you have
+   just finished reading. */
+.gm-inspect-more {
+  display: block;
+  width: calc(100% - var(--sp-5) * 2);
+  margin: var(--sp-4) var(--sp-5) var(--sp-5);
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.gm-inspect-more:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+  background: var(--surface-2);
+}
+
+/* ── the decision row, on a page instead of in a 392px column ─────────────
+   `.gm-action` flexes to fill its row, which is right inside a narrow card
+   and absurd across a 920px reading column: five verbs, each 180px wide,
+   reading as five equally-weighted choices when one of them aborts the run.
+   On the node place they size to their words and sit together on the left,
+   which is also how they read as a *row of actions* rather than a toolbar.
+   ═══════════════════════════════════════════════════════════════════════ */
+.gm-nodepage .gm-inspect-held {
+  padding: 10px var(--sp-5);
+  border-top: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--amber) 45%, var(--border));
+  box-shadow: none;
+}
+.gm-nodepage .gm-inspect-held .gm-actions {
+  justify-content: flex-start;
+}
+.gm-nodepage .gm-inspect-held .gm-action {
+  flex: 0 0 auto;
+  padding: 6px 14px;
+  font-size: var(--fs-md);
+}
+/* The held row's own content gets the reading column too, so the decision
+   lines up with the evidence under it rather than starting at the window. */
+.gm-nodepage .gm-held-row {
+  width: min(920px, 100%);
+  margin: 0 auto;
+}
+
+.gm-runs-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+.gm-runs-actions + .gm-runs-search {
+  margin-left: 0;
+}
+
+/* ═══ connect an agent (#/connect) ═══════════════════════════════════════
+   One screen: pick your stack, copy two things.
+
+   Built from the debugger's own atoms rather than its own: one surface,
+   hairline-divided sections, a `gm-section-label` heading each, a `gm-copy`
+   on the right of the head row — the same shape as the inspector. A page
+   that looks like a docs site dropped into a debugger reads as a different
+   product, and this is the first page most people ever see.
+   ═══════════════════════════════════════════════════════════════════════ */
+.gm-connect {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg-canvas);
+}
+.gm-connect-inner {
+  width: min(720px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: var(--sp-6) 0 48px;
+}
+.gm-connect-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+}
+.gm-connect-head h1 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+/* The same dot-and-label the header carries, so the two never look like
+   two different claims about the same socket. */
+.gm-connect-conn {
+  margin-left: auto;
+  flex: none;
+}
+.gm-connect-conn code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+.gm-connect-lede {
+  margin: var(--sp-3) 0 var(--sp-5);
+  font-size: var(--fs-base);
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+
+.gm-connect-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.gm-connect-section {
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+}
+.gm-connect-section--last {
+  border-bottom: none;
+}
+
+/* ── the one choice on the page ───────────────────────────────────────── */
+.gm-connect-stacks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.gm-connect-group {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+}
+.gm-connect-lang {
+  flex: none;
+  width: 94px;
+  padding-top: 3px;
+}
+.gm-connect-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.gm-connect-chip {
+  padding: 4px 11px;
+  font-size: var(--fs-md);
+  font-weight: 560;
+  background: var(--bg-canvas);
+}
+.gm-connect-chip:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+/* `.gm-chip--on` is declared with the other chip states, far above this
+   file position, so the selected surface needs the extra class to win. */
+.gm-connect-chip.gm-chip--on {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.gm-connect-blurb {
+  margin: var(--sp-4) 0 0;
+  padding: var(--sp-3) 0 0;
+  border-top: 1px dashed var(--border);
+  font-size: var(--fs-md);
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+/* ── the two commands ─────────────────────────────────────────────────── */
+.gm-connect-steplabel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.gm-connect-n {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+/* ── what a gate can do here ──────────────────────────────────────────── */
+.gm-connect-gate {
+  margin: 0;
+  font-size: var(--fs-md);
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+.gm-connect-next {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+.gm-connect-next code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
+.gm-connect-foot {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  margin-top: var(--sp-4);
+  padding: 0 var(--sp-1);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+.gm-connect-foot code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+.gm-connect-build {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  font-weight: 560;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.gm-connect-build:hover {
+  text-decoration: underline;
+}
+
+/* The brand doubles as "go to…", so the menu hangs off the left edge. */
+.gm-popover--places {
+  right: auto;
+  left: 0;
+  width: 212px;
+}
+
+@media (max-width: 860px) {
+  .gm-connect-inner {
+    width: calc(100% - 28px);
+    padding-top: var(--sp-5);
+  }
+  .gm-connect-section {
+    padding: var(--sp-4);
+  }
+  .gm-connect-group {
+    flex-direction: column;
+    gap: var(--sp-2);
+  }
+  .gm-connect-lang {
+    width: auto;
+  }
+  .gm-connect-blurb {
+    padding-left: 0;
+  }
+}
+
+.gm-runs-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+.gm-runs-actions + .gm-runs-search {
+  margin-left: 0;
+}
+

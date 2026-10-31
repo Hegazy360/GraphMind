@@ -4,6 +4,12 @@
  * stack, the exact input that produced it, and what ran around it — then the
  * numbers (duration, tokens, retries, estimated spend), then the payloads.
  *
+ * Which of those you get is yours to choose (store/workspace.ts). The base
+ * is the failure, the payloads and this call's timings; context diffs,
+ * per-node history, streamed text and the node id are switched on when you
+ * find you want them. Two things are never a panel and never hidden: why a
+ * run is held, and the row that releases it.
+ *
  * When the node it is describing is *held*, the panel also owns the decision:
  * a pinned footer with the same Continue / Step / Retry / Inject / Abort row
  * that the card carries. That is not duplication for its own sake — the panel
@@ -30,6 +36,7 @@ import { tokenBuffers } from '../store/tokenBuffers.js';
 import { useRunStore } from '../store/runStore.js';
 import { failureContext, nodeStats } from '../store/stats.js';
 import { useUiStore } from '../store/uiStore.js';
+import { hiddenCount, type Panels } from '../store/workspace.js';
 import {
   activePausesOf,
   executionError,
@@ -284,11 +291,13 @@ function ExecutionDetails({
   node,
   exec,
   execIndex,
+  panels,
 }: {
   runId: string;
   node: NodeState;
   exec: NodeExecution;
   execIndex: number;
+  panels: Panels;
 }) {
   const live = useTokenSnapshot(runId, node.nodeId);
   // Streams are segmented per execution at node.started boundaries: the
@@ -312,7 +321,7 @@ function ExecutionDetails({
 
   return (
     <>
-      {error !== undefined && (
+      {error !== undefined && panels.failure && (
         <WhyItFailed runId={runId} node={node} exec={exec} error={error} />
       )}
       {recovered !== undefined && (
@@ -321,10 +330,11 @@ function ExecutionDetails({
         </div>
       )}
 
-      {node.kind === 'llm' && (
+      {node.kind === 'llm' && panels.context && (
         <ContextCost runId={runId} node={node} exec={exec} execIndex={execIndex} />
       )}
 
+      {panels.timing && (
       <Section label="This execution">
         <div className="gm-inspect-stats">
           <StatCell
@@ -387,8 +397,9 @@ function ExecutionDetails({
           )}
         </div>
       </Section>
+      )}
 
-      {node.executions.length > 1 && (
+      {node.executions.length > 1 && panels.history && (
         <Section label="Across all executions">
           <div className="gm-inspect-stats">
             <StatCell label="executions" value={String(stats.executions)} />
@@ -425,31 +436,44 @@ function ExecutionDetails({
       {/* 0.6.0: what the model asked for beside what actually ran. */}
       <EditedArgs node={node} exec={exec} />
 
-      <Section label="Input" copy={() => toJson(exec.input)}>
-        {exec.input === REDACTED_PLACEHOLDER ? (
-          <RedactedChip field="input" kind={node.kind} />
-        ) : (
-          <JsonTree value={exec.input} rootPath="input" />
-        )}
-      </Section>
-
-      {exec.output !== undefined && (
-        <Section label="Output" copy={() => toJson(exec.output)}>
-          {exec.output === REDACTED_PLACEHOLDER ? (
-            <RedactedChip field="output" kind={node.kind} />
-          ) : (
-            <JsonTree value={exec.output} rootPath="output" />
+      {panels.payloads && (
+        <div className="gm-inspect-section--pair">
+          {/*
+            "Why this failed" already pins this call's input directly under
+            the error, which is the right adjacency — you read what broke,
+            then what you fed it. Printing the same JSON again two sections
+            later was the panel's most visible duplication, so the standalone
+            Input section stands down whenever Why is carrying it.
+          */}
+          {!(error !== undefined && panels.failure) && (
+            <Section label="Input" copy={() => toJson(exec.input)}>
+              {exec.input === REDACTED_PLACEHOLDER ? (
+                <RedactedChip field="input" kind={node.kind} />
+              ) : (
+                <JsonTree value={exec.input} rootPath="input" />
+              )}
+            </Section>
           )}
-        </Section>
+
+          {exec.output !== undefined && (
+            <Section label="Output" copy={() => toJson(exec.output)}>
+              {exec.output === REDACTED_PLACEHOLDER ? (
+                <RedactedChip field="output" kind={node.kind} />
+              ) : (
+                <JsonTree value={exec.output} rootPath="output" />
+              )}
+            </Section>
+          )}
+        </div>
       )}
 
-      {streamed !== '' && (
+      {panels.stream && streamed !== '' && (
         <Section label="Stream" copy={() => streamed}>
           <pre className="gm-stream nowheel">{streamed}</pre>
         </Section>
       )}
 
-      {tokens.reasoning !== '' && (
+      {panels.stream && tokens.reasoning !== '' && (
         <Section label="Reasoning" copy={() => tokens.reasoning}>
           <pre className="gm-stream gm-stream--reasoning nowheel">{tokens.reasoning}</pre>
         </Section>
@@ -583,31 +607,101 @@ function LoopEvidence({ node, pause }: { node: NodeState; pause: Pause }) {
   );
 }
 
-export function InspectorPanel() {
-  const runId = useUiStore((s) => s.selectedRunId);
-  const nodeId = useUiStore((s) => s.selectedNodeId);
-  if (runId === undefined || nodeId === undefined) return null;
-  return <InspectorInner runId={runId} nodeId={nodeId} />;
+/**
+ * The node's detail, as content — no pane, no overlay, no resize handle.
+ *
+ * The node place owns the whole width now, so this is a reading column
+ * rather than a 392px column of wrapped JSON, and the decision row is the
+ * page's own sticky header instead of a footer competing with the card
+ * underneath it.
+ */
+export function NodeDetail({ runId, nodeId }: { runId: string; nodeId: string }) {
+  const node = useRunStore((s) => s.runs[runId]?.nodes[nodeId]);
+  const panels = useUiStore((s) => s.panels);
+  const instanceIdx = useUiStore((s) => s.selectedInstanceIdx);
+  const setInstanceIdx = useUiStore((s) => s.setInstanceIdx);
+  // The hold this explains: the picked execution's own, else the node's
+  // newest (lib/gate.ts shownPause).
+  const pause = useRunStore((s) => shownPause(s.runs[runId], nodeId, instanceIdx));
+  const heldIdx = useRunStore((s) => heldExecutionIndex(s.runs[runId], nodeId));
+
+  if (node === undefined) return null;
+  const hidden = hiddenCount(panels);
+  const idx = Math.max(
+    0,
+    Math.min(instanceIdx ?? heldIdx ?? node.executions.length - 1, node.executions.length - 1),
+  );
+  const exec = node.executions[idx];
+  const held = pause !== undefined && pause.active;
+
+  return (
+    <div className="gm-nodedetail">
+      {held && pause !== undefined && isRepeatLoop(pause) && (
+        <LoopEvidence node={node} pause={pause} />
+      )}
+      {panels.history && <ResumeHistory runId={runId} nodeId={nodeId} />}
+      {/* 0.6.0 holds: cycle, error-repeat, smart breakpoints. */}
+      {held && pause !== undefined && <HoldEvidence runId={runId} node={node} pause={pause} />}
+
+      {node.executions.length > 1 && (
+        <div className="gm-inspect-execs">
+          <span className="gm-section-label">Execution</span>
+          <div className="gm-exec-strip">
+            {node.executions.map((e, i) => (
+              <button
+                key={`${e.instanceId}-${i}`}
+                className={`gm-exec-chip gm-exec-chip--${e.status}${i === idx ? ' gm-exec-chip--on' : ''}`}
+                title={`${e.instanceId} — ${e.status}${e.durationMs !== undefined ? ` · ${fmtRanHeld(e)}` : ''}`}
+                onClick={() => setInstanceIdx(i)}
+              >
+                #{i + 1}
+                {ranMs(e) !== undefined && (
+                  <span className="gm-exec-chip-ms">{fmtDuration(ranMs(e) ?? 0)}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {exec === undefined ? (
+        <div className="gm-inspect-empty">
+          Not executed yet — this node is known from <code>graph.hint</code>. It will light up the
+          moment your agent calls it.
+        </div>
+      ) : (
+        <ExecutionDetails runId={runId} node={node} exec={exec} execIndex={idx} panels={panels} />
+      )}
+
+      {/*
+        The way out of the base, where someone actually meets its edge: at
+        the bottom of a page, having read everything it had. A count, not a
+        nag — and it is gone the moment nothing is switched off.
+      */}
+      {hidden > 0 && (
+        <button
+          className="gm-inspect-more"
+          onClick={() => useUiStore.getState().setCustomizeOpen(true)}
+          title="Choose which panels this workspace shows"
+        >
+          {hidden} more panel{hidden === 1 ? '' : 's'} available — customize
+        </button>
+      )}
+    </div>
+  );
 }
 
-function InspectorInner({ runId, nodeId }: { runId: string; nodeId: string }) {
+/**
+ * The decision, when this node is held.
+ *
+ * Parallel calls of one tool can hold at once, so there is one row per held
+ * call; the keyed row is the one the keyboard acts on.
+ */
+export function HeldDecision({ runId, nodeId }: { runId: string; nodeId: string }) {
   const node = useRunStore((s) => s.runs[runId]?.nodes[nodeId]);
   const instanceIdx = useUiStore((s) => s.selectedInstanceIdx);
   const setInstanceIdx = useUiStore((s) => s.setInstanceIdx);
-  const [width, setWidth] = useState(() => {
-    try {
-      const stored = Number(localStorage.getItem(WIDTH_KEY));
-      return Number.isFinite(stored) && stored >= MIN_WIDTH ? Math.min(stored, MAX_WIDTH) : 392;
-    } catch {
-      return 392;
-    }
-  });
-  const dragging = useRef(false);
-  // The hold the inspector explains and the keyboard acts on: the picked
-  // execution's own hold, else the node's newest (lib/gate.ts shownPause).
   const pause = useRunStore((s) => shownPause(s.runs[runId], nodeId, instanceIdx));
-  // Parallel calls of one tool can hold at once: the footer has one row per
-  // held call. Selected as a string so the selector result stays stable.
   const heldIds = useRunStore((s) => {
     const run = s.runs[runId];
     if (run === undefined || run.nodes[nodeId]?.activePauseId === undefined) return '';
@@ -616,78 +710,27 @@ function InspectorInner({ runId, nodeId }: { runId: string; nodeId: string }) {
       .join(' ');
   });
   const pauses = useRunStore((s) => (heldIds === '' ? undefined : s.runs[runId]?.pauses));
-  // Unpicked, the inspector opens on the execution the shown hold names
-  // exactly, so the evidence matches the editor's prefill.
   const heldIdx = useRunStore((s) => heldExecutionIndex(s.runs[runId], nodeId));
-  // Whether the displayed execution leads with "Why this failed" (then the
-  // footer row for that same call does not repeat the error line).
+  // Whether the page leads with "Why this failed" (then the row for that
+  // same call does not repeat the error line).
   const whyShown = useRunStore((s) => {
     const run = s.runs[runId];
     const n = run?.nodes[nodeId];
     if (run === undefined || n === undefined || n.executions.length === 0) return false;
-    const i = Math.max(0, Math.min(instanceIdx ?? heldIdx ?? n.executions.length - 1, n.executions.length - 1));
+    const i = Math.max(
+      0,
+      Math.min(instanceIdx ?? heldIdx ?? n.executions.length - 1, n.executions.length - 1),
+    );
     const e = n.executions[i];
     return e !== undefined && executionError(run, n, e) !== undefined;
   });
 
-  const onDragStart = useCallback((event: React.MouseEvent) => {
-    event.preventDefault();
-    dragging.current = true;
-    document.body.style.cursor = 'col-resize';
-  }, []);
+  if (node === undefined || pause === undefined || !pause.active) return null;
+  const idx = Math.max(
+    0,
+    Math.min(instanceIdx ?? heldIdx ?? node.executions.length - 1, node.executions.length - 1),
+  );
 
-  // Tell the camera how much of the canvas this panel is *covering*.
-  //
-  // Docked (the normal case) that is nothing at all: the canvas element is
-  // already narrower, so an inset would squeeze the frame twice. Only at
-  // narrow widths, where the panel goes back to being a full-width overlay,
-  // does the camera need to know. Published on open, on close, on a
-  // breakpoint change and at the end of a resize drag — never per mousemove,
-  // which would re-frame the graph sixty times a second.
-  useEffect(() => {
-    const publish = (): void => {
-      useUiStore.getState().setInspectorWidth(overlaysCanvas() ? width : 0);
-    };
-    publish();
-    const query = mediaQuery();
-    query?.addEventListener('change', publish);
-    return () => {
-      query?.removeEventListener('change', publish);
-      useUiStore.getState().setInspectorWidth(0);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- drag end republishes explicitly
-  }, []);
-
-  useEffect(() => {
-    const onMove = (event: MouseEvent) => {
-      if (!dragging.current) return;
-      const next = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, window.innerWidth - event.clientX));
-      setWidth(next);
-    };
-    const onUp = () => {
-      if (!dragging.current) return;
-      dragging.current = false;
-      document.body.style.cursor = '';
-      useUiStore.getState().setInspectorWidth(overlaysCanvas() ? width : 0);
-      try {
-        localStorage.setItem(WIDTH_KEY, String(width));
-      } catch {
-        // width is per-session only when storage is blocked
-      }
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-  }, [width]);
-
-  if (node === undefined) return null;
-  const status = nodeStatus(node);
-  const idx = Math.max(0, Math.min(instanceIdx ?? heldIdx ?? node.executions.length - 1, node.executions.length - 1));
-  const exec = node.executions[idx];
-  const held = pause !== undefined && pause.active;
   const heldRows = heldIds
     .split(' ')
     .map((id) => pauses?.[id])
@@ -697,128 +740,42 @@ function InspectorInner({ runId, nodeId }: { runId: string; nodeId: string }) {
       const index = exact === undefined ? -1 : node.executions.findIndex((e) => e.instanceId === exact.instanceId);
       return { pause: p, execIndex: index >= 0 ? index : undefined };
     });
-  if (held && pause !== undefined && !heldRows.some((r) => r.pause.pauseId === pause.pauseId)) {
+  if (!heldRows.some((r) => r.pause.pauseId === pause.pauseId)) {
     heldRows.push({ pause, execIndex: undefined });
   }
 
   return (
-    <aside
-      className={`gm-panel gm-inspector${held ? ' gm-inspector--held' : ''}`}
-      style={{ width }}
-      aria-label="Node inspector"
+    <div
+      className={`gm-inspect-held${heldRows.length > 1 ? ' gm-inspect-held--multi' : ''}`}
+      aria-label="Held at a gate"
     >
-      <div
-        className="gm-panel-resize"
-        onMouseDown={onDragStart}
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize inspector"
-      />
-      <header className="gm-inspect-head">
-        <span
-          className={`gm-kind-badge gm-kind--${node.kind}`}
-          title={kindMeta(node.kind).hint}
-        >
-          <KindGlyph kind={node.kind} size={11} />
-          {kindMeta(node.kind).label}
-        </span>
-        <span className="gm-node-title gm-inspect-name">{node.name}</span>
-        <StatusPill status={status} />
-        <button
-          className="gm-iconbtn"
-          onClick={() => useUiStore.getState().selectNode(runId, undefined)}
-          title="Close (esc)"
-          aria-label="Close inspector"
-        >
-          <IconClose />
-        </button>
-      </header>
-
-      <div className="gm-inspect-id">
-        <span className="gm-mono" title={node.nodeId}>
-          {node.nodeId}
-        </span>
-        <button
-          className="gm-copy"
-          title="Copy a deep link to this node"
-          onClick={() => void copyText(deepLink(runId, nodeId))}
-        >
-          <IconLink width={11} height={11} /> link
-        </button>
-      </div>
-
-      <div className="gm-inspect-body">
-        {held && pause !== undefined && isRepeatLoop(pause) && (
-          <LoopEvidence node={node} pause={pause} />
-        )}
-        <ResumeHistory runId={runId} nodeId={nodeId} />
-        {/* 0.6.0 holds: cycle, error-repeat, smart breakpoints. */}
-        {held && pause !== undefined && <HoldEvidence runId={runId} node={node} pause={pause} />}
-        {node.executions.length > 1 && (
-          <div className="gm-inspect-execs">
-            <span className="gm-section-label">Execution</span>
-            <div className="gm-exec-strip">
-              {node.executions.map((e, i) => (
-                <button
-                  key={`${e.instanceId}-${i}`}
-                  className={`gm-exec-chip gm-exec-chip--${e.status}${i === idx ? ' gm-exec-chip--on' : ''}`}
-                  title={`${e.instanceId} — ${e.status}${e.durationMs !== undefined ? ` · ${fmtRanHeld(e)}` : ''}`}
-                  onClick={() => setInstanceIdx(i)}
-                >
-                  #{i + 1}
-                  {ranMs(e) !== undefined && (
-                    <span className="gm-exec-chip-ms">{fmtDuration(ranMs(e) ?? 0)}</span>
-                  )}
-                </button>
-              ))}
-            </div>
+      {heldRows.map((row) => {
+        const rowIdx = row.execIndex;
+        const keyed = row.pause.pauseId === pause.pauseId;
+        return (
+          <div
+            key={row.pause.pauseId}
+            className={`gm-held-row${keyed ? ' gm-held-row--keyed' : ''}`}
+            data-testid="held-row"
+          >
+            <PauseActions
+              runId={runId}
+              node={node}
+              pause={row.pause}
+              variant="panel"
+              shortcuts={keyed}
+              // The Why block already says this row's error.
+              hideError={whyShown && row.execIndex === idx}
+              {...(heldRows.length > 1
+                ? {
+                    instanceLabel: rowIdx !== undefined ? `call #${rowIdx + 1}` : 'call ?',
+                    ...(rowIdx !== undefined ? { onPickInstance: () => setInstanceIdx(rowIdx) } : {}),
+                  }
+                : {})}
+            />
           </div>
-        )}
-
-        {exec === undefined ? (
-          <div className="gm-inspect-empty">
-            Not executed yet — this node is known from <code>graph.hint</code>. It will light up
-            the moment your agent calls it.
-          </div>
-        ) : (
-          <ExecutionDetails runId={runId} node={node} exec={exec} execIndex={idx} />
-        )}
-      </div>
-
-      {held && pause !== undefined && (
-        <footer
-          className={`gm-inspect-held${heldRows.length > 1 ? ' gm-inspect-held--multi' : ''}`}
-          aria-label="Held at a gate"
-        >
-          {heldRows.map((row) => {
-            const rowIdx = row.execIndex;
-            const keyed = row.pause.pauseId === pause.pauseId;
-            return (
-              <div
-                key={row.pause.pauseId}
-                className={`gm-held-row${keyed ? ' gm-held-row--keyed' : ''}`}
-                data-testid="held-row"
-              >
-                <PauseActions
-                  runId={runId}
-                  node={node}
-                  pause={row.pause}
-                  variant="panel"
-                  shortcuts={keyed}
-                  // The Why block above already says this row's error.
-                  hideError={whyShown && row.execIndex === idx}
-                  {...(heldRows.length > 1
-                    ? {
-                        instanceLabel: rowIdx !== undefined ? `call #${rowIdx + 1}` : 'call ?',
-                        ...(rowIdx !== undefined ? { onPickInstance: () => setInstanceIdx(rowIdx) } : {}),
-                      }
-                    : {})}
-                />
-              </div>
-            );
-          })}
-        </footer>
-      )}
-    </aside>
+        );
+      })}
+    </div>
   );
 }

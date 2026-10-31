@@ -14,7 +14,9 @@ import {
   fitGraph,
   nodeCard,
   openFixtureRun,
+  openViewMenu,
   openViewer,
+  runStatusPill,
   test,
   waitForPlantedPause,
 } from './harness.js';
@@ -39,7 +41,7 @@ function runWithHeldFlights(): Record<string, unknown>[] {
 }
 
 function inspector(page: import('@playwright/test').Page) {
-  return page.getByRole('complementary', { name: 'Node inspector' });
+  return page.getByRole('region', { name: 'Call detail' });
 }
 
 test('a node the SDK reports as held shows what it ran, with the held time beside it', async ({ page }) => {
@@ -60,7 +62,8 @@ test('a node the SDK reports as held shows what it ran, with the held time besid
   await expect(stats.locator('.gm-inspect-stat').filter({ hasText: 'held' })).toContainText('40.0s');
 
   // The timeline: geometry still spans the wall, the label reads ran.
-  await page.getByRole('button', { name: 'Timeline', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await (await openViewMenu(page)).getByRole('radio', { name: 'Timeline' }).click();
   const timeline = page.locator('.gm-timeline');
   await expect(timeline).toBeVisible();
   const bar = timeline.locator('.gm-bar').filter({ hasText: /2\.4ms/ }).first();
@@ -95,22 +98,33 @@ test('a hold played live in the fixture is derived from the pause envelopes and 
   await expect(stats.locator('.gm-inspect-stat').filter({ hasText: 'ran' })).toContainText('1.4s');
 });
 
-test('the run list and top bar report run time, with held time called out', async ({ page }) => {
+test('the run summary and the runs list report run time, with held time called out', async ({
+  page,
+}) => {
   await openFixtureRun(page);
   await waitForPlantedPause(page);
   await page.waitForTimeout(1200);
   await page.keyboard.press('c');
-  await expect(page.locator('.gm-run-item-status').first()).toHaveText('done', { timeout: 30_000 });
+  await expect(runStatusPill(page)).toHaveText('done', { timeout: 30_000 });
 
-  // The top bar grows a "held" stat once a gate was held.
-  const held = page.locator('.gm-topbar-stats .gm-stat').filter({ hasText: 'held' });
+  // The summary carries wall time, and says how it splits on hover.
+  const wall = page.locator('.gm-topbar-stats .gm-stat').filter({ hasText: 'wall' });
+  await expect(wall).toBeVisible();
+  await expect(wall).toHaveAttribute('title', /running · .* held at gates/);
+
+  // Held time itself is one click away, in Totals, whole and never shed.
+  await page.getByRole('button', { name: 'Totals' }).click();
+  const totals = page.getByRole('dialog', { name: 'Run totals' });
+  const held = totals.locator('.gm-inspect-stat').filter({ hasText: 'held at gates' });
   await expect(held).toBeVisible();
-  const heldText = (await held.textContent()) ?? '';
-  expect(heldText).toMatch(/\d/);
+  expect((await held.textContent()) ?? '').toMatch(/\d/);
 
-  // The run item shows elapsed minus held, and the tooltip carries both.
-  const item = page.locator('.gm-run-item').first();
-  const elapsedCell = item.locator('.gm-run-item-meta span[title*="held at gates"]');
+  // …and the runs list shows elapsed minus held, with both on the tooltip.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  const card = page.locator('.gm-runcard').first();
+  await expect(card.locator('.gm-runcard-status')).toHaveText('done');
+  const elapsedCell = card.locator('.gm-runcard-meta span[title*="held at gates"]');
   await expect(elapsedCell).toHaveCount(1);
   await expect(elapsedCell).toHaveAttribute('title', /wall · .* held at gates/);
 });

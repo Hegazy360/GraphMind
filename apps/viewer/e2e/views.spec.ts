@@ -8,7 +8,9 @@ import {
   fitGraph,
   nodeBody,
   nodeCard,
+  openDebugMenu,
   openFixtureRun,
+  openViewMenu,
   test,
   waitForPlantedPause,
 } from './harness.js';
@@ -20,7 +22,7 @@ test('collapse folds the run into one summary card, expand puts it back', async 
   const cards = page.locator('.react-flow__node');
   await expect(cards).toHaveCount(7);
 
-  await page.getByRole('button', { name: 'Collapse', exact: true }).click();
+  (await openViewMenu(page)).getByRole('button', { name: 'Collapse' }).click();
 
   // Everything under the agent folds into it.
   await expect(cards).toHaveCount(1);
@@ -28,10 +30,10 @@ test('collapse folds the run into one summary card, expand puts it back', async 
   await expect(group.locator('.gm-node--group')).toBeVisible();
   await expect(group).toContainText('nodes');
   await expect(group).toContainText('calls');
-  // The toolbar reports the fold and offers the inverse.
-  const expand = page.getByRole('button', { name: '1 folded' });
-  await expect(expand).toBeVisible();
-  await expand.click();
+  // The toolbar counts the fold on the View button, and the menu offers the
+  // inverse — "you are not seeing everything" stays visible in the bar.
+  await expect(page.getByRole('button', { name: 'View 1' })).toBeVisible();
+  await (await openViewMenu(page)).getByRole('button', { name: 'Expand 1 folded' }).click();
   await expect(cards).toHaveCount(7);
   await expect(nodeCard(page, FIXTURE_NODES.currency)).toBeVisible();
 });
@@ -62,7 +64,7 @@ test('⇧T opens the waterfall next to the graph, and the view segments switch p
   await waitForPlantedPause(page);
 
   const timeline = page.locator('.gm-timeline');
-  const graph = page.locator('.gm-workspace-graph');
+  const graph = page.locator('.gm-runpage-graph');
   await expect(timeline).toBeHidden();
 
   await page.keyboard.press('Shift+T');
@@ -88,16 +90,16 @@ test('⇧T opens the waterfall next to the graph, and the view segments switch p
   await expect(zoomLabel).toHaveText('1.0×');
 
   // Timeline-only hides the graph; graph-only hides the timeline.
-  await page.getByRole('button', { name: 'Timeline', exact: true }).click();
+  await (await openViewMenu(page)).getByRole('radio', { name: 'Timeline' }).click();
   await expect(graph).toBeHidden();
   await expect(timeline).toBeVisible();
 
-  await page.getByRole('button', { name: 'Graph', exact: true }).click();
+  await (await openViewMenu(page)).getByRole('radio', { name: 'Graph' }).click();
   await expect(graph).toBeVisible();
   await expect(timeline).toBeHidden();
 });
 
-test('clicking a timeline row selects the node on the canvas', async ({ page }) => {
+test('clicking a timeline row opens that call', async ({ page }) => {
   await openFixtureRun(page);
   await waitForPlantedPause(page);
   await page.keyboard.press('Shift+T');
@@ -108,9 +110,10 @@ test('clicking a timeline row selects the node on the canvas', async ({ page }) 
     .first();
   await row.locator('.gm-timeline-label').click();
 
-  await expect(page.getByRole('complementary', { name: 'Node inspector' })).toContainText(
-    'searchHotels',
-  );
+  await expect(
+    page.getByRole('region', { name: 'Call detail' }).locator('.gm-nodehead-name'),
+  ).toHaveText('searchHotels');
+  await page.keyboard.press('Escape');
   await expect(nodeBody(page, FIXTURE_NODES.hotels)).toHaveClass(/gm-node--selected/);
 });
 
@@ -132,17 +135,23 @@ test('the kind filter dims what it excludes instead of hiding it', async ({ page
   await expect(nodeCard(page, FIXTURE_NODES.agent)).not.toHaveClass(/gm-dim/);
 });
 
-test('the theme toggle cycles system → dark → light and survives a reload', async ({ page }) => {
+test('the theme is picked outright in the View menu and survives a reload', async ({ page }) => {
   await openFixtureRun(page, { theme: 'system', colorScheme: 'dark' });
 
   const html = page.locator('html');
   await expect(html).not.toHaveAttribute('data-theme', /.*/);
 
-  const toggle = page.getByRole('button', { name: 'System theme' });
-  await toggle.click();
+  // Three radios rather than a cycler: "light" is one click from anywhere,
+  // not two-and-hope.
+  const themes = (await openViewMenu(page)).getByRole('radiogroup', { name: 'Theme' });
+  await expect(themes.getByRole('radio', { name: 'System' })).toHaveAttribute(
+    'aria-checked',
+    'true',
+  );
+  await themes.getByRole('radio', { name: 'Dark' }).click();
   await expect(html).toHaveAttribute('data-theme', 'dark');
 
-  await page.getByRole('button', { name: 'Dark theme' }).click();
+  await themes.getByRole('radio', { name: 'Light' }).click();
   await expect(html).toHaveAttribute('data-theme', 'light');
 
   // The choice is remembered.
@@ -159,9 +168,12 @@ test('the breakpoint dot on a tool card registers a breakpoint chip', async ({ p
     .getByRole('button', { name: 'Set breakpoint on searchHotels' })
     .click();
 
-  const chip = page.locator('.gm-chip--bp', { hasText: 'searchHotels' });
+  // The header counts it without being opened; the menu names it.
+  await expect(page.getByRole('button', { name: /^(Debug|Step) 1$/ })).toBeVisible();
+  const menu = await openDebugMenu(page);
+  const chip = menu.locator('.gm-chip--bp', { hasText: 'searchHotels' });
   await expect(chip).toBeVisible();
 
   await chip.getByRole('button', { name: /Clear breakpoint/ }).click();
-  await expect(page.locator('.gm-chip--bp')).toHaveCount(0);
+  await expect(menu.locator('.gm-chip--bp')).toHaveCount(0);
 });

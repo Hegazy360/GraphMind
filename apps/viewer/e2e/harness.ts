@@ -91,6 +91,46 @@ export interface OpenOptions {
   colorScheme?: 'dark' | 'light';
   /** Envelopes to inline as `window.__GRAPHMIND_RUN__` (exported-run mode). */
   embeddedRun?: unknown[];
+  /**
+   * Which panels the run page shows (src/store/workspace.ts). The viewer
+   * ships `essentials`, so a test that reads a panel outside the base says
+   * `workspace: 'everything'` — and one that leaves this unset is asserting
+   * against what a reader actually gets on install.
+   */
+  workspace?: 'essentials' | 'everything';
+}
+
+/**
+ * Pre-seed which panels the run page shows, for a test that navigates on its
+ * own (an exported run on `file://`, or `graphmind serve`'s redirect file)
+ * rather than through `openViewer`. Takes a page or a whole BrowserContext —
+ * a multi-tab test wants every tab seeded, not just the first.
+ */
+export async function seedWorkspace(
+  target: { addInitScript: Page['addInitScript'] },
+  choice: 'essentials' | 'everything',
+): Promise<void> {
+  await target.addInitScript((pick: string) => {
+    const ids = [
+      'failure',
+      'timing',
+      'payloads',
+      'context',
+      'history',
+      'stream',
+      'identity',
+      'overlays',
+      'diagnostics',
+    ];
+    const base = ['failure', 'timing', 'payloads', 'overlays'];
+    const panels: Record<string, boolean> = {};
+    for (const id of ids) panels[id] = pick === 'everything' || base.includes(id);
+    try {
+      localStorage.setItem('graphmind.workspace', JSON.stringify(panels));
+    } catch {
+      // storage blocked — the app falls back to the base, which is fine
+    }
+  }, choice);
 }
 
 /** Load the built viewer with a known pre-boot environment. */
@@ -108,6 +148,8 @@ export async function openViewer(page: Page, options: OpenOptions = {}): Promise
       }
     }, theme);
   }
+
+  if (options.workspace !== undefined) await seedWorkspace(page, options.workspace);
 
   const embedded = options.embeddedRun;
   if (embedded !== undefined) {
@@ -133,6 +175,21 @@ export async function openFixtureRun(
   await expect(nodeCard(page, FIXTURE_NODES.agent)).toBeVisible();
 }
 
+/**
+ * Open the top bar's View menu and hand back its dialog.
+ *
+ * Panes, folding and theme live behind one disclosure now — the bar carries
+ * the run's figures, not seven ways of redrawing them.
+ */
+export async function openViewMenu(page: Page): Promise<Locator> {
+  const menu = page.getByRole('dialog', { name: 'View options' });
+  if (!(await menu.isVisible())) {
+    await page.getByRole('button', { name: /^View/ }).click();
+  }
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
 /** One React Flow node wrapper, addressed by its logical nodeId. */
 export function nodeCard(page: Page, nodeId: string): Locator {
   return page.locator(`.react-flow__node[data-id="${nodeId}"]`);
@@ -153,7 +210,69 @@ export function edgeInto(page: Page, nodeId: string): Locator {
 
 /** The run-status pill in the toolbar ("running" / "paused" / "done" / …). */
 export function runStatusPill(page: Page): Locator {
-  return page.locator('.gm-topbar-title .gm-pill').first();
+  return page.locator('.gm-runsummary .gm-pill').first();
+}
+
+/**
+ * Mark the connect page as already seen, for a test about something else.
+ * A viewer with no runs yet opens it on its own — which is the point, and
+ * covered in empty-state.spec.ts.
+ */
+export async function skipSetupGuide(target: {
+  addInitScript: Page['addInitScript'];
+}): Promise<void> {
+  await target.addInitScript(() => {
+    try {
+      localStorage.setItem('graphmind.connectSeen', '1');
+    } catch {
+      // storage blocked — it may appear; the test will say so
+    }
+  });
+}
+
+/**
+ * Open the header's Debug menu and hand back its dialog. Run/Step, "Break
+ * everywhere" and the armed breakpoints live there now — session state, not
+ * a bar across every screen.
+ */
+export async function openDebugMenu(page: Page): Promise<Locator> {
+  const menu = page.getByRole('dialog', { name: 'Debug controls' });
+  if (!(await menu.isVisible())) {
+    await page.locator('.gm-header').getByRole('button', { name: /^(Debug|Step)\b/ }).click();
+  }
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+/**
+ * The run's own crumb in the header — where its name lives now that there is
+ * no toolbar. Index 1: `Runs › <app> › <call>`.
+ */
+export function runCrumb(page: Page): Locator {
+  return page.locator('.gm-crumb').nth(1);
+}
+
+/** The band under the header that announces a held call from any place. */
+export function holdStrip(page: Page): Locator {
+  return page.locator('.gm-holdstrip');
+}
+
+/** The page describing one call — the node place. */
+export function callDetail(page: Page): Locator {
+  return page.getByRole('region', { name: 'Call detail' });
+}
+
+/** Walk down into the held call from wherever you are. */
+export async function openHeldCall(page: Page): Promise<Locator> {
+  await holdStrip(page).getByRole('button', { name: 'Open the held call' }).click();
+  const detail = callDetail(page);
+  await expect(detail).toBeVisible();
+  return detail;
+}
+
+/** Walk back up: node → run → runs. */
+export async function goUp(page: Page): Promise<void> {
+  await page.keyboard.press('Escape');
 }
 
 /** The resume action row rendered inside a held node. */

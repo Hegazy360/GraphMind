@@ -36,7 +36,16 @@ import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { BrowserContext, Page } from '@playwright/test';
-import { expect, test, type ConsoleGuard } from './harness.js';
+import {
+  expect,
+  openDebugMenu,
+  openHeldCall,
+  runStatusPill,
+  seedWorkspace,
+  skipSetupGuide,
+  test,
+  type ConsoleGuard,
+} from './harness.js';
 
 const REPO = fileURLToPath(new URL('../../../', import.meta.url));
 const CLI = join(REPO, 'packages', 'cli', 'dist', 'cli.js');
@@ -160,19 +169,36 @@ function guarded(page: Page, guard: ConsoleGuard): Page {
 
 /** Open the viewer through `graphmind serve`'s redirect file, as the CLI does. */
 async function openWithToken(page: Page, stack: Stack): Promise<void> {
+  // The control chip and the "released by" audit line are both outside the
+  // base workspace; this suite is about what the server enforces, not about
+  // what ships switched on.
+  await seedWorkspace(page, 'everything');
+  await skipSetupGuide(page);
   await page.goto(pathToFileURL(stack.opener).href);
   await page.waitForURL(`http://127.0.0.1:${stack.port}/**`);
-  await expect(page.locator('.gm-chip--control')).toHaveText('full control · agent: edit');
+  await expectControl(page, 'full control · agent: edit');
   // The token never stays in the address bar.
   expect(page.url()).not.toContain('token');
 }
 
+/**
+ * What the server says this tab may do. It lives in the Debug menu now —
+ * session state, shown where the controls it governs are.
+ */
+async function expectControl(page: Page, text: string | RegExp): Promise<void> {
+  const menu = await openDebugMenu(page);
+  const chip = menu.locator('.gm-chip--control');
+  if (typeof text === 'string') await expect(chip).toHaveText(text);
+  else await expect(chip).toContainText(text);
+  await page.keyboard.press('Escape');
+}
+
 function inspector(page: Page) {
-  return page.getByRole('complementary', { name: 'Node inspector' });
+  return page.getByRole('region', { name: 'Call detail' });
 }
 
 function footer(page: Page) {
-  return inspector(page).locator('footer.gm-inspect-held');
+  return inspector(page).locator('.gm-inspect-held');
 }
 
 function editor(page: Page) {
@@ -187,10 +213,12 @@ function banner(page: Page) {
   return page.locator(`.react-flow__node[data-id="${TOOL_NODE}"] .gm-pause-banner`);
 }
 
+/** Wait for the hold on the graph, then step into the call it holds. */
 async function waitForHeld(page: Page): Promise<void> {
   await expect(banner(page)).toBeVisible({ timeout: 30_000 });
+  await openHeldCall(page);
   await expect(footer(page)).toBeVisible();
-  // The inspector leads with why it failed (the footer's row does not repeat it).
+  // The call leads with why it failed (the decision row does not repeat it).
   await expect(inspector(page)).toContainText('unknown currency code "XYZ"');
 }
 
@@ -228,7 +256,6 @@ test('edit a real held tool call: schema refusal, valid retry, the tool runs it,
   const agent = stack.startAgent();
 
   await waitForHeld(page);
-  await expect(page.locator('.gm-topbar-title .gm-pill').first()).toHaveText('paused');
   await openEditor(page);
   await expect(editor(page).getByTestId('edit-scope')).toHaveText(
     'This call only. The model still sees the arguments it asked for.',
@@ -242,22 +269,20 @@ test('edit a real held tool call: schema refusal, valid retry, the tool runs it,
   await expect(editor(page).getByTestId('edit-refusal')).toHaveText(
     'The tool\'s schema rejected this: field "to" is too long (at most 3 characters)',
   );
-  await expect(banner(page)).toBeVisible();
+  await expect(footer(page)).toBeVisible(); // still held
   await expect(argsBox(page)).toHaveValue(/"to": "US dollars"/);
 
   // 2. A valid edit: the REAL tool runs with it and the agent carries on.
   await draftWith(page, { to: 'USD' });
   await argsBox(page).press('ControlOrMeta+Enter');
-  await expect(banner(page)).toHaveCount(0, { timeout: 20_000 });
-  await expect(page.locator('.gm-topbar-title .gm-pill').first()).toHaveText('done', { timeout: 20_000 });
+  await expect(footer(page)).toHaveCount(0, { timeout: 20_000 });
   expect(await agent.exited).toBe(0);
   const result = agentResult(agent);
   expect(result?.executedWith.map((args) => args.to)).toEqual(['XYZ', 'USD']);
   expect(result?.text).toContain('"to":"USD"');
   expect(result?.text).toContain('"converted":109');
 
-  // 3. The trail: the edited pill, before/after, and who resumed it.
-  await expect(page.locator(`.react-flow__node[data-id="${TOOL_NODE}"] .gm-pill--edited`)).toHaveText('edited');
+  // 3. The trail, on the call: before/after and who resumed it.
   const edited = inspector(page).getByTestId('edited-args');
   await expect(edited).toBeVisible();
   const rows = edited.getByTestId('edited-change');
@@ -268,6 +293,11 @@ test('edit a real held tool call: schema refusal, valid retry, the tool runs it,
   const resumedBy = inspector(page).getByTestId('resumed-by');
   await expect(resumedBy).toHaveCount(1);
   await expect(resumedBy).toContainText('error → retry (edited input) · resumed by viewer');
+
+  // …and back on the graph, the card is stamped and the run is done.
+  await page.keyboard.press('Escape');
+  await expect(page.locator(`.react-flow__node[data-id="${TOOL_NODE}"] .gm-pill--edited`)).toHaveText('edited');
+  await expect(runStatusPill(page)).toHaveText('done', { timeout: 20_000 });
 
   // And the server's record agrees: stamped by the hub, not the app.
   const events = await stack.events();
@@ -286,10 +316,12 @@ test('a tab without the token can continue, retry and abort — it is not offere
   stack = await startStack();
   // A fresh context has no stored token: the plain URL, not the redirect file.
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await seedWorkspace(context, 'everything');
+  await skipSetupGuide(context);
   extraContexts.push(context);
   const tokenless = guarded(await context.newPage(), consoleGuard);
   await tokenless.goto(`http://127.0.0.1:${stack.port}/`);
-  await expect(tokenless.locator('.gm-chip--control')).toContainText('no token');
+  await expectControl(tokenless, /no token/);
   stack.startAgent();
 
   await waitForHeld(tokenless);
@@ -300,23 +332,28 @@ test('a tab without the token can continue, retry and abort — it is not offere
   await expect(inspector(tokenless).getByTestId('pause-tokenless')).toContainText(
     'No token: this tab can continue, retry and abort.',
   );
-  // Nor are step mode and breakpoints: the run bar's radios, "Break
+  // Nor are step mode and breakpoints: the Debug menu's radios, "Break
   // everywhere", the breakpoint chip's ×, the card's gutter dot and the
   // palette's actions are disabled and say why — not flipped on a click and
   // flipped back by the server's refusal.
-  const runBar = tokenless.locator('footer.gm-runbar');
+  await tokenless.keyboard.press('Escape'); // back to the graph for the card
+  const gutterDot = tokenless.locator(`.react-flow__node[data-id="${TOOL_NODE}"] .gm-bp`);
+  await expect(gutterDot, 'gutter dot is disabled for a tokenless tab').toBeDisabled();
+  expect(await gutterDot.getAttribute('title'), 'gutter dot says why').toContain('No token');
+
+  const menu = await openDebugMenu(tokenless);
   const locked = [
-    ['Run radio', runBar.getByRole('radio', { name: 'Run' })],
-    ['Step radio', runBar.getByRole('radio', { name: 'Step' })],
-    ['Break everywhere', runBar.getByRole('button', { name: 'Break everywhere' })],
-    ['breakpoint chip ×', runBar.getByRole('button', { name: /^Clear breakpoint/ })],
-    ['gutter dot', tokenless.locator(`.react-flow__node[data-id="${TOOL_NODE}"] .gm-bp`)],
+    ['Run radio', menu.getByRole('radio', { name: 'Run' })],
+    ['Step radio', menu.getByRole('radio', { name: 'Step' })],
+    ['Break everywhere', menu.getByRole('button', { name: 'Break everywhere' })],
+    ['breakpoint chip ×', menu.getByRole('button', { name: /^Clear breakpoint/ })],
   ] as const;
   for (const [label, control] of locked) {
     await expect(control, `${label} is disabled for a tokenless tab`).toBeDisabled();
     expect(await control.getAttribute('title'), `${label} says why`).toContain('No token');
   }
-  await expect(runBar.getByRole('radio', { name: 'Run' })).toHaveAttribute('aria-checked', 'true');
+  await expect(menu.getByRole('radio', { name: 'Run' })).toHaveAttribute('aria-checked', 'true');
+  await tokenless.keyboard.press('Escape');
   await tokenless.keyboard.press('ControlOrMeta+KeyK');
   const palette = tokenless.getByRole('dialog', { name: 'Command palette' });
   await expect(palette).toBeVisible();
@@ -332,10 +369,13 @@ test('a tab without the token can continue, retry and abort — it is not offere
   await expect(palette).toBeVisible();
   await tokenless.keyboard.press('Escape');
   await expect(palette).toHaveCount(0);
-  await expect(runBar.getByRole('radio', { name: 'Run' })).toHaveAttribute('aria-checked', 'true');
-  await expect(runBar.locator('.gm-chip--notice')).toHaveCount(0);
+  const after = await openDebugMenu(tokenless);
+  await expect(after.getByRole('radio', { name: 'Run' })).toHaveAttribute('aria-checked', 'true');
+  await expect(tokenless.locator('.gm-chip--notice')).toHaveCount(0);
+  await tokenless.keyboard.press('Escape');
   // Continue still works for a tokenless tab (0.5 behaviour): the tool's error
   // goes back to the model and the run finishes.
+  await openHeldCall(tokenless);
   await footer(tokenless).getByRole('button', { name: /^Continue/ }).click();
   await expect(banner(tokenless)).toHaveCount(0, { timeout: 20_000 });
   await expect(inspector(tokenless).getByTestId('resumed-by')).toContainText('error → continue · resumed by tokenless viewer');
@@ -348,12 +388,14 @@ test('first writer wins across tabs: a later Continue and a later edit are both 
   stack = await startStack();
   await openWithToken(page, stack);
   // Two more tabs: same origin, so the same stored token — full control too.
+  await seedWorkspace(page.context(), 'everything');
+  await skipSetupGuide(page.context());
   const second = guarded(await page.context().newPage(), consoleGuard);
   await second.goto(`http://127.0.0.1:${stack.port}/`);
-  await expect(second.locator('.gm-chip--control')).toHaveText('full control · agent: edit');
+  await expectControl(second, 'full control · agent: edit');
   const third = guarded(await page.context().newPage(), consoleGuard);
   await third.goto(`http://127.0.0.1:${stack.port}/`);
-  await expect(third.locator('.gm-chip--control')).toHaveText('full control · agent: edit');
+  await expectControl(third, 'full control · agent: edit');
   // Each run of the tool's schema takes 1.2 s, and an AI SDK edit runs it
   // twice (the model's raw arguments are checked first, so a transform never
   // runs twice), so the first tab's edit is still being answered (the hub's
@@ -383,10 +425,10 @@ test('first writer wins across tabs: a later Continue and a later edit are both 
   // its edit: the hub refuses both — taken — and each tab says so at once,
   // where the button was pressed (not "no answer from the app" in 10 s).
   await Promise.all([
-    banner(second).getByRole('button', { name: /^Continue/ }).click(),
+    footer(second).getByRole('button', { name: /^Continue/ }).click(),
     editor(third).getByRole('button', { name: 'Retry with 1 change' }).click(),
   ]);
-  const taken = banner(second).getByTestId('pause-reply');
+  const taken = footer(second).getByTestId('pause-reply');
   await expect(taken).toHaveText(/^Taken — another resume for this pause got there first/, { timeout: 2_000 });
   await expect(taken).toContainText('Yours was not sent.');
   const editTaken = editor(third).getByTestId('edit-reply');
@@ -401,6 +443,7 @@ test('first writer wins across tabs: a later Continue and a later edit are both 
   expect(await agent.exited).toBe(0);
   expect(agentResult(agent)?.executedWith.map((args) => args.to)).toEqual(['XYZ', 'GBP']);
   for (const tab of [page, second, third]) {
+    await tab.keyboard.press('Escape');
     await expect(tab.locator(`.react-flow__node[data-id="${TOOL_NODE}"] .gm-pill--edited`)).toHaveText('edited');
   }
   const resumed = (await stack.events()).filter((e) => e.type === 'exec.resumed');
@@ -430,7 +473,7 @@ test('two parallel calls of one tool both held: both are shown, every key acts o
   expect(Object.values(instanceOf).sort()).toEqual(['call-a', 'call-b']);
 
   // The card has room for one row: it shows one hold and counts the other;
-  // the inspector's footer lists both, each named by its call.
+  // the call's decision row lists both, each named by its call.
   const card = page.locator(`.react-flow__node[data-id="${TOOL_NODE}"]`);
   await expect(banner(page)).toHaveCount(1);
   await expect(banner(page).getByTestId('pause-more')).toHaveText('+1 held');
@@ -453,22 +496,23 @@ test('two parallel calls of one tool both held: both are shown, every key acts o
   expect(instanceOf[released[0]?.payload['pauseId'] as string]).toBe(keyedCall);
   expect(instanceOf[(await openPauses())[0] ?? '']).toBe(otherCall);
 
-  // The other call is still held, and still shown: the card is paused with
-  // its banner, the footer has its row, the top bar says paused.
+  // The other call is still held, and still shown: the decision row still
+  // has its row, and back on the graph the card is paused with its banner.
+  await expect(rows).toHaveCount(1);
+  await page.keyboard.press('Escape');
   await expect(card.locator('.gm-node')).toHaveClass(/gm-node--paused/);
   await expect(banner(page)).toHaveCount(1);
   await expect(banner(page).getByTestId('pause-more')).toHaveCount(0);
-  await expect(rows).toHaveCount(1);
-  await expect(page.locator('.gm-topbar-title .gm-pill').first()).toHaveText('paused');
+  await expect(runStatusPill(page)).toHaveText('paused');
 
   // `e` opens the editor for exactly that call; an edit to a known code runs it.
-  await card.locator('.gm-node-title').click();
+  await openHeldCall(page);
   await page.keyboard.press('e');
   await expect(editor(page)).toBeVisible();
   await expect(argsBox(page)).toHaveValue(otherCall === 'call-a' ? /"to": "XYZ"/ : /"to": "QQQ"/);
   await draftWith(page, { to: 'USD' });
   await argsBox(page).press('ControlOrMeta+Enter');
-  await expect(banner(page)).toHaveCount(0, { timeout: 20_000 });
+  await expect(footer(page)).toHaveCount(0, { timeout: 20_000 });
   expect(await agent.exited).toBe(0);
   const ran = agentResult(agent)?.executedWith.map((args) => args.to) ?? [];
   expect(ran.slice(0, 2).sort()).toEqual(['QQQ', 'XYZ']);

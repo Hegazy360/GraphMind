@@ -12,7 +12,7 @@
  *
  * Both bundled fixtures are checked at two moments: as they open (the
  * catalogue is on screen before anything runs) and while the planted gate is
- * held (the paused card is 92px taller and the inspector is open). The
+ * held (the paused card is 92px taller). The
  * assertions are about *rules*, not node lists, because the MCP fixture is
  * owned by the MCP workstream and keeps growing.
  */
@@ -186,8 +186,7 @@ async function waitForHeldCard(page: Page): Promise<string> {
   await expect(banner).toBeVisible({ timeout: 45_000 });
   const heldId = await banner.evaluate((el) => el.closest('.react-flow__node')?.getAttribute('data-id') ?? '');
   expect(heldId).not.toBe('');
-  await expect(page.getByRole('complementary', { name: 'Node inspector' })).toBeVisible();
-  // The hold animation plus the re-frame the inspector opening provokes.
+  // The hold animation plus the re-frame the camera does to put it on screen.
   await page.waitForTimeout(1_200);
   return heldId;
 }
@@ -195,18 +194,18 @@ async function waitForHeldCard(page: Page): Promise<string> {
 async function expectHeldCardClear(page: Page, geometry: CanvasGeometry, heldId: string): Promise<void> {
   const held = geometry.nodes.find((n) => n.id === heldId);
   expect(held, `${heldId} on screen`).toBeDefined();
-  expect(geometry.inspector, 'inspector open').not.toBeNull();
   expect(geometry.canvas).not.toBeNull();
-  if (held === undefined || geometry.inspector === null || geometry.canvas === null) return;
+  if (held === undefined || geometry.canvas === null) return;
   // The held card carries the resume row…
   expect(held.actions.length, 'the held card shows its action row').toBeGreaterThanOrEqual(3);
-  // …is entirely inside the canvas…
+  // …and is entirely inside the canvas. There is nothing docked over the
+  // graph any more — the call's detail is a place you step into — so the
+  // only thing that can clip a held card is the canvas itself.
   expect(held.rect.y).toBeGreaterThanOrEqual(geometry.canvas.y - 1);
   expect(held.rect.y + held.rect.height).toBeLessThanOrEqual(geometry.canvas.y + geometry.canvas.height + 1);
   expect(held.rect.x).toBeGreaterThanOrEqual(geometry.canvas.x - 1);
-  // …and not underneath the inspector that explains it.
-  expect(held.rect.x + held.rect.width, 'held card clipped by the inspector').toBeLessThanOrEqual(
-    geometry.inspector.x,
+  expect(held.rect.x + held.rect.width).toBeLessThanOrEqual(
+    geometry.canvas.x + geometry.canvas.width + 1,
   );
   // Which means its buttons are actually clickable.
   await expect(nodeCard(page, heldId).getByRole('button', { name: 'Continue', exact: true })).toBeInViewport();
@@ -250,7 +249,7 @@ test('demo run: painted edges cross no card and meet both handles', async ({ pag
   expectRoutingWasNeeded(geometry, 'demo open');
 });
 
-test('demo run: the held gate keeps its actions inside the card, clear of the inspector, edges intact', async ({
+test('demo run: the held gate keeps its actions inside the card, edges intact', async ({
   page,
 }) => {
   await openFixtureRun(page);

@@ -14,6 +14,7 @@ import {
   expect,
   nodeBody,
   nodeCard,
+  openDebugMenu,
   openFixtureRun,
   runStatusPill,
   test,
@@ -101,7 +102,7 @@ test('Retry runs the failed call again and it succeeds the second time', async (
 
   // The inspector keeps both attempts, the failure and the retry.
   await nodeCard(page, FIXTURE_NODES.currency).locator('.gm-node-title').click();
-  const inspector = page.getByRole('complementary', { name: 'Node inspector' });
+  const inspector = page.getByRole('region', { name: 'Call detail' });
   await expect(inspector.locator('.gm-exec-chip')).toHaveCount(2);
   await expect(inspector.locator('.gm-exec-chip--error')).toHaveCount(1);
   await expect(inspector.locator('.gm-exec-chip--ok')).toHaveCount(1);
@@ -158,7 +159,7 @@ test('Inject substitutes a result: editor, JSON validation, injected badge, happ
 
   // …and the inspector reports where that value came from.
   await card.locator('.gm-node-title').click();
-  const inspector = page.getByRole('complementary', { name: 'Node inspector' });
+  const inspector = page.getByRole('region', { name: 'Call detail' });
   await expect(inspector).toContainText('injected from the debugger');
   await expect(inspector).toContainText('injected-by-e2e');
 });
@@ -167,12 +168,18 @@ test('Step switches the debugger into step mode as it resumes', async ({ page })
   await openFixtureRun(page);
   const banner = await waitForPlantedPause(page);
 
-  const stepButton = page.getByRole('radio', { name: 'Step' });
-  await expect(stepButton).toHaveAttribute('aria-checked', 'false');
+  await expect(
+    (await openDebugMenu(page)).getByRole('radio', { name: 'Step', exact: true }),
+  ).toHaveAttribute('aria-checked', 'false');
+  await page.keyboard.press('Escape');
 
   await banner.getByRole('button', { name: 'Step', exact: true }).click();
 
   await expect(banner).toBeHidden();
-  await expect(stepButton).toHaveAttribute('aria-checked', 'true');
+  // The mode the card switched the debugger into is the mode the menu says.
+  await expect(
+    (await openDebugMenu(page)).getByRole('radio', { name: 'Step', exact: true }),
+  ).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Escape');
   await expect(llmBadge(page)).toHaveText('×3', { timeout: 20_000 });
 });

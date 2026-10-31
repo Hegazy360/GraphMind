@@ -11,26 +11,45 @@
  * first-writer-wins across tabs) is edit-e2e.spec.ts.
  */
 import { EDIT_NODES } from '../src/store/editFixture.js';
-import { expect, nodeCard, openFixtureRun, openViewer, pauseBanner, runStatusPill, test, waitForPlantedPause } from './harness.js';
+import {
+  expect,
+  nodeCard,
+  openFixtureRun,
+  openHeldCall,
+  openViewer,
+  pauseBanner,
+  runStatusPill,
+  test,
+  waitForPlantedPause,
+} from './harness.js';
 import type { Page } from '@playwright/test';
 
 function inspector(page: Page) {
-  return page.getByRole('complementary', { name: 'Node inspector' });
+  return page.getByRole('region', { name: 'Call detail' });
 }
 
 function footer(page: Page) {
-  return inspector(page).locator('footer.gm-inspect-held');
+  return inspector(page).locator('.gm-inspect-held');
 }
 
 function editor(page: Page) {
   return page.getByRole('group', { name: 'Edit arguments for run_sql' });
 }
 
+/**
+ * Land on the held call. The hold announces itself on the graph; `e` is the
+ * shortcut that both steps into the call and opens the editor, because
+ * editing arguments needs the arguments on screen.
+ */
 async function openEditRun(page: Page): Promise<void> {
   await openViewer(page, { query: 'fixture=edit' });
   await expect(pauseBanner(page, EDIT_NODES.sql)).toBeVisible({ timeout: 30_000 });
   await expect(runStatusPill(page)).toHaveText('paused');
-  // The held node opens the inspector on its own.
+  // Offered on the card (short label) before anything is opened.
+  await expect(
+    pauseBanner(page, EDIT_NODES.sql).getByRole('button', { name: 'Edit args…', exact: true }),
+  ).toBeVisible();
+  await openHeldCall(page);
   await expect(footer(page)).toBeVisible();
 }
 
@@ -44,8 +63,6 @@ async function draftWith(page: Page, patch: Record<string, unknown>): Promise<vo
 test('edit, get refused, fix, retry: the call runs with the changed keys and is marked edited', async ({ page }) => {
   await openEditRun(page);
 
-  // Offered on the card (short label) and in the panel, with the e shortcut.
-  await expect(pauseBanner(page, EDIT_NODES.sql).getByRole('button', { name: 'Edit args…', exact: true })).toBeVisible();
   const open = footer(page).getByRole('button', { name: 'Edit arguments…', exact: true });
   await expect(open).toBeVisible();
   await expect(open).toHaveAttribute('aria-expanded', 'false');
@@ -76,7 +93,7 @@ test('edit, get refused, fix, retry: the call runs with the changed keys and is 
   await editor(page).getByRole('button', { name: 'Retry with 2 changes' }).click();
   const refusal = editor(page).getByTestId('edit-refusal');
   await expect(refusal).toHaveText("The tool's schema rejected this: limit: must be an integer from 1 to 100");
-  await expect(runStatusPill(page)).toHaveText('paused');
+  await expect(footer(page)).toBeVisible(); // still held
   await expect(box).toHaveValue(/"limit": 500/);
 
   // Fix and retry with ⌘/ctrl-Enter.
@@ -84,8 +101,7 @@ test('edit, get refused, fix, retry: the call runs with the changed keys and is 
   await box.press('ControlOrMeta+Enter');
   await expect(pauseBanner(page, EDIT_NODES.sql)).toHaveCount(0, { timeout: 20_000 });
 
-  // The trail: the edited pill on the card, before/after in the inspector.
-  await expect(nodeCard(page, EDIT_NODES.sql).locator('.gm-pill--edited')).toHaveText('edited');
+  // The trail: before/after on the call, and the edited pill on its card.
   const edited = inspector(page).getByTestId('edited-args');
   await expect(edited).toBeVisible();
   await expect(edited).toContainText('This call only. The model still sees the arguments it asked for.');
@@ -95,6 +111,9 @@ test('edit, get refused, fix, retry: the call runs with the changed keys and is 
   await expect(rows.nth(0)).toContainText('FROM users ORDER BY');
   await expect(rows.nth(1)).toContainText('20');
   await expect(rows.nth(1)).toContainText('50');
+
+  await page.keyboard.press('Escape');
+  await expect(nodeCard(page, EDIT_NODES.sql).locator('.gm-pill--edited')).toHaveText('edited');
   // The recorded retry plays out.
   await expect(runStatusPill(page)).toHaveText('done', { timeout: 20_000 });
 });
@@ -127,19 +146,24 @@ test('a truncated preview can be kept or replaced whole, never edited inside; a 
   // Escape closes the editor — and only the editor.
   await box.press('Escape');
   await expect(editor(page)).toHaveCount(0);
+  // …and only the editor: still on the call, still held.
   await expect(inspector(page)).toBeVisible();
-  await expect(runStatusPill(page)).toHaveText('paused');
+  await expect(footer(page)).toBeVisible();
 
   // The draft survives: reopening shows what was typed.
   await footer(page).getByRole('button', { name: 'Edit arguments…', exact: true }).click();
   await expect(box).not.toHaveValue(/"database"/);
 });
 
-test('the card’s button opens the editor in the inspector', async ({ page }) => {
-  await openEditRun(page);
-  await inspector(page).getByRole('button', { name: 'Close inspector' }).click();
-  await expect(inspector(page)).toHaveCount(0);
-  await pauseBanner(page, EDIT_NODES.sql).getByRole('button', { name: 'Edit args…', exact: true }).click();
+test('the card’s button steps into the call with the editor already open', async ({ page }) => {
+  await openViewer(page, { query: 'fixture=edit' });
+  await expect(pauseBanner(page, EDIT_NODES.sql)).toBeVisible({ timeout: 30_000 });
+
+  await pauseBanner(page, EDIT_NODES.sql)
+    .getByRole('button', { name: 'Edit args…', exact: true })
+    .click();
+
+  await expect(inspector(page)).toBeVisible();
   await expect(editor(page)).toBeVisible();
   await expect(editor(page).getByRole('textbox', { name: 'Arguments for run_sql, as JSON' })).toBeFocused();
 });

@@ -62,6 +62,23 @@ function writeStorage(token: string | undefined): void {
  * refused or unconfirmed one is discarded and the old token kept). With no
  * token yet it is taken at once — a bad one is dropped at the first refusal.
  */
+/**
+ * The place a URL asks for, with any `#token=` credential stripped off.
+ *
+ * `graphmind serve` opens the viewer at `#token=<t>`, so the raw hash is
+ * never empty on the one path most people arrive by. Anything that wants to
+ * know whether the *reader* named a place — the first-run guide, the
+ * auto-open — has to ask this, not `location.hash`.
+ */
+export function routeFromHash(hash: string): string {
+  const prefix = `#${FRAGMENT_KEY}=`;
+  if (!hash.startsWith(prefix)) return hash;
+  const body = hash.slice(prefix.length);
+  const amp = body.indexOf('&');
+  const route = amp === -1 ? '' : body.slice(amp + 1);
+  return route.startsWith('/') ? `#${route}` : '';
+}
+
 export function captureTokenFromLocation(): string | undefined {
   if (typeof location === 'undefined') return undefined;
   const hash = location.hash;

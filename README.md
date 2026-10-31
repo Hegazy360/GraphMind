@@ -156,7 +156,11 @@ corrected result (the agent finishes happily), **continue** (it apologizes),
 
 ### 2. Debug your own agent
 
-Not sure what to add? Let it read your project:
+A viewer with nothing attached opens **Connect an agent** (`#/connect`): pick
+your SDK, copy the install command and the two lines it needs. One screen, no
+wizard. It stays one click away from anywhere, in the header's menu.
+
+Prefer the terminal? Let it read your project instead:
 
 ```sh
 npx graphmind-ai init

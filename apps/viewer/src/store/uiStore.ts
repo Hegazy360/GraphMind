@@ -11,6 +11,14 @@ import { create } from 'zustand';
 import type { BreakpointMatcher, NodeKind, RunMode } from '@graphmind-ai/schema';
 import { EMPTY_FILTER, type FilterSpec, type StatusFilter } from './filters.js';
 import { loadTheme, type ThemeChoice } from '../lib/theme.js';
+import {
+  loadPanels,
+  presetPanels,
+  savePanels,
+  type PanelId,
+  type Panels,
+  type PresetId,
+} from './workspace.js';
 import type { Page } from '../router.js';
 
 export type ConnectionStatus = 'connecting' | 'live' | 'detached' | 'replaying' | 'off';
@@ -144,8 +152,16 @@ export interface InjectRequest {
 }
 
 interface UiState {
-  /** The debugger (runs, canvas, inspector) or the workflow builder. */
+  /** Which place is on screen. */
   page: Page;
+  /**
+   * How deep the *stack* was when a side trip (connect, build) was taken.
+   *
+   * A side trip does not unwind the stack — you expect to come back to the
+   * call you were reading, not to the top — so the trail keeps describing
+   * where you stood, and leaving returns you exactly there.
+   */
+  stackAt: 'runs' | 'run' | 'node';
   selectedRunId: string | undefined;
   selectedNodeId: string | undefined;
   /** Selected execution index in the inspector (per-instance selector). */
@@ -154,6 +170,8 @@ interface UiState {
   paletteOpen: boolean;
   /** Seeds the palette input (e.g. "> " to jump straight to actions). */
   paletteSeed: string;
+  /** The "which panels do I want" dialog (store/workspace.ts). */
+  customizeOpen: boolean;
   mode: RunMode;
   breakpoints: BreakpointMatcher[];
   connection: ConnectionStatus;
@@ -190,13 +208,30 @@ interface UiState {
   timelineHeight: number;
   filters: FilterSpec;
   theme: ThemeChoice;
+  /**
+   * Which panels this reader has in their workspace. Seeded from storage at
+   * creation for the same reason the theme is: a mount-time effect would
+   * race the persist-on-change effect and wipe the stored choice.
+   */
+  panels: Panels;
 
   setPage: (page: Page) => void;
+  /** Leave a side trip, back to the place it was taken from. */
+  leaveAside: () => void;
+  /**
+   * Go to a run's graph, from anywhere. Unlike `closeNode` this does not
+   * care where you were — a breadcrumb click from a side trip has to land,
+   * and inferring the destination from the current selection is how it
+   * silently did nothing instead.
+   */
+  openRun: (runId: string) => void;
   selectRun: (runId: string | undefined) => void;
   selectNode: (runId: string, nodeId: string | undefined) => void;
+  closeNode: () => void;
   setInstanceIdx: (idx: number | undefined) => void;
   toggleFollow: () => void;
   setPaletteOpen: (open: boolean, seed?: string) => void;
+  setCustomizeOpen: (open: boolean) => void;
   setMode: (mode: RunMode) => void;
   addBreakpoint: (matcher: BreakpointMatcher) => void;
   removeBreakpoint: (matcher: BreakpointMatcher) => void;
@@ -226,6 +261,8 @@ interface UiState {
   toggleErrorPath: () => void;
   clearFilters: () => void;
   setTheme: (theme: ThemeChoice) => void;
+  togglePanel: (id: PanelId) => void;
+  applyPreset: (preset: Exclude<PresetId, 'custom'>) => void;
 }
 
 export function matcherKey(matcher: BreakpointMatcher): string {
@@ -247,13 +284,15 @@ export const MIN_TIMELINE_HEIGHT = 132;
 export const DEFAULT_TIMELINE_HEIGHT = 268;
 
 export const useUiStore = create<UiState>((set) => ({
-  page: 'debug',
+  page: 'runs',
+  stackAt: 'runs',
   selectedRunId: undefined,
   selectedNodeId: undefined,
   selectedInstanceIdx: undefined,
   followCamera: true,
   paletteOpen: false,
   paletteSeed: '',
+  customizeOpen: false,
   mode: 'run',
   breakpoints: [],
   connection: 'off',
@@ -276,15 +315,60 @@ export const useUiStore = create<UiState>((set) => ({
   // Seeded from storage at creation, not in an effect: a mount-time effect
   // would race the "persist on change" effect and wipe the stored choice.
   theme: loadTheme(),
+  panels: loadPanels(),
 
-  setPage: (page) => set((s) => (s.page === page ? s : { page })),
+  setPage: (page) =>
+    set((s) => {
+      if (s.page === page) return s;
+      // Remember the stack as it is left, so a side trip can come back to it.
+      if (page === 'runs' || page === 'run' || page === 'node') {
+        return { page, stackAt: page };
+      }
+      return { page };
+    }),
+  leaveAside: () =>
+    set((s) => {
+      if (s.page !== 'connect' && s.page !== 'build') return s;
+      // A run that has since gone away (a cleared list, a new session) would
+      // strand us on a place with nothing to show; the list always exists.
+      const back = s.selectedRunId === undefined ? 'runs' : s.stackAt;
+      return { page: back as Page };
+    }),
   selectRun: (runId) =>
-    set({ selectedRunId: runId, selectedNodeId: undefined, selectedInstanceIdx: undefined }),
+    set({
+      selectedRunId: runId,
+      selectedNodeId: undefined,
+      selectedInstanceIdx: undefined,
+      ...(runId === undefined ? {} : { page: 'run' as Page, stackAt: 'run' as const }),
+    }),
   selectNode: (runId, nodeId) =>
-    set({ selectedRunId: runId, selectedNodeId: nodeId, selectedInstanceIdx: undefined }),
+    set({
+      selectedRunId: runId,
+      selectedNodeId: nodeId,
+      selectedInstanceIdx: undefined,
+      page: (nodeId === undefined ? 'run' : 'node') as Page,
+      stackAt: nodeId === undefined ? ('run' as const) : ('node' as const),
+    }),
+  /**
+   * Step back up to the graph *keeping* the selection, so the node you were
+   * reading is still lit and centred when you get there. Distinct from
+   * `selectNode(runId, undefined)`, which is an explicit deselect.
+   */
+  closeNode: () =>
+    set((s) => (s.page === 'node' ? { page: 'run' as Page, stackAt: 'run' as const } : s)),
+  openRun: (runId) =>
+    set((s) => ({
+      selectedRunId: runId,
+      // Same run: keep the call you were reading picked on the graph.
+      selectedNodeId: s.selectedRunId === runId ? s.selectedNodeId : undefined,
+      ...(s.selectedRunId === runId ? {} : { selectedInstanceIdx: undefined }),
+      page: 'run' as Page,
+      stackAt: 'run' as const,
+    })),
   setInstanceIdx: (idx) => set({ selectedInstanceIdx: idx }),
   toggleFollow: () => set((s) => ({ followCamera: !s.followCamera })),
   setPaletteOpen: (open, seed = '') => set({ paletteOpen: open, paletteSeed: open ? seed : '' }),
+  setCustomizeOpen: (customizeOpen) => set({ customizeOpen }),
   setMode: (mode) => set({ mode }),
   addBreakpoint: (matcher) =>
     set((s) =>
@@ -343,6 +427,17 @@ export const useUiStore = create<UiState>((set) => ({
     set((s) => ({ filters: { ...s.filters, errorPathOnly: !s.filters.errorPathOnly } })),
   clearFilters: () => set({ filters: EMPTY_FILTER }),
   setTheme: (theme) => set({ theme }),
+  togglePanel: (id) =>
+    set((state) => {
+      const panels = { ...state.panels, [id]: !state.panels[id] };
+      savePanels(panels);
+      return { panels };
+    }),
+  applyPreset: (preset) => {
+    const panels = presetPanels(preset);
+    savePanels(panels);
+    set({ panels });
+  },
 }));
 
 /** Collapsed roots for a run, referentially stable when empty. */

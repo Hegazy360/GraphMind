@@ -14,7 +14,7 @@ import { generateLoopRun, LOOP_NODES } from '../src/store/loop.js';
 import { expect, nodeCard, openViewer, pauseBanner, runStatusPill, test } from './harness.js';
 
 function inspector(page: import('@playwright/test').Page) {
-  return page.getByRole('complementary', { name: 'Node inspector' });
+  return page.getByRole('region', { name: 'Call detail' });
 }
 
 async function openLoopRun(page: import('@playwright/test').Page): Promise<void> {
@@ -50,7 +50,7 @@ test('the inspector lays the identical calls and their identical outputs side by
   }
   const panel = inspector(page);
   await expect(panel).toBeVisible();
-  await expect(panel.locator('.gm-inspect-head')).toContainText('searchFlights');
+  await expect(panel.locator('.gm-nodehead')).toContainText('searchFlights');
 
   const evidence = panel.getByTestId('loop-evidence');
   await expect(evidence).toBeVisible();

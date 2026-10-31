@@ -141,7 +141,7 @@ export function BuilderPage() {
           </a>
           <button
             className="gm-iconbtn"
-            onClick={() => useUiStore.getState().setPage('debug')}
+            onClick={() => useUiStore.getState().setPage('runs')}
             title="Back to the debugger"
             aria-label="Close the builder"
           >

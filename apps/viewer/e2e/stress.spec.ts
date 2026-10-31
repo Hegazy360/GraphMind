@@ -4,7 +4,7 @@
  * canvas — so this is the scaling claim being checked in a browser rather
  * than asserted in a comment.
  */
-import { expect, test } from './harness.js';
+import { expect, openViewMenu, test } from './harness.js';
 
 interface StressReport {
   runId: string;
@@ -48,8 +48,9 @@ test('a 300-node run ingests, folds itself, and stays interactive', async ({ pag
 
   // …and a run this size opens folded rather than as a 15,000px-wide row of
   // unreadable dots (AUTO_COLLAPSE_NODES in RunCanvas).
-  const folded = page.getByRole('button', { name: /folded$/ });
-  await expect(folded).toBeVisible();
+  // The View button carries the count, so "you are not seeing everything"
+  // is legible without opening anything.
+  await expect(page.getByRole('button', { name: /^View \d+$/ })).toBeVisible();
   const cardsWhenFolded = await page.locator('.react-flow__node').count();
   expect(cardsWhenFolded).toBeGreaterThan(0);
   expect(cardsWhenFolded).toBeLessThan(report.nodes);
@@ -60,8 +61,10 @@ test('a 300-node run ingests, folds itself, and stays interactive', async ({ pag
   await expect(page.locator('.gm-canvas-hud')).toContainText('nodes');
 
   // Unfold everything: now the whole graph is laid out.
-  await folded.click();
-  await expect(page.getByRole('button', { name: 'Collapse', exact: true })).toBeVisible();
+  const menu = await openViewMenu(page);
+  await menu.getByRole('button', { name: /^Expand \d+ folded$/ }).click();
+  await expect((await openViewMenu(page)).getByRole('button', { name: 'Collapse' })).toBeVisible();
+  await page.keyboard.press('Escape');
   const hud = page.locator('.gm-canvas-hud');
   await expect
     .poll(
@@ -86,7 +89,7 @@ test('a 300-node run ingests, folds itself, and stays interactive', async ({ pag
   // Interactive: a click still lands, and the inspector opens promptly.
   const started = Date.now();
   await page.locator('.react-flow__node .gm-node-title').first().click();
-  const inspector = page.getByRole('complementary', { name: 'Node inspector' });
+  const inspector = page.getByRole('region', { name: 'Call detail' });
   await expect(inspector).toBeVisible({ timeout: 10_000 });
   expect(
     Date.now() - started,
@@ -110,7 +113,7 @@ test('the command palette can still find one node among hundreds', async ({ page
 
   await first.press('Enter');
   await expect(palette).toBeHidden();
-  await expect(page.getByRole('complementary', { name: 'Node inspector' })).toContainText('runSql');
+  await expect(page.getByRole('region', { name: 'Call detail' })).toContainText('runSql');
 });
 
 test('the minimap pans the camera on a large graph', async ({ page }) => {

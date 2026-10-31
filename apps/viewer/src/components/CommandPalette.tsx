@@ -215,6 +215,22 @@ function useActionItems(runId: string | undefined): PaletteItem[] {
         },
       },
       {
+        id: 'act:customize',
+        group: 'Actions',
+        title: 'Customize the run page',
+        subtitle: 'Choose which panels the inspector and the canvas show',
+        keywords: 'panels layout detail essentials everything simplify hide show preferences settings',
+        run: () => ui.setCustomizeOpen(true),
+      },
+      {
+        id: 'act:connect',
+        group: 'Actions',
+        title: 'Connect an agent',
+        subtitle: 'The install command and the two lines, for your SDK',
+        keywords: 'setup start guide connect instrument install integrate onboarding sdk adapter help',
+        run: () => ui.setPage('connect'),
+      },
+      {
         id: 'act:build',
         group: 'Actions',
         title: 'Build a workflow',
@@ -331,10 +347,7 @@ export function CommandPalette() {
           subtitle: run.runId,
           hint: run.meta.startedTs !== undefined ? fmtRelative(run.meta.startedTs) : undefined,
           keywords: runBadgeStatus(run),
-          run: () => {
-            useUiStore.getState().selectRun(run.runId);
-            useUiStore.getState().setPage('debug');
-          },
+          run: () => useUiStore.getState().selectRun(run.runId),
         })),
     [runs],
   );

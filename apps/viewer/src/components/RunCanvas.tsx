@@ -241,6 +241,9 @@ export function RunCanvas({ runId }: { runId: string }) {
   const focusRequest = useUiStore((s) => s.focusRequest);
   const filters = useUiStore((s) => s.filters);
   const lod = useUiStore((s) => s.lod);
+  // Navigation aids for a graph too big to take in: self-limiting already
+  // (they appear only above a size), and switchable (store/workspace.ts).
+  const overlays = useUiStore((s) => s.panels.overlays);
   const collapsed = useUiStore((s) => collapsedFor(s, runId));
   const inspectorWidth = useUiStore((s) => s.inspectorWidth);
 
@@ -813,7 +816,7 @@ export function RunCanvas({ runId }: { runId: string }) {
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={1.3} color="var(--grid-dot)" />
         <LodWatcher nodeCount={nodes.length} />
-        {showMinimap && (
+        {showMinimap && overlays && (
           <MiniMap
             className="gm-minimap"
             pannable
@@ -861,7 +864,7 @@ export function RunCanvas({ runId }: { runId: string }) {
         </button>
       </div>
 
-      {nodes.length > 40 && (
+      {nodes.length > 40 && overlays && (
         <div
           className="gm-canvas-hud"
           title={`Layout: ${perf.mode} pass over ${perf.nodes} nodes in ${perf.ms.toFixed(2)}ms. Detail drops automatically as you zoom out.`}

@@ -8,7 +8,15 @@
  * the camera puts a held gate on screen, and that none of it costs frames on
  * a 300-node graph.
  */
-import { FIXTURE_NODES, expect, nodeCard, openFixtureRun, openViewer, test } from './harness.js';
+import {
+  FIXTURE_NODES,
+  expect,
+  nodeCard,
+  openFixtureRun,
+  openViewMenu,
+  openViewer,
+  test,
+} from './harness.js';
 
 interface FrameStats {
   frames: number;
@@ -157,38 +165,30 @@ test('prefers-reduced-motion switches every keyframe off', async ({ page }) => {
   expect(Number.parseFloat(ringOpacity)).toBeGreaterThan(0.3);
 });
 
-test('a held gate is put on screen, clear of the inspector that explains it', async ({ page }) => {
+test('a held gate is put on screen, whole, inside the canvas', async ({ page }) => {
   await openFixtureRun(page);
   const banner = nodeCard(page, FIXTURE_NODES.currency).locator('.gm-pause-banner');
   await expect(banner).toBeVisible({ timeout: 45_000 });
 
-  const inspector = page.getByRole('complementary', { name: 'Node inspector' });
-  await expect(inspector).toBeVisible();
-
-  // Give the camera its hold animation plus the re-frame the inspector
-  // opening provokes.
+  // Give the camera its hold animation.
   await page.waitForTimeout(1_600);
 
   const geometry = await page.evaluate(() => {
     const card = document.querySelector('.react-flow__node[data-id="tool:currencyConvert"]');
-    const panel = document.querySelector('.gm-inspector');
     const canvas = document.querySelector('.gm-canvas');
-    if (card === null || panel === null || canvas === null) return null;
-    return {
-      card: card.getBoundingClientRect(),
-      panel: panel.getBoundingClientRect(),
-      canvas: canvas.getBoundingClientRect(),
-    };
+    if (card === null || canvas === null) return null;
+    return { card: card.getBoundingClientRect(), canvas: canvas.getBoundingClientRect() };
   });
   expect(geometry).not.toBeNull();
   if (geometry === null) return;
 
-  // Entirely inside the canvas…
+  // Entirely inside the canvas, on all four sides. There is no longer a
+  // panel docked over the graph for it to hide behind — a held card only
+  // has to clear the canvas it is drawn on.
   expect(geometry.card.top).toBeGreaterThanOrEqual(geometry.canvas.top - 1);
   expect(geometry.card.bottom).toBeLessThanOrEqual(geometry.canvas.bottom + 1);
   expect(geometry.card.left).toBeGreaterThanOrEqual(geometry.canvas.left - 1);
-  // …and not underneath the inspector.
-  expect(geometry.card.right).toBeLessThanOrEqual(geometry.panel.left);
+  expect(geometry.card.right).toBeLessThanOrEqual(geometry.canvas.right + 1);
 
   // Which means the action row is clickable where it is.
   await banner.getByRole('button', { name: 'Retry', exact: true }).click();
@@ -210,8 +210,9 @@ test('a 300-node graph still paints at speed while panning', async ({ page }, te
   // Unfold everything, then frame the whole run so React Flow's virtualizer
   // actually mounts it. Panning a canvas with fifteen cards on it proves
   // nothing; the number that matters is what happens with hundreds.
-  await page.getByRole('button', { name: /folded$/ }).click();
-  await expect(page.getByRole('button', { name: 'Collapse', exact: true })).toBeVisible();
+  await (await openViewMenu(page)).getByRole('button', { name: /^Expand \d+ folded/ }).click();
+  await expect((await openViewMenu(page)).getByRole('button', { name: 'Collapse' })).toBeVisible();
+  await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Fit view' }).click();
   await expect
     .poll(async () => await page.locator('.react-flow__node').count(), {
@@ -250,7 +251,8 @@ test('the flourishes switch themselves off on a graph too big to afford them', a
       { timeout: 60_000 },
     )
     .toBe(true);
-  await page.getByRole('button', { name: /folded$/ }).click();
+  await (await openViewMenu(page)).getByRole('button', { name: /^Expand \d+ folded/ }).click();
+  await page.keyboard.press('Escape');
   await page.waitForTimeout(600);
 
   await expect(page.locator('.gm-canvas--big')).toBeVisible();

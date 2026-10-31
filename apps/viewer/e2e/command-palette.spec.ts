@@ -9,6 +9,7 @@ import {
   nodeCard,
   openFixtureRun,
   openPalette,
+  runCrumb,
   test,
 } from './harness.js';
 
@@ -91,14 +92,16 @@ test('⌘K opens the palette, searches, and navigates to a node', async ({ page 
   await input.press('Enter');
   await expect(palette).toBeHidden();
 
-  // Navigated: selected, deep-linked, and centred on the canvas.
-  await expect(nodeBody(page, FIXTURE_NODES.hotels)).toHaveClass(/gm-node--selected/);
-  await expect(page.getByRole('complementary', { name: 'Node inspector' })).toContainText(
-    'searchHotels',
-  );
+  // Navigated: the palette lands you on the call itself, deep-linked.
+  await expect(
+    page.getByRole('region', { name: 'Call detail' }).locator('.gm-nodehead-name'),
+  ).toHaveText('searchHotels');
   expect(page.url()).toContain('node/tool%3AsearchHotels');
 
-  // The camera brought it back into view, roughly centred.
+  // Stepping back up leaves it picked on the graph — and the camera brought
+  // it into view, roughly centred, even though it was off screen.
+  await page.keyboard.press('Escape');
+  await expect(nodeBody(page, FIXTURE_NODES.hotels)).toHaveClass(/gm-node--selected/);
   await page.waitForTimeout(900); // setCenter animates for 550ms
   const position = await cardPosition(page, FIXTURE_NODES.hotels);
   expect(position.inside, 'the palette should bring the node into view').toBe(true);
@@ -165,5 +168,5 @@ test('the palette can jump between runs', async ({ page }) => {
   await expect(runOption).toBeVisible();
   await runOption.click();
   await expect(palette).toBeHidden();
-  await expect(page.locator('.gm-topbar-title h1')).toHaveText('trip-planner');
+  await expect(runCrumb(page)).toHaveText('trip-planner');
 });

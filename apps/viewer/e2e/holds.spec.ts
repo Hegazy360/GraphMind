@@ -15,7 +15,7 @@ import { expect, nodeBody, nodeCard, openViewer, pauseBanner, test } from './har
 import type { Page } from '@playwright/test';
 
 function inspector(page: Page) {
-  return page.getByRole('complementary', { name: 'Node inspector' });
+  return page.getByRole('region', { name: 'Call detail' });
 }
 
 async function openInspectorOn(page: Page, nodeId: string): Promise<void> {

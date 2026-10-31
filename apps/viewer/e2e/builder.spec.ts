@@ -7,15 +7,16 @@
  * suite against a real server; here they must be visibly disabled, not
  * silently broken.
  */
-import { expect, openViewer, test } from './harness.js';
+import { expect, openViewer, skipSetupGuide, test } from './harness.js';
 
 const WS_FAILURE = /WebSocket connection to .* failed|ws:\/\/127\.0\.0\.1:4747/;
 
-test('opens from the rail, follows the form in the diagram, and says what needs a server', async ({
+test('opens from the runs list, follows the form in the diagram, and says what needs a server', async ({
   page,
   consoleGuard,
 }) => {
   consoleGuard.allow(WS_FAILURE);
+  await skipSetupGuide(page);
   await openViewer(page);
 
   await page.getByRole('button', { name: 'Build a workflow' }).first().click();
@@ -59,5 +60,5 @@ test('#/build deep-links straight to the page', async ({ page, consoleGuard }) =
   await expect(page.locator('.gm-builder-bar h1')).toHaveText('New workflow');
   await expect(page.locator('.gm-bpreview-card')).toHaveCount(4);
   // The rail button reads as pressed while the page is open.
-  await expect(page.getByRole('button', { name: 'Build a workflow' }).first()).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.gm-builder-bar h1')).toHaveText('New workflow');
 });

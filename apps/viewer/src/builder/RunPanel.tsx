@@ -223,7 +223,7 @@ export function RunPanel({
     if (runId === undefined) return;
     const ui = useUiStore.getState();
     ui.selectRun(runId);
-    ui.setPage('debug');
+    ui.setPage('runs');
   };
 
   const disabledNote = blockedNote ?? (busy !== undefined ? 'Working…' : undefined);

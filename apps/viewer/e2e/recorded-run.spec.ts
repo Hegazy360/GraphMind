@@ -18,7 +18,17 @@ import { tmpdir } from 'node:os';
 import { join, normalize, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { auditPage } from './audit.js';
-import { FIXTURE_NODES, expect, nodeCard, openFixtureRun, openViewer, test } from './harness.js';
+import {
+  FIXTURE_NODES,
+  expect,
+  nodeCard,
+  openDebugMenu,
+  openFixtureRun,
+  openViewer,
+  seedWorkspace,
+  settleAnimations,
+  test,
+} from './harness.js';
 
 const EXPORTED_RUN: unknown[] = JSON.parse(
   readFileSync(new URL('../src/fixtures/demo-run.json', import.meta.url), 'utf8'),
@@ -26,15 +36,16 @@ const EXPORTED_RUN: unknown[] = JSON.parse(
 
 /** Load the exported run and wait for its cards. */
 async function openExported(page: import('@playwright/test').Page): Promise<void> {
-  await openViewer(page, { embeddedRun: EXPORTED_RUN });
+  await openViewer(page, { embeddedRun: EXPORTED_RUN, workspace: 'everything' });
   await expect(page.locator('.react-flow__node')).toHaveCount(7, { timeout: 10_000 });
 }
 
 test('the run/step segments are disabled in an exported run, and say why', async ({ page }) => {
   await openExported(page);
 
-  const run = page.getByRole('radio', { name: 'Run', exact: true });
-  const step = page.getByRole('radio', { name: 'Step', exact: true });
+  const menu = await openDebugMenu(page);
+  const run = menu.getByRole('radio', { name: 'Run', exact: true });
+  const step = menu.getByRole('radio', { name: 'Step', exact: true });
   await expect(run).toBeDisabled();
   await expect(step).toBeDisabled();
   await expect(step).toHaveAttribute('title', /frozen record|Nothing is executing/);
@@ -50,7 +61,7 @@ test('"Break everywhere" is disabled in an exported run and adds no breakpoint',
 }) => {
   await openExported(page);
 
-  const breakAll = page.getByRole('button', { name: /Break everywhere/ });
+  const breakAll = (await openDebugMenu(page)).getByRole('button', { name: /Break everywhere/ });
   await expect(breakAll).toBeDisabled();
   await expect(breakAll).toHaveAttribute('title', /frozen record|Nothing is executing/);
 
@@ -73,10 +84,10 @@ test('per-tool breakpoint dots are inert in an exported run', async ({ page }) =
   await expect(page.locator('.gm-chip--bp')).toHaveCount(0);
 });
 
-test('the run bar names what it is attached to: nothing', async ({ page }) => {
+test('the header names what it is attached to: nothing', async ({ page }) => {
   await openExported(page);
-  await expect(page.locator('.gm-runbar-endpoint')).toHaveText('recorded · no server');
   await expect(page.locator('.gm-conn-label')).toHaveText('replaying');
+  await expect(await openDebugMenu(page)).toContainText('recorded · no server');
 });
 
 /**
@@ -89,11 +100,12 @@ test('a paced replay keeps its debugger controls', async ({ page, consoleGuard }
   consoleGuard.allow(/WebSocket connection to .* failed|ws:\/\/127\.0\.0\.1:\d+\/ws\/ui/);
   await openFixtureRun(page);
 
-  await expect(page.getByRole('radio', { name: 'Step', exact: true })).toBeEnabled();
-  await expect(page.getByRole('button', { name: /Break everywhere/ })).toBeEnabled();
+  const menu = await openDebugMenu(page);
+  await expect(menu.getByRole('radio', { name: 'Step', exact: true })).toBeEnabled();
+  await expect(menu.getByRole('button', { name: /Break everywhere/ })).toBeEnabled();
 
-  await page.getByRole('button', { name: /Break everywhere/ }).click();
-  await expect(page.locator('.gm-chip--bp')).toHaveCount(1);
+  await menu.getByRole('button', { name: /Break everywhere/ }).click();
+  await expect(menu.locator('.gm-chip--bp')).toHaveCount(1);
 });
 
 /**
@@ -107,18 +119,22 @@ for (const theme of ['dark', 'light'] as const) {
     await expect(page.locator('.react-flow__node')).toHaveCount(7, { timeout: 10_000 });
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
 
+    await openDebugMenu(page);
+    // The popover fades in; sampling mid-animation reads its colours off a
+    // half-transparent surface and reports nonsense ratios.
+    await settleAnimations(page);
     const report = await auditPage(page, {
-      textSelectors: ['.gm-seg button', '.gm-toolbtn', '.gm-conn-label', '.gm-runbar-endpoint'],
-      rowSelectors: ['.gm-runbar', '.gm-seg'],
+      textSelectors: ['.gm-seg button', '.gm-toolbtn', '.gm-conn-label', '.gm-popover-foot'],
+      rowSelectors: ['.gm-header', '.gm-seg'],
       minRatio: 3,
     });
-    await testInfo.attach(`recorded-runbar-${theme}.png`, {
-      body: await page.locator('.gm-runbar').screenshot(),
+    await testInfo.attach(`recorded-debug-${theme}.png`, {
+      body: await page.locator('.gm-popover').screenshot(),
       contentType: 'image/png',
     });
     expect(report.inspected).toBeGreaterThan(3);
     expect(report.clipped, 'a disabled control with its label cut off').toEqual([]);
-    expect(report.overlapping, 'run bar controls overlapping').toEqual([]);
+    expect(report.overlapping, 'debug controls overlapping').toEqual([]);
     expect(report.contrast, 'a disabled control faded below 3:1').toEqual([]);
   });
 }
@@ -229,13 +245,16 @@ test.describe('a real record --html export', () => {
   test('opened from disk, it prices the run with no request and no console error', async ({ page }) => {
     const requested: string[] = [];
     page.on('request', (r) => requested.push(r.url()));
+    // Context & cost is outside the base workspace; this test is about the
+    // price table reaching a file:// page, not about what ships switched on.
+    await seedWorkspace(page, 'everything');
     await page.goto(pathToFileURL(join(root, 'team', 'run.html')).href);
     await expect(page.locator('.react-flow__node')).toHaveCount(7, { timeout: 15_000 });
     await expect(page.locator('.gm-topbar-stats')).toContainText('$0.024');
     await page.getByRole('button', { name: 'Fit view' }).click();
     await page.waitForTimeout(700);
     await nodeCard(page, FIXTURE_NODES.llm).locator('.gm-node-title').click();
-    const ctx = page.getByRole('complementary', { name: 'Node inspector' }).getByTestId('context-cost');
+    const ctx = page.getByRole('region', { name: 'Call detail' }).getByTestId('context-cost');
     await expect(ctx).toContainText('≈ est. (prices as of');
     await expect(ctx).not.toContainText('Prices unavailable here');
     expect(requested.filter((url) => url.includes('data_slim') || url.includes('synthetic-'))).toEqual([]);

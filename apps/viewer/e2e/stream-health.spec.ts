@@ -15,7 +15,13 @@
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { auditPage } from './audit.js';
-import { expect, openViewer, test } from './harness.js';
+import {
+  expect,
+  openDebugMenu,
+  openViewer,
+  runCrumb,
+  test,
+} from './harness.js';
 
 const RECORDED: { seq: number; ts: number; runId: string; type: string }[] = JSON.parse(
   readFileSync(new URL('../src/fixtures/demo-run.json', import.meta.url), 'utf8'),
@@ -133,7 +139,7 @@ test('a socket delivering a backlog says "catching up", not "live"', async ({
 
   // The run arrives and the canvas fills in — this is exactly the failure
   // mode: it *looks* like a live debugger.
-  await expect(page.locator('.gm-topbar-title h1')).toHaveText('trip-planner', { timeout: 30_000 });
+  await expect(runCrumb(page)).toHaveText('trip-planner', { timeout: 30_000 });
 
   // …and the run bar refuses to call it live.
   await expect(connLabel(page)).toHaveText(/^catching up [\d,]+\/72,144$/, { timeout: 30_000 });
@@ -207,12 +213,12 @@ for (const theme of ['dark', 'light'] as const) {
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
 
     const report = await auditPage(page, {
-      textSelectors: ['.gm-conn-label', '.gm-runbar-endpoint', '.gm-seg button', '.gm-toolbtn'],
-      rowSelectors: ['.gm-runbar'],
+      textSelectors: ['.gm-conn-label', '.gm-crumb', '.gm-toolbtn'],
+      rowSelectors: ['.gm-header'],
       minRatio: 3,
     });
     await testInfo.attach(`catchup-runbar-${theme}.png`, {
-      body: await page.locator('.gm-runbar').screenshot(),
+      body: await page.locator('.gm-header').screenshot(),
       contentType: 'image/png',
     });
     expect(report.inspected).toBeGreaterThan(3);

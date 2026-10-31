@@ -13,7 +13,7 @@ import {
 } from './harness.js';
 
 function inspector(page: import('@playwright/test').Page) {
-  return page.getByRole('complementary', { name: 'Node inspector' });
+  return page.getByRole('region', { name: 'Call detail' });
 }
 
 test('clicking a node opens the inspector with its input and output', async ({ page }) => {
@@ -27,9 +27,8 @@ test('clicking a node opens the inspector with its input and output', async ({ p
 
   const panel = inspector(page);
   await expect(panel).toBeVisible();
-  await expect(panel.locator('.gm-inspect-head')).toContainText('searchFlights');
+  await expect(panel.locator('.gm-nodehead')).toContainText('searchFlights');
   await expect(panel.locator('.gm-kind-badge')).toHaveText('tool');
-  await expect(panel.locator('.gm-inspect-id')).toContainText(FIXTURE_NODES.flights);
 
   // The payloads, both directions.
   await expect(panel).toContainText('Input');
@@ -42,13 +41,13 @@ test('clicking a node opens the inspector with its input and output', async ({ p
   await expect(panel.locator('.gm-inspect-stat-label').filter({ hasText: 'duration' })).toBeVisible();
   await expect(panel.locator('.gm-inspect-kv')).toContainText('call_f1');
 
-  // Selection is reflected on the canvas and in the URL.
-  await expect(nodeBody(page, FIXTURE_NODES.flights)).toHaveClass(/gm-node--selected/);
+  // The place you are in is in the URL…
   expect(page.url()).toContain('node/tool%3AsearchFlights');
 
-  // Escape closes it again.
+  // …and Escape steps back up to the graph, with the call still picked.
   await page.keyboard.press('Escape');
-  await expect(panel).toBeHidden();
+  await expect(nodeBody(page, FIXTURE_NODES.flights)).toHaveClass(/gm-node--selected/);
+  await expect(panel).toHaveCount(0);
 });
 
 test('a failed node leads with why it failed, including the stack', async ({ page }) => {
@@ -93,13 +92,14 @@ test('the inspector follows the selection to a sibling from the failure context'
   await expect(sibling).toBeVisible();
   await sibling.click();
 
-  await expect(panel.locator('.gm-inspect-head')).toContainText('getWeather');
+  await expect(panel.locator('.gm-nodehead-name')).toHaveText('getWeather');
   await expect(panel).toContainText('forecast');
+  await page.keyboard.press('Escape');
   await expect(nodeBody(page, FIXTURE_NODES.weather)).toHaveClass(/gm-node--selected/);
 });
 
 test('an LLM step keeps usage and the full stream, per execution', async ({ page }) => {
-  await openFixtureRun(page);
+  await openFixtureRun(page, { workspace: 'everything' });
   // Hold the run so the step has exactly two finished executions — otherwise
   // the inspector's "latest execution" default is a moving target.
   await waitForPlantedPause(page);
@@ -108,7 +108,7 @@ test('an LLM step keeps usage and the full stream, per execution', async ({ page
 
   await nodeCard(page, FIXTURE_NODES.llm).locator('.gm-node-title').click();
   const panel = inspector(page);
-  await expect(panel.locator('.gm-inspect-head')).toContainText('llm step');
+  await expect(panel.locator('.gm-nodehead')).toContainText('llm step');
 
   // Two attempts so far, and the numbers for the one on screen.
   const chips = panel.locator('.gm-exec-chip');

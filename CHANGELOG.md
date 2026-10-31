@@ -8,6 +8,133 @@ distribution, and the Ruby `graphmind` gem).
 
 ## Unreleased
 
+### Changed — one header, one section
+
+The viewer framed its canvas on three sides — a run rail on the left, a
+toolbar above, a debug bar below, an inspector docked on the right — and
+asked a newcomer to work out which of the four they were supposed to be
+reading. Every one of them was on screen on every screen, including the ones
+with no canvas to act on.
+
+It is now a stack of places with exactly one on screen at a time:
+
+```text
+runs  →  run  →  node
+```
+
+- **The breadcrumb in the header is the navigation.** `Runs › trip-planner ›
+  currencyConvert`, every ancestor a link, <kbd>Esc</kbd> and the browser's
+  back button walking the same path — each place is a hash URL, so every
+  link `graphmind mcp`, `graphmind record --html` and <kbd>⇧</kbd><kbd>L</kbd>
+  ever emitted still lands exactly where it says.
+- **Runs is a place, not a 244px rail.** A card per run with how it ended,
+  how big, how long, what it cost and the error it stopped on — enough to
+  choose between two runs of the same app without opening either.
+- **The graph gets the window.** No rail, no docked panel: a seven-node run
+  has room and a three-hundred-node one has all of it.
+- **A call is a page.** The decision row pinned above the evidence instead of
+  a footer under a scroll, payloads in a reading column instead of a 392px
+  gutter, and — new — <kbd>[</kbd> and <kbd>]</kbd> to walk the run in
+  execution order without going back to the graph to hunt for the next call.
+- **Side trips extend the trail instead of replacing it.** Connect and Build
+  are taken from somewhere and expected to return there, so the breadcrumb
+  keeps describing where the stack stood — `Runs › trip-planner ›
+  currencyConvert › Connect an agent` — every ancestor stays a link, and
+  <kbd>Esc</kbd> comes back to the exact call you left. They had been dead
+  ends: one un-clickable crumb and no way out but the back button.
+- **Every place is one click from every other**, in a menu under the
+  GraphMind mark. Connect and Build used to be reachable only from the runs
+  list, so getting to either from inside a run meant leaving the run first.
+- **A held run gets a band under the header, on every place**, naming the
+  call and why, with one click into it. It does not move you: seeing *where*
+  in the shape a run stopped is most of the value of stopping it, so the
+  graph stays. <kbd>C</kbd>/<kbd>S</kbd>/<kbd>R</kbd> still release a hold
+  from the graph without navigating; <kbd>I</kbd> and <kbd>E</kbd> step into
+  the call, because injecting and editing need the payload on screen.
+- **The debug bar became a Debug menu.** Run/Step, Break everywhere and the
+  armed breakpoints are session state, not a bar across every screen; the
+  button carries the armed count and reads `Step` when stepping. Disabled
+  controls now clear 3:1 contrast inside the menu's surface, which
+  `--text-faint` did not.
+- **Opening the first run is an opening move, not a standing rule.** A reader
+  who asked for `#/runs`, or who stepped back up to the list, is no longer
+  dragged out of it by the next run to arrive — and the setup guide no longer
+  fires its timer at someone who has already navigated somewhere.
+- The token `graphmind serve` puts in the viewer link is no longer mistaken
+  for a requested place, so the first-run guide works on the path most people
+  actually arrive by.
+
+### Changed — the run page starts small and grows
+
+The debugger showed everything it had about a node at once: the error, its
+stack, the input that caused it twice over, the siblings, the timings, the
+token counts, the totals across every execution, the streamed text, the
+reasoning, the node id, who released the last hold. All of it is useful to
+someone. Printing all of it to everyone, on the first run they ever open, is
+how a debugger reads as a wall.
+
+- **The run page ships as `essentials`** — the graph, four figures, and an
+  inspector that answers what happened, what went in, what came out and how
+  long it took. Five further panels (context and cost, per-node history,
+  streamed text, the node id, the connection detail) exist and start switched
+  off.
+- **Customize the run page** chooses them, from the View menu, from a line at
+  the bottom of the inspector, or from the palette. `Essentials` and
+  `Everything` are shortcuts, not modes: change one toggle and you are in
+  `custom`, with nothing lost and nothing to apply. The choice is stored in
+  the browser and applies to every run.
+- **Nothing a preset can reach can hide a hold.** The pause banner, the hold
+  evidence and the Continue / Step / Retry / Inject / Edit / Abort row are not
+  panels. A debugger that could be configured into not telling you it had
+  stopped would be worse than no debugger, and a browser test asserts it under
+  the shipped default.
+- **The input is printed once.** "Why this failed" pins the failing call's
+  input directly under the error, which is the right adjacency; the standalone
+  Input section used to print the same JSON again two sections later, and now
+  stands down whenever Why is carrying it.
+- A panel added by a later release arrives switched off, even for someone who
+  once chose `Everything` — choosing every panel that existed in 0.6 is not
+  consent to every panel invented afterwards.
+
+### Changed — "now what?" is one screen
+
+The viewer answered "I just installed this, now what?" with everything it had
+at once: a canvas, a card of four replay buttons, a three-line snippet with no
+install step and no choice of SDK, eight figures in the toolbar and seven ways
+to redraw the graph beside them. The features were there; the order was not.
+
+- **Connect an agent** (`#/connect`, the header menu, or the palette). A
+  viewer that opens with nothing attached and no runs goes here on its own,
+  once per browser — never over a deep link, never over a replay, and never
+  once a run exists.
+- **One screen, no wizard.** Pick the SDK your agent already uses (seven, from
+  the Vercel AI SDK to the MCP proxy) and copy the install command and the two
+  lines it needs. Each stack carries its own honest statement of what a gate
+  can do there — LangChain callbacks can hold a node but not change what it
+  returns — stated *before* you wire it up, and whether anything is currently
+  listening. The choice of stack is remembered.
+- It is built from the debugger's own atoms: one surface, hairline-divided
+  sections, a section label heading each, a copy on the right of the head
+  row — the same shape as the inspector, so the first page most people see
+  does not read as a docs site that wandered in. Both themes are now under
+  the contrast-and-clipping audit on this page too.
+- **The top bar carries four figures, not eight.** Nodes, errors, wall and est.
+  cost — the ones you want before you look at the graph. LLM steps, tool calls,
+  running vs held time and the token breakdown moved into **Totals**, whole,
+  where they are never shed to fit. The run id, 110px of the bar nobody read,
+  is now the tooltip on the deep-link button it always belonged to.
+- **Panes, folding and the theme are one View menu** instead of five buttons
+  and a segmented control. The button carries the folded count, so a graph
+  hiding part of itself still says so. The theme is three radios rather than a
+  cycler, and <kbd>D</kbd>, <kbd>⇧</kbd><kbd>T</kbd> and <kbd>⇧</kbd><kbd>C</kbd>
+  are unchanged.
+- **The run bar drops what cannot act.** On the connect page and the Build page
+  the Run/Step toggle, Pause all, the breakpoint chips and the endpoint are
+  absent rather than dimmed; the connection state, which is still true there,
+  stays.
+- The empty canvas offers one way forward and one aside (replay the demo)
+  instead of four replay buttons and a keyboard legend.
+
 ### Added — build a workflow in the viewer
 
 - **The Build page** (`#/build`, the "Build a workflow" button in the run

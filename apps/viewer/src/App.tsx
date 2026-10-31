@@ -1,5 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ReactFlowProvider } from '@xyflow/react';
+/**
+ * One header, one section.
+ *
+ * The viewer used to frame its canvas on three sides — a run rail on the
+ * left, a toolbar above, a debug bar below, an inspector on the right — and
+ * ask a newcomer to work out which of the four they were supposed to be
+ * looking at. It is now a stack of places with one on screen at a time:
+ *
+ *     runs  →  run  →  node
+ *
+ * plus the setup guide and the builder beside it. The header carries the
+ * breadcrumb (which is the navigation), whether anything is attached, and
+ * the menus; a held run gets a band under it, because a stopped process
+ * outranks wherever you happen to be standing.
+ */
+import { useEffect, useMemo, useRef } from 'react';
 import {
   embeddedRun,
   isExportedRun,
@@ -8,9 +22,10 @@ import {
   type FixtureName,
 } from './connection/FixtureConnection.js';
 import { useLiveConnection } from './connection/useLiveConnection.js';
+import { routeFromHash } from './connection/auth.js';
 import { resolveServerUrl } from './connection/ServerConnection.js';
 import { parseStressParams, useStressRun } from './connection/StressConnection.js';
-import { BUILD_HASH, formatHash, parseHash } from './router.js';
+import { depthOf, formatHash, inRun, isAside, pageHash, parseHash } from './router.js';
 import { canvasActions, copyText, deepLink } from './lib/commands.js';
 import { controlAllows } from './lib/control.js';
 import { canEditArgs } from './lib/editArgs.js';
@@ -19,59 +34,32 @@ import { applyTheme, nextTheme, saveTheme } from './lib/theme.js';
 import { collapsibleRoots } from './store/collapse.js';
 import { useEditStore } from './store/editStore.js';
 import { useRunStore } from './store/runStore.js';
-import { MIN_TIMELINE_HEIGHT, collapsedFor, useUiStore } from './store/uiStore.js';
+import { collapsedFor, useUiStore } from './store/uiStore.js';
+import { AppHeader } from './components/AppHeader.js';
 import { CommandPalette } from './components/CommandPalette.js';
-import { InspectorPanel } from './components/InspectorPanel.js';
-import { RunBar } from './components/RunBar.js';
-import { RunCanvas } from './components/RunCanvas.js';
-import { RunsList } from './components/RunsList.js';
-import { EmptyState } from './components/EmptyState.js';
-import { Timeline } from './components/Timeline.js';
-import { TopBar } from './components/TopBar.js';
+import { CustomizePanel } from './components/CustomizePanel.js';
+import { HoldStrip } from './components/HoldStrip.js';
 import { BuilderPage } from './builder/BuilderPage.js';
+import { NodePage } from './pages/NodePage.js';
+import { RunPage } from './pages/RunPage.js';
+import { RunsPage } from './pages/RunsPage.js';
+import { ConnectPage } from './pages/ConnectPage.js';
+import { connectSeen, markConnectSeen, shouldOpenConnect } from './lib/firstRun.js';
 
-/** The draggable divider between the graph and the waterfall. */
-function TimelineSplitter({ onResize }: { onResize: (height: number) => void }) {
-  const dragging = useRef(false);
-  const onDown = useCallback((event: React.MouseEvent) => {
-    event.preventDefault();
-    dragging.current = true;
-    document.body.style.cursor = 'row-resize';
-  }, []);
+/** How long "attached with nothing to show" must hold before it means it. */
+const SETTLE_MS = 900;
 
-  useEffect(() => {
-    const onMove = (event: MouseEvent) => {
-      if (!dragging.current) return;
-      onResize(window.innerHeight - event.clientY - 44);
-    };
-    const onUp = () => {
-      dragging.current = false;
-      document.body.style.cursor = '';
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-  }, [onResize]);
-
-  return (
-    <div
-      className="gm-splitter"
-      onMouseDown={onDown}
-      role="separator"
-      aria-orientation="horizontal"
-      aria-label="Resize the timeline"
-      tabIndex={0}
-      onKeyDown={(event) => {
-        const height = useUiStore.getState().timelineHeight;
-        if (event.key === 'ArrowUp') onResize(height + 24);
-        if (event.key === 'ArrowDown') onResize(Math.max(MIN_TIMELINE_HEIGHT, height - 24));
-      }}
-    />
-  );
-}
+/**
+ * The place the page was *opened* at, if the reader named one.
+ *
+ * Read once, at module load, because the app starts writing its own place
+ * into the hash immediately — so by the time the first-run check runs,
+ * `location.hash` is `#/runs` and says nothing about what was asked for.
+ * The token `graphmind serve` puts in the link is not a place, so it is
+ * stripped: otherwise nobody arriving the normal way would ever be counted
+ * as having arrived without one.
+ */
+const ARRIVED_AT = typeof location === 'undefined' ? '' : routeFromHash(location.hash);
 
 export default function App() {
   const { fixtureParam, serverUrl, stress } = useMemo(() => {
@@ -96,31 +84,14 @@ export default function App() {
   const selectedRunId = useUiStore((s) => s.selectedRunId);
   const selectedNodeId = useUiStore((s) => s.selectedNodeId);
   const paletteOpen = useUiStore((s) => s.paletteOpen);
-  const view = useUiStore((s) => s.view);
   const page = useUiStore((s) => s.page);
-  const timelineHeight = useUiStore((s) => s.timelineHeight);
   const theme = useUiStore((s) => s.theme);
+  const connection = useUiStore((s) => s.connection);
   const runExists = useRunStore((s) =>
     selectedRunId !== undefined ? s.runs[selectedRunId] !== undefined : false,
   );
   const firstRunId = useRunStore((s) => Object.keys(s.runs)[0]);
   const runCount = useRunStore((s) => Object.keys(s.runs).length);
-  // Below the rail's own width plus a usable canvas there is nothing to show
-  // next to it, so a narrow window starts with the graph and reveals the run
-  // list as an overlay on demand (index.css does the overlay half).
-  const [railOpen, setRailOpen] = useState(
-    () => typeof matchMedia !== 'function' || !matchMedia('(max-width: 860px)').matches,
-  );
-  /** The gate holding the selected run, if any — drives the paused moment. */
-  const heldPauseId = useRunStore((s) => {
-    if (selectedRunId === undefined) return undefined;
-    const run = s.runs[selectedRunId];
-    if (run === undefined) return undefined;
-    for (const id of Object.keys(run.pauses)) {
-      if (run.pauses[id]?.active === true) return id;
-    }
-    return undefined;
-  });
 
   // theme: the store is seeded from storage; keep <html> and storage in sync
   useEffect(() => {
@@ -128,22 +99,20 @@ export default function App() {
     saveTheme(theme);
   }, [theme]);
 
-  // hash → state (deep links)
+  // hash → state (deep links, and the browser's own back button)
   useEffect(() => {
     const apply = () => {
       const route = parseHash(location.hash);
       const ui = useUiStore.getState();
-      if (route.page === 'build') {
-        ui.setPage('build');
+      if (route.page === 'build' || route.page === 'connect' || route.page === 'runs') {
+        ui.setPage(route.page);
         return;
       }
-      if (route.page === 'debug') ui.setPage('debug');
       if (route.runId === undefined) return;
-      if (route.nodeId !== undefined) {
+      if (route.page === 'node' && route.nodeId !== undefined) {
         ui.selectNode(route.runId, route.nodeId);
-        ui.requestFocus(route.nodeId);
-      } else if (ui.selectedRunId !== route.runId) {
-        ui.selectRun(route.runId);
+      } else {
+        ui.openRun(route.runId);
       }
     };
     apply();
@@ -151,39 +120,80 @@ export default function App() {
     return () => window.removeEventListener('hashchange', apply);
   }, []);
 
-  // state → hash
+  /**
+   * state → hash. Going deeper pushes a history entry so the browser's back
+   * button walks the stack the way the breadcrumb does; coming back up
+   * replaces, so "back" never lands on a place you just left by hand.
+   */
+  const lastDepth = useRef<number | null>(null);
   useEffect(() => {
-    const next = page === 'build' ? BUILD_HASH : formatHash(selectedRunId, selectedNodeId);
-    if (next === location.hash) return;
-    history.replaceState(null, '', next === '' ? location.pathname + location.search : next);
+    const next = inRun(page)
+      ? formatHash(selectedRunId, page === 'node' ? selectedNodeId : undefined)
+      : pageHash(page);
+    const depth = depthOf(page);
+    if (next === location.hash) {
+      lastDepth.current = depth;
+      return;
+    }
+    const url = next === '' ? location.pathname + location.search : next;
+    const forward = lastDepth.current !== null && depth > lastDepth.current;
+    if (forward) history.pushState(null, '', url);
+    else history.replaceState(null, '', url);
+    lastDepth.current = depth;
   }, [page, selectedRunId, selectedNodeId]);
 
-  // auto-select the first run to arrive (deep links win — they select first)
+  /**
+   * Open the first run to arrive, once.
+   *
+   * With one run on the machine, making someone click it is ceremony. But
+   * it is an *opening* move, not a standing rule: a reader who asked for
+   * `#/runs`, or who stepped back up to the list, has said which place they
+   * want, and a run arriving later must not drag them out of it.
+   */
+  const autoOpened = useRef(false);
   useEffect(() => {
-    if (selectedRunId === undefined && firstRunId !== undefined) {
-      useUiStore.getState().selectRun(firstRunId);
-    }
+    if (autoOpened.current || ARRIVED_AT !== '') return;
+    if (selectedRunId !== undefined || firstRunId === undefined) return;
+    autoOpened.current = true;
+    useUiStore.getState().selectRun(firstRunId);
   }, [selectedRunId, firstRunId]);
 
   /**
-   * A gate opening should arrive with its evidence already on screen.
-   *
-   * Execution is held: the next thing the user does is decide, and the
-   * inputs to that decision — the error, the exact input that produced it,
-   * the siblings that did not fail — all live in the inspector. Opening it
-   * for them removes a click from the only moment that is genuinely urgent.
-   *
-   * It never *takes* a selection: if you were already reading some other
-   * node, you stay there. The card's own banner is still the fallback.
+   * A cold start opens the setup guide instead of an empty page. Fires at
+   * most once per browser, never over a deep link or an offline replay, and
+   * never once a run exists.
    */
+  const guideOffered = useRef(false);
   useEffect(() => {
-    if (heldPauseId === undefined || selectedRunId === undefined) return;
-    const ui = useUiStore.getState();
-    if (ui.selectedNodeId !== undefined) return;
-    const nodeId = useRunStore.getState().runs[selectedRunId]?.pauses[heldPauseId]?.nodeId;
-    if (nodeId === undefined) return;
-    ui.selectNode(selectedRunId, nodeId);
-  }, [heldPauseId, selectedRunId]);
+    if (guideOffered.current || offline || ARRIVED_AT !== '') return;
+    if (!shouldOpenConnect(connection, runCount, connectSeen())) return;
+    // Wait out the handshake: the server replays history on subscribe, so
+    // "attached with zero runs" is true for a moment on every connect.
+    const timer = setTimeout(() => {
+      const ui = useUiStore.getState();
+      // Only from a standing start. Anyone who went somewhere in the
+      // meantime — opened the builder, picked a run — has answered the
+      // question the guide was about to ask.
+      if (ui.page !== 'runs') return;
+      if (Object.keys(useRunStore.getState().runs).length > 0) return;
+      guideOffered.current = true;
+      markConnectSeen();
+      ui.setPage('connect');
+    }, SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [connection, runCount, offline]);
+
+  /**
+   * A gate opening does *not* move you.
+   *
+   * The old layout opened the inspector beside the graph, which cost
+   * nothing. Navigating now would cost the graph — and the moment a run
+   * stops is exactly when you want to see where in the shape it stopped.
+   * So the hold announces itself (the band under the header, the banner on
+   * the card) and you choose to go in. `c` / `s` / `r` still release it from
+   * right here without moving at all; only `i` and `e`, which need the
+   * editor and the evidence, take you to the call.
+   */
 
   // ── keyboard ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -204,26 +214,35 @@ export default function App() {
         ui.setPaletteOpen(!ui.paletteOpen);
         return;
       }
+      // Escape is "up one step": close what is open, else leave the node for
+      // the graph, else leave the run for the list.
       if (e.key === 'Escape') {
         if (ui.paletteOpen) ui.setPaletteOpen(false);
-        else if (ui.selectedNodeId !== undefined && ui.selectedRunId !== undefined) {
-          ui.selectNode(ui.selectedRunId, undefined);
+        else if (ui.customizeOpen) ui.setCustomizeOpen(false);
+        else if (ui.page === 'node' && ui.selectedNodeId !== undefined) {
+          // Back to the graph, landing on the node you were reading: the
+          // selection survives the step, so it is still lit and centred —
+          // which is also why the test here is the *place*, not the
+          // selection, or a second Escape would step onto itself.
+          ui.closeNode();
+          ui.requestFocus(ui.selectedNodeId);
+        } else if (isAside(ui.page)) {
+          // A side trip comes back to where it was taken from, not to the
+          // top: leaving Connect should land on the call you were reading.
+          ui.leaveAside();
+        } else if (ui.page === 'run') {
+          ui.setPage('runs');
         }
         return;
       }
       if (typing || meta || e.altKey) return;
-      // The builder is a form: its text fields already return above, and the
-      // canvas shortcuts have nothing to act on. Only the rail toggle stays.
-      if (useUiStore.getState().page === 'build') {
-        if (e.key === 'b' && !e.shiftKey) setRailOpen((open) => !open);
-        return;
-      }
+      // Outside a run the canvas shortcuts have nothing to act on.
+      if (!inRun(ui.page)) return;
 
       // ── while a gate is held, the decision owns the keyboard ─────────────
       // c/s/r/i (and e, on an editable pause) are unbound the rest of the
-      // time, and a held run is a full stop: nothing else is more urgent than
-      // what happens next. Abort is deliberately not bound — an irreversible
-      // action should cost a click.
+      // time, and a held run is a full stop. Abort is deliberately not bound
+      // — an irreversible action should cost a click.
       if (!e.shiftKey && ui.selectedRunId !== undefined) {
         const pause = heldGate(ui.selectedRunId);
         if (pause !== undefined) {
@@ -231,17 +250,16 @@ export default function App() {
           const key1 = e.key.toLowerCase();
           // A tokenless tab has no Step or Inject (the server refuses them).
           const withheld =
-            (key1 === 's' && !controlAllows(ui.control, 'debug')) || (key1 === 'i' && !controlAllows(ui.control, 'inject'));
+            (key1 === 's' && !controlAllows(ui.control, 'debug')) ||
+            (key1 === 'i' && !controlAllows(ui.control, 'inject'));
           if (!withheld && (key1 === 'c' || key1 === 's' || key1 === 'r' || key1 === 'i')) {
             e.preventDefault();
             if (key1 === 'c') resumeGate(runId, pause.pauseId, 'continue');
             else if (key1 === 's') stepGate(runId, pause.pauseId);
             else if (key1 === 'r') resumeGate(runId, pause.pauseId, 'retry');
             else {
-              // Inject from the keyboard always opens the *panel* editor:
-              // it is the copy that can never be covered, and it sits beside
-              // the error and the input you are about to substitute for.
-              // Keep a picked execution: it is what chose this pause.
+              // Inject from the keyboard opens the editor beside the error
+              // and the input you are about to substitute for.
               if (ui.selectedNodeId !== pause.nodeId) ui.selectNode(runId, pause.nodeId);
               ui.requestInject(pause.pauseId, 'panel');
             }
@@ -249,7 +267,6 @@ export default function App() {
           }
           // `e` edits the held call's arguments (0.6.0) — only where the app
           // said it can (`exec.paused.editable`), never on an LLM step.
-          // Like `i`, it opens the panel's copy, beside the evidence.
           if (key1 === 'e') {
             const node = useRunStore.getState().runs[runId]?.nodes[pause.nodeId];
             if (node !== undefined && canEditArgs(node, pause, isExportedRun(), ui.control)) {
@@ -273,6 +290,19 @@ export default function App() {
         ui.setPaletteOpen(true, key === '>' ? '>' : '');
         return;
       }
+      if (key === 'l' && shift) {
+        e.preventDefault();
+        const runId = ui.selectedRunId;
+        if (runId !== undefined) void copyText(deepLink(runId, ui.selectedNodeId));
+        return;
+      }
+      if (key === 'd' && !shift) {
+        ui.setTheme(nextTheme(useUiStore.getState().theme));
+        return;
+      }
+      // The rest act on the canvas, which only exists on the run place.
+      if (ui.page !== 'run') return;
+
       if (key === 'f') {
         e.preventDefault();
         if (shift) canvasActions()?.fitView();
@@ -303,97 +333,30 @@ export default function App() {
           const run = useRunStore.getState().runs[runId];
           if (run !== undefined) ui.setCollapsed(runId, collapsibleRoots(run));
         }
-        return;
-      }
-      if (key === 'l' && shift) {
-        e.preventDefault();
-        const runId = ui.selectedRunId;
-        if (runId !== undefined) void copyText(deepLink(runId, ui.selectedNodeId));
-        return;
-      }
-      if (key === 'b' && !shift) {
-        setRailOpen((open) => !open);
-        return;
-      }
-      if (key === 'd' && !shift) {
-        ui.setTheme(nextTheme(useUiStore.getState().theme));
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const showRun = selectedRunId !== undefined && runExists;
-  const showTimeline = showRun && (view === 'split' || view === 'timeline');
+  const fixtureAvailable = !demoRequested && fixtureParam === null && stress === null;
+  const insideRun = inRun(page) && selectedRunId !== undefined && runExists;
+
+  let main: React.ReactNode;
+  if (page === 'build') main = <BuilderPage />;
+  else if (page === 'connect') main = <ConnectPage />;
+  else if (insideRun && page === 'node' && selectedNodeId !== undefined)
+    main = <NodePage runId={selectedRunId} nodeId={selectedNodeId} />;
+  else if (insideRun) main = <RunPage runId={selectedRunId} />;
+  else main = <RunsPage fixtureAvailable={fixtureAvailable} />;
 
   return (
     <div className="gm-app">
-      <div className="gm-app-body">
-        {railOpen && <RunsList onCollapse={() => setRailOpen(false)} />}
-        <main className="gm-main">
-          {page === 'build' ? (
-            <BuilderPage />
-          ) : (
-            <>
-          {showRun && <TopBar runId={selectedRunId} />}
-          <div className="gm-workspace">
-            {/*
-              The inspector is a *pane*, not an overlay. It used to be
-              absolutely positioned over the whole workspace, which put it on
-              top of the timeline's controls, the minimap, and — the papercut
-              that mattered — the inject button on a held card. Docking it
-              costs some canvas width and removes a whole class of "the thing
-              I need is behind the thing describing it" bugs. Below the
-              narrow breakpoint it goes back to being an overlay, because at
-              phone width there is no room for two panes at all.
-            */}
-            <div className="gm-workspace-panes">
-            <ReactFlowProvider>
-              {showRun ? (
-                <>
-                  {view !== 'timeline' && (
-                    <div className="gm-workspace-graph">
-                      <RunCanvas runId={selectedRunId} />
-                    </div>
-                  )}
-                  {showTimeline && (
-                    <>
-                      {view === 'split' && (
-                        <TimelineSplitter
-                          onResize={(height) => useUiStore.getState().setTimelineHeight(height)}
-                        />
-                      )}
-                      <div
-                        className="gm-workspace-timeline"
-                        style={
-                          view === 'timeline'
-                            ? { flex: 1, minHeight: 0 }
-                            : { height: timelineHeight, flexShrink: 0 }
-                        }
-                      >
-                        <Timeline runId={selectedRunId} />
-                      </div>
-                    </>
-                  )}
-                </>
-              ) : (
-                <EmptyState
-                  fixtureAvailable={!demoRequested && fixtureParam === null && stress === null}
-                  runCount={runCount}
-                  railOpen={railOpen}
-                  onOpenRail={() => setRailOpen(true)}
-                />
-              )}
-            </ReactFlowProvider>
-            </div>
-            <InspectorPanel />
-          </div>
-            </>
-          )}
-        </main>
-      </div>
-      <RunBar onToggleRail={() => setRailOpen((open) => !open)} railOpen={railOpen} />
+      <AppHeader />
+      <HoldStrip />
+      <main className="gm-main">{main}</main>
       {paletteOpen && <CommandPalette />}
+      <CustomizePanel />
     </div>
   );
 }

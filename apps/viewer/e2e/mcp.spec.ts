@@ -11,7 +11,15 @@
  * holds in an MCP run exactly as it does in an agent run.
  */
 import type { Locator, Page } from '@playwright/test';
-import { expect, nodeBody, nodeCard, openViewer, runStatusPill, test } from './harness.js';
+import {
+  expect,
+  nodeBody,
+  nodeCard,
+  openHeldCall,
+  openViewer,
+  runStatusPill,
+  test,
+} from './harness.js';
 
 const NODES = {
   session: 'server:docs-mcp',
@@ -148,10 +156,9 @@ test('a gate holds an MCP resources/read, and the inspector explains it', async 
   await expect(banner.locator('.gm-pause-error')).toContainText('McpError');
   await expect(runStatusPill(page)).toHaveText('paused');
 
-  // The inspector opened itself on the held node, with the JSON-RPC request
-  // that produced the failure and the session it belongs to.
-  const inspector = page.getByRole('complementary', { name: 'Node inspector' });
-  await expect(inspector).toBeVisible();
+  // Stepping into the held call shows the JSON-RPC request that produced
+  // the failure and the session it belongs to.
+  const inspector = await openHeldCall(page);
   await expect(inspector.locator('.gm-kind-badge')).toHaveText('resource');
   await expect(inspector.locator('.gm-why-error-name')).toHaveText('McpError');
   await expect(inspector.locator('.gm-why-input')).toContainText('resources/read');
@@ -159,6 +166,7 @@ test('a gate holds an MCP resources/read, and the inspector explains it', async 
 
   // …and releasing it lets the rest of the session run.
   await inspector.locator('.gm-inspect-held').getByRole('button', { name: 'Continue' }).click();
+  await page.keyboard.press('Escape');
   await expect(nodeBody(page, NODES.create)).toHaveClass(/gm-node--ok/, { timeout: 30_000 });
   await expect(runStatusPill(page)).toHaveText('done', { timeout: 30_000 });
 });

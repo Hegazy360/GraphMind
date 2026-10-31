@@ -58,10 +58,11 @@ test('a pause released by a coding agent says so in the inspector', async ({ pag
     },
   ];
   await openViewer(page, {
+    workspace: 'everything',
     embeddedRun: run,
     hash: `#/run/${FIXTURE_RUN_ID}/node/${encodeURIComponent(FIXTURE_NODES.currency)}`,
   });
-  const inspector = page.getByRole('complementary', { name: 'Node inspector' });
+  const inspector = page.getByRole('region', { name: 'Call detail' });
   await expect(inspector).toBeVisible();
   const line = inspector.getByTestId('resumed-by');
   await expect(line).toHaveCount(1);

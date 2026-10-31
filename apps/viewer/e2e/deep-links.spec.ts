@@ -12,6 +12,7 @@ import {
   nodeBody,
   nodeCard,
   openViewer,
+  runCrumb,
   runStatusPill,
   test,
 } from './harness.js';
@@ -29,18 +30,25 @@ test('a node deep link restores the selection on a cold load', async ({ page }) 
 
   // The run has not even arrived yet when the hash is parsed; the selection
   // has to survive the wait and then land on the right card.
-  const inspector = page.getByRole('complementary', { name: 'Node inspector' });
-  await expect(inspector).toBeVisible({ timeout: 25_000 });
-  await expect(inspector.locator('.gm-inspect-head')).toContainText('searchHotels');
-  await expect(nodeBody(page, FIXTURE_NODES.hotels)).toHaveClass(/gm-node--selected/);
+  const detail = page.getByRole('region', { name: 'Call detail' });
+  await expect(detail).toBeVisible({ timeout: 25_000 });
+  await expect(detail.locator('.gm-nodehead-name')).toHaveText('searchHotels');
   expect(page.url()).toContain(`#/run/${FIXTURE_RUN_ID}/node/tool%3AsearchHotels`);
+
+  // Stepping back up lands on the graph with that node still picked, so a
+  // deep link gives you the call *and* where it sits in the run.
+  await page.keyboard.press('Escape');
+  await expect(nodeBody(page, FIXTURE_NODES.hotels)).toHaveClass(/gm-node--selected/, {
+    timeout: 20_000,
+  });
+  expect(page.url()).toContain(`#/run/${FIXTURE_RUN_ID}`);
 });
 
 test('a run deep link selects the run without selecting a node', async ({ page }) => {
   await openViewer(page, { query: 'fixture=1', hash: `#/run/${FIXTURE_RUN_ID}` });
 
-  await expect(page.locator('.gm-topbar-title h1')).toHaveText('trip-planner');
-  await expect(page.getByRole('complementary', { name: 'Node inspector' })).toBeHidden();
+  await expect(runCrumb(page)).toHaveText('trip-planner');
+  await expect(page.getByRole('region', { name: 'Call detail' })).toBeHidden();
 });
 
 test('a hash written by the app is a link that works when pasted back', async ({ page }) => {
@@ -52,13 +60,14 @@ test('a hash written by the app is a link that works when pasted back', async ({
 
   const link = page.url();
   expect(link).toContain('#/run/');
+  expect(link).toContain('/node/');
 
   // A brand new page load of exactly that URL lands in the same place.
   const second = await page.context().newPage();
   await second.goto(link);
-  const inspector = second.getByRole('complementary', { name: 'Node inspector' });
+  const inspector = second.getByRole('region', { name: 'Call detail' });
   await expect(inspector).toBeVisible({ timeout: 25_000 });
-  await expect(inspector.locator('.gm-inspect-head')).toContainText('searchFlights');
+  await expect(inspector.locator('.gm-nodehead')).toContainText('searchFlights');
   await second.close();
 });
 
@@ -67,17 +76,18 @@ test('an exported run (window.__GRAPHMIND_RUN__) renders offline, instantly', as
 
   // No pacing, no server: the whole recording is on screen immediately.
   await expect(page.locator('.react-flow__node')).toHaveCount(7, { timeout: 10_000 });
-  await expect(page.locator('.gm-topbar-title h1')).toHaveText('trip-planner');
+  await expect(runCrumb(page)).toHaveText('trip-planner');
   await expect(runStatusPill(page)).toHaveText('done');
-
-  // Every payload travelled with the file.
-  await nodeCard(page, FIXTURE_NODES.flights).locator('.gm-node-title').click();
-  const inspector = page.getByRole('complementary', { name: 'Node inspector' });
-  await expect(inspector).toContainText('VIE');
-  await expect(inspector).toContainText('options');
 
   // …including the failure and its retry.
   await expect(nodeCard(page, FIXTURE_NODES.currency).locator('.gm-badge-count')).toHaveText('×2');
+
+  // Every payload travelled with the file.
+  await nodeCard(page, FIXTURE_NODES.flights).locator('.gm-node-title').click();
+  const detail = page.getByRole('region', { name: 'Call detail' });
+  await expect(detail).toContainText('VIE');
+  await expect(detail).toContainText('options');
+  await page.keyboard.press('Escape');
 
   // It is honest about not being attached to anything.
   await expect(page.locator('.gm-conn-label')).toHaveText('replaying');

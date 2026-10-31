@@ -1,11 +1,11 @@
 /**
- * First-run experience + run-source badges: the welcome card shows exactly
- * when the viewer is connected with zero runs, and demo runs are labelled
- * as recorded sessions (keyed off RunInfo.source === 'demo').
+ * Run-source badges and the first-run decision: demo runs are labelled as
+ * recorded sessions (keyed off RunInfo.source === 'demo'), and a viewer with
+ * nothing to show offers the connect page exactly once.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { RunInfo } from '../src/connection/protocol.js';
-import { INTEGRATION_SNIPPET, runChipLabel, shouldShowWelcome } from '../src/lib/firstRun.js';
+import { runChipLabel, shouldOpenConnect } from '../src/lib/firstRun.js';
 import { useRunStore } from '../src/store/runStore.js';
 
 function runInfo(overrides: Partial<RunInfo>): RunInfo {
@@ -23,22 +23,6 @@ function runInfo(overrides: Partial<RunInfo>): RunInfo {
     ...overrides,
   };
 }
-
-describe('shouldShowWelcome (first-run state)', () => {
-  it('shows only when connected with zero runs', () => {
-    expect(shouldShowWelcome('live', 0)).toBe(true);
-    expect(shouldShowWelcome('live', 1)).toBe(false);
-    expect(shouldShowWelcome('connecting', 0)).toBe(false);
-    expect(shouldShowWelcome('detached', 0)).toBe(false);
-    expect(shouldShowWelcome('off', 0)).toBe(false);
-    expect(shouldShowWelcome('replaying', 0)).toBe(false);
-  });
-
-  it('the integration snippet is exactly three lines', () => {
-    expect(INTEGRATION_SNIPPET.split('\n')).toHaveLength(3);
-    expect(INTEGRATION_SNIPPET).toContain('graphmind({');
-  });
-});
 
 describe('runChipLabel (recorded-session badge)', () => {
   it("labels server 'demo' runs as recorded sessions", () => {
@@ -80,5 +64,29 @@ describe('runStore.noteRunInfo serverSource', () => {
     const meta = useRunStore.getState().runs['demo-late']?.meta;
     expect(meta?.status).toBe('running'); // events stay authoritative
     expect(meta?.serverSource).toBe('demo');
+  });
+});
+
+describe('shouldOpenConnect (does a stranger land on the connect page?)', () => {
+  it('opens on a settled, empty, first-time viewer', () => {
+    expect(shouldOpenConnect('live', 0, false)).toBe(true);
+    expect(shouldOpenConnect('detached', 0, false)).toBe(true);
+  });
+
+  it('never interrupts someone who has runs to look at', () => {
+    expect(shouldOpenConnect('live', 1, false)).toBe(false);
+  });
+
+  it('never offers itself twice', () => {
+    expect(shouldOpenConnect('live', 0, true)).toBe(false);
+  });
+
+  it('waits for the connection to settle rather than flashing during the handshake', () => {
+    expect(shouldOpenConnect('connecting', 0, false)).toBe(false);
+  });
+
+  it('stays out of the way of an offline replay', () => {
+    expect(shouldOpenConnect('replaying', 0, false)).toBe(false);
+    expect(shouldOpenConnect('off', 0, false)).toBe(false);
   });
 });
