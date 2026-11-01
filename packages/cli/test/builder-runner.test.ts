@@ -97,6 +97,27 @@ describe('ProjectRunner', () => {
     expect(JSON.stringify(r.list())).not.toContain(SECRET);
   });
 
+  it('passes a session-only key to the child, over .env, and scrubs it too', async () => {
+    const dir = project();
+    const SESSION = 'sk-session-ONLYINMEMORY0123456789abcdef';
+    const r = make(
+      {
+        install: [node("console.log('installing deps')", 'fake install')],
+        start: node("console.log('key is ' + process.env.ANTHROPIC_API_KEY + ' len=' + (process.env.ANTHROPIC_API_KEY ?? '').length)", 'fake start'),
+      },
+      { sessionSecrets: { values: (d) => (d === dir ? { ANTHROPIC_API_KEY: SESSION } : {}) } },
+    );
+    const job = r.start(dir);
+    expect(await finished(r, job.id)).toBe('exited');
+    const text = r.lines(job.id).map((l) => l.text).join('\n');
+    // The child saw the session key (its length), and the log shows neither it
+    // nor the .env value it replaced.
+    expect(text).toContain(`len=${SESSION.length}`);
+    expect(text).toContain('key is __REDACTED__');
+    expect(text).not.toContain(SESSION);
+    expect(text).not.toContain(SECRET);
+  });
+
   it('skips the install step when the marker directory exists', async () => {
     const dir = project();
     mkdirSync(join(dir, 'node_modules'));

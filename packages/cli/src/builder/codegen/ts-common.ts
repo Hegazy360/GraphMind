@@ -7,7 +7,8 @@
  * adapters, which speak the same wire protocol as the server that made it.
  */
 import { VERSION } from '../../version.js';
-import { PROVIDER_ENV_KEY, TARGETS, type WorkflowSpec } from '../spec.js';
+import { TARGETS, usedMcpServers, type WorkflowSpec } from '../spec.js';
+import { providerMeta } from '../providers.js';
 import { paramSummary, stubResult, tsInputType, tsLiteral, tsString, wrap } from './shared.js';
 import type { LocalPackages } from '../local-packages.js';
 
@@ -89,7 +90,14 @@ export const TS_CONFIG = `${JSON.stringify(
  * the file is read into the environment only, never printed.
  */
 export function tsEnvLoader(provider: WorkflowSpec['provider']): string {
-  const key = PROVIDER_ENV_KEY[provider];
+  const meta = providerMeta(provider);
+  const key = meta.envKey;
+  const check = meta.keyRequired
+    ? `if (process.env[${tsString(key)}] === undefined || process.env[${tsString(key)}] === '') {
+  console.error(${tsString(`${key} is not set. Add it to .env (see .env.example).`)});
+  process.exit(1);
+}`
+    : `// ${meta.label} needs no key by default; set ${key} in .env only if your server asks for one.`;
   return `// Credentials live in .env (owner-only, git-ignored), never in code: ${key}.
 // The builder wrote it; edit it by hand or from the Build page. Node loads it
 // here without printing anything. Missing file = the SDK reads the environment.
@@ -98,10 +106,7 @@ try {
 } catch {
   // no .env yet
 }
-if (process.env[${tsString(key)}] === undefined || process.env[${tsString(key)}] === '') {
-  console.error(${tsString(`${key} is not set. Add it to .env (see .env.example).`)});
-  process.exit(1);
-}`;
+${check}`;
 }
 
 /** The tool stubs as plain async functions (Anthropic and OpenAI SDK targets). */
@@ -137,7 +142,10 @@ export function tsPlainToolsFile(spec: WorkflowSpec): string {
 }
 
 export function envExample(spec: WorkflowSpec): string {
-  const key = PROVIDER_ENV_KEY[spec.provider];
+  const meta = providerMeta(spec.provider);
+  // A provider that needs no key gets a commented line, so the file still
+  // says what the variable would be called.
+  const key = meta.keyRequired ? meta.envKey : `# ${meta.envKey}`;
   const workspace =
     spec.provider === 'anthropic'
       ? `
@@ -146,9 +154,14 @@ export function envExample(spec: WorkflowSpec): string {
 # ANTHROPIC_WORKSPACE_ID=
 `
       : '';
+  // One line per MCP server that asked for a bearer token.
+  const mcp = usedMcpServers(spec)
+    .filter((server) => server.headerEnv !== undefined && server.headerEnv !== '')
+    .map((server) => `\n# Bearer token for the "${server.name}" MCP server.\n${server.headerEnv}=`)
+    .join('');
   return `# Copy to .env and fill in. .env is git-ignored and must stay that way.
 ${key}=
-${workspace}
+${workspace}${mcp}
 # Where the GraphMind debugger listens (the default is fine for a local server).
 # GRAPHMIND_URL=ws://127.0.0.1:4747/ingest
 `;
@@ -165,7 +178,8 @@ export interface ReadmeCommands {
 
 export function readme(spec: WorkflowSpec, commands: ReadmeCommands): string {
   const target = TARGETS[spec.target];
-  const key = PROVIDER_ENV_KEY[spec.provider];
+  const meta = providerMeta(spec.provider);
+  const key = meta.envKey;
   const toolList =
     spec.tools.length === 0
       ? '_No tools yet._'
@@ -179,12 +193,17 @@ plain code: edit anything, and keep editing it in your editor from here on.
 
 ## Run it
 
-1. Put your key in \`.env\` (git-ignored; the builder may already have written it):
+1. ${
+    meta.keyRequired
+      ? `Put your key in \`.env\` (git-ignored; the builder may already have written it):
 
    \`\`\`
    ${key}=...
    \`\`\`
-${
+`
+      : `Have ${meta.label} running${meta.baseURL === undefined ? '' : ` at ${meta.baseURL}`}. No key is needed; set \`${key}\` in \`.env\` only if yours asks for one.
+`
+  }${
     spec.provider === 'anthropic'
       ? `
    A key that is not scoped to a workspace also needs \`ANTHROPIC_WORKSPACE_ID=...\`
@@ -233,12 +252,41 @@ is a no-op and the agent runs normally.
 
 ${toolList}
 
-Each tool is a stub that returns a fixed value. Replace the stub bodies in
+${
+  usedMcpServers(spec).length === 0
+    ? ''
+    : `## MCP servers
+
+${usedMcpServers(spec)
+  .map(
+    (server) =>
+      `- \`${server.name}\` — ${
+        server.transport === 'stdio' ? `stdio: \`${[server.command, ...server.args].join(' ')}\`` : `http: ${server.url}`
+      }${server.headerEnv === undefined ? '' : ` (bearer token from \`${server.headerEnv}\`)`}. Its tools reach the model as \`${server.name}_<tool>\`.`,
+  )
+  .join('\n')}
+
+They are connected in \`src/mcp.ts\` with the public MCP SDK, and every call
+through them is a node the debugger can hold.
+
+`
+}${
+  spec.subAgents.length === 0
+    ? ''
+    : `## Sub-agents
+
+${spec.subAgents.map((agent) => `- \`${agent.name}\` — ${agent.description}`).join('\n')}
+
+Each is a tool taking a \`task\` string; its body runs a nested loop
+(\`src/agents.ts\`) with only the tools it was given.
+
+`
+}Each tool is a stub that returns a fixed value. Replace the stub bodies in
 \`${target.language === 'typescript' ? 'src/tools.ts' : 'tools.py'}\` with real code; the schemas next to them are what the model reads.
 
 ## Model
 
-- Provider: ${spec.provider}
+- Provider: ${meta.label}${meta.baseURL !== undefined && meta.family === 'openai' && target.framework === 'OpenAI SDK' ? ` (OpenAI-compatible endpoint, ${meta.baseURL})` : ''}
 - Model: \`${spec.model}\`
 - Max steps: ${spec.maxSteps}
 

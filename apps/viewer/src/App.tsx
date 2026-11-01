@@ -126,7 +126,28 @@ export default function App() {
    * replaces, so "back" never lands on a place you just left by hand.
    */
   const lastDepth = useRef<number | null>(null);
+  /**
+   * Not before the hash has been read.
+   *
+   * Both effects run on the same commit, and this one still sees the page
+   * from the render that preceded `setPage`. Writing then would replace a
+   * `#/build` deep link with `#/runs` — and in a development build, where
+   * React runs every effect twice, the second pass reads that back as the
+   * place the reader asked for and strands them on the runs list. The
+   * address bar is the initial state; this effect only ever reports changes
+   * to it.
+   */
+  const hashApplied = useRef(false);
   useEffect(() => {
+    if (!hashApplied.current) {
+      hashApplied.current = true;
+      const asked = parseHash(location.hash);
+      const names = asked.page !== undefined || asked.runId !== undefined;
+      if (names) {
+        lastDepth.current = depthOf(page);
+        return;
+      }
+    }
     const next = inRun(page)
       ? formatHash(selectedRunId, page === 'node' ? selectedNodeId : undefined)
       : pageHash(page);

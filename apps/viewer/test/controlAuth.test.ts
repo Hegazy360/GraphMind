@@ -94,6 +94,50 @@ describe('presenting the token', () => {
     expect(auth.authHeaders('http://evil.example/api')).toEqual({});
   });
 
+  /**
+   * `pnpm dev` serves the viewer from Vite, so every call it makes to the
+   * debugger is cross-origin and the rule above would leave the dev viewer
+   * read-only. The exception is deliberately the narrowest one that works:
+   * only a token the dev server handed over, only back to a loopback target.
+   */
+  it('a token the dev server handed over may go back to the loopback server it came from', async () => {
+    installBrowser('http://localhost:5199/');
+    const auth = await freshAuth();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ token: TOKEN }) }) as unknown as Response),
+    );
+    await auth.adoptDevToken();
+    expect(auth.viewerToken()).toBe(TOKEN);
+    expect(auth.authHeaders('http://127.0.0.1:4747/api/builder/targets')).toEqual({
+      authorization: `Bearer ${TOKEN}`,
+    });
+    expect(auth.socketProtocols('ws://127.0.0.1:4747/ws/ui')).toEqual(['graphmind.v1', `gm.auth.${TOKEN}`]);
+    // Still never off this machine.
+    expect(auth.authHeaders('http://evil.example/api')).toEqual({});
+  });
+
+  it('a token from anywhere else keeps the strict same-origin rule, dev build or not', async () => {
+    installBrowser('http://localhost:5199/');
+    const auth = await freshAuth();
+    // Typed, pasted, or captured from a fragment: not the dev server's word.
+    auth.setViewerToken(TOKEN);
+    expect(auth.authHeaders('http://127.0.0.1:4747/api/builder/targets')).toEqual({});
+    expect(auth.socketProtocols('ws://127.0.0.1:4747/ws/ui')).toBeUndefined();
+  });
+
+  it('replacing the dev token with another drops the exception with it', async () => {
+    installBrowser('http://localhost:5199/');
+    const auth = await freshAuth();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ token: TOKEN }) }) as unknown as Response),
+    );
+    await auth.adoptDevToken();
+    auth.setViewerToken('gmv_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    expect(auth.authHeaders('http://127.0.0.1:4747/api/x')).toEqual({});
+  });
+
   it('without a token the socket offers no subprotocol at all (0.5-compatible)', async () => {
     installBrowser('http://127.0.0.1:4747/');
     const auth = await freshAuth();

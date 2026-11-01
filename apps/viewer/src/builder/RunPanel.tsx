@@ -1,20 +1,30 @@
 /**
  * Create the project on disk and run it from here.
  *
- * The key field is `type="password"`, lives in this component's state for
- * the length of one request, is sent once (to loopback, with the viewer
- * token), and is cleared the moment the server answers. The server writes
- * it to the project's `.env` (owner-only) and only ever reports the NAME
- * back; the job log is scrubbed before it is stored. Nothing on this page
- * can display a key after it has been typed.
+ * ── what happens to the key you type ──────────────────────────────────────
+ * The field is `type="password"` with autocomplete off; the value lives in
+ * this component's state for the length of one request, is sent once (to
+ * loopback), and is cleared the moment the server
+ * answers. It is never put in the builder store, in localStorage, in the
+ * URL, or in any log: the job log is scrubbed before it is stored, and
+ * every server response carries names only.
+ *
+ * Where it rests is the engineer's choice:
+ *
+ *  - "this session only" (the default): the server holds it in memory,
+ *    hands it to the run's child process, and forgets it when it exits —
+ *    or sooner, with Forget. Nothing is written to disk anywhere.
+ *  - "save to .env": written to the project's `.env`, owner-only (0600) and
+ *    git-ignored, so the project also runs from your own terminal.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';
-import { BuilderApiError, createProject, pollJob, startJob, stopJob, writeEnv } from './api.js';
+import { BuilderApiError, createProject, forgetEnv, pollJob, startJob, stopJob, writeEnv } from './api.js';
 import { useBuilderStore } from './builderStore.js';
-import { isJobRun, runErrorOf } from './model.js';
-import type { EnvKey, PreviewResponse } from './types.js';
+import { envKeysFor, isJobRun, runErrorOf } from './graph.js';
+import { BlockedNotice, type Blocked } from './BlockedNotice.js';
+import type { EnvKey, PreviewResponse, WorkflowSpec } from './types.js';
 
 const POLL_MS = 600;
 
@@ -36,21 +46,26 @@ function phaseLabel(phase: string): string {
 }
 
 export function RunPanel({
+  spec,
   preview,
   workflowsDir,
   canAct,
+  blocked,
   blockedNote,
   toolchainNote,
 }: {
+  /** The graph, compiled. */
+  spec: WorkflowSpec;
   preview: PreviewResponse | undefined;
   workflowsDir: string | undefined;
   canAct: boolean;
-  /** Why Create/Run are disabled, when they are. */
+  /** Why Create/Run are disabled, when they are, and how to fix it. */
+  blocked: Blocked | undefined;
+  /** The same reason as one line, for the disabled buttons' titles. */
   blockedNote: string | undefined;
   /** Which interpreter a Python project will run with, or why it cannot. */
   toolchainNote?: string | undefined;
 }) {
-  const spec = useBuilderStore((s) => s.spec);
   const created = useBuilderStore((s) => s.created);
   const job = useBuilderStore((s) => s.job);
   const lines = useBuilderStore((s) => s.lines);
@@ -62,15 +77,21 @@ export function RunPanel({
   const [dir, setDir] = useState('');
   const [overwrite, setOverwrite] = useState(false);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
+  // Default: hold the key in memory for this session and write nothing.
+  const [persist, setPersist] = useState(false);
   const [busy, setBusy] = useState<'create' | 'env' | 'start' | 'stop' | undefined>(undefined);
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error'; text: string } | undefined>(undefined);
   const logRef = useRef<HTMLDivElement>(null);
 
-  const envKeys: EnvKey[] = preview?.envKeys ?? [];
+  // The server's list once it has answered; until then (or with no server at
+  // all) the same list, derived from the graph.
+  const envKeys: EnvKey[] = preview?.envKeys ?? envKeysFor(spec);
   const requiredKeys = envKeys.filter((k) => k.required);
   // Created for THIS spec name? A rename after Create means a new project.
   const createdHere = created !== undefined && created.project.name === spec.name;
-  const keysSet = createdHere ? created.project.envKeys : [];
+  const diskKeys = createdHere ? created.project.envKeys : [];
+  const sessionKeys = createdHere ? (created.sessionKeys ?? []) : [];
+  const keysSet = [...diskKeys, ...sessionKeys];
   const missingKeys = requiredKeys.filter((k) => !keysSet.includes(k.name) && (secrets[k.name] ?? '') === '');
   const live = job !== undefined && (job.phase === 'installing' || job.phase === 'running');
 
@@ -138,9 +159,7 @@ export function RunPanel({
     if (error instanceof BuilderApiError) {
       setNotice({
         tone: 'error',
-        text: error.unauthorized
-          ? 'This tab has no viewer token. Open the viewer from the link `graphmind serve` printed (or its redirect file).'
-          : error.issues.length > 0
+        text: error.issues.length > 0
             ? `${error.message}: ${error.issues.map((i) => `${i.path} ${i.message}`).join('; ')}`
             : error.message,
       });
@@ -156,7 +175,7 @@ export function RunPanel({
       const result = await createProject({
         spec,
         ...(dir.trim() === '' ? {} : { dir: dir.trim() }),
-        ...(Object.keys(secretsToSend).length === 0 ? {} : { secrets: secretsToSend }),
+        ...(Object.keys(secretsToSend).length === 0 ? {} : { secrets: secretsToSend, persistSecrets: persist }),
         overwrite,
       });
       setSecrets({}); // the key has been written; it does not stay in memory here
@@ -164,7 +183,12 @@ export function RunPanel({
       resetJob();
       setNotice({
         tone: 'ok',
-        text: `Wrote ${result.files.length} files to ${result.dir}${result.envWritten.length > 0 ? ` and set ${result.envWritten.join(', ')} in .env` : ''}.`,
+        text:
+          `Wrote ${result.files.length} files to ${result.dir}` +
+          (result.envWritten.length > 0 ? `, and set ${result.envWritten.join(', ')} in .env` : '') +
+          ((result.sessionKeys ?? []).length > 0
+            ? `. ${(result.sessionKeys ?? []).join(', ')} is held for this session only — nothing was written to disk.`
+            : '.'),
       });
     } catch (error) {
       fail(error);
@@ -178,10 +202,36 @@ export function RunPanel({
     setBusy('env');
     setNotice(undefined);
     try {
-      const result = await writeEnv(created.dir, secretsToSend);
+      const result = await writeEnv(created.dir, secretsToSend, persist);
       setSecrets({});
-      setCreated({ ...created, envWritten: result.keys, project: { ...created.project, envKeys: result.keys } });
-      setNotice({ tone: 'ok', text: `.env now sets ${result.keys.join(', ') || 'nothing'}.` });
+      setCreated({
+        ...created,
+        envWritten: result.keys,
+        sessionKeys: result.sessionKeys,
+        project: { ...created.project, envKeys: result.keys },
+      });
+      setNotice({
+        tone: 'ok',
+        text: persist
+          ? `.env now sets ${result.keys.join(', ') || 'nothing'}.`
+          : `${result.sessionKeys.join(', ') || 'Nothing'} is held in memory for this session. Nothing was written to disk.`,
+      });
+    } catch (error) {
+      fail(error);
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  /** Drop the in-memory keys now, rather than waiting for the server to exit. */
+  const forget = async () => {
+    if (!createdHere || created === undefined) return;
+    setBusy('env');
+    setNotice(undefined);
+    try {
+      const result = await forgetEnv(created.dir);
+      setCreated({ ...created, sessionKeys: result.sessionKeys });
+      setNotice({ tone: 'ok', text: `Forgot ${result.forgotten.join(', ') || 'nothing'}.` });
     } catch (error) {
       fail(error);
     } finally {
@@ -230,6 +280,7 @@ export function RunPanel({
 
   return (
     <section className="gm-brun" aria-label="Create and run">
+      {blocked !== undefined && <BlockedNotice blocked={blocked} />}
       <div className="gm-section-label">Create the project</div>
       <label className="gm-bfield">
         <span className="gm-bfield-label">
@@ -247,15 +298,49 @@ export function RunPanel({
       {envKeys.length > 0 && (
         <div className="gm-bsecrets">
           <div className="gm-bfield-label">
-            Credentials <span className="gm-bfield-hint">written to .env (owner-only, git-ignored), never shown again</span>
+            Credentials <span className="gm-bfield-hint">sent once, over loopback; never shown again</span>
+          </div>
+          <div className="gm-bstore" role="radiogroup" aria-label="Where to keep the key">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!persist}
+              className={`gm-bstore-opt${!persist ? ' gm-bstore-opt--on' : ''}`}
+              onClick={() => setPersist(false)}
+            >
+              <span className="gm-bstore-title">This session only</span>
+              <span className="gm-bstore-sub">Held in the debugger's memory, given to the run, gone when it exits. Nothing is written to disk.</span>
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={persist}
+              className={`gm-bstore-opt${persist ? ' gm-bstore-opt--on' : ''}`}
+              onClick={() => setPersist(true)}
+            >
+              <span className="gm-bstore-title">Save to .env</span>
+              <span className="gm-bstore-sub">Written to the project's .env, owner-only and git-ignored, so it also runs from your terminal.</span>
+            </button>
           </div>
           {envKeys.map((key) => {
-            const set = keysSet.includes(key.name);
+            const onDisk = diskKeys.includes(key.name);
+            const inMemory = sessionKeys.includes(key.name);
+            const set = onDisk || inMemory;
             return (
               <label key={key.name} className="gm-bsecret" title={key.hint}>
                 <span className="gm-bsecret-name">
                   {key.name}
-                  {set ? <span className="gm-chip gm-chip--tiny gm-chip--on">set</span> : key.required ? <span className="gm-chip gm-chip--tiny">required</span> : null}
+                  {inMemory ? (
+                    <span className="gm-chip gm-chip--tiny gm-chip--on" title="Held in memory for this session only">
+                      session
+                    </span>
+                  ) : onDisk ? (
+                    <span className="gm-chip gm-chip--tiny gm-chip--on" title="Set in the project's .env">
+                      .env
+                    </span>
+                  ) : key.required ? (
+                    <span className="gm-chip gm-chip--tiny">required</span>
+                  ) : null}
                 </span>
                 <input
                   className="gm-binput gm-binput--mono"
@@ -288,8 +373,25 @@ export function RunPanel({
           {busy === 'create' ? 'Writing…' : createdHere ? 'Write again' : 'Create project'}
         </button>
         {createdHere && Object.keys(secretsToSend).length > 0 && (
-          <button className="gm-action" style={{ flex: 'none' }} onClick={() => void saveEnv()} disabled={!canAct || busy !== undefined} title="Update .env without rewriting the code">
-            {busy === 'env' ? 'Saving…' : 'Save credentials only'}
+          <button
+            className="gm-action"
+            style={{ flex: 'none' }}
+            onClick={() => void saveEnv()}
+            disabled={!canAct || busy !== undefined}
+            title={persist ? 'Write the key to .env without rewriting the code' : 'Hold the key in memory for this session'}
+          >
+            {busy === 'env' ? 'Saving…' : persist ? 'Save to .env' : 'Hold for this session'}
+          </button>
+        )}
+        {createdHere && sessionKeys.length > 0 && (
+          <button
+            className="gm-action"
+            style={{ flex: 'none' }}
+            onClick={() => void forget()}
+            disabled={!canAct || busy !== undefined}
+            title={`Drop ${sessionKeys.join(', ')} from the debugger's memory now`}
+          >
+            Forget {sessionKeys.length === 1 ? 'the key' : 'the keys'}
           </button>
         )}
       </div>

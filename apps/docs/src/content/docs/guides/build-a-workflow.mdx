@@ -1,6 +1,6 @@
 ---
 title: Build a workflow in the viewer
-description: Describe an agent in the Build page, get an instrumented starter project in TypeScript or Python for the Anthropic or OpenAI SDK, write it to disk with your key in a private .env, and run it from the same page. Local only; the code is yours.
+description: Place the nodes you want to test on the Build page's canvas - an agent, tools, MCP servers, sub-agents - read the code they become, and run it with your key. Local only; the key need never touch the disk; the code is yours.
 sidebar:
   label: Build a workflow
   order: 1
@@ -14,11 +14,31 @@ a `.env` for the key, a manifest. The **Build page** does that part for you, in 
 and framework you work in, with GraphMind already wired in, so the first run of a new agent is
 also its first debugging session.
 
-It is deliberately small. One agent: a model, a system prompt, a task, and a list of tools with
-typed parameters. Each tool starts as a stub that returns a fixed value, so the project runs end
-to end before you have written any code, and you replace the stubs in your editor. After that
-GraphMind has nothing to do with the code: it is plain files in a plain directory, instrumented
-with the public adapters, and the Build page never edits them again unless you ask it to.
+You work on a **canvas**. Each node is one thing you can test, and an edge means "this agent can
+use that":
+
+| Node | What it becomes |
+| --- | --- |
+| **Agent** | The run itself: the model, the system prompt, the task, the step cap. Exactly one. |
+| **Tool** | A function the model can call, with typed parameters. Starts as a stub returning a fixed value. |
+| **MCP server** | A connection to an MCP server (stdio or HTTP). Its tools join the agent's list as `server_tool`. **Test connection** connects and lists them before anything is generated. |
+| **Sub-agent** | A nested agent the root can delegate to. It takes one `task` string and runs its own loop with its own tools. |
+
+Wire a tool to the agent and the agent can call it; wire it to a sub-agent instead and only the
+sub-agent can. Everything on the canvas is one node per code location, which is the same unit the
+debugger draws a run in — so the graph you build and the run you get look like the same object.
+
+Each tool starts as a stub that returns a fixed value, so the project runs end to end before you
+have written any code, and you replace the stubs in your editor. After that GraphMind has nothing
+to do with the code: it is plain files in a plain directory, instrumented with the public
+adapters, and the Build page never edits them again unless you ask it to.
+
+<Aside title="MCP and sub-agents are TypeScript-only for now">
+The three TypeScript targets generate an MCP client (`src/mcp.ts`) and sub-agent tools
+(`src/agents.ts`). The Python targets generate an agent with local tools; placing an MCP or
+sub-agent node while a Python target is selected marks those cards and says so, rather than
+dropping them quietly.
+</Aside>
 
 ## Open it
 
@@ -31,27 +51,37 @@ npx graphmind-ai
 Then click **Build a workflow** in the run list (or press <kbd>⌘</kbd><kbd>K</kbd> and type
 "build", or open `http://127.0.0.1:4747/#/build`).
 
-<Aside type="caution" title="It needs the viewer token">
-The Build page writes files and starts processes, so every one of its requests carries the
-viewer token: the `#token=…` link `graphmind serve` printed, or its private redirect file. A
-tab opened without it shows the form and the diagram, but the code preview, **Create** and
-**Run** are disabled and the page says why. The agent token (`graphmind resume`) is refused
-too; a coding agent has `graphmind init`.
+<Aside title="No token, no sign-in">
+The Build page works from the viewer as served — no `#token=` link needed. It is a canvas for
+trying a workflow out before writing it into code, and nothing it does needs the debugger's
+control plane. What that leaves open: another process on your own machine could create or run
+a builder project, or spawn an MCP command through **Test connection**. On a single-user machine
+that process already runs as you; on a shared one, start the server with
+`GRAPHMIND_BUILDER_REQUIRE_TOKEN=1` and every builder route needs the viewer token again.
 </Aside>
 
 ## Describe, read, create, run
 
 <Steps>
 
-1. **Describe the agent.** A name (it becomes the directory and the `app` label on every run),
-   the language and framework (TypeScript with the Vercel AI SDK, the Anthropic SDK or the
-   OpenAI SDK; Python with the OpenAI or Anthropic SDK), the provider and model, a system prompt,
-   the task, and the tools. Tool and parameter names must be valid identifiers in both languages,
-   so a spec can switch target without renaming anything; the form says so inline when one is not.
+1. **Place the nodes.** The page opens on an agent with two stub tools. Add a **Tool**, an
+   **MCP server** or a **Sub-agent** from the palette — each arrives wired to the agent you had
+   selected — and drag from a card's right edge to wire it somewhere else. Click a card to edit it
+   in the **Node** tab: the agent card also carries the project-level choices (name, language and
+   framework, provider, model). Adding a node wires it to the agent your selection belongs to — select
+   a sub-agent, or anything it owns, and the next **+ Tool** lands on that sub-agent. Names share one
+   namespace and must be valid identifiers in both
+   languages, so a workflow can switch target without renaming anything; a card that has a problem
+   is outlined and says what it is.
 
-2. **Read what it becomes.** The diagram is the run's shape on the canvas: one `agent` node, one
-   `llm:step`, one node per tool. The code panel is the project, file by file, produced by the
-   server's own generator from the current form, so what you read is byte for byte what Create
+   An MCP node has **Test connection**: the server spawns the command (or calls the URL) exactly as
+   the generated project will, lists the tools it publishes, and disconnects. The tools come back as
+   chips; click one to allow only it. For an HTTP server that needs a bearer token, the field next to
+   the button takes it for that one test — it is used for the connection, scrubbed from anything
+   that comes back, and kept nowhere.
+
+2. **Read what it becomes.** The **Code** tab is the project, file by file, produced by the
+   server's own generator from the current canvas, so what you read is byte for byte what Create
    writes. Copy a file, or everything, if you would rather paste it into a repository of your own
    and never press Create.
 
@@ -60,11 +90,20 @@ too; a coding agent has `graphmind init`.
    unless you tick **overwrite generated files**, and even then only the generated files are
    rewritten: your `.env` and anything you added stay as they were.
 
-4. **Add your key.** The credentials fields are password fields. What you type is sent once, to
-   the loopback server, with the viewer token, and written to the project's `.env` with owner-only
-   permissions. It is not stored in the browser, not written into the spec file next to the code,
-   and never sent back: the page only ever learns that a variable is *set*. Edit `.env` by hand
-   later if you prefer; `.env` is in the generated `.gitignore`.
+4. **Add your key, and say where it may rest.** The credentials fields are password fields. What
+   you type is sent once, to the loopback server, with the viewer token. It is never stored in the
+   browser, never written into the spec file next to the code, and never sent back: the page only
+   ever learns that a variable is *set*. Two choices for where it goes:
+
+   - **This session only** (the default): the server holds it in memory, hands it to the run's
+     child process, and forgets it when it exits — or sooner, with **Forget**, or after eight
+     hours. **Nothing is written to disk anywhere**, so a key you use once leaves no trace to
+     clean up afterwards.
+   - **Save to `.env`**: written to the project's `.env` with owner-only permissions (0600,
+     git-ignored), so the project also runs from your own terminal later.
+
+   An MCP server over HTTP that needs a bearer token names the **variable** it should come from
+   (never the token), and the token is asked for here like any other key.
 
    An Anthropic key that is **not scoped to a workspace** needs one named: put the workspace's ID
    in the optional `ANTHROPIC_WORKSPACE_ID` field (or `.env` line) and the generated code sends it
@@ -79,11 +118,39 @@ too; a coding agent has `graphmind init`.
 
 </Steps>
 
+## From a GraphMind checkout
+
+`pnpm dev` serves the viewer from Vite on port 5199 while `graphmind serve` runs on 4747, so
+the Build page is talking to another origin. One thing makes that work:
+
+- `graphmind serve` answers an **allow-listed** origin's requests with the CORS header its
+  browser needs (`GRAPHMIND_ALLOWED_ORIGINS`, which `pnpm dev` sets for the Vite origin).
+  Without it a browser discards every builder answer. A server with nothing allow-listed sends
+  that header to nobody, which is the default. (The dev server also hands the viewer the running
+  server's token, so inject and edit work from the hot-reload viewer too.)
+
+## Providers
+
+| Provider | Key | Reached by |
+| --- | --- | --- |
+| Anthropic | `ANTHROPIC_API_KEY` | the Anthropic SDK targets; the AI SDK target |
+| OpenAI | `OPENAI_API_KEY` | the OpenAI SDK targets; the AI SDK target |
+| Google (Gemini), Mistral, xAI, Groq, DeepSeek | `GOOGLE_GENERATIVE_AI_API_KEY`, `MISTRAL_API_KEY`, `XAI_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY` | the OpenAI SDK targets, over each one's OpenAI-compatible endpoint; the AI SDK target, through its first-party `@ai-sdk/*` package |
+| OpenRouter | `OPENROUTER_API_KEY` | the OpenAI SDK targets (endpoint); the AI SDK target through `@ai-sdk/openai-compatible` |
+| Ollama (local) | none needed (`OLLAMA_API_KEY` only if yours asks) | the OpenAI SDK targets at `http://127.0.0.1:11434/v1`; the AI SDK target through `@ai-sdk/openai-compatible` |
+
+The provider sets the key the Run tab asks for and the default model; the model is a free field.
+A target offers the providers its SDK can reach, so switching to the Anthropic SDK moves an
+OpenAI-family provider back to Anthropic and tells you. The table lives in
+`packages/cli/src/builder/providers.ts`; a new provider is one row.
+
 ## What gets written
 
 | Target | Files |
 | --- | --- |
-| TypeScript, any framework | `package.json`, `tsconfig.json`, `src/main.ts`, `src/tools.ts` (+ `src/schemas.ts` for the Anthropic and OpenAI SDKs) |
+| TypeScript, any framework | `package.json`, `tsconfig.json`, `src/main.ts`, `src/tools.ts` (+ `src/schemas.ts` and `src/loop.ts` for the Anthropic and OpenAI SDKs) |
+| TypeScript, with MCP nodes | `src/mcp.ts` — one connection per server, its tools listed at startup and exposed as `server_tool` |
+| TypeScript, with sub-agent nodes | `src/agents.ts` — one tool per sub-agent, each running its own loop over the tools you wired to it |
 | Python | `requirements.txt`, `main.py`, `tools.py` |
 | Every target | `README.md`, `.gitignore`, `.env.example`, `graphmind.workflow.json` (the spec, so the page can list the project; never a secret) |
 
@@ -112,28 +179,41 @@ by the test suite against the real `ai`, `@ai-sdk/*`, `@anthropic-ai/sdk` and `o
 
 - **Local only.** The Build page talks to the `graphmind serve` that served it, on loopback, with
   the viewer token. Nothing is sent anywhere else; there is no account and no hosted side.
-- **One agent per project.** Multi-agent graphs, routing and retrieval are things you write in the
-  generated code. The page is a starting point, not an editor for what you built from it.
+- **One level of delegation.** The root agent, its tools and MCP servers, and sub-agents with
+  tools and MCP servers of their own. Deeper graphs, routing and retrieval are things you write in
+  the generated code. The page is a starting point, not an editor for what you built from it.
+- **An MCP node runs what you typed.** A stdio server is a program the *generated project*
+  spawns — and **Test connection** spawns it too, from the debugger, under the viewer token, with
+  the MCP SDK's default environment rather than the debugger's own. Argv array, no shell, in both
+  places. That is the same trust boundary as Run itself (your machine, your viewer token), but it
+  is worth saying out loud: do not paste a command you would not run in your own terminal.
 - **Run runs only what it wrote.** The job route starts the fixed install and start commands of a
   directory that carries `graphmind.workflow.json`; a directory the builder did not create is
   refused, and the commands are chosen by the target, not by the request.
-- **The key is yours to manage.** It lives in the project's `.env` and nowhere else. Rotate it by
-  typing a new one (or editing the file); clear it with an empty value from the **Save credentials**
-  button, or by deleting the line.
+- **The key is yours to manage.** It lives either in the server's memory for the session or in the
+  project's `.env`, and nowhere else. Rotate it by typing a new one; clear a session key with
+  **Forget** (or by stopping the server), and a `.env` key with an empty value or by deleting the
+  line. No response from any route ever carries a value, and the job log is scrubbed of every
+  `.env` value, every session key and every secret-named variable the process inherited before a
+  line is kept.
 
 ## The API, for the curious
 
-Every route is under `/api/builder` and requires the viewer token, GETs included:
+Every route is under `/api/builder`; none needs a credential unless the server was started with
+`GRAPHMIND_BUILDER_REQUIRE_TOKEN=1`:
 
 | Route | Does |
 | --- | --- |
 | `GET /api/builder/targets` | The targets, the default spec, where projects go |
 | `POST /api/builder/preview` | `{spec}` → the files Create would write, plus the commands and the variables they need |
 | `GET /api/builder/projects` | Projects the builder made (and running jobs); variable names only |
-| `POST /api/builder/projects` | `{spec, dir?, secrets?, overwrite?}` → writes the project (and `.env`) |
-| `GET /api/builder/projects/env?dir=` · `POST` | Which variables `.env` sets (names only) · merge new values in |
+| `POST /api/builder/projects` | `{spec, dir?, secrets?, persistSecrets?, overwrite?}` → writes the project (and `.env`, unless `persistSecrets: false`) |
+| `GET /api/builder/projects/env?dir=` · `POST` | Which variables are set, in `.env` and in memory (names only) · store new values (`persist: false` = memory only) |
+| `POST /api/builder/projects/env/forget` | Drop the session-only keys for a project, now |
+| `POST /api/builder/mcp/probe` | `{server, bearer?}` → connect to an MCP node as the project would, list its tools, disconnect; the bearer is used once and scrubbed from the answer |
 | `POST /api/builder/jobs` · `GET /api/builder/jobs/:id?after=` · `POST …/stop` | Run a project; page its scrubbed output; stop it |
 
 The spec's validation lives in `packages/cli/src/builder/spec.ts`, the generators under
-`packages/cli/src/builder/codegen/`. A new target is one generator file plus one entry in the
-target table.
+`packages/cli/src/builder/codegen/`, and the session key store in
+`packages/cli/src/builder/secret-store.ts`. A new target is one generator file plus one entry in
+the target table; the canvas compiles to a spec in `apps/viewer/src/builder/graph.ts`.

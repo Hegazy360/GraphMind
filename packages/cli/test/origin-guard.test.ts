@@ -13,14 +13,7 @@
 import { connect } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import {
-  checkRequestHeaders,
-  isHostAllowed,
-  isLoopbackHostname,
-  isOriginAllowed,
-  normalizeOrigin,
-  parseOriginPolicy,
-} from '../src/origin-guard.js';
+import { checkRequestHeaders, corsOriginFor, isHostAllowed, isLoopbackHostname, isOriginAllowed, normalizeOrigin, parseOriginPolicy } from '../src/origin-guard.js';
 import { startTestServer, type TestServer } from './helpers.js';
 
 const EVIL = 'https://totally-unrelated-site.example';
@@ -235,5 +228,40 @@ describe('HTTP API rejects rebound hosts', () => {
     const { port } = await boot();
     const tunnelled = await rawRequest(port, '/health', { Host: 'localhost:8888' });
     expect(tunnelled.status).toBe(200);
+  });
+});
+
+/**
+ * CORS, which is a separate question from "may this origin talk to me":
+ * the origin guard says who is let in, `corsOriginFor` says whose browser is
+ * allowed to READ the answer. Only an explicit opt-in earns the second.
+ */
+describe('corsOriginFor', () => {
+  const none = parseOriginPolicy({});
+  const dev = parseOriginPolicy({ GRAPHMIND_ALLOWED_ORIGINS: 'http://localhost:5199,http://127.0.0.1:5199' });
+  const any = parseOriginPolicy({ GRAPHMIND_ALLOWED_ORIGINS: '*' });
+
+  it('gives nothing away by default, to anyone', () => {
+    expect(corsOriginFor('http://localhost:5199', none)).toBeUndefined();
+    expect(corsOriginFor('https://evil.example', none)).toBeUndefined();
+    // a loopback page on this server's own port is same-origin: it needs no header
+    expect(corsOriginFor('http://127.0.0.1:4747', none)).toBeUndefined();
+  });
+
+  it('answers an allow-listed origin with exactly that origin, never a wildcard', () => {
+    expect(corsOriginFor('http://localhost:5199', dev)).toBe('http://localhost:5199');
+    expect(corsOriginFor('http://LocalHost:5199/', dev)).toBe('http://localhost:5199');
+    expect(corsOriginFor('http://localhost:5200', dev)).toBeUndefined();
+    expect(corsOriginFor('https://evil.example', dev)).toBeUndefined();
+  });
+
+  it('echoes the caller under the opt-out, and never trusts a non-origin', () => {
+    expect(corsOriginFor('https://anything.example', any)).toBe('https://anything.example');
+    for (const policy of [none, dev, any]) {
+      expect(corsOriginFor(undefined, policy)).toBeUndefined();
+      expect(corsOriginFor('', policy)).toBeUndefined();
+      expect(corsOriginFor('null', policy)).toBeUndefined();
+      expect(corsOriginFor('file:///x', policy)).toBeUndefined();
+    }
   });
 });

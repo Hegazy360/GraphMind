@@ -220,9 +220,20 @@ export interface ControlRoutes {
  */
 export function registerControlRoutes(
   app: Hono,
-  deps: { hub: Hub; storage: Storage; verifier: CredentialVerifier },
+  deps: {
+    hub: Hub;
+    storage: Storage;
+    verifier: CredentialVerifier;
+    /**
+     * Path prefixes that carry their own access rule and are left out of the
+     * blanket check below. The builder (`/api/builder/`) is open by default —
+     * see builder/routes.ts for why, and for the switch that closes it.
+     */
+    exemptPrefixes?: readonly string[] | undefined;
+  },
 ): ControlRoutes {
   const { hub, storage, verifier } = deps;
+  const exemptPrefixes = deps.exemptPrefixes ?? [];
   let activeWaits = 0;
   /** The part of `activeWaits` parked without a valid credential. */
   let tokenlessWaits = 0;
@@ -236,9 +247,11 @@ export function registerControlRoutes(
   });
 
   // Every non-GET /api route needs a credential. Registered here, before
-  // the routes, so it also covers /api/demo/start and anything added later.
+  // the routes, so it also covers /api/demo/start and anything added later —
+  // except a prefix that was explicitly handed its own rule.
   app.use('/api/*', async (c, next) => {
     if (c.req.method === 'GET' || c.req.method === 'HEAD') return next();
+    if (exemptPrefixes.some((prefix) => c.req.path.startsWith(prefix))) return next();
     const credential = credentialOf(c, verifier);
     if (credential.kind !== 'ok') {
       c.header('www-authenticate', 'Bearer');

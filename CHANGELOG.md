@@ -135,37 +135,118 @@ to redraw the graph beside them. The features were there; the order was not.
 - The empty canvas offers one way forward and one aside (replay the demo)
   instead of four replay buttons and a keyboard legend.
 
+### Fixed — the Build page from a checkout, and a tab without a token
+
+- **`pnpm dev` can drive the builder.** The dev viewer is served by Vite on
+  another port, so every Build page request was cross-origin: the browser
+  discarded each answer for want of a CORS header, and the token was withheld
+  from the other origin anyway. Now `graphmind serve` answers an
+  **allow-listed** origin (`GRAPHMIND_ALLOWED_ORIGINS`, which `pnpm dev`
+  already sets) with that origin — never `*`, never with credentials, and
+  never at all on a server that allow-listed nothing. The Vite dev server also
+  hands the viewer the running server's token, so inject and edit work from
+  the hot-reload viewer with nothing to copy; a token obtained that way may go
+  back to the loopback server it came from and nowhere else.
+- **The builder needs no token.** It had been gated behind the viewer
+  token like the control plane, so a tab opened at `127.0.0.1:4747` by hand,
+  or the hot-reload viewer, could draw a workflow and do nothing with it. The
+  page is for trying a workflow out before it is code; nothing it does needs
+  the debugger's control plane, and the gate was friction with nothing behind
+  it. Every `/api/builder` route is now open to any caller the origin guard
+  admits. What that leaves open is stated in the security reference: another
+  process on the same machine can create or run a builder project, or spawn
+  an MCP command through the probe — on your own machine, as you already can.
+  `GRAPHMIND_BUILDER_REQUIRE_TOKEN=1` puts the token back for a shared one.
+- **Test connection reports instead of sitting still.** It was disabled when
+  the page could not act, with the reason in a tooltip, which is
+  indistinguishable from a broken button; it is now always clickable and
+  answers every click — with the server's tools, with the failure, or with
+  what is missing and how to supply it.
+- **`#/build` survives a deep link in a development build.** Two effects raced
+  on the first commit: the hash writer ran with the page's pre-navigation
+  state and replaced `#/build` with `#/runs`, and React's double-invoked
+  effects then read that back as the place the reader had asked for. The
+  address bar is now the initial state, and the writer only reports changes to
+  it.
+
 ### Added — build a workflow in the viewer
 
-- **The Build page** (`#/build`, the "Build a workflow" button in the run
-  list, or the palette). Describe one agent — name, language and framework,
-  provider and model, system prompt, task, and tools with typed parameters and
-  a stub result — and the server's own generator shows the project it becomes,
-  file by file, already instrumented with the matching GraphMind adapter. Five
-  targets: TypeScript with the Vercel AI SDK, the Anthropic SDK or the OpenAI
-  SDK; Python with the OpenAI or Anthropic SDK. Every value typed into the form
-  is emitted as a string literal, never as code; the generated TypeScript is
-  checked in the test suite against the real provider packages.
+- **The Build page is a canvas** (`#/build`, the "Build a workflow" button in
+  the run list, or the palette). Place the nodes you want to test and wire
+  them by dragging from a card's edge; the right rail carries the selected
+  node's fields, the code, and Create/Run. Four kinds of node:
+  - **Agent** — the run: model, system prompt, task, step cap.
+  - **Tool** — a function the model can call, with typed parameters and a stub
+    result you replace in your editor.
+  - **MCP server** — a server the agent connects to as a client, over stdio or
+    Streamable HTTP, whose tools join the agent's list as `server_tool` and
+    each of which is a node the debugger can hold. A server that needs a
+    bearer token names the *variable* it comes from, never the token.
+    **Test connection** connects to it the way the project will — the stdio
+    command spawned with the MCP SDK's default environment, not the
+    debugger's — lists the tools it publishes, and disconnects; click a
+    listed tool to allow only it. A bearer token typed for the test is used
+    once, scrubbed from the answer, and kept nowhere.
+  - **Sub-agent** — a nested agent the root delegates to with one `task`
+    string, running its own loop over the tools you wired to *it*.
+
+  An edge means "this agent can use that", so the same tool can belong to the
+  root, to a sub-agent, or to both; only edges the generators can emit can be
+  drawn. The server's own generator shows the project the canvas becomes, file
+  by file, already instrumented with the matching GraphMind adapter — so the
+  snippet on screen is byte for byte what Create writes, and usable as-is if
+  you would rather paste it into your own repository.
+
+  Adding a node wires it to the agent the selection belongs to: select a
+  sub-agent, or a tool it already owns, and the next **+ Tool** lands on that
+  sub-agent rather than falling back to the root.
+
+  Nine providers: Anthropic, OpenAI, Google (Gemini), Mistral, xAI, Groq,
+  DeepSeek, OpenRouter, and a local Ollama, which needs no key at all. The
+  OpenAI SDK targets reach every OpenAI-compatible one through its endpoint;
+  the AI SDK target through its first-party `@ai-sdk/*` package or the
+  `openai-compatible` shim. Each target offers the providers its SDK can
+  reach, and the Run tab asks for the matching key by name.
+
+  Five targets: TypeScript with the Vercel AI SDK, the Anthropic SDK or the
+  OpenAI SDK; Python with the OpenAI or Anthropic SDK. MCP and sub-agent nodes
+  generate for the three TypeScript targets (`src/mcp.ts`, `src/agents.ts`,
+  and a shared `src/loop.ts` for the raw-SDK ones); selecting a Python target
+  marks those cards and says why rather than dropping them quietly. Every
+  value typed into the canvas is emitted as a string literal, never as code,
+  and the generated TypeScript is checked in the test suite against the real
+  provider and MCP packages.
 - **Create** writes the project to `$GRAPHMIND_HOME/workflows/<name>` (or an
   absolute path), with `graphmind.workflow.json` beside the code so the page
   can list it again. A non-empty directory is refused unless overwrite is
-  chosen, and overwrite rewrites only the generated files. The API key goes
-  into the project's `.env`, created owner-only and written atomically; the
-  server reports which variable names are set and never a value, and the spec
-  file never carries one.
+  chosen, and overwrite rewrites only the generated files.
+- **Your key need never touch the disk.** The Run tab asks where it should
+  rest, and defaults to **this session only**: the server holds it in memory,
+  hands it to the run's child process, and forgets it when it exits, when you
+  click **Forget**, or after eight hours — nothing is written anywhere.
+  Choosing **Save to .env** writes it to the project's `.env`, created
+  owner-only and written atomically, so the project also runs from your own
+  terminal. Either way the field is a password field, the value is sent once
+  over loopback with the viewer token, the server reports variable *names* and
+  never a value, and neither the spec file nor any generated source carries
+  one.
 - **Run** installs once (`npm install`, or a virtualenv and `pip install`) and
   starts the project with `GRAPHMIND_URL` pointing at this server. Output
-  streams into the page with every `.env` value and every secret-named
-  inherited variable replaced by `__REDACTED__` before a line is kept; the run
+  streams into the page with every `.env` value, every session-only key and
+  every secret-named inherited variable replaced by `__REDACTED__` before a
+  line is kept; the run
   appears live in the run list, one click away. Only directories the builder
   created can be run, with commands fixed by the target.
-- **Access**: every `/api/builder/*` route, GETs included, needs the viewer
-  token; the agent token and tokenless callers are refused. This is the first
-  server route that spawns a process from a request, and the security page
-  says so.
-- A security test plants a key through the builder and asserts it reaches
-  `.env` and nothing else: no response, listing, spec file, source file or
-  server log line.
+- **Access**: no token. The routes are open to whatever the origin guard
+  admits — the viewer this server serves, an allow-listed origin, a local
+  process — and `GRAPHMIND_BUILDER_REQUIRE_TOKEN=1` closes them to all but the
+  viewer token. These are the first server routes that spawn a process from a
+  request, and the security page says so.
+- Security tests plant a key through both credential paths and assert where it
+  ends up: the saved one in `.env` and nothing else, the session one in no
+  file at all (every file under `$GRAPHMIND_HOME` is grepped for it) — and
+  neither in a response, a listing, a spec file, a source file, a job log line
+  or a server log line.
 - **From a checkout, generated projects install.** A CLI running from the
   repository (whose version may be unpublished) packs the built adapters
   into `$GRAPHMIND_HOME/workflows/.packages/` and generates `file:` tarball

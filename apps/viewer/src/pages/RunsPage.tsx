@@ -11,7 +11,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { runHeldMs } from '../lib/duration.js';
 import { runChipLabel } from '../lib/firstRun.js';
 import { fmtCount, fmtDuration, fmtRelative } from '../lib/format.js';
-import { runErrorOf } from '../builder/model.js';
+import { runErrorOf } from '../builder/graph.js';
 import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';
 import { runBadgeStatus, type RunBadgeStatus, type RunState } from '../store/types.js';

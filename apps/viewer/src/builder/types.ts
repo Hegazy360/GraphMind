@@ -4,7 +4,7 @@
  * these types only describe what travels. Keep the two in step.
  */
 export type TargetId = 'ts-ai-sdk' | 'ts-anthropic' | 'ts-openai' | 'py-openai' | 'py-anthropic';
-export type Provider = 'anthropic' | 'openai';
+export type Provider = 'anthropic' | 'openai' | 'google' | 'mistral' | 'xai' | 'groq' | 'deepseek' | 'openrouter' | 'ollama';
 export type ParamType = 'string' | 'number' | 'boolean';
 export type Language = 'typescript' | 'python';
 
@@ -16,6 +16,8 @@ export interface TargetMeta {
   adapter: string;
   entry: string;
   docs: string;
+  /** Which node kinds this target's generator can emit. */
+  supports: { mcp: boolean; subAgents: boolean };
 }
 
 export interface ToolParam {
@@ -32,6 +34,41 @@ export interface ToolSpec {
   returns: string;
 }
 
+export type McpTransport = 'stdio' | 'http';
+
+/** An MCP server the agent connects to as a client. Never holds a secret. */
+export interface McpServerSpec {
+  name: string;
+  transport: McpTransport;
+  /** stdio: the program to spawn, and its arguments. */
+  command: string;
+  args: string[];
+  /** http: the endpoint. */
+  url: string;
+  /** http: the variable holding the bearer token, if the server needs one. */
+  headerEnv?: string;
+  /** Only these tools are exposed. Empty = everything the server lists. */
+  tools: string[];
+}
+
+/** A nested agent: one tool on the parent, its own loop underneath. */
+export interface SubAgentSpec {
+  name: string;
+  description: string;
+  systemPrompt?: string;
+  model?: string;
+  maxSteps: number;
+  tools: string[];
+  mcpServers: string[];
+}
+
+/** What the ROOT agent is wired to. */
+export interface AttachSpec {
+  tools: string[];
+  mcpServers: string[];
+  subAgents: string[];
+}
+
 export interface WorkflowSpec {
   name: string;
   description?: string;
@@ -42,6 +79,9 @@ export interface WorkflowSpec {
   prompt: string;
   maxSteps: number;
   tools: ToolSpec[];
+  mcpServers: McpServerSpec[];
+  subAgents: SubAgentSpec[];
+  attach?: AttachSpec;
 }
 
 export interface SpecIssue {
@@ -94,12 +134,15 @@ export interface ProjectSummary {
   createdAt: string | undefined;
   installed: boolean;
   envKeys: string[];
+  sessionKeys?: string[];
 }
 
 export interface CreateResponse {
   dir: string;
   files: string[];
   envWritten: string[];
+  /** Names of the keys held in the server's memory only. Never values. */
+  sessionKeys: string[];
   install: string[];
   start: string;
   project: ProjectSummary;
@@ -136,3 +179,14 @@ export interface ProjectsResponse {
   projects: ProjectSummary[];
   jobs: JobInfo[];
 }
+
+/** One tool an MCP probe found. */
+export interface ProbeTool {
+  name: string;
+  description: string;
+}
+
+/** What `POST /api/builder/mcp/probe` answers. */
+export type ProbeResult =
+  | { ok: true; server: { name: string; version: string }; tools: ProbeTool[]; ms: number }
+  | { ok: false; message: string; stderr?: string; ms: number };

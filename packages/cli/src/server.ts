@@ -45,12 +45,20 @@ import {
 } from './control-auth.js';
 import { credentialOf, registerControlRoutes, securityHeaderLines, securityHeaders } from './control-http.js';
 import { registerBuilderRoutes } from './builder/routes.js';
+import { SessionSecrets } from './builder/secret-store.js';
 import { ProjectRunner } from './builder/runner.js';
 import { parsePauseOnError } from './debug-state.js';
 import { startBundledDemoReplay, type DemoReplay } from './demo/replayer.js';
 import { Hub, type LogFn } from './hub.js';
 import { openBrowser } from './open-browser.js';
-import { checkRequestHeaders, parseOriginPolicy } from './origin-guard.js';
+import {
+  CORS_ALLOWED_HEADERS,
+  CORS_ALLOWED_METHODS,
+  CORS_MAX_AGE_SECONDS,
+  checkRequestHeaders,
+  corsOriginFor,
+  parseOriginPolicy,
+} from './origin-guard.js';
 import { DEFAULT_PORT, resolveDbPath, resolveViewerDist, type EnvLike } from './paths.js';
 import { SqliteStorage } from './sqlite-storage.js';
 import { writeRunFiles, type RunFiles } from './run-files.js';
@@ -282,15 +290,40 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
       log(`refused ${rejection.kind} "${rejection.value}" on ${c.req.path}`);
       return c.text(`${rejection.message}\n`, 403);
     }
+    /**
+     * CORS, for allow-listed origins only (origin-guard.ts `corsOriginFor`).
+     * A server started without GRAPHMIND_ALLOWED_ORIGINS sends no such header
+     * to anybody; one started with the viewer's dev origin lets that origin —
+     * and only that origin — read its answers, which is what the Build page
+     * needs to work under `pnpm dev`.
+     *
+     * The preflight is answered before any credential check: a browser sends
+     * it without the Authorization header, so requiring one would 401 the
+     * request that exists to ask whether Authorization is permitted.
+     */
+    const corsOrigin = corsOriginFor(c.req.header('origin'), originPolicy);
+    if (corsOrigin !== undefined) {
+      c.header('access-control-allow-origin', corsOrigin);
+      c.header('vary', 'Origin', { append: true });
+      if (c.req.method === 'OPTIONS' && c.req.header('access-control-request-method') !== undefined) {
+        c.header('access-control-allow-methods', CORS_ALLOWED_METHODS);
+        c.header('access-control-allow-headers', CORS_ALLOWED_HEADERS);
+        c.header('access-control-max-age', String(CORS_MAX_AGE_SECONDS));
+        return c.body(null, 204);
+      }
+    }
     return next();
   });
   // Control plane + the credential check on every non-GET /api route. Must
   // come before any other /api route (see registerControlRoutes).
-  const controlRoutes = registerControlRoutes(app, { hub, storage, verifier });
+  const controlRoutes = registerControlRoutes(app, { hub, storage, verifier, exemptPrefixes: ['/api/builder/'] });
   // The workflow builder (viewer token only). Projects it runs stream into
   // this server's own /ingest, so the port must be known: read lazily.
-  const runner = new ProjectRunner({ ingestUrl: () => `ws://${host}:${boundPort}/ingest`, log });
-  registerBuilderRoutes(app, { verifier, runner, env, log });
+  // Keys the engineer asked us NOT to write down live here, in memory, for
+  // as long as this process does.
+  const sessionSecrets = new SessionSecrets();
+  const runner = new ProjectRunner({ ingestUrl: () => `ws://${host}:${boundPort}/ingest`, log, sessionSecrets });
+  registerBuilderRoutes(app, { verifier, runner, sessionSecrets, env, log });
   app.get('/health', (c) => c.json({ ok: true, name: 'graphmind-ai', version: VERSION }));
   app.get('/api/runs', (c) => c.json({ runs: hub.listRunInfos() }));
   app.get('/api/runs/:id/events', (c) => {
@@ -508,6 +541,7 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
     controlRoutes.closeWaits();
     activeDemo?.stop();
     runner.dispose();
+    sessionSecrets.dispose();
     await hub.closeAll(500);
     // After closeAll: closing the ingest sockets arms one reconciliation
     // timer per open run, and a server going down is not the moment to

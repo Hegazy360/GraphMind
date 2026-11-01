@@ -134,6 +134,7 @@ function notify(token: string | undefined): void {
 }
 
 export function setViewerToken(token: string | undefined): void {
+  if (token !== devServerToken) devServerToken = undefined;
   memoryToken = token;
   writeStorage(token);
   notify(token);
@@ -166,15 +167,43 @@ export function onViewerTokenChange(listener: (token: string | undefined) => voi
 
 /**
  * The token belongs to the server that served this page. A viewer pointed at
- * another server (`?server=` / `?ws=`, or the Vite dev server) never sends it
- * there.
+ * another server (`?server=` / `?ws=`) never sends it there, so a page talked
+ * into naming a host cannot hand that host control of the debugger.
+ *
+ * The one exception is a token the DEV SERVER ITSELF handed this page
+ * (`adoptDevToken`): giving it back to the loopback server it came from
+ * reveals nothing that server does not already know. It is the narrowest
+ * rule that makes `pnpm dev` work — it covers only a development build, only
+ * a loopback target, and only a token this page did not learn from the URL
+ * or from storage. A token captured from a fragment keeps the strict
+ * same-origin rule, so `?server=127.0.0.1:9999` still gets nothing.
  */
+function isDevBuild(): boolean {
+  return typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV);
+}
+
+/**
+ * Set only by `adoptDevToken`: this page's token came from the Vite dev
+ * server, which read it from the local `graphmind serve` it fronts.
+ */
+let devServerToken: string | undefined;
+
+/** 127.0.0.0/8, ::1 and localhost — names that can only mean this machine. */
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '::1') return true;
+  const parts = host.split('.');
+  return parts.length === 4 && parts[0] === '127' && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+}
+
 export function tokenFor(url: string): string | undefined {
   const token = viewerToken();
   if (token === undefined || typeof location === 'undefined') return undefined;
   try {
     const target = new URL(url, location.href);
-    return target.host === location.host ? token : undefined;
+    if (target.host === location.host) return token;
+    const fromDevServer = devServerToken !== undefined && devServerToken === token;
+    return isDevBuild() && fromDevServer && isLoopbackHost(target.hostname) ? token : undefined;
   } catch {
     return undefined;
   }
@@ -202,6 +231,36 @@ export function authHeaders(url: string): Record<string, string> {
  * (another tab may have stored a newer, valid one there, which this tab then
  * adopts).
  */
+/**
+ * DEVELOPMENT ONLY: adopt the token of the `graphmind serve` this dev viewer
+ * talks to.
+ *
+ * `pnpm dev` serves the viewer from Vite, so the token `graphmind serve`
+ * printed is on another origin's URL and a contributor has to notice a line
+ * of terminal output and paste it. They don't, and then half the viewer is
+ * mysteriously read-only. The Vite dev server reads the token out of the
+ * server's own redirect file and hands it to this page (see the
+ * `graphmind-dev-token` plugin in vite.config.ts).
+ *
+ * Compiled out of production builds, where the token always arrives in the
+ * URL fragment from the server that served the page.
+ */
+export async function adoptDevToken(): Promise<void> {
+  if (!isDevBuild() || viewerToken() !== undefined) return;
+  try {
+    const response = await fetch('/__graphmind/dev-token');
+    if (!response.ok) return;
+    const body = (await response.json()) as { token?: unknown };
+    const token = typeof body.token === 'string' ? body.token : undefined;
+    if (token !== undefined && TOKEN_RE.test(token)) {
+      devServerToken = token;
+      setViewerToken(token);
+    }
+  } catch {
+    // no dev server plugin, or no server running: the page still works
+  }
+}
+
 export async function checkTokenAfterFailedConnect(presented: string | undefined): Promise<void> {
   if (presented === undefined) return;
   if ((await sessionPrincipal(presented)) !== 'refused') return; // valid, or the server is unreachable

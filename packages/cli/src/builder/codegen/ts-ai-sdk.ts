@@ -2,10 +2,19 @@
  * TypeScript + Vercel AI SDK. The shortest instrumentation GraphMind has:
  * `gm.wrapModel` + `gm.wrapTools` + `gm.run`, then `streamText` with a step
  * cap. Tools are `tool({ inputSchema: z.object(...), execute })`.
+ *
+ * The canvas's other node kinds land here as: MCP tools (`src/mcp.ts`,
+ * adapted to AI SDK tools with the server's own JSON Schema) and sub-agents
+ * (`src/agents.ts`, each one a tool whose execute runs a nested
+ * `generateText`). Both go through `gm.wrapTools`, so every one of them is a
+ * node the debugger can hold.
  */
 import { VERSION } from '../../version.js';
-import type { WorkflowSpec } from '../spec.js';
+import type { SubAgentSpec, WorkflowSpec } from '../spec.js';
+import { rootWiring, subAgentWiring } from '../spec.js';
+import { aiSdkPackageFor, providerMeta } from '../providers.js';
 import { paramSummary, stubResult, tsLiteral, tsString } from './shared.js';
+import { MCP_SDK_DEP, hasMcp, mcpFile, mcpPrefix } from './mcp-ts.js';
 import { TS_CONFIG, TS_DEPS, envExample, tsEnvLoader, tsPackageJson } from './ts-common.js';
 import type { GeneratedFile } from './types.js';
 import type { LocalPackages } from '../local-packages.js';
@@ -63,31 +72,153 @@ function toolsFile(spec: WorkflowSpec): string {
   return lines.join('\n');
 }
 
+/** One sub-agent as a tool: `{ task }` in, its final text out. */
+function subAgentEntry(spec: WorkflowSpec, agent: SubAgentSpec): string[] {
+  const wiring = subAgentWiring(spec, agent);
+  const names = tsLiteral(wiring.tools.map((t) => t.name));
+  const prefixes = tsLiteral(wiring.mcpServers.map(mcpPrefix));
+  const hasSystem = agent.systemPrompt !== undefined && agent.systemPrompt.trim() !== '';
+  return [
+    `  ${agent.name}: tool({`,
+    `    description: ${tsString(agent.description)},`,
+    '    inputSchema: z.object({',
+    "      task: z.string().describe('What this agent should do, stated in a sentence or two.'),",
+    '    }),',
+    '    execute: async ({ task }) => {',
+    `      const result = await generateText({`,
+    `        model: deps.modelFor(${tsString(agent.model ?? spec.model)}),`,
+    ...(hasSystem ? [`        system: ${tsString(agent.systemPrompt ?? '')},`] : []),
+    '        prompt: task,',
+    `        tools: select(deps.tools, ${names}, ${prefixes}),`,
+    `        stopWhen: stepCountIs(${agent.maxSteps}),`,
+    '      });',
+    '      return { text: result.text };',
+    '    },',
+    '  }),',
+  ];
+}
+
+function agentsFile(spec: WorkflowSpec): string {
+  const lines: string[] = [
+    '/**',
+    ` * The agents ${spec.name} can delegate to.`,
+    ' *',
+    ' * Each one is an ordinary AI SDK tool: the root agent calls it with a task,',
+    ' * and the execute body runs a nested generateText with only the tools that',
+    " * sub-agent was given on the canvas. The nested run's steps appear in the",
+    ' * debugger underneath the call that started them.',
+    ' */',
+    "import { generateText, stepCountIs, tool, type LanguageModel, type ToolSet } from 'ai';",
+    "import { z } from 'zod';",
+    '',
+    'export interface SubAgentDeps {',
+    '  /** A wrapped model for a model id (main.ts passes gm.wrapModel). */',
+    '  modelFor: (id: string) => LanguageModel;',
+    '  /** Every tool in the project, already wrapped: local stubs and MCP tools. */',
+    '  tools: ToolSet;',
+    '}',
+    '',
+    '/** The tools named exactly, plus every tool from a named MCP server. */',
+    'export function select(tools: ToolSet, names: readonly string[], prefixes: readonly string[]): ToolSet {',
+    '  return Object.fromEntries(',
+    '    Object.entries(tools).filter(',
+    '      ([name]) => names.includes(name) || prefixes.some((prefix) => name.startsWith(prefix)),',
+    '    ),',
+    '  );',
+    '}',
+    '',
+    'export function subAgentTools(deps: SubAgentDeps): ToolSet {',
+    '  return {',
+  ];
+  for (const agent of spec.subAgents) lines.push(...subAgentEntry(spec, agent).map((line) => `  ${line}`));
+  lines.push('  };', '}', '');
+  return lines.join('\n');
+}
+
 function mainFile(spec: WorkflowSpec): string {
-  const providerImport =
-    spec.provider === 'anthropic'
-      ? "import { createAnthropic } from '@ai-sdk/anthropic';"
-      : "import { openai } from '@ai-sdk/openai';";
-  const providerCall = spec.provider === 'anthropic' ? 'anthropic' : 'openai';
+  const root = rootWiring(spec);
+  const mcp = hasMcp(spec);
+  const subs = spec.subAgents.length > 0;
+  const meta = providerMeta(spec.provider);
+  const aiSdk = aiSdkPackageFor(spec.provider);
+  const providerImport = `import { ${aiSdk.factory} } from '${aiSdk.pkg}';`;
   // A key that is not scoped to a workspace must name one per request (the
   // ANTHROPIC_WORKSPACE_ID line in .env); a scoped key needs no header.
-  const providerSetup =
-    spec.provider === 'anthropic'
-      ? `// An unscoped Anthropic key needs the workspace named per request; a scoped
+  let providerSetup: string;
+  if (spec.provider === 'anthropic') {
+    providerSetup = `// An unscoped Anthropic key needs the workspace named per request; a scoped
 // key leaves ANTHROPIC_WORKSPACE_ID unset and sends no header.
 const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID;
-const anthropic = createAnthropic(workspaceId ? { headers: { 'anthropic-workspace-id': workspaceId } } : {});
+const provider = createAnthropic(workspaceId ? { headers: { 'anthropic-workspace-id': workspaceId } } : {});
+`;
+  } else if (meta.aiSdk !== undefined) {
+    providerSetup = `const provider = ${aiSdk.factory}({});
+`;
+  } else {
+    // No first-party package: the OpenAI-compatible shim, pointed at the
+    // provider's endpoint. A provider that needs no key gets a placeholder,
+    // since the shim sends whatever it is given as a bearer token.
+    providerSetup = `// ${meta.label} speaks the OpenAI protocol; the shim points at its endpoint.
+const provider = createOpenAICompatible({
+  name: ${tsString(spec.provider)},
+  baseURL: ${tsString(meta.baseURL ?? '')},
+  apiKey: process.env[${tsString(meta.envKey)}]${meta.keyRequired ? '' : ` ?? ${tsString(spec.provider)}`},
+});
+`;
+  }
+  const hasSystem = spec.systemPrompt !== undefined && spec.systemPrompt.trim() !== '';
+  const systemConst = hasSystem ? `const SYSTEM = ${tsString(spec.systemPrompt ?? '')};\n` : '';
+  const system = hasSystem ? '      system: SYSTEM,\n' : '';
 
+  // Which of the project's tools this agent is wired to. `select` is only
+  // emitted when the canvas actually left something out.
+  const rootNames = [...root.tools.map((t) => t.name), ...root.subAgents.map((a) => a.name)];
+  const rootPrefixes = root.mcpServers.map(mcpPrefix);
+  const everything =
+    root.tools.length === spec.tools.length &&
+    root.mcpServers.length === spec.mcpServers.length &&
+    root.subAgents.length === spec.subAgents.length;
+
+  const mcpImport = mcp ? "import { callersOf, connectMcp } from './mcp.js';\n" : '';
+  const agentsImport = subs
+    ? `import { select, subAgentTools } from './agents.js';\n`
+    : everything
+      ? ''
+      : `import { select } from './select.js';\n`;
+  const aiImports = ['stepCountIs', 'streamText', ...(mcp ? ['jsonSchema', 'tool'] : [])].sort();
+  const toolSetType = mcp || subs || !everything ? ", type ToolSet" : '';
+
+  const mcpBlock = mcp
+    ? `
+// Every MCP server on the canvas, connected and listed once. Their tools keep
+// the server's own JSON Schema; nothing is re-described here.
+const mcp = await connectMcp(APP);
+const mcpTools: ToolSet = Object.fromEntries(
+  Object.values(mcp.tools).map((entry) => [
+    entry.name,
+    tool({
+      description: entry.description,
+      inputSchema: jsonSchema(entry.inputSchema as Parameters<typeof jsonSchema>[0]),
+      execute: (input: unknown) => entry.call(input),
+    }),
+  ]),
+);
 `
-      : '';
-  const system =
-    spec.systemPrompt !== undefined && spec.systemPrompt.trim() !== ''
-      ? `      system: SYSTEM,\n`
-      : '';
-  const systemConst =
-    spec.systemPrompt !== undefined && spec.systemPrompt.trim() !== ''
-      ? `const SYSTEM = ${tsString(spec.systemPrompt)};\n`
-      : '';
+    : '';
+  const wrapInput = mcp ? '{ ...workflowTools, ...mcpTools }' : 'workflowTools';
+  const subBlock = subs
+    ? `const agentTools = subAgentTools({ modelFor, tools: wrapped });
+`
+    : '';
+  const allTools = subs ? '{ ...wrapped, ...agentTools }' : 'wrapped';
+  const toolsLine = everything
+    ? `const tools = ${allTools};`
+    : `const tools = select(${allTools}, ${tsLiteral(rootNames)}, ${tsLiteral(rootPrefixes)});`;
+  const closing = mcp
+    ? `  await mcp.close();
+  await gm.dispose();`
+    : '  await gm.dispose();';
+
   return `/**
  * ${spec.name} — generated by the GraphMind workflow builder (graphmind-ai ${VERSION}).
  *
@@ -100,26 +231,34 @@ const anthropic = createAnthropic(workspaceId ? { headers: { 'anthropic-workspac
  */
 ${providerImport}
 import { graphmind, isAbortError } from '@graphmind-ai/sdk';
-import { stepCountIs, streamText } from 'ai';
+import { ${aiImports.join(', ')}${toolSetType} } from 'ai';
 import { tools as workflowTools } from './tools.js';
-
+${mcpImport}${agentsImport}
 ${tsEnvLoader(spec.provider)}
 
+const APP = ${tsString(spec.name)};
 const MODEL = ${tsString(spec.model)};
 const MAX_STEPS = ${spec.maxSteps};
 ${systemConst}const PROMPT = ${tsString(spec.prompt)};
 
-${providerSetup}const gm = graphmind({ app: ${tsString(spec.name)} });
+${providerSetup}
+const gm = graphmind({ app: APP });
 // Wait for the debugger so pause-on-error is armed before the first step.
 // Fails open: no debugger within the timeout just means an undebugged run.
 const attached = await gm.ready();
 console.error(attached ? 'attached to GraphMind' : 'no GraphMind server found; running undebugged');
 
-const model = gm.wrapModel(${providerCall}(MODEL));
-const tools = gm.wrapTools(workflowTools);
+// Every model goes through wrapModel, so a sub-agent's steps are nodes too.
+const modelFor = (id: string) => gm.wrapModel(provider(id));
+const model = modelFor(MODEL);
+${mcpBlock}
+// Gated: the debugger can hold any of these before it runs, edit the
+// arguments, or inject a result.
+const wrapped = gm.wrapTools(${wrapInput})${mcp || subs || !everything ? ' as ToolSet' : ''};
+${subBlock}${toolsLine}
 
 try {
-  await gm.run(${tsString(spec.name)}, async () => {
+  await gm.run(APP, async () => {
     const result = streamText({
       model,
       tools,
@@ -137,24 +276,53 @@ ${system}      prompt: PROMPT,
   if (isAbortError(error)) console.error('(run aborted from the debugger)');
   else throw error;
 } finally {
-  await gm.dispose();
+${closing}
+}
+`;
+}
+
+/** `select` on its own, for a project that filters tools but has no sub-agents. */
+function selectFile(): string {
+  return `/**
+ * Which tools an agent is wired to: the ones named exactly, plus everything
+ * from a named MCP server (its tools all start with \`server_\`).
+ */
+import type { ToolSet } from 'ai';
+
+export function select(tools: ToolSet, names: readonly string[], prefixes: readonly string[]): ToolSet {
+  return Object.fromEntries(
+    Object.entries(tools).filter(
+      ([name]) => names.includes(name) || prefixes.some((prefix) => name.startsWith(prefix)),
+    ),
+  );
 }
 `;
 }
 
 export function generateTsAiSdk(spec: WorkflowSpec, local?: LocalPackages): GeneratedFile[] {
-  const providerPkg = spec.provider === 'anthropic' ? '@ai-sdk/anthropic' : '@ai-sdk/openai';
+  const aiSdk = aiSdkPackageFor(spec.provider);
+  const mcp = hasMcp(spec);
+  const root = rootWiring(spec);
+  const everything =
+    root.tools.length === spec.tools.length &&
+    root.mcpServers.length === spec.mcpServers.length &&
+    root.subAgents.length === spec.subAgents.length;
   const dependencies: Record<string, string> = {
     '@graphmind-ai/sdk': `^${VERSION}`,
     ai: TS_DEPS.ai,
-    [providerPkg]: TS_DEPS[providerPkg],
+    [aiSdk.pkg]: aiSdk.version,
     zod: TS_DEPS.zod,
+    ...(mcp ? { '@modelcontextprotocol/sdk': MCP_SDK_DEP } : {}),
   };
-  return [
+  const files: GeneratedFile[] = [
     { path: 'package.json', content: tsPackageJson(spec, dependencies, local) },
     { path: 'tsconfig.json', content: TS_CONFIG },
     { path: 'src/main.ts', content: mainFile(spec) },
     { path: 'src/tools.ts', content: toolsFile(spec) },
-    { path: '.env.example', content: envExample(spec) },
   ];
+  if (mcp) files.push({ path: 'src/mcp.ts', content: mcpFile(spec) });
+  if (spec.subAgents.length > 0) files.push({ path: 'src/agents.ts', content: agentsFile(spec) });
+  else if (!everything) files.push({ path: 'src/select.ts', content: selectFile() });
+  files.push({ path: '.env.example', content: envExample(spec) });
+  return files;
 }

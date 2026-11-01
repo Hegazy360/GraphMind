@@ -1,7 +1,7 @@
 /**
- * `/api/builder/*` over a real server: viewer-token only (401 without, 403
- * for the agent token), preview and create, `.env` by name only, and the
- * job endpoints' refusals.
+ * `/api/builder/*` over a real server: open to the viewer without a token
+ * (and gated again under GRAPHMIND_BUILDER_REQUIRE_TOKEN=1), preview and
+ * create, `.env` by name only, and the job endpoints' refusals.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -53,45 +53,49 @@ async function api(
 }
 
 describe('access', () => {
-  it('needs a credential on GET too (401), refuses the agent token (403), accepts the viewer token', async () => {
+  it('is open to the viewer with no token at all, and to a token-bearing one alike', async () => {
     const { port, server } = await boot();
     const none = await api(port, '/api/builder/targets');
-    expect(none.status).toBe(401);
-    expect(none.body.error).toBe('unauthorized');
-
-    const agent = await api(port, '/api/builder/targets', { token: server.tokens.agent });
-    expect(agent.status).toBe(403);
-    expect(agent.body.message).toContain('graphmind init');
-
-    const viewer = await api(port, '/api/builder/targets', { token: server.tokens.viewer });
-    expect(viewer.status).toBe(200);
-    expect(viewer.body.targets.map((t: { id: string }) => t.id)).toEqual([
+    expect(none.status).toBe(200);
+    expect(none.body.targets.map((t: { id: string }) => t.id)).toEqual([
       'ts-ai-sdk',
       'ts-anthropic',
       'ts-openai',
       'py-openai',
       'py-anthropic',
     ]);
-    expect(viewer.body.defaultSpec.name).toBe('my-agent');
-    expect(typeof viewer.body.workflowsDir).toBe('string');
+    expect(none.body.defaultSpec.name).toBe('my-agent');
+    expect(typeof none.body.workflowsDir).toBe('string');
+    const viewer = await api(port, '/api/builder/targets', { token: server.tokens.viewer });
+    expect(viewer.status).toBe(200);
+    // A credential that is wrong for the control plane is simply not consulted here.
+    const agent = await api(port, '/api/builder/targets', { token: server.tokens.agent });
+    expect(agent.status).toBe(200);
   });
 
-  it('refuses a bogus token on every builder route, POST included', async () => {
+  it('with GRAPHMIND_BUILDER_REQUIRE_TOKEN=1: needs the viewer token on GET too, refuses the agent token', async () => {
+    const ts = await startTestServer({ env: { GRAPHMIND_BUILDER_REQUIRE_TOKEN: '1' } });
+    cleanups.push(() => ts.cleanup());
+    const none = await api(ts.port, '/api/builder/targets');
+    expect(none.status).toBe(401);
+    expect(none.body.message).toContain('GRAPHMIND_BUILDER_REQUIRE_TOKEN');
+    const agent = await api(ts.port, '/api/builder/targets', { token: ts.server.tokens.agent });
+    expect(agent.status).toBe(403);
+    expect(agent.body.message).toContain('graphmind init');
+    const bogus = await api(ts.port, '/api/builder/preview', { token: 'gmv_notarealtoken0000000000000000', body: { spec: defaultSpec() } });
+    expect(bogus.status).toBe(401);
+    const viewer = await api(ts.port, '/api/builder/targets', { token: ts.server.tokens.viewer });
+    expect(viewer.status).toBe(200);
+  });
+
+  it('does not let a stale token get in the way: a bogus one is ignored, not refused', async () => {
     const { port } = await boot();
-    for (const [path, body] of [
-      ['/api/builder/preview', { spec: defaultSpec() }],
-      ['/api/builder/projects', { spec: defaultSpec() }],
-      ['/api/builder/jobs', { dir: '/nope' }],
-    ] as const) {
-      const r = await api(port, path, { token: 'gmv_notarealtoken0000000000000000', body });
-      expect(r.status, path).toBe(401);
-    }
-    expect((await api(port, '/api/builder/projects')).status).toBe(401);
-    expect((await api(port, '/api/builder/jobs/job_x')).status).toBe(401);
+    const r = await api(port, '/api/builder/preview', { token: 'gmv_notarealtoken0000000000000000', body: { spec: defaultSpec() } });
+    expect(r.status).toBe(200);
+    expect((await api(port, '/api/builder/projects', { token: 'gmv_notarealtoken0000000000000000' })).status).toBe(200);
+    expect((await api(port, '/api/builder/jobs/job_x', { token: 'gmv_notarealtoken0000000000000000' })).status).toBe(404);
   });
-});
 
-describe('preview', () => {
   it('returns the files Create would write, and validation issues with paths', async () => {
     const { port, server } = await boot();
     const token = server.tokens.viewer;

@@ -7,7 +7,8 @@
  * generated project needs only `graphmind-ai` plus the provider SDK.
  */
 import { VERSION } from '../../version.js';
-import { PROVIDER_ENV_KEY, type WorkflowSpec } from '../spec.js';
+import type { WorkflowSpec } from '../spec.js';
+import { providerMeta } from '../providers.js';
 import { paramSummary, paramsJsonSchema, pyLiteral, pySignature, pyString, stubResult } from './shared.js';
 import { envExample } from './ts-common.js';
 import type { GeneratedFile } from './types.js';
@@ -99,11 +100,29 @@ import graphmind
 }
 
 function envCheck(spec: WorkflowSpec): string {
-  const key = PROVIDER_ENV_KEY[spec.provider];
+  const meta = providerMeta(spec.provider);
+  if (!meta.keyRequired) {
+    return `load_env()
+# ${meta.label} needs no key by default; set ${meta.envKey} in .env only if your server asks for one.`;
+  }
   return `load_env()
-if not os.environ.get(${pyString(key)}):
-    print(${pyString(`${key} is not set. Add it to .env (see .env.example).`)}, file=sys.stderr)
+if not os.environ.get(${pyString(meta.envKey)}):
+    print(${pyString(`${meta.envKey} is not set. Add it to .env (see .env.example).`)}, file=sys.stderr)
     sys.exit(1)`;
+}
+
+/** `OpenAI()` for OpenAI itself; any compatible provider gets its endpoint. */
+function openaiClient(spec: WorkflowSpec): string {
+  const meta = providerMeta(spec.provider);
+  if (spec.provider === 'openai') return 'OpenAI()';
+  const key = meta.keyRequired
+    ? `os.environ.get(${pyString(meta.envKey)})`
+    : `os.environ.get(${pyString(meta.envKey)}) or ${pyString(spec.provider)}`;
+  return `OpenAI(
+    # ${meta.label}, over its OpenAI-compatible endpoint.
+    base_url=${pyString(meta.baseURL ?? '')},
+    api_key=${key},
+)`;
 }
 
 function constants(spec: WorkflowSpec): string {
@@ -134,7 +153,7 @@ gm = graphmind.init(app=${pyString(spec.name)})
 attached = gm.ready()
 print("attached to GraphMind" if attached else "no GraphMind server found; running undebugged", file=sys.stderr)
 
-client = gm.instrument_openai(OpenAI())
+client = gm.instrument_openai(${openaiClient(spec)})
 # Gated: the debugger can hold a call before it runs, edit its arguments, or
 # inject a result. The index is by the name the model chose.
 tools = gm.wrap_tools(TOOLS)

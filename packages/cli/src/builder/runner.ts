@@ -7,6 +7,9 @@
  * What never reaches the log, by construction:
  *
  *  - every value in the project's `.env` (the key the engineer just typed);
+ *  - every session-only key held for the project (secret-store.ts): the ones
+ *    the engineer asked us NOT to write down. They are merged into the
+ *    child's environment over `.env` and scrubbed on the way back out;
  *  - the value of every process environment variable whose NAME looks like a
  *    secret (`isSecretKey`: ANTHROPIC_API_KEY, GITHUB_TOKEN, ...), since the
  *    child inherits this server's environment and a provider SDK that prints
@@ -67,6 +70,12 @@ export interface RunnerOptions {
   parentEnv?: NodeJS.ProcessEnv | undefined;
   /** Grace between SIGTERM and SIGKILL on stop. Default 3000. */
   killGraceMs?: number | undefined;
+  /**
+   * Keys the engineer chose NOT to write to disk (secret-store.ts). They are
+   * merged into the child's environment, over `.env`, and scrubbed from the
+   * log like every other secret. Nothing else reads them.
+   */
+  sessionSecrets?: { values: (dir: string) => Record<string, string> } | undefined;
   /** Override Python discovery (tests). `null` = behave as if none qualifies. */
   python?: PythonToolchain | null | undefined;
 }
@@ -135,6 +144,9 @@ export class ProjectRunner {
     }
     const id = `job_${randomBytes(6).toString('hex')}`;
     const dotenv = readEnvValues(join(project.dir, '.env'));
+    // Session-only keys win over `.env`: the engineer typed them later, and
+    // "this one, just for now" is the whole point of them.
+    const session = this.options.sessionSecrets?.values(project.dir) ?? {};
     const parentEnv = this.options.parentEnv ?? process.env;
     const parentSecrets = Object.entries(parentEnv)
       .filter(([key, value]) => value !== undefined && isSecretKey(key))
@@ -154,7 +166,7 @@ export class ProjectRunner {
       lines: [],
       child: undefined,
       stopRequested: false,
-      scrub: makeScrubber([...Object.values(dotenv), ...parentSecrets]),
+      scrub: makeScrubber([...Object.values(dotenv), ...Object.values(session), ...parentSecrets]),
       killTimer: undefined,
     };
     this.jobs.set(id, job);
@@ -182,6 +194,7 @@ export class ProjectRunner {
     const childEnv: NodeJS.ProcessEnv = {
       ...parentEnv,
       ...dotenv,
+      ...session,
       GRAPHMIND_URL: this.options.ingestUrl(),
       GRAPHMIND: '1',
       FORCE_COLOR: '0',

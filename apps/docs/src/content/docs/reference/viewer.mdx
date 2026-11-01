@@ -402,11 +402,21 @@ of the viewer is for.
 ## The Build page
 
 `#/build`, the **Build a workflow** button in the run list, or "Build a workflow" in the
-palette. Describe one agent and its tools, pick the language and SDK, read the instrumented
-project the server generates, write it to disk with your key in a private `.env`, and run it
-from the page; the run appears in the list beside the log. It needs the viewer token, and the
-page says so when a tab has none. The whole flow, and where its boundaries are, is on
-[build a workflow](/guides/build-a-workflow/).
+palette. A canvas: place the nodes you want to test — the agent, tools, MCP servers,
+sub-agents — wire them by dragging from a card's right edge, and the right rail shows the
+selected node's fields (**Node**), the instrumented project the server generates from the
+canvas (**Code**), and Create/Run with your key (**Run**). An MCP node has **Test connection**,
+which lists the server's tools before anything is generated. Nine providers — Anthropic, OpenAI,
+Google, Mistral, xAI, Groq, DeepSeek, OpenRouter and a local Ollama — each target offering the
+ones its SDK can reach. The run appears in the list beside the log.
+
+The key is a password field sent once over loopback, and you choose where it rests: held in
+the server's memory for the session (the default — nothing is written to disk, and **Forget**
+drops it immediately) or saved to the project's `.env` (owner-only, git-ignored). No route
+ever answers with a value.
+
+It needs a server to generate against and nothing else — no token, no sign-in. The whole flow,
+and where its boundaries are, is on [build a workflow](/guides/build-a-workflow/).
 
 ## Built-in fixtures
 

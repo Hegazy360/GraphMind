@@ -98,11 +98,15 @@ code location; executions light it up.
   first. Or **inject** a result instead and skip the call; retry it, continue
   with the original error, or abort the run (cooperative cancellation via
   `AbortSignal`, so SDK retry logic doesn't fight you).
-- **Build a workflow in the viewer** *(unreleased)* - describe an agent and
-  its tools, pick TypeScript or Python and the SDK you use, read the
-  instrumented project the server generates, write it to disk with your key
-  in a private `.env`, and run it from the same page, with the run appearing
-  live beside the log.
+- **Build a workflow in the viewer** *(unreleased)* - a canvas: place the
+  nodes you want to test - an agent, tools, MCP servers to connect to (with
+  a Test connection button that lists their tools), sub-agents to delegate
+  to - wire them together, read the instrumented project the server
+  generates from them, and run it from the same page against any of nine
+  providers (Anthropic, OpenAI, Google, Mistral, xAI, Groq, DeepSeek,
+  OpenRouter, a local Ollama), with the run appearing live beside the log. Your API key is sent once over
+  loopback and, by default, held in memory for the session only: nothing is
+  written to disk, and it is never echoed back or logged.
 - **Drive it from your coding agent** *(0.6)* - `graphmind wait` blocks until
   a call is held and `graphmind resume` releases it (with an edit or an
   injected result, as far as `serve --allow-control` allows; off by default).

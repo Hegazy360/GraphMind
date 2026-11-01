@@ -2,8 +2,10 @@
  * Spec -> project. Pure: the same spec always gives the same files, which is
  * what lets the Build page preview exactly what Create will write.
  */
-import { PROVIDER_ENV_KEY, TARGETS, type TargetId, type WorkflowSpec } from '../spec.js';
+import { TARGETS, type TargetId, type WorkflowSpec } from '../spec.js';
+import { providerMeta } from '../providers.js';
 import { GITIGNORE } from './shared.js';
+import { mcpEnvNames } from './mcp-ts.js';
 import { readme } from './ts-common.js';
 import { generatePython } from './python.js';
 import { generateTsAiSdk } from './ts-ai-sdk.js';
@@ -63,12 +65,14 @@ export function installMarker(target: TargetId): string {
 }
 
 export function envKeysFor(spec: WorkflowSpec): EnvKey[] {
-  const key = PROVIDER_ENV_KEY[spec.provider];
+  const meta = providerMeta(spec.provider);
   return [
     {
-      name: key,
-      required: true,
-      hint: `Your ${spec.provider === 'anthropic' ? 'Anthropic' : 'OpenAI'} API key. Written to .env (owner-only, git-ignored); never shown again.`,
+      name: meta.envKey,
+      required: meta.keyRequired,
+      hint: meta.keyRequired
+        ? `Your ${meta.label} API key. Sent once; never shown again.`
+        : `${meta.label} needs no key by default. Only if your server asks for one.`,
     },
     // An Anthropic key that is not scoped to a workspace must name one per
     // request; the generated code sends it as the anthropic-workspace-id header.
@@ -81,6 +85,12 @@ export function envKeysFor(spec: WorkflowSpec): EnvKey[] {
           },
         ]
       : []),
+    // One per MCP node that named a variable for its bearer token.
+    ...mcpEnvNames(spec).map((entry) => ({
+      name: entry.name,
+      required: false,
+      hint: `Bearer token for the "${entry.server}" MCP server. Sent as the Authorization header; never printed.`,
+    })),
     {
       name: 'GRAPHMIND_URL',
       required: false,

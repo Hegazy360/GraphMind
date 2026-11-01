@@ -36,6 +36,14 @@
  *
  *     # disable the check entirely — only for a setup you fully control
  *     GRAPHMIND_ALLOWED_ORIGINS='*' graphmind serve
+ *
+ * Allow-listing an origin also opts it in to CORS (`corsOriginFor` below).
+ * Without that, an allow-listed page can open a websocket but every `fetch`
+ * it makes is discarded by its own browser for want of an
+ * `Access-Control-Allow-Origin` header — which is exactly what made the
+ * viewer's Build page unusable from the Vite dev server. Nothing is opted in
+ * by default: a server started without `GRAPHMIND_ALLOWED_ORIGINS` sends no
+ * CORS header to anyone, as before.
  */
 import type { EnvLike } from './paths.js';
 
@@ -169,6 +177,35 @@ export function isHostAllowed(host: string | undefined, policy: OriginPolicy): b
   }
   return false;
 }
+
+/**
+ * The value of `Access-Control-Allow-Origin` for this request, or undefined
+ * to send none.
+ *
+ * Only an origin the operator EXPLICITLY allow-listed gets one. Same-origin
+ * requests do not need it (the browser does not apply CORS to them), and a
+ * page that is merely tolerated by the loopback rule does not get one either
+ * — the header is the deliberate "yes, this other origin may read my
+ * answers", and it should be as narrow as the opt-in that produced it.
+ *
+ * Never `*`: the value is always the single requesting origin, so a response
+ * cannot be shared with an origin that did not ask for it. Credentials are
+ * not involved — the viewer authenticates with an `Authorization` header,
+ * never a cookie — so `Access-Control-Allow-Credentials` is never sent.
+ */
+export function corsOriginFor(origin: string | undefined, policy: OriginPolicy): string | undefined {
+  if (origin === undefined || origin === '') return undefined; // not a browser
+  const normalized = normalizeOrigin(origin);
+  if (normalized === undefined) return undefined; // "null", file://, garbage
+  if (policy.allowAny) return normalized;
+  return policy.extra.has(normalized) ? normalized : undefined;
+}
+
+/** The headers a browser is told it may send on an allow-listed cross-origin call. */
+export const CORS_ALLOWED_HEADERS = 'authorization, content-type';
+export const CORS_ALLOWED_METHODS = 'GET, POST, OPTIONS';
+/** Preflight cache, seconds. Short: the allow-list can change on a restart. */
+export const CORS_MAX_AGE_SECONDS = 600;
 
 export type RejectionKind = 'origin' | 'host';
 

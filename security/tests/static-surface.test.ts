@@ -121,6 +121,17 @@ describe('the client and the CLI read only documented environment variables', ()
     // `0`/`false`/`off`/`no` turn one off). No user data.
     'GRAPHMIND_BREAK_ON_ERROR_RESULT',
     'GRAPHMIND_BREAK_ON_TRUNCATED',
+    // 0.6.0 — the workflow builder (cli). None carries user data: one names
+    // the Anthropic workspace a generated project should send, one forces the
+    // registry pins instead of a checkout's tarballs, one names the Python
+    // interpreter the runner should use. Documented in reference/environment
+    // and in guides/build-a-workflow.
+    'ANTHROPIC_WORKSPACE_ID',
+    'GRAPHMIND_BUILDER_REGISTRY',
+    'GRAPHMIND_PYTHON',
+    // 0.6.0 — puts the viewer token back in front of the builder routes, for
+    // a shared machine. A boolean switch; carries no user data.
+    'GRAPHMIND_BUILDER_REQUIRE_TOKEN',
     'CI',
   ];
 

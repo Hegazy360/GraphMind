@@ -3623,6 +3623,49 @@ span.gm-pause-instance {
   background: var(--amber-tint);
   border-bottom: 1px solid color-mix(in srgb, var(--amber) 35%, var(--border));
 }
+/* the way out of a blocked state, wherever it is shown */
+.gm-btoken {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gm-builder-railbody .gm-btoken {
+  padding: 8px 10px;
+  color: var(--amber-text);
+  background: var(--amber-tint);
+  border: 1px solid color-mix(in srgb, var(--amber) 35%, var(--border));
+  border-radius: var(--radius-sm);
+}
+.gm-btoken-text {
+  font-size: var(--fs-md);
+  font-weight: 620;
+}
+.gm-btoken-how {
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  opacity: 0.95;
+}
+.gm-btoken-how code,
+.gm-btoken-text code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+.gm-btoken-row {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  max-width: 620px;
+}
+.gm-btoken-row .gm-binput {
+  flex: 1;
+}
+.gm-btoken-row .gm-action {
+  flex: none;
+}
+.gm-btoken-bad {
+  font-size: var(--fs-sm);
+  color: var(--err);
+}
 .gm-builder-blocked code,
 .gm-brun code,
 .gm-bcode-note code {
@@ -3634,31 +3677,130 @@ span.gm-pause-instance {
   flex: 1;
   min-height: 0;
 }
-.gm-builder-form {
-  width: 400px;
-  flex-shrink: 0;
-  overflow-y: auto;
-  padding: var(--sp-5);
-  border-right: 1px solid var(--border);
-  background: var(--bg);
-}
-.gm-builder-main {
+/* the canvas side */
+.gm-builder-stage {
+  position: relative;
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.gm-bcanvas {
+  flex: 1;
+  min-height: 320px;
+}
+.gm-bpalette {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.gm-bpalette-btn {
+  padding: 5px 10px;
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 620;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 2px solid currentColor;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.gm-bpalette-btn:hover {
+  border-color: var(--border-strong);
+  border-left-color: currentColor;
+  color: var(--text);
+}
+.gm-bpalette-btn--tool { color: var(--kind-tool); }
+.gm-bpalette-btn--mcp { color: var(--kind-llm); }
+.gm-bpalette-btn--subagent { color: var(--kind-agent); }
+.gm-bpalette-hint {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.gm-bloose {
+  padding: 6px var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--err);
+  background: var(--err-soft);
+  border-bottom: 1px solid color-mix(in srgb, var(--err) 30%, var(--border));
+}
+
+/* the right rail */
+.gm-builder-rail {
+  width: 430px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+}
+.gm-builder-rail > .gm-brail-tabs {
+  /* .gm-bcode-tabs sets flex: 1 for the file row; the rail's row is a header. */
+  flex: 0 0 auto;
+  padding: var(--sp-2) var(--sp-3) 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-canvas);
+}
+.gm-builder-railbody {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: var(--sp-5);
+  padding: var(--sp-4);
+}
+.gm-binspector-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+.gm-binspector-head .gm-bfield-hint {
+  flex: 1;
+  font-size: var(--fs-xs);
+}
+.gm-toolbtn--danger {
+  color: var(--err);
+}
+.gm-bprobe {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-5);
+  gap: var(--sp-2);
 }
-.gm-builder-preview {
+.gm-bprobe-tools {
   display: flex;
-  flex-direction: column;
-  gap: var(--sp-3);
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
 }
-.gm-builder-preview-note {
+.gm-bprobe-tool {
+  cursor: pointer;
+  font-family: var(--font-mono);
+}
+.gm-bprobe-stderr {
+  margin: 6px 0 0;
+  max-height: 120px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-dim);
+}
+.gm-bnote {
   font-size: var(--fs-sm);
   color: var(--text-faint);
+  line-height: 1.5;
+}
+.gm-bnote code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
 }
 
 /* form atoms */
@@ -3817,59 +3959,55 @@ textarea.gm-binput {
   height: 22px;
 }
 
-/* preview diagram */
-.gm-bpreview {
-  overflow-x: auto;
-  padding: var(--sp-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
-  background-image: radial-gradient(var(--grid-dot) 1px, transparent 1px);
-  background-size: 24px 24px;
-}
-.gm-bpreview-stage {
+/* canvas cards */
+.gm-bnode {
   position: relative;
-  margin: 0 auto;
-}
-.gm-bpreview-edges {
-  position: absolute;
-  inset: 0;
-  overflow: visible;
-}
-.gm-bpreview-edges path {
-  fill: none;
-  stroke: var(--edge-done);
-  stroke-width: 1.5;
-  stroke-dasharray: 4 4;
-}
-.gm-bpreview-card {
-  position: absolute;
+  box-sizing: border-box;
+  width: 220px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
   gap: 1px;
-  padding: 5px 10px;
-  line-height: 1.25;
-  box-sizing: border-box;
-  border: 1px dashed var(--ghost);
+  padding: 7px 11px;
+  line-height: 1.3;
+  border: 1px solid var(--border);
   border-left: 2px solid currentColor;
   border-radius: var(--radius-sm);
   background: var(--surface);
   box-shadow: var(--shadow);
+  cursor: grab;
 }
-.gm-bpreview-card[data-kind='agent'] { color: var(--kind-agent); }
-.gm-bpreview-card[data-kind='llm'] { color: var(--kind-llm); }
-.gm-bpreview-card[data-kind='tool'] { color: var(--kind-tool); }
-.gm-bpreview-kind {
+.gm-bnode--agent { color: var(--kind-agent); }
+.gm-bnode--subagent { color: var(--kind-agent); }
+.gm-bnode--tool { color: var(--kind-tool); }
+.gm-bnode--mcp { color: var(--kind-llm); }
+.gm-bnode--on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow);
+}
+.gm-bnode--bad {
+  border-color: var(--err);
+}
+.gm-bnode-kind {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.gm-bpreview-title {
+.gm-bnode-warn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  font-size: 9px;
+  color: var(--err);
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+.gm-bnode-title {
   font-size: var(--fs-md);
   font-weight: 620;
   color: var(--text);
@@ -3877,12 +4015,32 @@ textarea.gm-binput {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.gm-bpreview-sub {
+.gm-bnode-sub {
   font-size: var(--fs-xs);
   color: var(--text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.gm-bhandle {
+  width: 8px;
+  height: 8px;
+  background: var(--surface);
+  border: 1.5px solid var(--border-strong);
+}
+.gm-bhandle:hover {
+  border-color: var(--accent);
+}
+.react-flow__edge.gm-bedge .react-flow__edge-path {
+  /* A wire you are meant to see and grab, not a finished run's history. */
+  stroke: var(--border-strong);
+  stroke-width: 2;
+}
+.react-flow__edge.gm-bedge:hover .react-flow__edge-path {
+  stroke: var(--accent);
+}
+.react-flow__edge.gm-bedge.selected .react-flow__edge-path {
+  stroke: var(--accent);
 }
 
 /* code panel */
@@ -3893,6 +4051,11 @@ textarea.gm-binput {
   border-radius: var(--radius);
   background: var(--bg);
   min-height: 260px;
+}
+.gm-builder-railbody .gm-bcode,
+.gm-builder-railbody .gm-brun {
+  border: none;
+  padding: 0;
 }
 .gm-bcode-head {
   display: flex;
@@ -3994,9 +4157,8 @@ textarea.gm-binput {
 }
 .gm-bsecret {
   display: grid;
-  grid-template-columns: 220px 1fr;
-  gap: var(--sp-3);
-  align-items: center;
+  grid-template-columns: 1fr;
+  gap: 4px;
 }
 .gm-bsecret-name {
   display: flex;
@@ -4005,6 +4167,42 @@ textarea.gm-binput {
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
   color: var(--text-dim);
+}
+.gm-bstore {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2);
+}
+.gm-bstore-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 7px 10px;
+  text-align: left;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.gm-bstore-opt:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.gm-bstore-opt--on {
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border-strong));
+  background: var(--accent-soft);
+}
+.gm-bstore-title {
+  font-size: var(--fs-md);
+  font-weight: 620;
+}
+.gm-bstore-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  line-height: 1.4;
 }
 .gm-brun-actions {
   display: flex;
@@ -4064,14 +4262,16 @@ textarea.gm-binput {
     flex-direction: column;
     overflow-y: auto;
   }
-  .gm-builder-form {
-    width: auto;
-    overflow: visible;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
+  .gm-builder-stage {
+    min-height: 340px;
   }
-  .gm-builder-main {
-    overflow: visible;
+  .gm-builder-rail {
+    width: auto;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+  .gm-bstore {
+    grid-template-columns: 1fr;
   }
   .gm-bsecret {
     grid-template-columns: 1fr;

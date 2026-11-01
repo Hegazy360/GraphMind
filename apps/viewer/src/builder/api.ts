@@ -1,13 +1,16 @@
 /**
- * The Build page's calls to `/api/builder/*`. Every call carries the viewer
- * token (`authHeaders`) because every builder route requires it, GET
- * included. Secrets go out exactly once, in `createProject` / `writeEnv`,
+ * The Build page's calls to `/api/builder/*`. No route requires a credential
+ * (routes.ts explains why); a viewer token is still sent when this tab has
+ * one, which is what a server started with GRAPHMIND_BUILDER_REQUIRE_TOKEN=1
+ * asks for. Secrets go out exactly once, in `createProject` / `writeEnv`,
  * and are never read back: the server only ever answers with names.
  */
 import { authHeaders } from '../connection/auth.js';
 import { resolveHttpBase } from '../connection/ServerConnection.js';
 import type {
   CreateResponse,
+  McpServerSpec,
+  ProbeResult,
   JobInfo,
   JobResponse,
   PreviewResponse,
@@ -84,13 +87,46 @@ export function createProject(input: {
   spec: WorkflowSpec;
   dir?: string;
   secrets?: Record<string, string>;
+  /** false = hold the keys in the server's memory instead of writing .env. */
+  persistSecrets?: boolean;
   overwrite?: boolean;
 }): Promise<CreateResponse> {
   return call<CreateResponse>('/api/builder/projects', { body: input });
 }
 
-export function writeEnv(dir: string, secrets: Record<string, string>): Promise<{ dir: string; written: string[]; removed: string[]; keys: string[] }> {
-  return call('/api/builder/projects/env', { body: { dir, secrets } });
+export interface EnvResponse {
+  dir: string;
+  written: string[];
+  removed: string[];
+  /** Names set in .env. */
+  keys: string[];
+  /** Names held in the server's memory only. */
+  sessionKeys: string[];
+}
+
+/**
+ * Send keys once. `persist: false` is the no-trace path: the server holds
+ * them in memory for the run and writes nothing. Either way the response is
+ * names only — a value sent from here can never be read back.
+ */
+export function writeEnv(dir: string, secrets: Record<string, string>, persist: boolean): Promise<EnvResponse> {
+  return call<EnvResponse>('/api/builder/projects/env', { body: { dir, secrets, persist } });
+}
+
+/** Drop the session-only keys for a project, now. */
+export function forgetEnv(dir: string): Promise<{ dir: string; forgotten: string[]; sessionKeys: string[] }> {
+  return call('/api/builder/projects/env/forget', { body: { dir } });
+}
+
+/**
+ * Test an MCP node: the server connects the way the generated project will
+ * and lists the tools. A bearer token for an HTTP server is sent once, for
+ * this connection only, and is never stored on either side.
+ */
+export function probeMcp(server: McpServerSpec, bearer?: string): Promise<ProbeResult> {
+  return call<ProbeResult>('/api/builder/mcp/probe', {
+    body: { server, ...(bearer === undefined || bearer === '' ? {} : { bearer }) },
+  });
 }
 
 export function startJob(dir: string): Promise<{ job: JobInfo }> {

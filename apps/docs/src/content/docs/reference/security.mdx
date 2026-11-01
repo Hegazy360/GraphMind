@@ -34,7 +34,7 @@ Summary:
 | --- | --- | --- |
 | Network | The server binds `127.0.0.1` only, no other interface, ever. | `packages/cli/src/server.ts` — `const host = '127.0.0.1'` |
 | Browser | A web page in your browser cannot talk to it: WebSocket upgrades and HTTP requests need a loopback `Host` (defeats DNS rebinding) and either no `Origin` or the served viewer's own. Everything else is `403`. Every response forbids framing (`frame-ancestors 'none'`, `X-Frame-Options: DENY`), sends `Referrer-Policy: no-referrer` and `nosniff`, `/api` adds `no-store`, and no response carries a CORS header. The resume endpoint is POST + `application/json` + Bearer only; no GET mutates. | `packages/cli/src/origin-guard.ts`, `control-http.ts`; `packages/cli/test/origin-guard*.test.ts`, `control-http.test.ts`; `security/tests/control-http-exposure.test.ts` |
-| Control | Input edits, injected results, breakpoints, step mode and every non-GET `/api` route need a per-start 128-bit token: the **viewer** token (delivered only in the `#token=` URL fragment via a 0600 redirect file) or the **agent** token (`~/.graphmind/run/serve-<port>.json`, 0600), which `serve --allow-control=off\|resume\|inject\|edit` limits in the server (default `off`). Constant-time comparison; no `?token=`, no cookies; `serve --json` never prints a token. `--no-edit-input` refuses all edits. The stored `exec.resumed` records `principal` from the credential. | `packages/cli/src/control-auth.ts`, `run-files.ts`, `pause-registry.ts`; `security/tests/control-auth.test.ts`, `control-registry-isolation.test.ts` |
+| Control | Input edits, injected results, breakpoints, step mode and every non-GET `/api` route (except `/api/builder/*`, open by default — see below) need a per-start 128-bit token: the **viewer** token (delivered only in the `#token=` URL fragment via a 0600 redirect file) or the **agent** token (`~/.graphmind/run/serve-<port>.json`, 0600), which `serve --allow-control=off\|resume\|inject\|edit` limits in the server (default `off`). Constant-time comparison; no `?token=`, no cookies; `serve --json` never prints a token. `--no-edit-input` refuses all edits. The stored `exec.resumed` records `principal` from the credential. | `packages/cli/src/control-auth.ts`, `run-files.ts`, `pause-registry.ts`; `security/tests/control-auth.test.ts`, `control-registry-isolation.test.ts` |
 | Command execution | The server never spawns a process in response to network input. But an authorized input edit chooses the **arguments** of a tool call the app is holding — a `shell` tool then runs what the editor chose, as your app — and an injected LLM completion can name the next tool call and its arguments. Hence the credential and level above, for both. The MCP proxy has no listening socket. | `packages/cli/src/hub.ts`, `server.ts` (no `spawn`); `packages/cli/src/mcp-proxy/proxy.ts` (no `listen`) |
 | Local peers | **Any local process, as any OS user, can read runs over loopback** (the read API needs no credential, although the database file is 0600), and a **tokenless** viewer socket can still continue, retry and abort a held run (0.5 behaviour, deprecated) — whatever `--allow-control` says. It cannot edit inputs, inject results or change breakpoints or step mode, and a peer cannot take over another's live run or pause (flooding fresh run ids does not evict the claim of a run still in flight, whether its app is connected or reconnecting, and does not reopen a finished or abandoned run). | `security/tests/run-isolation.test.ts`, `control-auth.test.ts`, `control-registry-isolation.test.ts`; `internal/decisions.md` "runs are claimed, not squatted" |
 | Host application | Instrumentation is fail-open: detached = synchronous no-op; a debugger that disconnects releases every gate; adapters never throw into the host. | `packages/client/src`; `examples/soak` (fail-open checks in CI) |
@@ -236,20 +236,47 @@ viewer sockets are deprecated rather than removed: an agent with a shell can ope
 breakpoints — those need a token).
 
 **Does it execute anything?** In one case. The viewer's Build page can **run a project the
-builder itself wrote**: a `POST /api/builder/jobs` carrying the viewer token starts that
+builder itself wrote**: a `POST /api/builder/jobs` starts that
 project's fixed install and start commands (`npm install` / `npm start`, or a virtualenv and
 `pip install` / `python main.py`) in its directory. The directory must carry the builder's own
-`graphmind.workflow.json`; the commands are chosen by the target, never taken from the request;
-tokenless callers and the agent token are refused. No other route spawns anything. The MCP proxy
+`graphmind.workflow.json`; the commands are chosen by the target, never taken from the request.
+The builder routes need **no token** by default — the page is a canvas for trying a workflow out,
+and a credential in front of it was friction with nothing behind it — which means another
+process on the same machine, reaching 127.0.0.1 on this port, could create or run a builder
+project or spawn an MCP command through the probe. On your own machine that process already runs
+as you. On a shared machine set `GRAPHMIND_BUILDER_REQUIRE_TOKEN=1`: every builder route then
+needs the viewer token, and the agent token is refused. One more route spawns on request:
+`POST /api/builder/mcp/probe`, the Build page's **Test connection** for an MCP node, starts the
+stdio command the canvas names (argv as typed, no shell, the MCP SDK's default environment rather
+than the debugger's), lists its tools and stops it; the same rule applies. A project with a
+stdio MCP node spawns that server itself when it runs. Treat an MCP command on the canvas like a
+command in your own terminal. A bearer token given to the probe for an HTTP server is used for
+that connection, scrubbed from the answer, and never stored or logged. The MCP proxy
 spawns exactly the command you pass it, and nothing else.
 
 **Does the builder see our API key?** It passes through once. The key you type on the Build page
-is sent to the loopback server with the viewer token and written to the project's `.env`
-(created `0600`, written atomically, in the generated `.gitignore`). It is not kept in the
-browser, not written into the spec file or any generated source, never returned by any route
-(the server reports variable *names* only), and the run log is scrubbed of every `.env` value
-and every secret-named inherited variable before a line is stored. A test in `security/` plants
-a key through the builder and greps every one of those surfaces for it.
+is sent to the loopback server with the viewer token, and you choose where it rests:
+
+- **this session only** (the default): held in the server process's memory, handed to the run's
+  child process, dropped when the server exits, when you click **Forget**, or after eight hours.
+  Nothing is written to disk anywhere;
+- **saved**: written to the project's `.env` (created `0600`, written atomically, in the
+  generated `.gitignore`).
+
+Either way it is not kept in the browser, not written into the spec file or any generated
+source, never returned by any route (the server reports variable *names* only), and the run log
+is scrubbed of every `.env` value, every session key and every secret-named inherited variable
+before a line is stored. Tests in `security/` plant a key through both paths and grep every one
+of those surfaces — including every file under `$GRAPHMIND_HOME` for the session path — for it.
+
+**Does it send CORS headers?** Only to an origin you allow-listed. `GRAPHMIND_ALLOWED_ORIGINS`
+(the viewer's Vite dev server, say) already decides who may open a websocket; from 0.6 it also
+decides whose browser may read an HTTP answer, because otherwise an allow-listed page can
+connect but every `fetch` it makes is discarded by its own browser. The value is always the
+single requesting origin, never `*`; `Access-Control-Allow-Credentials` is never sent (the
+viewer authenticates with an `Authorization` header, not a cookie); and a server started
+without the variable — the default — sends no such header to anybody. The preflight is answered
+before the credential check, since browsers send it without one.
 
 **Can it break our production application?** It is off by default under `NODE_ENV=production` and
 unconditionally off with `GRAPHMIND_DISABLED=1`. When on but detached it is a synchronous no-op.

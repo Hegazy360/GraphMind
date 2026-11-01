@@ -3,12 +3,24 @@
  * Build page, validated once here and then turned into a runnable project
  * (codegen/) in the language and framework they picked.
  *
- * Deliberately small. A spec is one agent: a model, a system prompt, a task
- * prompt, and a list of tools with typed parameters. Each tool starts as a
- * stub that returns a fixed value, so the generated project runs end to end
- * on the first try and the engineer replaces the stubs with real code in
- * their editor. GraphMind never owns that code afterwards: the project is
- * plain files in a plain directory, instrumented with the public adapters.
+ * A spec is a small graph of nodes, which is what the Build page draws:
+ *
+ *   - one root agent (model, system prompt, task prompt, step cap);
+ *   - `tools`: local stub tools with typed parameters;
+ *   - `mcpServers`: MCP servers the agent connects to as a client, whose
+ *     tools join the agent's tool list under a `server_tool` name;
+ *   - `subAgents`: nested agents the root agent can delegate to; each one
+ *     is exposed to the root as a tool taking a single `task` string.
+ *
+ * `attach` says which of those the ROOT agent gets; each sub-agent names its
+ * own. Anything defined but attached nowhere is still generated (it is code
+ * the engineer asked for), just not wired in.
+ *
+ * Each local tool starts as a stub that returns a fixed value, so the
+ * generated project runs end to end on the first try and the engineer
+ * replaces the stubs with real code in their editor. GraphMind never owns
+ * that code afterwards: the project is plain files in a plain directory,
+ * instrumented with the public adapters.
  *
  * Nothing in a spec is a secret. API keys travel separately (routes.ts ->
  * env-file.ts) and are never part of the spec file written next to the code.
@@ -18,8 +30,9 @@ import { z } from 'zod';
 export const TARGET_IDS = ['ts-ai-sdk', 'ts-anthropic', 'ts-openai', 'py-openai', 'py-anthropic'] as const;
 export type TargetId = (typeof TARGET_IDS)[number];
 
-export const PROVIDERS = ['anthropic', 'openai'] as const;
-export type Provider = (typeof PROVIDERS)[number];
+import { DEFAULT_MODEL, PROVIDERS, PROVIDER_ENV_KEY, providersOfFamily, type Provider } from './providers.js';
+
+export { DEFAULT_MODEL, PROVIDERS, PROVIDER_ENV_KEY, type Provider };
 
 export const PARAM_TYPES = ['string', 'number', 'boolean'] as const;
 export type ParamType = (typeof PARAM_TYPES)[number];
@@ -38,6 +51,8 @@ export interface TargetMeta {
   /** The file to open first. */
   entry: string;
   docs: string;
+  /** Which node kinds this target's generator can emit. */
+  supports: { mcp: boolean; subAgents: boolean };
 }
 
 export const TARGETS: Record<TargetId, TargetMeta> = {
@@ -45,59 +60,54 @@ export const TARGETS: Record<TargetId, TargetMeta> = {
     id: 'ts-ai-sdk',
     language: 'typescript',
     framework: 'Vercel AI SDK',
-    providers: ['anthropic', 'openai'],
+    providers: PROVIDERS,
     adapter: '@graphmind-ai/sdk',
     entry: 'src/main.ts',
     docs: 'https://graphmind.ai/docs/integrations/vercel-ai-sdk/',
+    supports: { mcp: true, subAgents: true },
   },
   'ts-anthropic': {
     id: 'ts-anthropic',
     language: 'typescript',
     framework: 'Anthropic SDK',
-    providers: ['anthropic'],
+    providers: providersOfFamily('anthropic'),
     adapter: '@graphmind-ai/anthropic',
     entry: 'src/main.ts',
     docs: 'https://graphmind.ai/docs/integrations/anthropic/',
+    supports: { mcp: true, subAgents: true },
   },
   'ts-openai': {
     id: 'ts-openai',
     language: 'typescript',
     framework: 'OpenAI SDK',
-    providers: ['openai'],
+    providers: providersOfFamily('openai'),
     adapter: '@graphmind-ai/openai',
     entry: 'src/main.ts',
     docs: 'https://graphmind.ai/docs/integrations/openai/',
+    supports: { mcp: true, subAgents: true },
   },
   'py-openai': {
     id: 'py-openai',
     language: 'python',
     framework: 'OpenAI SDK',
-    providers: ['openai'],
+    providers: providersOfFamily('openai'),
     adapter: 'graphmind-ai',
     entry: 'main.py',
     docs: 'https://graphmind.ai/docs/integrations/python/',
+    supports: { mcp: false, subAgents: false },
   },
   'py-anthropic': {
     id: 'py-anthropic',
     language: 'python',
     framework: 'Anthropic SDK',
-    providers: ['anthropic'],
+    providers: providersOfFamily('anthropic'),
     adapter: 'graphmind-ai',
     entry: 'main.py',
     docs: 'https://graphmind.ai/docs/integrations/python/',
+    supports: { mcp: false, subAgents: false },
   },
 };
 
-/** The environment variable each provider's SDK reads its key from. */
-export const PROVIDER_ENV_KEY: Record<Provider, string> = {
-  anthropic: 'ANTHROPIC_API_KEY',
-  openai: 'OPENAI_API_KEY',
-};
-
-export const DEFAULT_MODEL: Record<Provider, string> = {
-  anthropic: 'claude-sonnet-4-5',
-  openai: 'gpt-5.1',
-};
 
 /**
  * Identifiers must be valid in BOTH languages the builder emits, so one spec
@@ -168,6 +178,104 @@ export const ToolSchema = z
   });
 export type ToolSpec = z.infer<typeof ToolSchema>;
 
+export const MCP_TRANSPORTS = ['stdio', 'http'] as const;
+export type McpTransport = (typeof MCP_TRANSPORTS)[number];
+
+/** `ANTHROPIC_API_KEY`-shaped: the NAME of a variable, never a value. */
+const ENV_NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+/**
+ * A stdio command is spawned by the generated project with an argv array and
+ * no shell, so a space or a quote in it would be part of the program name
+ * rather than a separator. Refusing the characters that make that confusing
+ * keeps "what you typed is what runs" true.
+ */
+const MCP_COMMAND_RE = /^[A-Za-z0-9_@./\\:+-]+$/;
+
+/**
+ * An MCP server the agent connects to AS A CLIENT: its tools join the
+ * agent's tool list, named `server_tool`.
+ *
+ * No credential lives here. An HTTP server that needs one names the
+ * environment variable to read it from (`headerEnv`), and the generated code
+ * sends it as `Authorization: Bearer $THAT`; the value goes in `.env` (or
+ * stays in the session-only store) like any other key.
+ */
+export const McpServerSchema = z
+  .object({
+    name: identifier('an MCP server name'),
+    transport: z.enum(MCP_TRANSPORTS),
+    /** stdio: the program to spawn. */
+    command: z.string().trim().max(200).default(''),
+    args: z.array(z.string().max(500)).max(24).default([]),
+    /** http: the endpoint (Streamable HTTP). */
+    url: z.string().trim().max(2000).default(''),
+    /** http: the variable holding the bearer token, if the server needs one. */
+    headerEnv: z
+      .string()
+      .trim()
+      .regex(ENV_NAME_RE, 'an environment variable name is UPPER_CASE letters, digits and underscores')
+      .optional(),
+    /** Only these tools are exposed to the model. Empty = every tool the server lists. */
+    tools: z.array(z.string().trim().max(64)).max(64).default([]),
+  })
+  .superRefine((server, ctx) => {
+    if (server.transport === 'stdio') {
+      if (server.command === '') {
+        ctx.addIssue({ code: 'custom', path: ['command'], message: 'a stdio MCP server needs a command (e.g. "npx")' });
+      } else if (!MCP_COMMAND_RE.test(server.command)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['command'],
+          message: 'the command is one program name or path, with no spaces or quotes; put the rest in arguments',
+        });
+      }
+      return;
+    }
+    let url: URL | undefined;
+    try {
+      url = new URL(server.url);
+    } catch {
+      url = undefined;
+    }
+    if (url === undefined || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
+      ctx.addIssue({ code: 'custom', path: ['url'], message: 'an http MCP server needs an http:// or https:// URL' });
+    }
+  });
+export type McpServerSpec = z.infer<typeof McpServerSchema>;
+
+/**
+ * A nested agent. The root agent sees it as one tool taking a `task` string;
+ * calling it runs its own model loop with its own tools, which is what makes
+ * the delegation visible as a sub-graph in the debugger.
+ */
+export const SubAgentSchema = z.object({
+  name: identifier('a sub-agent name'),
+  /** What the ROOT agent reads to decide when to delegate. */
+  description: z.string().trim().min(1, 'say when the root agent should delegate to this one').max(500),
+  systemPrompt: z.string().max(20_000).optional(),
+  /** Defaults to the root agent's model. */
+  model: z
+    .string()
+    .trim()
+    .max(100)
+    .regex(/^[A-Za-z0-9._:/-]+$/, 'a model id is letters, digits and . _ : / -')
+    .optional(),
+  maxSteps: z.number().int().min(1).max(20).default(4),
+  /** Names from `tools` / `mcpServers`. */
+  tools: z.array(z.string()).max(20).default([]),
+  mcpServers: z.array(z.string()).max(6).default([]),
+});
+export type SubAgentSpec = z.infer<typeof SubAgentSchema>;
+
+/** What the root agent is wired to. Absent = everything defined. */
+export const AttachSchema = z.object({
+  tools: z.array(z.string()).max(20).default([]),
+  mcpServers: z.array(z.string()).max(6).default([]),
+  subAgents: z.array(z.string()).max(4).default([]),
+});
+export type AttachSpec = z.infer<typeof AttachSchema>;
+
 export const WorkflowSpecSchema = z
   .object({
     name: z
@@ -186,6 +294,9 @@ export const WorkflowSpecSchema = z
     prompt: z.string().trim().min(1, 'the agent needs a task').max(20_000),
     maxSteps: z.number().int().min(1).max(50).default(8),
     tools: z.array(ToolSchema).max(20).default([]),
+    mcpServers: z.array(McpServerSchema).max(6).default([]),
+    subAgents: z.array(SubAgentSchema).max(4).default([]),
+    attach: AttachSchema.optional(),
   })
   .superRefine((spec, ctx) => {
     const target = TARGETS[spec.target];
@@ -193,21 +304,83 @@ export const WorkflowSpecSchema = z
       ctx.addIssue({
         code: 'custom',
         path: ['provider'],
-        message: `${target.framework} (${target.language}) cannot call ${spec.provider}; pick ${target.providers.join(' or ')}`,
+        message: `${target.framework} (${target.language}) cannot call ${spec.provider}; pick one of ${target.providers.join(', ')}`,
       });
     }
+    if (spec.mcpServers.length > 0 && !target.supports.mcp) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['mcpServers'],
+        message: `${target.framework} (${target.language}) has no MCP client generator yet; remove the MCP nodes or switch to a TypeScript target`,
+      });
+    }
+    if (spec.subAgents.length > 0 && !target.supports.subAgents) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['subAgents'],
+        message: `${target.framework} (${target.language}) has no sub-agent generator yet; remove the sub-agent nodes or switch to a TypeScript target`,
+      });
+    }
+    // One namespace: every name below becomes an identifier or a tool name
+    // the model picks from, so two nodes may not share one.
     const seen = new Set<string>();
-    spec.tools.forEach((tool, index) => {
-      if (seen.has(tool.name)) {
-        ctx.addIssue({ code: 'custom', path: ['tools', index, 'name'], message: `duplicate tool "${tool.name}"` });
-      }
-      seen.add(tool.name);
-    });
+    const unique = (name: string, path: (string | number)[], what: string) => {
+      if (seen.has(name)) ctx.addIssue({ code: 'custom', path, message: `duplicate ${what} "${name}"` });
+      seen.add(name);
+    };
+    spec.tools.forEach((tool, index) => unique(tool.name, ['tools', index, 'name'], 'tool'));
+    spec.mcpServers.forEach((server, index) => unique(server.name, ['mcpServers', index, 'name'], 'MCP server'));
+    spec.subAgents.forEach((agent, index) => unique(agent.name, ['subAgents', index, 'name'], 'sub-agent'));
+
+    // Wiring (`attach`, and each sub-agent's lists) is NOT checked against
+    // the definitions: a name with nothing behind it wires nothing, which is
+    // what deleting a node from the canvas leaves behind for a moment. An
+    // edit that removes a tool must not make the whole spec unsendable.
   });
 
 export type WorkflowSpec = z.infer<typeof WorkflowSpecSchema>;
 /** What a caller sends: defaults not yet applied. */
 export type WorkflowSpecInput = z.input<typeof WorkflowSpecSchema>;
+
+/**
+ * What one agent (the root, or a sub-agent) is wired to, resolved from names
+ * to definitions. The generators work from this and never re-resolve names.
+ */
+export interface AgentWiring {
+  tools: ToolSpec[];
+  mcpServers: McpServerSpec[];
+  subAgents: SubAgentSpec[];
+}
+
+function pick<T extends { name: string }>(all: readonly T[], names: readonly string[]): T[] {
+  // Definition order, not click order: the generated file reads the same way
+  // the canvas does.
+  return all.filter((item) => names.includes(item.name));
+}
+
+/** What the root agent is wired to. No `attach` means "everything defined". */
+export function rootWiring(spec: WorkflowSpec): AgentWiring {
+  if (spec.attach === undefined) {
+    return { tools: [...spec.tools], mcpServers: [...spec.mcpServers], subAgents: [...spec.subAgents] };
+  }
+  return {
+    tools: pick(spec.tools, spec.attach.tools),
+    mcpServers: pick(spec.mcpServers, spec.attach.mcpServers),
+    subAgents: pick(spec.subAgents, spec.attach.subAgents),
+  };
+}
+
+/** What one sub-agent is wired to. A sub-agent cannot own another sub-agent. */
+export function subAgentWiring(spec: WorkflowSpec, agent: SubAgentSpec): AgentWiring {
+  return { tools: pick(spec.tools, agent.tools), mcpServers: pick(spec.mcpServers, agent.mcpServers), subAgents: [] };
+}
+
+/** Every MCP server actually wired to something: the ones worth connecting. */
+export function usedMcpServers(spec: WorkflowSpec): McpServerSpec[] {
+  const names = new Set<string>(rootWiring(spec).mcpServers.map((s) => s.name));
+  for (const agent of spec.subAgents) for (const name of agent.mcpServers) names.add(name);
+  return spec.mcpServers.filter((server) => names.has(server.name));
+}
 
 export interface SpecIssue {
   /** Dotted path into the spec (`tools.1.name`); empty for the whole spec. */
@@ -265,5 +438,7 @@ export function defaultSpec(target: TargetId = 'ts-ai-sdk'): WorkflowSpec {
         returns: '{ "jacket": true, "reason": "evenings drop below 15C" }',
       },
     ],
+    mcpServers: [],
+    subAgents: [],
   };
 }

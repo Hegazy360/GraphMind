@@ -168,7 +168,7 @@ test('a crumb from a side trip jumps straight to that level', async ({ page }) =
   await nodeCard(page, FIXTURE_NODES.flights).locator('.gm-node-title').click();
   await page.locator('.gm-header-brand').click();
   await page.getByRole('menuitem', { name: 'Build a workflow' }).click();
-  await expect(page.locator('.gm-builder-bar h1')).toHaveText('New workflow');
+  await expect(page.locator('.gm-builder-bar h1')).toHaveText('Workflow');
 
   await page.locator('.gm-crumb').nth(1).click();
   await expect(page.locator('.gm-runpage-graph')).toBeVisible();

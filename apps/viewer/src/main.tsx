@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.js';
-import { captureTokenFromLocation } from './connection/auth.js';
+import { adoptDevToken, captureTokenFromLocation } from './connection/auth.js';
 import './index.css';
 
 // Before anything reads `location.hash` (the router, deep links): take the
@@ -12,6 +12,9 @@ captureTokenFromLocation();
 window.addEventListener('hashchange', () => {
   captureTokenFromLocation();
 });
+// `pnpm dev` only: take the running server's token from the Vite dev server,
+// so the dev viewer has the same control as one opened from the printed link.
+void adoptDevToken();
 
 const root = document.getElementById('root');
 if (root === null) throw new Error('missing #root');
