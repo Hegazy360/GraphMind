@@ -1,106 +1,31 @@
 /**
- * The builder's wire shapes, mirrored from the server
- * (packages/cli/src/builder/spec.ts and routes.ts). The server validates;
- * these types only describe what travels. Keep the two in step.
+ * What the Build page works with.
+ *
+ * The spec and the generator are not mirrored any more: they are imported
+ * from the one place that defines them (`@workflow`, the CLI's builder
+ * source, aliased in vite.config.ts), and the page runs the generator
+ * itself. Only the HTTP shapes below are written out here — they mirror
+ * routes.ts, which cannot be imported into a browser because it is a server.
  */
-export type TargetId = 'ts-ai-sdk' | 'ts-anthropic' | 'ts-openai' | 'py-openai' | 'py-anthropic';
-export type Provider = 'anthropic' | 'openai' | 'google' | 'mistral' | 'xai' | 'groq' | 'deepseek' | 'openrouter' | 'ollama';
-export type ParamType = 'string' | 'number' | 'boolean';
-export type Language = 'typescript' | 'python';
+export type {
+  AttachSpec,
+  Language,
+  McpServerSpec,
+  McpTransport,
+  ParamType,
+  Provider,
+  SpecIssue,
+  SubAgentSpec,
+  TargetId,
+  TargetMeta,
+  ToolParam,
+  ToolSpec,
+  WorkflowSpec,
+} from '@workflow/spec.js';
+export type { AdapterSource, EnvKey, GeneratedFile } from '@workflow/codegen/types.js';
 
-export interface TargetMeta {
-  id: TargetId;
-  language: Language;
-  framework: string;
-  providers: Provider[];
-  adapter: string;
-  entry: string;
-  docs: string;
-  /** Which node kinds this target's generator can emit. */
-  supports: { mcp: boolean; subAgents: boolean };
-}
-
-export interface ToolParam {
-  name: string;
-  type: ParamType;
-  description?: string;
-  required: boolean;
-}
-
-export interface ToolSpec {
-  name: string;
-  description: string;
-  params: ToolParam[];
-  returns: string;
-}
-
-export type McpTransport = 'stdio' | 'http';
-
-/** An MCP server the agent connects to as a client. Never holds a secret. */
-export interface McpServerSpec {
-  name: string;
-  transport: McpTransport;
-  /** stdio: the program to spawn, and its arguments. */
-  command: string;
-  args: string[];
-  /** http: the endpoint. */
-  url: string;
-  /** http: the variable holding the bearer token, if the server needs one. */
-  headerEnv?: string;
-  /** Only these tools are exposed. Empty = everything the server lists. */
-  tools: string[];
-}
-
-/** A nested agent: one tool on the parent, its own loop underneath. */
-export interface SubAgentSpec {
-  name: string;
-  description: string;
-  systemPrompt?: string;
-  model?: string;
-  maxSteps: number;
-  tools: string[];
-  mcpServers: string[];
-}
-
-/** What the ROOT agent is wired to. */
-export interface AttachSpec {
-  tools: string[];
-  mcpServers: string[];
-  subAgents: string[];
-}
-
-export interface WorkflowSpec {
-  name: string;
-  description?: string;
-  target: TargetId;
-  provider: Provider;
-  model: string;
-  systemPrompt?: string;
-  prompt: string;
-  maxSteps: number;
-  tools: ToolSpec[];
-  mcpServers: McpServerSpec[];
-  subAgents: SubAgentSpec[];
-  attach?: AttachSpec;
-}
-
-export interface SpecIssue {
-  path: string;
-  message: string;
-}
-
-export interface GeneratedFile {
-  path: string;
-  content: string;
-}
-
-export interface EnvKey {
-  name: string;
-  required: boolean;
-  hint: string;
-}
-
-export type AdapterSource = 'registry' | 'checkout';
+import type { AdapterSource, EnvKey, GeneratedFile } from '@workflow/codegen/types.js';
+import type { Provider, SpecIssue, TargetId, TargetMeta, WorkflowSpec } from '@workflow/spec.js';
 
 export interface TargetsResponse {
   version: string;

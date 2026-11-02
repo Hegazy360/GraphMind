@@ -457,36 +457,325 @@ a.gm-crumb:hover {
   background: var(--bg-canvas);
 }
 .gm-runs-inner {
-  width: min(880px, calc(100% - 48px));
+  width: min(1200px, calc(100% - 56px));
   margin: 0 auto;
-  padding: var(--sp-6) 0 48px;
+  padding: var(--sp-6) 0 56px;
+}
+/* The list keeps a reading width; the space left over is where the two
+   things that are not a run live. */
+.gm-runs-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 272px;
+  gap: 40px;
+  align-items: start;
+}
+.gm-runs-main {
+  min-width: 0;
 }
 .gm-runs-head {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   gap: var(--sp-4);
   margin-bottom: var(--sp-5);
+}
+.gm-runs-title {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
 }
 .gm-runs-head h1 {
   margin: 0;
   font-size: 21px;
   font-weight: 650;
   letter-spacing: -0.025em;
+  line-height: 1.2;
 }
 .gm-runs-count {
   font-size: var(--fs-md);
   color: var(--text-faint);
 }
+
+/* ── start something: the rail beside the list ───────────────────────── */
+.gm-runs-rail {
+  position: sticky;
+  top: var(--sp-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.gm-rail-label {
+  margin: 0 0 var(--sp-1) 2px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.gm-actioncard {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-4);
+  padding: 14px 15px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+.gm-actioncard:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+.gm-actioncard-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--text-dim);
+}
+.gm-actioncard-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.gm-actioncard-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-base);
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.gm-actioncard-go {
+  flex: none;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+.gm-actioncard:hover .gm-actioncard-go {
+  opacity: 1;
+  transform: translateX(2px);
+}
+.gm-actioncard-blurb {
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+/* The first step for most people arriving here, and it looks like it. */
+.gm-actioncard--primary {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+.gm-actioncard--primary:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+.gm-actioncard--primary .gm-actioncard-icon {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+.gm-actioncard--primary .gm-actioncard-go {
+  color: var(--accent);
+}
+.gm-rail-quiet {
+  padding: 6px 4px;
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.gm-rail-quiet:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+/* The facets: five tiles that say how the history went, and each one is a
+   filter. They are the first thing read, so they are the biggest type on
+   the page after the title. */
+.gm-facets {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+.gm-facet {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-dim);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.gm-facet:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+.gm-facet-count {
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.gm-facet-label {
+  font-size: var(--fs-sm);
+  font-weight: 560;
+  letter-spacing: 0.02em;
+}
+.gm-facet--none .gm-facet-count {
+  color: var(--text-faint);
+}
+/* The count takes the status colour; the tile does not, until it is chosen. */
+.gm-facet--live:not(.gm-facet--none) .gm-facet-count {
+  color: var(--accent-strong);
+}
+.gm-facet--held:not(.gm-facet--none) .gm-facet-count {
+  color: var(--amber-text);
+}
+.gm-facet--failed:not(.gm-facet--none) .gm-facet-count {
+  color: var(--err);
+}
+.gm-facet--done:not(.gm-facet--none) .gm-facet-count {
+  color: var(--ok);
+}
+.gm-facet--on {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.gm-facet--on.gm-facet--live {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+.gm-facet--on.gm-facet--held {
+  border-color: color-mix(in srgb, var(--amber) 55%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 55%, var(--border));
+}
+.gm-facet--on.gm-facet--failed {
+  border-color: color-mix(in srgb, var(--err) 55%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--err) 55%, var(--border));
+}
+.gm-facet--on.gm-facet--done {
+  border-color: color-mix(in srgb, var(--ok) 55%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ok) 55%, var(--border));
+}
+
+/* The second row of controls: which app, which source, how to shelve, and
+   the search. Pickers only appear when there is more than one answer. */
+.gm-runs-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3) var(--sp-5);
+  margin-bottom: var(--sp-5);
+  min-height: 28px;
+}
+.gm-runs-tools-end {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-left: auto;
+}
+.gm-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.gm-pick-label {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-right: 2px;
+}
+.gm-pick-count {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.gm-chip--on .gm-pick-count {
+  color: inherit;
+  opacity: 0.8;
+}
+.gm-pick--menu select {
+  height: 26px;
+  padding: 0 24px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  max-width: 240px;
+}
+.gm-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.gm-seg .gm-pick-label {
+  margin-right: var(--sp-2);
+}
+.gm-seg-btn {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 560;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+.gm-seg-btn:first-of-type {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+.gm-seg-btn:last-of-type {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  margin-left: -1px;
+}
+.gm-seg-btn:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  z-index: 1;
+}
+.gm-seg-btn--on {
+  color: var(--text);
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  z-index: 1;
+}
 .gm-runs-search {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  margin-left: auto;
-  padding: 5px 9px;
+  height: 26px;
+  padding: 0 7px 0 9px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text-faint);
+}
+.gm-runs-search:focus-within {
+  border-color: var(--border-strong);
 }
 .gm-runs-search input {
   border: none;
@@ -494,25 +783,134 @@ a.gm-crumb:hover {
   outline: none;
   color: var(--text);
   font-size: var(--fs-md);
-  width: 190px;
+  width: 210px;
+}
+.gm-runs-search-clear {
+  display: inline-flex;
+  padding: 2px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.gm-runs-search-clear:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+.gm-runs-showing {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: calc(-1 * var(--sp-3)) 0 var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+}
+.gm-runs-clear {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: inherit;
+  cursor: pointer;
+}
+.gm-runs-clear:hover {
+  text-decoration: underline;
 }
 .gm-runs-empty {
   padding: var(--sp-6);
   text-align: center;
   color: var(--text-faint);
   font-size: var(--fs-md);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
 }
+
+/* The list is a table: one grid template shared by the column header and
+   every row, so the figures line up down the page. */
 .gm-runs-list {
+  --runs-cols: 14px minmax(0, 1.6fr) minmax(0, 1.1fr) 104px 110px 78px 14px;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2);
+  gap: var(--sp-5);
 }
-.gm-runcard {
+.gm-runs-cols {
+  display: grid;
+  grid-template-columns: var(--runs-cols);
+  gap: 0 var(--sp-4);
+  padding: 0 15px;
+  margin-bottom: calc(-1 * var(--sp-3));
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.gm-shelf-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding: 0 2px;
+  margin-bottom: var(--sp-2);
+}
+.gm-shelf-head h2 {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+.gm-shelf--live .gm-shelf-head h2 {
+  color: var(--accent-strong);
+}
+.gm-shelf-tally {
+  display: flex;
+  gap: var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+}
+.gm-shelf-tally--held {
+  color: var(--amber-text);
+}
+.gm-shelf-tally--failed {
+  color: var(--err);
+}
+.gm-shelf-rows {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 3px;
+}
+.gm-shelf--live .gm-shelf-rows {
+  padding: var(--sp-2);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+}
+.gm-shelf-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: var(--sp-2);
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.gm-shelf-more:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.gm-runcard {
+  display: grid;
+  grid-template-columns: var(--runs-cols);
+  grid-auto-rows: auto;
+  align-items: center;
+  gap: 0 var(--sp-4);
   width: 100%;
-  padding: 13px 15px;
+  padding: 10px 15px 10px 12px;
   border: 1px solid var(--border);
   border-left: 3px solid var(--border-strong);
   border-radius: var(--radius);
@@ -525,7 +923,8 @@ a.gm-crumb:hover {
   background: var(--surface-2);
   border-color: var(--border-strong);
 }
-.gm-runcard--error {
+.gm-runcard--error,
+.gm-runcard--aborted {
   border-left-color: var(--err);
 }
 .gm-runcard--paused {
@@ -537,7 +936,11 @@ a.gm-crumb:hover {
 .gm-runcard--ok {
   border-left-color: var(--ok);
 }
-.gm-runcard-top {
+.gm-runcard-dotcell {
+  display: flex;
+  justify-content: center;
+}
+.gm-runcard-name {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
@@ -552,14 +955,22 @@ a.gm-crumb:hover {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.gm-runcard-id {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 .gm-runcard-status {
   font-size: var(--fs-xs);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-faint);
+  flex-shrink: 0;
 }
-.gm-runcard-status--error {
+.gm-runcard-status--error,
+.gm-runcard-status--aborted {
   color: var(--err);
 }
 .gm-runcard-status--paused {
@@ -568,11 +979,42 @@ a.gm-crumb:hover {
 .gm-runcard-status--running {
   color: var(--accent);
 }
+/* The figure cells sit in the grid themselves; the wrapper is a hook only. */
+.gm-runcard-meta {
+  display: contents;
+}
+.gm-runcard-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 7px;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.gm-runcard-sub {
+  color: var(--text-faint);
+}
+.gm-runcard-none {
+  color: var(--text-faint);
+  opacity: 0.6;
+}
+.gm-runcard-errors {
+  color: var(--err);
+}
+.gm-runcard-held {
+  color: var(--amber-text);
+  font-size: var(--fs-xs);
+}
+.gm-runcard-cost {
+  color: var(--text);
+}
 .gm-runcard-when {
-  margin-left: auto;
   font-size: var(--fs-sm);
   color: var(--text-faint);
   white-space: nowrap;
+  text-align: right;
 }
 .gm-runcard-go {
   flex: none;
@@ -582,22 +1024,10 @@ a.gm-crumb:hover {
 .gm-runcard:hover .gm-runcard-go {
   opacity: 1;
 }
-.gm-runcard-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-4);
-  font-size: var(--fs-sm);
-  color: var(--text-faint);
-}
-.gm-runcard-errors {
-  color: var(--err);
-}
-.gm-runcard-held {
-  color: var(--amber-text);
-}
 .gm-runcard-error {
-  margin-top: 2px;
-  padding: 6px 9px;
+  grid-column: 2 / -1;
+  margin-top: 7px;
+  padding: 5px 9px;
   border-radius: var(--radius-sm);
   background: var(--err-soft);
   color: var(--err-strong);
@@ -612,6 +1042,85 @@ a.gm-crumb:hover {
 .gm-runcard-error--held {
   background: var(--amber-tint);
   color: var(--amber-text);
+}
+
+/* No room for a column beside the list: the rail becomes a row of cards
+   above it, which is still the first thing read. */
+@media (max-width: 1140px) {
+  .gm-runs-body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-5);
+  }
+  .gm-runs-rail {
+    position: static;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: var(--sp-3);
+    order: -1;
+    margin-bottom: var(--sp-2);
+  }
+  .gm-rail-label {
+    grid-column: 1 / -1;
+    margin-bottom: 0;
+  }
+  .gm-rail-quiet {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Narrower than the table: the column header goes, the figures stack
+   under the name, and the facets become two rows. */
+@media (max-width: 900px) {
+  .gm-runs-cols {
+    display: none;
+  }
+  .gm-runs-list {
+    --runs-cols: 14px minmax(0, 1fr) 84px 14px;
+  }
+  .gm-runcard-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px var(--sp-4);
+    grid-column: 2 / 3;
+    grid-row: 2;
+    margin-top: 3px;
+  }
+  .gm-runcard-when {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  .gm-runcard-go {
+    grid-column: 4;
+    grid-row: 1;
+  }
+  .gm-runcard-error {
+    grid-column: 2 / -1;
+  }
+  .gm-facets {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: var(--sp-2);
+  }
+  .gm-facet {
+    padding: 8px 10px 7px;
+  }
+  .gm-facet-count {
+    font-size: 16px;
+  }
+}
+@media (max-width: 620px) {
+  .gm-facets {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .gm-runs-tools-end {
+    margin-left: 0;
+    width: 100%;
+  }
+  .gm-runs-search {
+    flex: 1;
+  }
+  .gm-runs-search input {
+    width: 100%;
+  }
 }
 
 /* ── the node place ──────────────────────────────────────────────────── */
@@ -3454,9 +3963,6 @@ a.gm-crumb:hover {
     width: calc(100% - 28px);
     padding-top: var(--sp-5);
   }
-  .gm-runs-search input {
-    width: 120px;
-  }
   .gm-nodepage-body,
   .gm-nodehead {
     padding-left: var(--sp-4);
@@ -4515,16 +5021,6 @@ textarea.gm-binput {
   margin: 0 auto;
 }
 
-.gm-runs-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  margin-left: auto;
-}
-.gm-runs-actions + .gm-runs-search {
-  margin-left: 0;
-}
-
 /* ═══ connect an agent (#/connect) ═══════════════════════════════════════
    One screen: pick your stack, copy two things.
 
@@ -4541,14 +5037,13 @@ textarea.gm-binput {
   background: var(--bg-canvas);
 }
 .gm-connect-inner {
-  width: min(720px, calc(100% - 48px));
+  width: min(1160px, calc(100% - 56px));
   margin: 0 auto;
-  padding: var(--sp-6) 0 48px;
+  padding: var(--sp-6) 0 56px;
 }
 .gm-connect-head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-4);
+  max-width: 680px;
+  margin-bottom: var(--sp-5);
 }
 .gm-connect-head h1 {
   margin: 0;
@@ -4556,21 +5051,21 @@ textarea.gm-binput {
   font-weight: 650;
   letter-spacing: -0.025em;
 }
-/* The same dot-and-label the header carries, so the two never look like
-   two different claims about the same socket. */
-.gm-connect-conn {
-  margin-left: auto;
-  flex: none;
-}
-.gm-connect-conn code {
-  font-family: var(--font-mono);
-  font-size: 0.95em;
-}
 .gm-connect-lede {
-  margin: var(--sp-3) 0 var(--sp-5);
+  margin: var(--sp-3) 0 0;
   font-size: var(--fs-base);
   line-height: 1.7;
   color: var(--text-dim);
+}
+/* What to do on the left, whether it worked on the right. */
+.gm-connect-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 40px;
+  align-items: start;
+}
+.gm-connect-main {
+  min-width: 0;
 }
 
 .gm-connect-card {
@@ -4583,7 +5078,7 @@ textarea.gm-binput {
   padding: var(--sp-4) var(--sp-5);
   border-bottom: 1px solid var(--border);
 }
-.gm-connect-section--last {
+.gm-connect-section:last-child {
   border-bottom: none;
 }
 
@@ -4591,47 +5086,69 @@ textarea.gm-binput {
 .gm-connect-stacks {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: var(--sp-4);
+  margin-top: var(--sp-3);
 }
 .gm-connect-group {
   display: flex;
-  align-items: baseline;
-  gap: var(--sp-3);
-}
-.gm-connect-lang {
-  flex: none;
-  width: 94px;
-  padding-top: 3px;
-}
-.gm-connect-chips {
-  display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: var(--sp-2);
 }
+.gm-connect-lang {
+  color: var(--text-faint);
+}
+/* auto-FILL, not auto-fit: a language with one stack keeps a card the same
+   width as its neighbours above instead of stretching across the row. */
+.gm-connect-chips {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(238px, 1fr));
+  gap: var(--sp-2);
+}
+/* A stack is chosen by recognising your own project, so the cue you
+   recognise it by is on the card rather than behind a click. */
 .gm-connect-chip {
-  padding: 4px 11px;
-  font-size: var(--fs-md);
-  font-weight: 560;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   background: var(--bg-canvas);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
 }
 .gm-connect-chip:hover {
-  color: var(--text);
   border-color: var(--border-strong);
+  background: var(--surface-2);
 }
-/* `.gm-chip--on` is declared with the other chip states, far above this
-   file position, so the selected surface needs the extra class to win. */
-.gm-connect-chip.gm-chip--on {
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-}
-.gm-connect-blurb {
-  margin: var(--sp-4) 0 0;
-  padding: var(--sp-3) 0 0;
-  border-top: 1px dashed var(--border);
+.gm-connect-chip-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--fs-md);
-  line-height: 1.6;
+  font-weight: 600;
+  color: var(--text);
+}
+.gm-connect-chip-tick {
+  flex: none;
+  margin-left: auto;
+  color: var(--accent);
+}
+.gm-connect-chip-blurb {
+  font-size: var(--fs-sm);
+  line-height: 1.45;
   color: var(--text-faint);
+}
+.gm-connect-chip--on {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+}
+.gm-connect-chip--on .gm-connect-chip-name {
+  color: var(--accent-strong);
+}
+.gm-connect-chip--on .gm-connect-chip-blurb {
+  color: var(--text-dim);
 }
 
 /* ── the two commands ─────────────────────────────────────────────────── */
@@ -4653,33 +5170,11 @@ textarea.gm-binput {
   letter-spacing: 0;
 }
 
-/* ── what a gate can do here ──────────────────────────────────────────── */
-.gm-connect-gate {
-  margin: 0;
-  font-size: var(--fs-md);
-  line-height: 1.65;
-  color: var(--text-dim);
-}
-.gm-connect-next {
-  margin: var(--sp-2) 0 0;
-  font-size: var(--fs-sm);
-  line-height: 1.6;
-  color: var(--text-faint);
-}
-.gm-connect-next code {
-  font-family: var(--font-mono);
-  font-size: 0.95em;
-}
-
 .gm-connect-foot {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: var(--sp-4);
-  margin-top: var(--sp-4);
+  margin: var(--sp-4) 0 0;
   padding: 0 var(--sp-1);
   font-size: var(--fs-sm);
-  line-height: 1.6;
+  line-height: 1.7;
   color: var(--text-faint);
 }
 .gm-connect-foot code {
@@ -4687,20 +5182,165 @@ textarea.gm-binput {
   font-size: 0.95em;
 }
 .gm-connect-build {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin-left: auto;
   padding: 0;
   border: none;
   background: none;
   color: var(--accent);
-  font-size: var(--fs-sm);
+  font-size: inherit;
   font-weight: 560;
   cursor: pointer;
-  white-space: nowrap;
 }
 .gm-connect-build:hover {
+  text-decoration: underline;
+}
+
+/* ── whether it worked ────────────────────────────────────────────────── */
+.gm-connect-rail {
+  position: sticky;
+  top: var(--sp-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.gm-attach {
+  padding: var(--sp-4) var(--sp-5) var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.gm-attach--waiting {
+  border-color: color-mix(in srgb, var(--amber) 32%, var(--border));
+}
+.gm-attach--replaying {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+.gm-attach-lede {
+  margin: 0;
+  font-size: var(--fs-md);
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+.gm-attach--ready {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+}
+.gm-attach-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding-bottom: var(--sp-3);
+  margin-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+.gm-attach-title {
+  font-size: var(--fs-base);
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.gm-attach-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.gm-attach-step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+.gm-attach-step--done {
+  color: var(--text-dim);
+}
+.gm-attach-step--pending {
+  color: var(--text-dim);
+}
+.gm-attach-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--text-faint);
+}
+.gm-attach-step--done .gm-attach-mark {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.gm-attach-ring {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+}
+.gm-attach-step--pending .gm-attach-ring {
+  border-color: var(--amber);
+  animation: gm-dot-blink 1.6s ease-in-out infinite;
+}
+.gm-attach-text code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+.gm-attach-hint {
+  margin: var(--sp-4) 0 0;
+  padding-top: var(--sp-3);
+  border-top: 1px dashed var(--border);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+.gm-attach-hint code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+  color: var(--text-dim);
+}
+.gm-attach-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: var(--sp-4);
+  padding: 6px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.gm-attach-go:hover {
+  border-color: var(--accent);
+}
+
+.gm-connect-gatebox {
+  padding: 0 var(--sp-1);
+}
+/* `.gm-note` brings the surface; here it sits under its own label. */
+.gm-connect-gate {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-md);
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+.gm-connect-doclink {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: var(--sp-3);
+  color: var(--accent);
+  text-decoration: none;
+  font-size: var(--fs-sm);
+  font-weight: 560;
+}
+.gm-connect-doclink:hover {
   text-decoration: underline;
 }
 
@@ -4711,6 +5351,22 @@ textarea.gm-binput {
   width: 212px;
 }
 
+/* No room for a column beside the steps: the status moves above them,
+   where it is still the first thing read. */
+@media (max-width: 1080px) {
+  .gm-connect-body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-5);
+  }
+  .gm-connect-rail {
+    position: static;
+    order: -1;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    align-items: start;
+  }
+}
+
 @media (max-width: 860px) {
   .gm-connect-inner {
     width: calc(100% - 28px);
@@ -4719,25 +5375,5 @@ textarea.gm-binput {
   .gm-connect-section {
     padding: var(--sp-4);
   }
-  .gm-connect-group {
-    flex-direction: column;
-    gap: var(--sp-2);
-  }
-  .gm-connect-lang {
-    width: auto;
-  }
-  .gm-connect-blurb {
-    padding-left: 0;
-  }
-}
-
-.gm-runs-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  margin-left: auto;
-}
-.gm-runs-actions + .gm-runs-search {
-  margin-left: 0;
 }
 

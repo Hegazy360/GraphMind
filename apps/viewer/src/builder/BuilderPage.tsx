@@ -12,11 +12,13 @@
  * debounced), so what is shown is byte-for-byte what Create writes and what
  * the snippet gives you if you copy it somewhere else.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { isExportedRun } from '../connection/FixtureConnection.js';
 import { useUiStore } from '../store/uiStore.js';
 import { IconClose } from '../components/Icons.js';
-import { BuilderApiError, fetchTargets, previewProject } from './api.js';
+import { generateProject, platformOf } from '@workflow/codegen/index.js';
+import { parseSpec } from '@workflow/spec.js';
+import { fetchTargets } from './api.js';
 import { useBuilderStore } from './builderStore.js';
 import { BuilderCanvas } from './BuilderCanvas.js';
 import { CodePanel } from './CodePanel.js';
@@ -25,8 +27,6 @@ import { ROOT_ID, attributeIssues, compile, issuesByNode, localIssues, ownerOf, 
 import { RunPanel } from './RunPanel.js';
 import { BlockedNotice, type Blocked } from './BlockedNotice.js';
 import type { PreviewResponse, SpecIssue } from './types.js';
-
-const PREVIEW_DEBOUNCE_MS = 350;
 
 type Tab = 'node' | 'code' | 'run';
 
@@ -47,20 +47,21 @@ export function BuilderPage() {
   const [tab, setTab] = useState<Tab>('node');
   const [workflowsDir, setWorkflowsDir] = useState<string | undefined>(undefined);
   const [pythonNote, setPythonNote] = useState<string | undefined>(undefined);
-  const [preview, setPreview] = useState<PreviewResponse | undefined>(undefined);
-  const [serverIssues, setServerIssues] = useState<SpecIssue[]>([]);
-  const [previewError, setPreviewError] = useState<string | undefined>(undefined);
-  const [pending, setPending] = useState(false);
-  const abortRef = useRef<AbortController | undefined>(undefined);
 
   const recorded = isExportedRun();
   const offline = connection === 'off' || connection === 'detached';
   // Why the page cannot act, if it cannot. No credential is involved: the
   // builder needs a server to generate against, and nothing else.
   const blocked: Blocked | undefined = recorded
-    ? { kind: 'recorded', text: 'This page is an exported run; there is no server to build with.' }
+    ? {
+        kind: 'recorded',
+        text: 'This page is an exported run. Draw and read the code freely; writing it to disk and running it need a server.',
+      }
     : offline
-      ? { kind: 'offline', text: 'No debugger server is attached, so nothing here can be generated, created or run.' }
+      ? {
+          kind: 'offline',
+          text: 'No debugger server is attached. The canvas and the code work anyway — Create, Run and Test connection are what need one.',
+        }
       : undefined;
   const blockedNote = blocked?.text;
   const canAct = blocked === undefined;
@@ -90,55 +91,42 @@ export function BuilderPage() {
   const { spec, nodeByPath } = useMemo(() => compile(graph), [graph]);
   const local = useMemo(() => localIssues(graph), [graph]);
 
-  // Debounced preview from the server's generator.
-  useEffect(() => {
-    if (!canAct) {
-      setPending(false);
-      return;
-    }
-    if (local.length > 0) {
-      // Not worth a round trip; keep the last good code on screen.
-      setServerIssues([]);
-      setPending(false);
-      return;
-    }
-    setPending(true);
-    const timer = setTimeout(() => {
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
-      previewProject(spec, controller.signal)
-        .then((result) => {
-          if (controller.signal.aborted) return;
-          setPreview(result);
-          setServerIssues([]);
-          setPreviewError(undefined);
-        })
-        .catch((error: unknown) => {
-          if (controller.signal.aborted) return;
-          if (error instanceof BuilderApiError) {
-            if (error.issues.length > 0) {
-              setServerIssues(error.issues);
-              setPreviewError(undefined);
-            } else {
-              setPreviewError(error.message);
-            }
-          } else {
-            setPreviewError(error instanceof Error ? error.message : String(error));
-          }
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setPending(false);
-        });
-    }, PREVIEW_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [spec, local.length, canAct]);
-
-  useEffect(() => () => abortRef.current?.abort(), []);
+  /**
+   * The project this canvas becomes — generated here, in the browser.
+   *
+   * It is the same generator the server runs for Create (aliased straight
+   * from the CLI's source), so the code on screen is byte for byte what
+   * Create writes. Running it locally is what makes the page useful with no
+   * server attached at all: draw a workflow, read the code, copy it. Create,
+   * Run and Test connection reach for the server, because writing files,
+   * spawning processes and opening a stdio MCP server are things a browser
+   * cannot do.
+   */
+  const { preview, specIssues } = useMemo((): {
+    preview: PreviewResponse | undefined;
+    specIssues: SpecIssue[];
+  } => {
+    if (local.length > 0) return { preview: undefined, specIssues: [] };
+    const parsed = parseSpec(spec);
+    if (!parsed.ok) return { preview: undefined, specIssues: parsed.issues };
+    const project = generateProject(parsed.spec, platformOf());
+    return {
+      preview: {
+        spec: parsed.spec,
+        target: project.target,
+        source: project.source,
+        files: project.files,
+        install: project.install.map((command) => command.label),
+        start: project.start.label,
+        envKeys: project.envKeys,
+      },
+      specIssues: [],
+    };
+  }, [spec, local.length]);
 
   const issues = useMemo(
-    () => [...local, ...attributeIssues(serverIssues, nodeByPath)],
-    [local, serverIssues, nodeByPath],
+    () => [...local, ...attributeIssues(specIssues, nodeByPath)],
+    [local, specIssues, nodeByPath],
   );
   const problems = useMemo(() => issuesByNode(issues), [issues]);
   const target = targetMeta(graph.target);
@@ -232,7 +220,7 @@ export function BuilderPage() {
           </div>
           <div className="gm-builder-railbody">
             {tab === 'node' && <Inspector issues={issues} canAct={canAct} blocked={blocked} />}
-            {tab === 'code' && <CodePanel preview={preview} pending={pending} error={previewError} />}
+            {tab === 'code' && <CodePanel preview={preview} />}
             {tab === 'run' && (
               <RunPanel
                 spec={spec}

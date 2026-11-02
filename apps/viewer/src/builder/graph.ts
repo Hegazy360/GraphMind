@@ -13,6 +13,8 @@
  * reports back onto the node that caused them, so an error lands on the
  * card rather than in a list at the bottom of the page.
  */
+import { PROVIDER_META, type ProviderMeta } from '@workflow/providers.js';
+import { TARGETS_BY_ID, targetMeta } from '@workflow/spec.js';
 import type {
   AttachSpec,
   McpServerSpec,
@@ -28,51 +30,20 @@ import type {
 } from './types.js';
 
 /**
- * Static copy of the server's provider table (packages/cli/src/builder/
- * providers.ts), so the page renders before the first response. Two SDK
- * families: the Anthropic SDK speaks to Anthropic; the OpenAI SDK speaks to
- * OpenAI and to every provider with an OpenAI-compatible endpoint. The AI
- * SDK target speaks to all of them.
+ * The provider and target tables, and the generator's own view of a spec,
+ * come from the one place that defines them (`@workflow`, aliased to the
+ * CLI's builder source in vite.config.ts). The page used to keep a hand
+ * copy "so it renders before the first response" — it needs no response
+ * now, and a copy was one more thing to drift.
  */
-export interface ProviderMeta {
-  id: Provider;
-  label: string;
-  /** The NAME of the variable the generated code reads. */
-  envKey: string;
-  /** False for a provider that runs locally and needs no key. */
-  keyRequired: boolean;
-  defaultModel: string;
-  family: 'anthropic' | 'openai';
-}
+export { PROVIDER_META, providerMeta, type ProviderMeta } from '@workflow/providers.js';
+export { TARGETS_BY_ID as TARGET_TABLE, targetMeta } from '@workflow/spec.js';
 
-export const PROVIDERS: ProviderMeta[] = [
-  { id: 'anthropic', label: 'Anthropic', envKey: 'ANTHROPIC_API_KEY', keyRequired: true, defaultModel: 'claude-sonnet-4-5', family: 'anthropic' },
-  { id: 'openai', label: 'OpenAI', envKey: 'OPENAI_API_KEY', keyRequired: true, defaultModel: 'gpt-5.1', family: 'openai' },
-  { id: 'google', label: 'Google (Gemini)', envKey: 'GOOGLE_GENERATIVE_AI_API_KEY', keyRequired: true, defaultModel: 'gemini-2.5-flash', family: 'openai' },
-  { id: 'mistral', label: 'Mistral', envKey: 'MISTRAL_API_KEY', keyRequired: true, defaultModel: 'mistral-large-latest', family: 'openai' },
-  { id: 'xai', label: 'xAI (Grok)', envKey: 'XAI_API_KEY', keyRequired: true, defaultModel: 'grok-4', family: 'openai' },
-  { id: 'groq', label: 'Groq', envKey: 'GROQ_API_KEY', keyRequired: true, defaultModel: 'llama-3.3-70b-versatile', family: 'openai' },
-  { id: 'deepseek', label: 'DeepSeek', envKey: 'DEEPSEEK_API_KEY', keyRequired: true, defaultModel: 'deepseek-chat', family: 'openai' },
-  { id: 'openrouter', label: 'OpenRouter', envKey: 'OPENROUTER_API_KEY', keyRequired: true, defaultModel: 'anthropic/claude-sonnet-4.5', family: 'openai' },
-  { id: 'ollama', label: 'Ollama (local)', envKey: 'OLLAMA_API_KEY', keyRequired: false, defaultModel: 'llama3.2', family: 'openai' },
-];
+/** Every provider, in table order. */
+export const PROVIDERS: ProviderMeta[] = Object.values(PROVIDER_META);
 
-export function providerMeta(id: Provider): ProviderMeta {
-  return PROVIDERS.find((p) => p.id === id) ?? (PROVIDERS[0] as ProviderMeta);
-}
-
-const ALL_PROVIDERS: Provider[] = PROVIDERS.map((p) => p.id);
-const ANTHROPIC_FAMILY: Provider[] = PROVIDERS.filter((p) => p.family === 'anthropic').map((p) => p.id);
-const OPENAI_FAMILY: Provider[] = PROVIDERS.filter((p) => p.family === 'openai').map((p) => p.id);
-
-/** Static copy of the server's target table, so the page renders before the first response. */
-export const TARGETS: TargetMeta[] = [
-  { id: 'ts-ai-sdk', language: 'typescript', framework: 'Vercel AI SDK', providers: ALL_PROVIDERS, adapter: '@graphmind-ai/sdk', entry: 'src/main.ts', docs: 'https://graphmind.ai/docs/integrations/vercel-ai-sdk/', supports: { mcp: true, subAgents: true } },
-  { id: 'ts-anthropic', language: 'typescript', framework: 'Anthropic SDK', providers: ANTHROPIC_FAMILY, adapter: '@graphmind-ai/anthropic', entry: 'src/main.ts', docs: 'https://graphmind.ai/docs/integrations/anthropic/', supports: { mcp: true, subAgents: true } },
-  { id: 'ts-openai', language: 'typescript', framework: 'OpenAI SDK', providers: OPENAI_FAMILY, adapter: '@graphmind-ai/openai', entry: 'src/main.ts', docs: 'https://graphmind.ai/docs/integrations/openai/', supports: { mcp: true, subAgents: true } },
-  { id: 'py-openai', language: 'python', framework: 'OpenAI SDK', providers: OPENAI_FAMILY, adapter: 'graphmind-ai', entry: 'main.py', docs: 'https://graphmind.ai/docs/integrations/python/', supports: { mcp: false, subAgents: false } },
-  { id: 'py-anthropic', language: 'python', framework: 'Anthropic SDK', providers: ANTHROPIC_FAMILY, adapter: 'graphmind-ai', entry: 'main.py', docs: 'https://graphmind.ai/docs/integrations/python/', supports: { mcp: false, subAgents: false } },
-];
+/** Every target, in table order. */
+export const TARGETS: TargetMeta[] = Object.values(TARGETS_BY_ID);
 
 export const DEFAULT_MODEL: Record<Provider, string> = Object.fromEntries(
   PROVIDERS.map((p) => [p.id, p.defaultModel]),
@@ -87,10 +58,6 @@ export const PROVIDER_ENV_KEY: Record<Provider, string> = Object.fromEntries(
 ) as Record<Provider, string>;
 
 export const PARAM_TYPES: ParamType[] = ['string', 'number', 'boolean'];
-
-export function targetMeta(id: TargetId): TargetMeta {
-  return TARGETS.find((t) => t.id === id) ?? (TARGETS[0] as TargetMeta);
-}
 
 // ── nodes ─────────────────────────────────────────────────────────────────
 
@@ -578,42 +545,8 @@ export function issueFor(issues: readonly SpecIssue[], path: string): string | u
   return issues.find((issue) => issue.path === path)?.message;
 }
 
-/**
- * The variables the generated project reads, mirrored from the server
- * (codegen/index.ts `envKeysFor`) so the Run tab can ask for a key before
- * the first preview comes back — or with no server at all.
- */
-export function envKeysFor(spec: WorkflowSpec): { name: string; required: boolean; hint: string }[] {
-  const meta = providerMeta(spec.provider);
-  return [
-    {
-      name: meta.envKey,
-      required: meta.keyRequired,
-      hint: meta.keyRequired ? `Your ${meta.label} API key.` : `${meta.label} needs no key by default. Only if your server asks for one.`,
-    },
-    ...(spec.provider === 'anthropic'
-      ? [
-          {
-            name: 'ANTHROPIC_WORKSPACE_ID',
-            required: false,
-            hint: 'Only for an API key that is not scoped to a workspace: the workspace to use.',
-          },
-        ]
-      : []),
-    ...spec.mcpServers
-      .filter((server) => server.headerEnv !== undefined && server.headerEnv !== '')
-      .map((server) => ({
-        name: server.headerEnv as string,
-        required: false,
-        hint: `Bearer token for the "${server.name}" MCP server. Sent as the Authorization header; never printed.`,
-      })),
-    {
-      name: 'GRAPHMIND_URL',
-      required: false,
-      hint: 'Only if the debugger is not on ws://127.0.0.1:4747/ingest.',
-    },
-  ];
-}
+/** The variables the generated project reads (the generator's own list). */
+export { envKeysFor } from '@workflow/codegen/index.js';
 
 // ── the run a job produced ────────────────────────────────────────────────
 

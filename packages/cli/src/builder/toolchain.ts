@@ -16,18 +16,10 @@
  * qualifies, the install step fails with a message naming the fix.
  */
 import { spawnSync } from 'node:child_process';
-import type { Platform } from './codegen/index.js';
-import type { Command } from './codegen/types.js';
+import type { Platform } from './codegen/types.js';
+import { pythonCommands, venvPython, type PythonToolchain } from './toolchain-commands.js';
 
-export interface PythonToolchain {
-  kind: 'uv' | 'interpreter';
-  /** `uv`, or the interpreter path. */
-  bin: string;
-  /** "3.12", when known. */
-  version: string | undefined;
-  /** One line for the job log. */
-  describe: string;
-}
+export { pythonCommands, venvPython, type PythonToolchain };
 
 export const MIN_PYTHON: readonly [number, number] = [3, 10];
 
@@ -79,27 +71,3 @@ export const NO_PYTHON_MESSAGE =
   'which keeps its interpreters out of the system, or set GRAPHMIND_PYTHON to a 3.10+ interpreter.';
 
 /** The venv's interpreter, relative to the project. */
-export function venvPython(platform: Platform): string {
-  return platform === 'win32' ? '.venv\\Scripts\\python.exe' : '.venv/bin/python';
-}
-
-/** Install and start commands for a Python project under this toolchain. */
-export function pythonCommands(toolchain: PythonToolchain, platform: Platform): { install: Command[]; start: Command } {
-  const python = venvPython(platform);
-  if (toolchain.kind === 'uv') {
-    return {
-      install: [
-        { argv: ['uv', 'venv', '--quiet', '--python', '>=3.10', '.venv'], label: "uv venv --python '>=3.10' .venv" },
-        { argv: ['uv', 'pip', 'install', '--quiet', '--python', python, '-r', 'requirements.txt'], label: `uv pip install --python ${python} -r requirements.txt` },
-      ],
-      start: { argv: [python, 'main.py'], label: `${python} main.py` },
-    };
-  }
-  return {
-    install: [
-      { argv: [toolchain.bin, '-m', 'venv', '.venv'], label: `${toolchain.bin} -m venv .venv` },
-      { argv: [python, '-m', 'pip', 'install', '--quiet', '-r', 'requirements.txt'], label: `${python} -m pip install -r requirements.txt` },
-    ],
-    start: { argv: [python, 'main.py'], label: `${python} main.py` },
-  };
-}

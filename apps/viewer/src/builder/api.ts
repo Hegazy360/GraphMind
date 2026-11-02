@@ -75,10 +75,6 @@ export function fetchTargets(): Promise<TargetsResponse> {
   return call<TargetsResponse>('/api/builder/targets');
 }
 
-export function previewProject(spec: WorkflowSpec, signal?: AbortSignal): Promise<PreviewResponse> {
-  return call<PreviewResponse>('/api/builder/preview', { body: { spec }, ...(signal === undefined ? {} : { signal }) });
-}
-
 export function listProjects(): Promise<ProjectsResponse> {
   return call<ProjectsResponse>('/api/builder/projects');
 }

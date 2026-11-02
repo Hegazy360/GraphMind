@@ -55,7 +55,7 @@ export interface TargetMeta {
   supports: { mcp: boolean; subAgents: boolean };
 }
 
-export const TARGETS: Record<TargetId, TargetMeta> = {
+export const TARGETS_BY_ID: Record<TargetId, TargetMeta> = {
   'ts-ai-sdk': {
     id: 'ts-ai-sdk',
     language: 'typescript',
@@ -391,6 +391,14 @@ export interface SpecIssue {
 export type ParseSpecResult = { ok: true; spec: WorkflowSpec } | { ok: false; issues: SpecIssue[] };
 
 /** Validate an untrusted spec. Never throws. */
+/** The target table, by id. (Historic name; `TARGETS_BY_ID` says what it is.) */
+export const TARGETS = TARGETS_BY_ID;
+
+/** One target's row. */
+export function targetMeta(id: TargetId): TargetMeta {
+  return TARGETS_BY_ID[id];
+}
+
 export function parseSpec(input: unknown): ParseSpecResult {
   const result = WorkflowSpecSchema.safeParse(input);
   if (result.success) return { ok: true, spec: result.data };

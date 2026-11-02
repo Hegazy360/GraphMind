@@ -44,7 +44,14 @@ import { NodePage } from './pages/NodePage.js';
 import { RunPage } from './pages/RunPage.js';
 import { RunsPage } from './pages/RunsPage.js';
 import { ConnectPage } from './pages/ConnectPage.js';
-import { connectSeen, markConnectSeen, shouldOpenConnect } from './lib/firstRun.js';
+import {
+  connectSeen,
+  firstRunOpened,
+  markConnectSeen,
+  markFirstRunOpened,
+  shouldOpenConnect,
+  shouldOpenFirstRun,
+} from './lib/firstRun.js';
 
 /** How long "attached with nothing to show" must hold before it means it. */
 const SETTLE_MS = 900;
@@ -164,18 +171,16 @@ export default function App() {
   }, [page, selectedRunId, selectedNodeId]);
 
   /**
-   * Open the first run to arrive, once.
-   *
-   * With one run on the machine, making someone click it is ceremony. But
-   * it is an *opening* move, not a standing rule: a reader who asked for
-   * `#/runs`, or who stepped back up to the list, has said which place they
-   * want, and a run arriving later must not drag them out of it.
+   * Open the first run to arrive — once per browser, and never a demo
+   * replay (lib/firstRun.ts explains both limits).
    */
   const autoOpened = useRef(false);
   useEffect(() => {
     if (autoOpened.current || ARRIVED_AT !== '') return;
     if (selectedRunId !== undefined || firstRunId === undefined) return;
+    if (!shouldOpenFirstRun(useRunStore.getState().runs[firstRunId], firstRunOpened())) return;
     autoOpened.current = true;
+    markFirstRunOpened();
     useUiStore.getState().selectRun(firstRunId);
   }, [selectedRunId, firstRunId]);
 

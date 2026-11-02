@@ -51,8 +51,12 @@ npx graphmind-ai
 Then click **Build a workflow** in the run list (or press <kbd>⌘</kbd><kbd>K</kbd> and type
 "build", or open `http://127.0.0.1:4747/#/build`).
 
-<Aside title="No token, no sign-in">
-The Build page works from the viewer as served — no `#token=` link needed. It is a canvas for
+<Aside title="No token, no sign-in, no server for the part that matters">
+The canvas and the generated code run **in the browser**: open the viewer and draw a workflow
+with nothing attached, read the code, copy it. The generator is the one the CLI runs, compiled
+into the page, so what you read is what Create would write. Only **Create**, **Run** and **Test
+connection** reach for the local server — writing files, spawning processes and opening a stdio
+MCP connection are things a browser cannot do. No token either: It is a canvas for
 trying a workflow out before writing it into code, and nothing it does needs the debugger's
 control plane. What that leaves open: another process on your own machine could create or run
 a builder project, or spawn an MCP command through **Test connection**. On a single-user machine
@@ -80,9 +84,9 @@ that process already runs as you; on a shared one, start the server with
    the button takes it for that one test — it is used for the connection, scrubbed from anything
    that comes back, and kept nowhere.
 
-2. **Read what it becomes.** The **Code** tab is the project, file by file, produced by the
-   server's own generator from the current canvas, so what you read is byte for byte what Create
-   writes. Copy a file, or everything, if you would rather paste it into a repository of your own
+2. **Read what it becomes.** The **Code** tab is the project, file by file, produced in the page
+   by the same generator the CLI uses, so what you read is byte for byte what Create writes — and
+   it is there whether or not a server is running. Copy a file, or everything, if you would rather paste it into a repository of your own
    and never press Create.
 
 3. **Create the project.** By default it goes to `~/.graphmind/workflows/<name>` (`$GRAPHMIND_HOME`
@@ -120,8 +124,9 @@ that process already runs as you; on a shared one, start the server with
 
 ## From a GraphMind checkout
 
-`pnpm dev` serves the viewer from Vite on port 5199 while `graphmind serve` runs on 4747, so
-the Build page is talking to another origin. One thing makes that work:
+`pnpm dev` serves the viewer from Vite on port 5199 while `graphmind serve` runs on 4747, so the
+Build page is talking to another origin for the few things that need one (Create, Run, Test
+connection — the canvas and the code need nothing). One thing makes those work:
 
 - `graphmind serve` answers an **allow-listed** origin's requests with the CORS header its
   browser needs (`GRAPHMIND_ALLOWED_ORIGINS`, which `pnpm dev` sets for the Vite origin).
@@ -215,5 +220,9 @@ Every route is under `/api/builder`; none needs a credential unless the server w
 
 The spec's validation lives in `packages/cli/src/builder/spec.ts`, the generators under
 `packages/cli/src/builder/codegen/`, and the session key store in
-`packages/cli/src/builder/secret-store.ts`. A new target is one generator file plus one entry in
-the target table; the canvas compiles to a spec in `apps/viewer/src/builder/graph.ts`.
+`packages/cli/src/builder/secret-store.ts`. The first two are pure TypeScript with no node
+imports, and the viewer imports them directly (the `@workflow` alias in
+`apps/viewer/vite.config.ts`) so the page can generate and validate without a round trip —
+there is one definition of a spec, not a server copy and a browser copy. A new target is one
+generator file plus one entry in the target table; the canvas compiles to a spec in
+`apps/viewer/src/builder/graph.ts`.

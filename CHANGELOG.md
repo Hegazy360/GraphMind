@@ -30,6 +30,31 @@ runs  →  run  →  node
 - **Runs is a place, not a 244px rail.** A card per run with how it ended,
   how big, how long, what it cost and the error it stopped on — enough to
   choose between two runs of the same app without opening either.
+- **The runs list has a shape.** `graphmind serve` replays everything it has
+  kept (two hundred runs, thirty days, by default) and the list used to be
+  exactly that: one flat column, newest first. Now a strip of facets across
+  the top says how the history went — **Live**, **Held**, **Failed**,
+  **Done**, each a filter with its count; whatever is running or held is
+  pinned in a **Live now** shelf above the history; the history is shelved
+  by day (**Today**, **Yesterday**, **Earlier this week**, **Older**) or by
+  app, each shelf with its own tally and long shelves folded to a preview;
+  and a row is a table row, with the run's shape, time, tokens and est. cost
+  in columns that line up with the row above it. The search matches the app,
+  the run id and the error a run stopped on, and a header line says where
+  the list comes from.
+- **Connect and Build are cards, not corner buttons.** They sit in a column
+  beside the runs list under **Start something**, which also keeps the table
+  to a reading width instead of stretching a row across a wide window. The
+  bundled demo is offered there too.
+- **Connect an agent is two columns: what to do, and whether it worked.**
+  The stack chooser shows every stack's recognition line rather than only
+  the chosen one's — it was the only thing telling "MCP server you own" from
+  "MCP server, via the proxy" apart, and you had to click to read it. Beside
+  the steps, a live rail reports the three facts in the order they become
+  true (a debugger on the endpoint, this tab attached, a first run recorded),
+  so the page you are staring at while you edit your code is the one that
+  tells you it worked, with a button into the run. A replay now says it is a
+  replay instead of claiming "not connected" and "1 run recorded" at once.
 - **The graph gets the window.** No rail, no docked panel: a seven-node run
   has room and a three-hundred-node one has all of it.
 - **A call is a page.** The decision row pinned above the evidence instead of
@@ -134,6 +159,32 @@ to redraw the graph beside them. The features were there; the order was not.
   stays.
 - The empty canvas offers one way forward and one aside (replay the demo)
   instead of four replay buttons and a keyboard legend.
+
+### Changed — the Build page runs on its own
+
+- **The canvas and the code need no server.** The generator and the spec are
+  pure TypeScript, so the page now runs them itself: draw a workflow with
+  nothing attached and the project is there, file by file, instantly, and it
+  is the CLI's own generator compiled into the bundle rather than a second
+  implementation that could drift. Validation came with it — a reserved word
+  or a provider a target cannot call is flagged as you type. **Create**,
+  **Run** and **Test connection** still use the local server, because
+  writing files, spawning processes and opening a stdio MCP connection are
+  things a browser cannot do, and the page now says exactly that when none is
+  attached instead of failing at "the debugger server is not reachable".
+- **One definition of a spec.** The viewer's hand-written copy of the spec
+  types, the provider table and the target table is gone; it imports the real
+  ones. The two could drift, and had.
+- **Arriving stops teleporting you into a run.** Opening the first run on
+  the machine was meant as an opening move — "clicking the only run there is
+  is ceremony" — but it fired on every mount, so each reload against a server
+  with a demo replay on it landed inside `#/run/demo-…` instead of the home
+  page, with no way to simply be on the list. It now happens at most once per
+  browser, and never for a demo replay, which is nobody's own work.
+- **`pnpm dev` rebuilds what is stale.** It only ever built the workspace
+  packages when `dist/` was missing, so an edit to `packages/*` ran silently
+  against the previous build — "am I supposed to rebuild something?" is not a
+  question to hold in your head while debugging something else.
 
 ### Fixed — the Build page from a checkout, and a tab without a token
 

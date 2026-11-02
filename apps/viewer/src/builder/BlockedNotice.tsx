@@ -2,10 +2,11 @@
  * Why the Build page cannot act, and what to do about it — in the page
  * rather than in a tooltip on a greyed-out button.
  *
- * There are only two reasons left: the page is an exported run with no
- * server behind it, or no server is attached. The builder itself needs no
- * credential; it is a canvas for trying a workflow out, and asking for a
- * token first was friction with nothing behind it.
+ * There are only two reasons left, and neither stops the useful part: the
+ * canvas and the generated code are computed in the browser, so they work
+ * with nothing running at all. What needs a server is writing files to
+ * disk, running them, and opening an MCP connection — none of which a
+ * browser can do. No credential is involved either way.
  */
 
 export type BlockedKind = 'recorded' | 'offline';

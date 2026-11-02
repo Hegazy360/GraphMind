@@ -1,5 +1,8 @@
 /**
  * The generated project, file by file, exactly as Create will write it.
+ *
+ * Generated in the browser by the same code the server runs (BuilderPage),
+ * so this panel needs no server and never waits for one.
  * Copy any file, or the whole thing as a shell-ready bundle; the install
  * and start commands sit under the code so the page is usable without
  * ever pressing Create (an engineer may prefer to paste into their own
@@ -15,15 +18,7 @@ function bundle(preview: PreviewResponse): string {
   return `${parts.join('\n')}\n# ---- run ----\n${[...preview.install, preview.start].join('\n')}\n`;
 }
 
-export function CodePanel({
-  preview,
-  pending,
-  error,
-}: {
-  preview: PreviewResponse | undefined;
-  pending: boolean;
-  error: string | undefined;
-}) {
+export function CodePanel({ preview }: { preview: PreviewResponse | undefined }) {
   const selected = useBuilderStore((s) => s.selectedFile);
   const selectFile = useBuilderStore((s) => s.selectFile);
   const [copied, setCopied] = useState<string | undefined>(undefined);
@@ -64,7 +59,6 @@ export function CodePanel({
           ))}
         </div>
         <div className="gm-bcode-actions">
-          {pending && <span className="gm-bcode-pending">updating…</span>}
           {file !== undefined && (
             <button className="gm-copy" onClick={() => void copy(file.path, file.content)} title={`Copy ${file.path}`}>
               {copied === file.path ? 'copied ✓' : 'copy file'}
@@ -77,10 +71,10 @@ export function CodePanel({
           )}
         </div>
       </div>
-      {error !== undefined ? (
-        <div className="gm-bcode-error">{error}</div>
-      ) : file === undefined ? (
-        <div className="gm-bcode-empty">{pending ? 'Generating…' : 'The generated code appears here.'}</div>
+      {file === undefined ? (
+        <div className="gm-bcode-empty">
+          The generated code appears here. Fix what the cards are flagging and it comes straight back.
+        </div>
       ) : (
         <pre className="gm-bcode-pre" tabIndex={0}>
           <code>{file.content}</code>
@@ -93,13 +87,9 @@ export function CodePanel({
           <span className="gm-bcode-note">
             with <code>npx graphmind-ai</code> running in another terminal. Needs{' '}
             <code>{preview.envKeys.filter((k) => k.required).map((k) => k.name).join(', ')}</code> in <code>.env</code>.
-            {preview.source === 'checkout' && (
-              <>
-                {' '}
-                This server runs from a GraphMind checkout, so the adapter is a local tarball (its version is not
-                published yet); a published <code>graphmind-ai</code> would pin the registry instead.
-              </>
-            )}
+            {' '}
+            The adapter is pinned at the published version; a server running from a GraphMind checkout rewrites that
+            to a local tarball when it writes the project, because a checkout's version is not published yet.
           </span>
         </div>
       )}

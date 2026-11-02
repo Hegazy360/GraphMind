@@ -5,7 +5,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { RunInfo } from '../src/connection/protocol.js';
-import { runChipLabel, shouldOpenConnect } from '../src/lib/firstRun.js';
+import { runChipLabel, shouldOpenConnect, shouldOpenFirstRun } from '../src/lib/firstRun.js';
 import { useRunStore } from '../src/store/runStore.js';
 
 function runInfo(overrides: Partial<RunInfo>): RunInfo {
@@ -88,5 +88,28 @@ describe('shouldOpenConnect (does a stranger land on the connect page?)', () => 
   it('stays out of the way of an offline replay', () => {
     expect(shouldOpenConnect('replaying', 0, false)).toBe(false);
     expect(shouldOpenConnect('off', 0, false)).toBe(false);
+  });
+});
+
+describe('shouldOpenFirstRun (does arriving drop you inside a run?)', () => {
+  const live = { meta: { serverSource: 'live' } };
+  const demo = { meta: { serverSource: 'demo' } };
+
+  it('opens the one run on a first visit, so the only thing to look at is not a click away', () => {
+    expect(shouldOpenFirstRun(live, false)).toBe(true);
+    expect(shouldOpenFirstRun({ meta: {} }, false)).toBe(true);
+  });
+
+  it('never does it twice: the convenience is an opening move, not a standing rule', () => {
+    expect(shouldOpenFirstRun(live, true)).toBe(false);
+  });
+
+  it('never does it for a demo replay, which is what `pnpm dev` serves', () => {
+    expect(shouldOpenFirstRun(demo, false)).toBe(false);
+    expect(shouldOpenFirstRun(demo, true)).toBe(false);
+  });
+
+  it('has nothing to open with no runs', () => {
+    expect(shouldOpenFirstRun(undefined, false)).toBe(false);
   });
 });

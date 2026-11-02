@@ -101,8 +101,9 @@ code location; executions light it up.
 - **Build a workflow in the viewer** *(unreleased)* - a canvas: place the
   nodes you want to test - an agent, tools, MCP servers to connect to (with
   a Test connection button that lists their tools), sub-agents to delegate
-  to - wire them together, read the instrumented project the server
-  generates from them, and run it from the same page against any of nine
+  to - wire them together, and read the instrumented project they become,
+  generated in the page with no server needed. Run it from the same page
+  against any of nine
   providers (Anthropic, OpenAI, Google, Mistral, xAI, Groq, DeepSeek,
   OpenRouter, a local Ollama), with the run appearing live beside the log. Your API key is sent once over
   loopback and, by default, held in memory for the session only: nothing is

@@ -35,7 +35,7 @@ instead of down a 392px gutter.
 
 | Place | What it is for |
 | --- | --- |
-| **Runs** | Which run? A card per run with how it ended, how big, how long, what it cost, and the error it stopped on |
+| **Runs** | Which run? Facets for how the history went, what is live pinned on top, the rest shelved by day or by app — a row per run with how it ended, how big, how long, what it cost, and the error it stopped on |
 | **Run** | What happened? The summary line and the graph (or the waterfall), edge to edge |
 | **Node** | One call. The decision if it is held, then why it failed, the payloads, the timings |
 
@@ -347,6 +347,35 @@ behind says `behind 34s`.
 - **View** — how much detail, which panes, how much is folded, the theme.
 - **Search** — the palette.
 
+## The runs list
+
+The first place. `graphmind serve` replays everything it has kept — the newest two hundred runs
+from the last thirty days, by default — and a line under the title says so (`47 runs across 3
+apps · everything the debugger server has kept`). Structure, top to bottom:
+
+- **Facets.** Five tiles — **All**, **Live**, **Held**, **Failed**, **Done** — each with its
+  count. Click one to filter; click again to clear. `Held 0` is itself information, so an
+  empty facet stays on the page, greyed.
+- **Pickers.** When the history holds more than one **app** or more than one **source**
+  (live, imported, recorded session, replay), a row of chips picks one; more than six apps
+  becomes a menu. **Group by** shelves the history by **Day** or by **App**. The search
+  matches the app, the run id and the error a run stopped on.
+- **Live now.** Whatever is running or held is pinned above the history, held runs first — a
+  stopped process outranks wherever it falls in the timeline.
+- **Shelves.** By day: **Today**, **Yesterday**, **Earlier this week**, **Older**, in local
+  time. By app: one shelf per app, the most recently run app first. Every shelf heading
+  carries its tally (`12 runs · 1 held · 3 failed`); a shelf longer than eight rows shows
+  eight and offers the rest.
+- **Rows.** A table, not a stack of cards: **Run** (app, a short run id, status), **Shape**
+  (nodes, llm steps, tool calls, errors), **Took** (elapsed minus held, with held time beside
+  it), **Spend** (tokens and est. cost) and **Started** line up down the page. A run that
+  failed, or is held on an error, carries the error under its row.
+- **Start something.** **Connect an agent** and **Build a workflow** are cards in a column
+  beside the list, not buttons in a corner — for most people arriving here one of the two is
+  the next step, and the list of past runs is the backdrop to it. Keeping them out of the
+  table also stops a row stretching the full width of a wide window. Below 1140px they move
+  above the list; the bundled demo is offered there too, when there is one to replay.
+
 ## The run summary
 
 One line above the graph: the status, then the four figures you want before you look at it —
@@ -388,16 +417,38 @@ see the same debug state, and a change in one broadcasts to the other — which 
 `#/connect`, the header menu, or "Connect an agent" in the palette. A viewer that opens with
 nothing attached and no runs lands here on its own, once.
 
-One screen: pick the SDK your agent already uses, and copy the install command and the two
-lines it needs. The page also states what a gate can actually do for that stack *before* you
-wire it up — LangChain callbacks can hold a node but not change what it returns — and whether
-anything is currently listening, in the same dot-and-label the header carries. Your choice of
-stack is remembered.
+There is deliberately no wizard. It was five steps and four were ceremony: a menu in front of
+a menu, a Next button between two code blocks that belong together, and a step whose content
+was "now run your app, and leave this tab open" — which is what the rest of the viewer is for.
+Two columns instead, because the page has two jobs.
 
-There is deliberately no wizard here. It was five steps, and four of them were ceremony: a
-menu in front of a menu, a Next button between two code blocks that belong together, and a
-step whose content was "now run your app, and leave this tab open" — which is what the rest
-of the viewer is for.
+**What to do**, on the left, read once top to bottom:
+
+1. **Your stack** — a card per supported stack, grouped by language, each showing the line
+   that lets you recognise your own project ("you call `streamText`", "someone else wrote the
+   server"). Every blurb is visible: a recognition cue you have to click to read is not one,
+   and it was the only thing telling the two MCP entries apart. The choice is remembered.
+2. **Install** — the package manager line for that stack.
+3. **Instrument** — the smallest edit that produces a live graph.
+
+Both code blocks have a **copy** button and rewrite in place when you pick a different stack.
+Under them, `npx graphmind-ai init` reads your project and prints these lines for you, or you
+can generate a starter project in the builder.
+
+**Whether it worked**, in a rail on the right, which changes under you while you work in your
+editor:
+
+- A three-point checklist in the order the facts become true — a debugger on the endpoint,
+  this tab attached to it, a first run recorded — each done or pending. The last one lands by
+  itself; come back to the tab and the panel has already changed, with a button into the run.
+- **Not connected** says how to start the server, and the tab keeps retrying on its own.
+- A **replay** says so plainly rather than reporting a connection it does not have: the runs
+  on the list came from a recording, not from your agent.
+- **At a gate** — what a gate can actually do on this stack, which genuinely differs (callbacks
+  can hold and abort a LangGraph node but not substitute its return value), stated before you
+  wire it up rather than after, with a link to that integration's guide.
+
+Below 1080px the rail moves above the steps.
 
 ## The Build page
 
@@ -415,7 +466,8 @@ the server's memory for the session (the default — nothing is written to disk,
 drops it immediately) or saved to the project's `.env` (owner-only, git-ignored). No route
 ever answers with a value.
 
-It needs a server to generate against and nothing else — no token, no sign-in. The whole flow,
+The canvas and the code are computed in the page, so both work with no server attached and no
+token; Create, Run and Test connection are the parts that need the local server. The whole flow,
 and where its boundaries are, is on [build a workflow](/guides/build-a-workflow/).
 
 ## Built-in fixtures

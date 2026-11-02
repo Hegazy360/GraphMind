@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -42,8 +43,44 @@ function devTokenPlugin(): Plugin {
   };
 }
 
+/**
+ * The CLI reads its own version out of package.json through `createRequire`,
+ * which a browser has no answer for — and the generator imports it to pin
+ * the adapter versions it writes into a project. Swap that one module for
+ * the same string, baked in at build time.
+ */
+function versionPlugin(): Plugin {
+  const versionModule = fileURLToPath(new URL('../../packages/cli/src/version.ts', import.meta.url));
+  const { version } = JSON.parse(
+    readFileSync(fileURLToPath(new URL('../../packages/cli/package.json', import.meta.url)), 'utf8'),
+  ) as { version: string };
+  return {
+    name: 'graphmind-cli-version',
+    enforce: 'pre',
+    resolveId(source, importer) {
+      if (!source.endsWith('version.js') || importer === undefined) return null;
+      const resolved = join(dirname(importer), source).replace(/\.js$/, '.ts');
+      return resolved === versionModule ? versionModule : null;
+    },
+    load(id) {
+      return id === versionModule ? `export const VERSION = ${JSON.stringify(version)};\n` : null;
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss(), devTokenPlugin()],
+  plugins: [react(), tailwindcss(), devTokenPlugin(), versionPlugin()],
+  /**
+   * The workflow spec and its code generator are pure TypeScript with no
+   * node imports, and the Build page runs them in the browser so it can show
+   * the project it describes with no server attached. They live next to the
+   * CLI that also runs them (server-side, for Create), rather than in a
+   * package of their own: the viewer is built into that same CLI and
+   * released with it, so there is no version to skew and nothing to publish.
+   */
+  resolve: {
+    alias: { '@workflow': fileURLToPath(new URL('../../packages/cli/src/builder', import.meta.url)) },
+  },
   server: {
     port: 5199,
     strictPort: true,

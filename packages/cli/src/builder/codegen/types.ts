@@ -1,4 +1,7 @@
 /** What a generator produces, and what the runner executes. */
+
+/** The shape of the paths and commands a project is generated for. */
+export type Platform = 'posix' | 'win32';
 import type { TargetMeta } from '../spec.js';
 
 export interface GeneratedFile {

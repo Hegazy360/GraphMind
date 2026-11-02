@@ -11,15 +11,17 @@ import { generatePython } from './python.js';
 import { generateTsAiSdk } from './ts-ai-sdk.js';
 import { generateTsAnthropic } from './ts-anthropic.js';
 import { generateTsOpenai } from './ts-openai.js';
-import type { Command, EnvKey, GeneratedFile, GeneratedProject } from './types.js';
+import type { Command, EnvKey, GeneratedFile, GeneratedProject, Platform } from './types.js';
 import type { LocalPackages } from '../local-packages.js';
-import { pythonCommands, venvPython, type PythonToolchain } from '../toolchain.js';
+import { pythonCommands, venvPython, type PythonToolchain } from '../toolchain-commands.js';
 
-export type { AdapterSource, Command, EnvKey, GeneratedFile, GeneratedProject } from './types.js';
+export type { AdapterSource, Command, EnvKey, GeneratedFile, GeneratedProject, Platform } from './types.js';
 
-export type Platform = 'posix' | 'win32';
-
-export function platformOf(nodePlatform: string = process.platform): Platform {
+/**
+ * Defaults to this process's platform, and to posix in a browser — where
+ * there is no `process` and the generated commands are only ever read.
+ */
+export function platformOf(nodePlatform: string = typeof process === 'undefined' ? 'posix' : process.platform): Platform {
   return nodePlatform === 'win32' ? 'win32' : 'posix';
 }
 
