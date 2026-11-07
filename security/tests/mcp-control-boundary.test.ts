@@ -8,8 +8,9 @@
  *        `serve --allow-control`), and it tells the model recorded payloads
  *        are untrusted data
  *   S12  an existing `mcp__graphmind__*` allowlist must not start
- *        auto-approving new, mutating tools: the tool list is exactly the four
- *        read-only tools, each annotated `readOnlyHint: true`
+ *        auto-approving new, mutating tools: the tool list is exactly the five
+ *        read-only tools (get_behavior joined in 0.7 — it only reads the same
+ *        DB the other four read), each annotated `readOnlyHint: true`
  *
  * Driven through the shipped binary (`dist/cli.js mcp`) over stdio.
  */
@@ -45,9 +46,9 @@ afterAll(async () => {
 });
 
 describe('S12: no new tools for an old allowlist to auto-approve', () => {
-  it('lists exactly the four read-only tools, each annotated readOnlyHint', async () => {
+  it('lists exactly the five read-only tools, each annotated readOnlyHint', async () => {
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['find_errors', 'get_node', 'get_run', 'list_runs']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['find_errors', 'get_behavior', 'get_node', 'get_run', 'list_runs']);
     for (const tool of tools) {
       expect(tool.annotations?.readOnlyHint, tool.name).toBe(true);
       expect(tool.annotations?.destructiveHint, tool.name).not.toBe(true);

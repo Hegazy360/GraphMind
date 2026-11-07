@@ -1,0 +1,52 @@
+# Agent regression tests in CI, with no API key and no token spend.
+#
+# Copy this into your own repo as .github/workflows/agent-regression.yml and
+# adjust the three marked lines. It is deliberately a file you copy rather
+# than an action you depend on: it is twenty lines of `graphmind replay`, and
+# a dependency would hide what it does.
+#
+# HOW IT WORKS
+#   1. Commit a recording. Capture a good run locally and export it:
+#        graphmind record <runId> --out fixtures/happy-path.ndjson
+#      That NDJSON is the fixture — plain text, reviewable in a diff.
+#   2. CI replays your agent against the file and asserts the trajectory
+#      still matches: the same tools, in the same order, with the same
+#      arguments, and the same number of model turns.
+#   3. No ANTHROPIC_API_KEY is set anywhere in this file, on purpose. If the
+#      replay ever reached a provider the job would fail, which is the
+#      strongest statement of hermeticity there is. (Your agent must not
+#      *demand* a key at startup — see the two-line guard in
+#      examples/support-desk/src/main.ts.)
+#
+# WHAT THIS CATCHES, precisely: changes in YOUR code — a tool renamed, a
+# schema tightened so the model's recorded arguments no longer validate, a
+# step cap lowered, a tool no longer registered, orchestration that drops a
+# call. It does NOT catch a changed tool body (the body never runs) or a
+# changed model (the model never runs). Those need a live run.
+name: Agent regression
+
+on: [push, pull_request]
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm ci # ← your install
+
+      - name: Replay the recording and assert the trajectory
+        # The fixture is read straight from the file — no database to set up,
+        # no import step. `--assert` exits non-zero on a regression, an extra
+        # call, or changed arguments; a pure reordering of parallel calls
+        # passes with a note.
+        run: |
+          npx graphmind-ai replay fixtures/happy-path.ndjson \
+            --assert \
+            --db "$RUNNER_TEMP/ci.db" \
+            --no-open \
+            -- node agent.js      # ← your agent's entry point

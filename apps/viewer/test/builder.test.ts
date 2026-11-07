@@ -23,6 +23,7 @@ import {
   removeNode,
   runErrorOf,
   slugify,
+  slugifyWhileTyping,
   withProvider,
   withTarget,
   type McpNode,
@@ -72,6 +73,29 @@ describe('defaults and switching', () => {
     expect(slugify('Support Agent v2!')).toBe('support-agent-v2');
     expect(slugify('---')).toBe('');
     expect(slugify('x'.repeat(80)).length).toBe(48);
+  });
+
+  it('keeps a typed dash, and trims it only once the name is finished', () => {
+    // PROJECT_NAME_RE allows a trailing dash, so every keystroke of
+    // "trip-bot" stays a valid name. `slugify` trimming it per keystroke
+    // meant the field could only ever produce "tripbot" — and the default
+    // name it offers, "my-agent", was one nobody could type.
+    expect(slugifyWhileTyping('trip-')).toBe('trip-');
+    expect(slugifyWhileTyping('trip-bot')).toBe('trip-bot');
+    expect(slugify('trip-')).toBe('trip');
+    expect(slugify('trip-bot')).toBe('trip-bot');
+  });
+
+  it('refuses a leading dash and anything that is not a name, in both forms', () => {
+    for (const slug of [slugify, slugifyWhileTyping]) {
+      expect(slug('---lead')).toBe('lead');
+      expect(slug('Trip Planner 2')).toBe('trip-planner-2');
+      expect(slug('a'.repeat(80))).toHaveLength(48);
+    }
+    // Where they differ, and why: a trailing space is the start of the next
+    // word while you type, and nothing at all once you have stopped.
+    expect(slugifyWhileTyping('  My Agent ')).toBe('my-agent-');
+    expect(slugify('  My Agent ')).toBe('my-agent');
   });
 
   it('names new nodes and parameters without colliding', () => {

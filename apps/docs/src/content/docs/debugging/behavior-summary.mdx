@@ -1,0 +1,85 @@
+---
+title: The behaviour summary
+description: One verdict per run — wasted tool calls, silent failures, token-limit stops, prompt growth — computed from facts the recording proves, identical in the viewer, the CLI and over MCP.
+sidebar:
+  order: 8
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A run that finished `ok` can still have gone badly: the agent called the same tool with the same
+arguments four times, a tool kept *returning* failures that never threw, every step's prompt grew
+until one stopped at the token limit. The behaviour summary is one verdict per run over exactly
+these questions, computed from the recording you already have.
+
+It appears in three places, always with the same numbers (they come from one implementation,
+`@graphmind-ai/analyze`):
+
+- **the viewer** — the Behaviour strip under the run's summary line; click it to unfold the
+  evidence;
+- **the terminal** — `graphmind runs --behavior last` (or a run id; `--json` for the raw report);
+- **your coding agent** — the MCP tool [`get_behavior`](/reference/mcp/#get_behavior-runid-).
+
+```text
+Behaviour — trip-planner (run_01H8…), error
+
+  2 of 7 tool calls (29%) repeated earlier work (1 repeat); checkBudget failed
+  3 of 3 calls; 1 LLM step stopped at the token limit.
+```
+
+## What it measures
+
+**Wasted work.** The three behaviours the [loop breakpoint](/debugging/breakpoints-and-step/)
+holds on live, found after the fact: consecutive identical calls (*repeat* — same node, same
+canonical input, `_meta` ignored, exactly as the live guard compares), a lap of 2–4 calls
+repeating identically (*cycle*), and the same tool failing the same way three or more times in a
+row (*error-repeat*). The report also counts the LLM steps that ran **inside** each streak and
+the tokens they consumed — that is what the loop actually cost; the viewer prices it when the
+model is in the bundled price table.
+
+**Tool health.** Per tool: calls, thrown failures, **silent failures** — a result shaped like
+`isError: true`, `success: false`, a non-zero exit code, or a bare `{error}` that never threw
+(the same strict shapes as the [smart breakpoint](/debugging/pause-on-error/)) — plus p50/p95 run
+time with debugger hold time subtracted, and whether failures were eventually followed by a
+success.
+
+**Termination quality.** Normalized finish reasons across LLM steps (`stop`, `tool-calls`,
+`length`, `content-filter`, `error`, `other`). A step that stops at `length` mid-task usually
+truncated a tool call's arguments; a *rising share* of `length` means the context is filling.
+
+**Context pressure.** Input tokens per LLM step and the first-to-last growth factor — the curve
+that shows the prompt swallowing tool output long before anything visibly fails.
+
+## What it deliberately does not do
+
+<Aside type="caution" title="A verdict, not a dashboard">
+The summary reports only what the recording proves. It does **not** guess at "dead steps" (an
+output nothing used — the recording carries no data flow), does not judge answer quality, and
+does not aggregate across runs into fleet statistics. One run, one verdict, evidence attached.
+</Aside>
+
+Two caveats the report states itself when they apply: tool calls whose inputs could not be read
+sit out duplicate detection, and token counts recorded before GraphMind 0.6 may exclude cached
+tokens.
+
+## Reading it in practice
+
+- **High waste share** → open the incident's calls in the viewer (each names its event span) and
+  look at what the model saw between iterations; the fix is usually a tool description or a
+  missing stop condition, and you can test it live with
+  [edited arguments](/debugging/edit-arguments/) or an
+  [injected result](/debugging/inject-and-continue/).
+- **Silent failures** → the model read "it worked" from a failing tool. Make the tool throw, or
+  keep the [smart breakpoint](/debugging/pause-on-error/) armed so the run holds there.
+- **`length` stops with tool calls** → the arguments were probably cut off; the live
+  `truncated-tool-call` breakpoint pauses exactly there.
+- **A steep context curve** → look at which tool's output dominates the later prompts
+  (`get_node` over MCP, or the node place in the viewer).
+
+From a coding agent, the loop closes without you paraphrasing anything:
+
+> **You:** my agent got slow and expensive yesterday — what happened?
+>
+> The agent calls `get_behavior` on the run, reads "14 of 31 tool calls repeated earlier work
+> (1 cycle)", pulls the looping calls with `get_node`, and proposes the fix with the viewer link
+> to the exact span.

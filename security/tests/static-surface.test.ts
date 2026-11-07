@@ -132,6 +132,14 @@ describe('the client and the CLI read only documented environment variables', ()
     // 0.6.0 — puts the viewer token back in front of the builder routes, for
     // a shared machine. A boolean switch; carries no user data.
     'GRAPHMIND_BUILDER_REQUIRE_TOKEN',
+    // 0.7.0 — hermetic replay (client). GRAPHMIND_REPLAY is a PATH to a tape
+    // `graphmind replay` wrote under the OS temp dir (owner-only) for the
+    // child it spawns; the other two are closed enums choosing a policy.
+    // The path names a file, never its contents, and nothing read here is
+    // recorded, sent or logged. Documented in reference/environment.
+    'GRAPHMIND_REPLAY',
+    'GRAPHMIND_REPLAY_ON_MISS',
+    'GRAPHMIND_REPLAY_ON_LOSSY',
     'CI',
   ];
 
@@ -151,15 +159,20 @@ describe('the client and the CLI read only documented environment variables', ()
     expect([...named].filter((name) => !ALLOWED_ENV.includes(name))).toEqual([]);
   });
 
-  it('the CLI copies the whole environment only into the demo child process', () => {
+  it('the CLI copies the whole environment only into a child process it spawns', () => {
     const dist = join(PACKAGES_DIR, 'cli', 'dist');
     const spreaders = jsFiles(dist).filter((file) =>
       /\.\.\.process\.env/.test(stripComments(readFileSync(file, 'utf8'))),
     );
     // Passing the parent environment to a child you spawn is not recording it;
-    // anywhere else it would be a red flag.
-    expect(spreaders.map((file) => relative(dist, file))).toEqual([
+    // anywhere else it would be a red flag. Both of these spawn a command the
+    // USER named (the demo agent; the agent being replayed), which would have
+    // inherited this environment anyway had they run it from their own shell
+    // — withholding it would break their provider keys and proxy settings for
+    // no gain.
+    expect(spreaders.map((file) => relative(dist, file)).sort()).toEqual([
       join('commands', 'demo.js'),
+      join('commands', 'replay.js'),
     ]);
   });
 });

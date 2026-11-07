@@ -145,3 +145,13 @@ jobs:
           # A re-run of an already-published version should be a no-op, not a
           # red build.
           skip-existing: true
+
+      # The release is not done until a stranger can `pip install` it: poll
+      # the registry through replica lag, exactly as publish-npm.yml does for
+      # the npm packages and publish-ruby.yml for the gem. Node is already on
+      # PATH on the tag path (the check-versions step set it up).
+      - name: Installable from the registry (polls through replica lag)
+        if: github.ref_type == 'tag'
+        env:
+          VERSION: ${{ steps.existing.outputs.version }}
+        run: node scripts/verify-published.mjs "$VERSION" --registries pypi

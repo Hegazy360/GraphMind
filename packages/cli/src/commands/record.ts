@@ -1,5 +1,5 @@
 /**
- * `graphmind record <runId> [--out <file>]` — export a persisted run's
+ * `graphmind record <runId|last> [--out <file>]` — export a persisted run's
  * envelope stream from storage to NDJSON (one wire envelope per line, the
  * same shape `graphmind demo` replays and `WS /ingest` accepts), or with
  * `--html` a self-contained viewer page.
@@ -28,9 +28,9 @@ function safeFileName(runId: string): string {
 export async function runRecord(parsed: ParsedCli): Promise<number> {
   recordTelemetry('record');
 
-  const runId = parsed.positionals[0];
-  if (runId === undefined || runId === '') {
-    console.error('usage: graphmind record <runId> [--out <file>]');
+  const runArg = parsed.positionals[0];
+  if (runArg === undefined || runArg === '') {
+    console.error('usage: graphmind record <runId|last> [--out <file>]');
     return 1;
   }
   if (parsed.positionals.length > 1) {
@@ -46,6 +46,10 @@ export async function runRecord(parsed: ParsedCli): Promise<number> {
 
   const storage = new SqliteStorage(dbPath);
   try {
+    // `last` picks the most recently started run — the same spelling
+    // `graphmind replay` and `runs --behavior` accept, because "export the
+    // run I just made" is the step right before both of them.
+    const runId = runArg === 'last' ? (storage.listRuns()[0]?.id ?? runArg) : runArg;
     const run = storage.getRun(runId);
     if (run === undefined) {
       console.error(`graphmind record: run "${runId}" not found in ${dbPath}`);

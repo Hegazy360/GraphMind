@@ -2,6 +2,7 @@
  * `graphmind runs` — list what is stored, and keep it from growing forever.
  *
  *   graphmind runs                      list recent runs
+ *   graphmind runs --behavior <id|last> behaviour report for one run
  *   graphmind runs --prune              apply the retention policy now
  *   graphmind runs --prune --keep 50    ...keeping only the 50 newest
  *   graphmind runs --prune --days 7     ...and only the last 7 days
@@ -10,7 +11,8 @@
  */
 import { existsSync } from 'node:fs';
 import type { ParsedCli } from '../args.js';
-import { resolveDbPath } from '../paths.js';
+import { BehaviorError, behaviorLines, loadBehaviorReport, resolveBehaviorRunId } from '../behavior.js';
+import { DEFAULT_PORT, resolveDbPath } from '../paths.js';
 import { SqliteStorage } from '../sqlite-storage.js';
 import { DEFAULT_RETENTION } from '../storage.js';
 import { recordTelemetry } from '../telemetry.js';
@@ -41,6 +43,26 @@ export async function runRuns(parsed: ParsedCli, io: RunsIo = console): Promise<
 
   const storage = new SqliteStorage(dbPath);
   try {
+    if (parsed.flags.behavior !== undefined) {
+      try {
+        const runId = resolveBehaviorRunId(storage, parsed.flags.behavior);
+        const report = loadBehaviorReport(storage, runId);
+        if (parsed.flags.json) {
+          io.log(JSON.stringify(report, null, 2));
+        } else {
+          const port = parsed.flags.port ?? DEFAULT_PORT;
+          for (const line of behaviorLines(report, `http://127.0.0.1:${port}`)) io.log(line);
+        }
+        return 0;
+      } catch (error) {
+        if (error instanceof BehaviorError) {
+          io.error(`graphmind runs: ${error.message}`);
+          return 1;
+        }
+        throw error;
+      }
+    }
+
     if (parsed.flags.rm !== undefined) {
       const ok = storage.deleteRun(parsed.flags.rm);
       if (!ok) {

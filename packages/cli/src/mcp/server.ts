@@ -14,7 +14,7 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { VERSION } from '../version.js';
-import { findErrors, getNode, getRun, listRuns, ToolError, type ToolContext } from './tools.js';
+import { findErrors, getBehavior, getNode, getRun, listRuns, ToolError, type ToolContext } from './tools.js';
 
 const INSTRUCTIONS = `GraphMind is a local live debugger for AI agents: apps instrumented with @graphmind-ai/sdk record every run (agent, LLM step, and tool call) into a local SQLite database, and the GraphMind viewer renders those runs as a live execution graph.
 
@@ -24,6 +24,7 @@ Typical debugging flow:
 1. find_errors — the most recent failed nodes across all runs (start here for "why did my run fail?").
 2. get_node — full detail for one node: input, output, error + stack, timings, token usage.
 3. list_runs / get_run — browse runs and their per-node breakdown.
+4. get_behavior — how well a run worked (wasted/looping tool calls, silent failures, token-limit stops, prompt growth), for "why was this slow/expensive/circling?" rather than "why did it throw?".
 
 Every result includes a deep link (http://127.0.0.1:4747/#/run/...) — cite it so the user can open the exact run or node in the GraphMind viewer (start it with \`graphmind\`).
 
@@ -86,6 +87,18 @@ const TOOLS: Tool[] = [
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
+    name: 'get_behavior',
+    title: 'Behaviour report for one run',
+    description:
+      'How well the run worked, not just whether it finished: wasted tool calls (consecutive repeats, 2–4-call cycles, the same failure three times in a row) with the LLM tokens spent while they looped; per-tool health (calls, thrown failures, SILENT failures returned as results, p50/p95 run time); normalized finish reasons across LLM steps (a rising share of \'length\' means the context is filling); and the prompt-size growth curve. Starts with a one-line verdict. Use it when the user asks why a run was slow, expensive, or went in circles — find_errors only covers what threw.',
+    inputSchema: {
+      type: 'object',
+      properties: { runId: RUN_ID_PROPERTY },
+      required: ['runId'],
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
     name: 'find_errors',
     title: 'Find recent failed nodes across runs',
     description:
@@ -124,6 +137,8 @@ export function createMcpServer(ctx: ToolContext): Server {
           return jsonResult(getRun(ctx, args));
         case 'get_node':
           return jsonResult(getNode(ctx, args));
+        case 'get_behavior':
+          return jsonResult(getBehavior(ctx, args));
         case 'find_errors':
           return jsonResult(findErrors(ctx, args));
         default:

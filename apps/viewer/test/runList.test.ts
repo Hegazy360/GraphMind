@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   NO_FILTER,
+  canGroupByApp,
   facetsOf,
   groupRuns,
   isFiltering,
@@ -218,5 +219,23 @@ describe('shortRunId', () => {
     expect(shortRunId('run-7')).toBe('run-7');
     expect(shortRunId('3f2a9c10-1b2c-4d5e-8f90-abcdefabcdef')).toBe('3f2a9c10');
     expect(shortRunId('demo-trip-planner-2026-11-04T15')).toBe('…6-11-04T15');
+  });
+});
+
+describe('canGroupByApp', () => {
+  const facetsOfApps = (names: string[]) =>
+    facetsOf(names.map((app, i) => summariseRun(run({ runId: `r${i}`, app }))));
+
+  it('is offered only when more than one app is on the list', () => {
+    expect(canGroupByApp(facetsOfApps(['a', 'b']), NO_FILTER)).toBe(true);
+    expect(canGroupByApp(facetsOfApps(['a', 'a']), NO_FILTER)).toBe(false);
+    expect(canGroupByApp(facetsOfApps([]), NO_FILTER)).toBe(false);
+  });
+
+  it('is withdrawn once a filter has narrowed the list to one app', () => {
+    const facets = facetsOfApps(['a', 'b']);
+    expect(canGroupByApp(facets, { ...NO_FILTER, app: 'a' })).toBe(false);
+    // A status filter does not narrow the apps, so it still applies.
+    expect(canGroupByApp(facets, { ...NO_FILTER, status: 'done' })).toBe(true);
   });
 });

@@ -12,6 +12,7 @@ import { runInit } from './commands/init.js';
 import { runMcp } from './commands/mcp.js';
 import { printMcpProxyHelp, runMcpProxy } from './commands/mcp-proxy.js';
 import { runRecord } from './commands/record.js';
+import { runReplay } from './commands/replay.js';
 import { runRuns } from './commands/runs.js';
 import { runSkill } from './commands/skill.js';
 import { MCP_PROXY_SUMMARY } from './mcp-proxy/help.js';
@@ -64,8 +65,12 @@ const commands: Record<string, CommandDef> = {
       ),
   },
   runs: {
-    summary: 'List stored runs, prune old ones, or delete them',
+    summary: 'List stored runs, report behaviour (--behavior), prune or delete',
     run: runRuns,
+  },
+  replay: {
+    summary: 'Re-run an agent against a recording; --substitute asks "what if?"',
+    run: runReplay,
   },
   record: {
     summary: 'Export a run: NDJSON fixture, or --html to share it',

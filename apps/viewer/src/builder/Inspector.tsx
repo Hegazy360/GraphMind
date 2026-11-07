@@ -18,10 +18,11 @@ import {
   PARAM_TYPES,
   PROVIDER_LABEL,
   ROOT_ID,
+  slugify,
   TARGETS,
   emptyParam,
   mcpOf,
-  slugify,
+  slugifyWhileTyping,
   targetMeta,
   withProvider,
   withTarget,
@@ -122,38 +123,59 @@ function AgentFields({ node, issues }: { node: AgentNode; issues: readonly Issue
   const nameError = issues.find((issue) => issue.path === 'name')?.message;
   const modelError = issues.find((issue) => issue.path === 'model')?.message;
 
+  // The targets, grouped the way the connect page groups its stacks: a
+  // language row each, so five choices read as two questions.
+  const languages: ('typescript' | 'python')[] = ['typescript', 'python'];
+
   return (
     <>
+      {/* Two sections, because these are two different things: what the
+          project is written in, and what the agent does. The agent card is
+          where you find both, but a model and a system prompt are not the
+          same kind of decision. */}
+      <div className="gm-bsection">
+        <span className="gm-section-label">Project</span>
+        <span className="gm-bfield-hint">the directory, the language, the model</span>
+      </div>
       <Field label="Project name" hint="the directory and the run's app label" error={nameError}>
         <input
           className="gm-binput gm-binput--mono"
           value={graph.name}
           spellCheck={false}
           aria-label="Project name"
-          onChange={(e) => patchGraph({ name: slugify(e.target.value) })}
+          // Trimmed of a trailing dash when the field is left, not while a
+          // name is being typed into it (graph.ts explains the difference).
+          onChange={(e) => patchGraph({ name: slugifyWhileTyping(e.target.value) })}
+          onBlur={(e) => patchGraph({ name: slugify(e.target.value) })}
         />
       </Field>
 
       <Field label="Language and framework" hint="what the generated code uses">
         <div className="gm-btargets" role="radiogroup" aria-label="Target">
-          {TARGETS.map((target) => (
-            <button
-              key={target.id}
-              type="button"
-              role="radio"
-              aria-checked={graph.target === target.id}
-              aria-label={`${target.language === 'typescript' ? 'TypeScript' : 'Python'} · ${target.framework}`}
-              className={`gm-btarget${graph.target === target.id ? ' gm-btarget--on' : ''}`}
-              onClick={() => setGraph(withTarget(graph, target.id as TargetId))}
-            >
-              <span className="gm-btarget-lang">{target.language === 'typescript' ? 'TypeScript' : 'Python'}</span>
-              <span className="gm-btarget-fw">{target.framework}</span>
-            </button>
+          {languages.map((language) => (
+            <div key={language} className="gm-btarget-row">
+              <span className="gm-btarget-lang">{language === 'typescript' ? 'TypeScript' : 'Python'}</span>
+              <div className="gm-btarget-chips">
+                {TARGETS.filter((target) => target.language === language).map((target) => (
+                  <button
+                    key={target.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={graph.target === target.id}
+                    aria-label={`${language === 'typescript' ? 'TypeScript' : 'Python'} · ${target.framework}`}
+                    className={`gm-btarget${graph.target === target.id ? ' gm-btarget--on' : ''}`}
+                    onClick={() => setGraph(withTarget(graph, target.id as TargetId))}
+                  >
+                    {target.framework}
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
       </Field>
 
-      <div className="gm-brow">
+      <div className="gm-brow gm-brow--two">
         <Field label="Provider">
           <select
             className="gm-binput"
@@ -178,9 +200,26 @@ function AgentFields({ node, issues }: { node: AgentNode; issues: readonly Issue
             onChange={(e) => patchGraph({ model: e.target.value })}
           />
         </Field>
-        <Field label="Max steps" hint="cap">
+      </div>
+
+      <Field label="Description" hint="for the README; optional">
+        <input
+          className="gm-binput"
+          value={graph.description}
+          aria-label="Description"
+          onChange={(e) => patchGraph({ description: e.target.value })}
+        />
+      </Field>
+
+      <div className="gm-bsection">
+        <span className="gm-section-label">Agent</span>
+        <span className="gm-bfield-hint">what this run does</span>
+      </div>
+
+      <div className="gm-brow gm-brow--steps">
+        <Field label="Max steps" hint="the loop stops here, whatever the model wants">
           <input
-            className="gm-binput"
+            className="gm-binput gm-binput--short"
             type="number"
             min={1}
             max={50}
@@ -208,15 +247,6 @@ function AgentFields({ node, issues }: { node: AgentNode; issues: readonly Issue
           value={node.prompt}
           aria-label="Task"
           onChange={(e) => update(node.id, { prompt: e.target.value } as Partial<AgentNode>)}
-        />
-      </Field>
-
-      <Field label="Description" hint="for the README; optional">
-        <input
-          className="gm-binput"
-          value={graph.description}
-          aria-label="Description"
-          onChange={(e) => patchGraph({ description: e.target.value })}
         />
       </Field>
     </>

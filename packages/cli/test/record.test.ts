@@ -95,6 +95,38 @@ describe('graphmind record', () => {
     }
   });
 
+  it('`last` exports the most recently started run', async () => {
+    const ts = await startTestServer();
+    try {
+      for (const [runId, startDelay] of [['run-older', 0], ['run-newest', 50]] as const) {
+        const app = await FakeApp.connect(ts.port, { app: 'recorder-app' });
+        if (startDelay > 0) await new Promise((r) => setTimeout(r, startDelay));
+        app.send('run.started', runId, { app: 'recorder-app', sdk: { name: 'ai', version: '7.0.0' } });
+        app.send('run.finished', runId, { status: 'ok' });
+        await waitUntil(() => ts.server.storage.listEvents(runId).total === 2, `${runId} persisted`);
+        await app.close();
+      }
+      const outPath = join(ts.dir, 'last.ndjson');
+      const code = await runRecord(parsedCli(['last'], { db: ts.dbPath, out: outPath }));
+      expect(code).toBe(0);
+      const first = readFileSync(outPath, 'utf8').split('\n')[0] ?? '';
+      expect(JSON.parse(first)).toMatchObject({ runId: 'run-newest' });
+    } finally {
+      await ts.cleanup();
+    }
+  });
+
+  it('`last` on an empty database fails like an unknown run, not a crash', async () => {
+    const ts = await startTestServer();
+    try {
+      await ts.server.close();
+      const code = await runRecord(parsedCli(['last'], { db: ts.dbPath }));
+      expect(code).toBe(1);
+    } finally {
+      await ts.cleanup();
+    }
+  });
+
   it('fails cleanly for a missing run or missing database', async () => {
     const ts = await startTestServer();
     await ts.server.close();

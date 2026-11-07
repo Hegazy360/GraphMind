@@ -35,6 +35,8 @@ export interface CliFlags {
   days: number | undefined;
   /** `graphmind runs --rm <runId>`: delete one run. */
   rm: string | undefined;
+  /** `graphmind runs --behavior <runId|last>`: behaviour report for one run. */
+  behavior: string | undefined;
   /** `graphmind record --html`: export a self-contained viewer page. */
   html: boolean;
   /**
@@ -76,6 +78,18 @@ export interface CliFlags {
   editInput: boolean;
   /** `graphmind skill --install --force`: overwrite an existing file. */
   force: boolean;
+  /** `graphmind replay --assert`: exit non-zero when the trajectory diverged. */
+  assert: boolean;
+  /** `graphmind replay --dry`: report what a replay would cover, run nothing. */
+  dry: boolean;
+  /** `graphmind replay --on-miss <error|live|skip>`: an unmatched call. */
+  onMiss: string | undefined;
+  /** `graphmind replay --on-lossy <error|live>`: a value too big to have been recorded. */
+  onLossy: string | undefined;
+  /** `graphmind replay --substitute <nodeId>[#n]=<json|@file>`, repeatable. */
+  substitute: string[];
+  /** `graphmind replay --live-model`: replay tools, call the real model. */
+  liveModel: boolean;
 }
 
 /**
@@ -110,6 +124,10 @@ export const OPTION_HELP: readonly string[] = [
   '  --keep <n>     (runs) keep/show the n newest runs',
   '  --days <n>     (runs) keep runs from the last n days',
   '  --rm <runId>   (runs) delete one run   --clear --yes  delete all',
+  '  --behavior <runId|last>',
+  '                 (runs) behaviour report for one run: wasted tool calls,',
+  '                 tool health, finish reasons, prompt growth. "last" picks',
+  '                 the most recently started run. --json for the full report',
   '  --trace        (mcp-proxy) log one stderr line per relayed JSON-RPC frame',
   '  --wait-for-attach',
   '                 (mcp-proxy) hold the first frame until the debugger attaches',
@@ -139,6 +157,22 @@ export const OPTION_HELP: readonly string[] = [
   '                 keys replace the live ones); needs --allow-control=edit',
   '  --operator <label>',
   '                 (resume) a display-only label for the audit line',
+  '  --assert       (replay) exit non-zero if the trajectory diverged',
+  '  --dry          (replay) report what a replay would cover; run nothing',
+  '  --on-miss <error|live|skip>',
+  '                 (replay) a call the recording does not have. Default error',
+  '                 (stop at the divergence); live runs it for real; skip',
+  '                 answers it with undefined',
+  '  --on-lossy <error|live>',
+  '                 (replay) a recorded value too large to have been kept in',
+  '                 full. Default error; live re-runs the call for real',
+  '  --substitute <nodeId>[#n]=<json|@file>',
+  '                 (replay) answer that call with this value instead, and run',
+  '                 everything after it for real (the counterfactual). Needs a',
+  '                 provider key; repeatable',
+  '  --live-model   (replay) serve tool calls from the recording but let model',
+  '                 steps call the provider — for testing a prompt, a tool',
+  '                 description or a model change against fixed tools',
   '  --install      (skill) write .claude/skills/graphmind/SKILL.md here',
   '  --force        (skill --install) overwrite an existing SKILL.md',
   '  -v, --version  Print the version and exit',
@@ -183,6 +217,7 @@ export function defaultFlags(): CliFlags {
     keep: undefined,
     days: undefined,
     rm: undefined,
+    behavior: undefined,
     html: false,
     redactSecrets: true,
     pauseOnError: undefined,
@@ -200,6 +235,12 @@ export function defaultFlags(): CliFlags {
     allowControl: undefined,
     editInput: true,
     force: false,
+    assert: false,
+    dry: false,
+    onMiss: undefined,
+    onLossy: undefined,
+    substitute: [],
+    liveModel: false,
   };
 }
 
@@ -312,6 +353,41 @@ export function parseCliArgs(argv: string[]): ParsedCli {
       case '--rm': {
         const raw = takeValue('--rm', inline, next);
         if (raw !== undefined) flags.rm = raw;
+        break;
+      }
+      case '--assert':
+        flags.assert = true;
+        break;
+      case '--dry':
+        flags.dry = true;
+        break;
+      case '--on-miss': {
+        const raw = takeValue('--on-miss', inline, next);
+        if (raw !== undefined) {
+          if (raw === 'error' || raw === 'live' || raw === 'skip') flags.onMiss = raw;
+          else errors.push(`--on-miss must be error, live or skip (got "${raw}")`);
+        }
+        break;
+      }
+      case '--substitute': {
+        const raw = takeValue('--substitute', inline, next);
+        if (raw !== undefined) flags.substitute.push(raw);
+        break;
+      }
+      case '--live-model':
+        flags.liveModel = true;
+        break;
+      case '--on-lossy': {
+        const raw = takeValue('--on-lossy', inline, next);
+        if (raw !== undefined) {
+          if (raw === 'error' || raw === 'live') flags.onLossy = raw;
+          else errors.push(`--on-lossy must be error or live (got "${raw}")`);
+        }
+        break;
+      }
+      case '--behavior': {
+        const raw = takeValue('--behavior', inline, next);
+        if (raw !== undefined) flags.behavior = raw;
         break;
       }
       case '--pause-on-error': {

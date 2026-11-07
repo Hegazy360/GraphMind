@@ -196,6 +196,13 @@ function makeExecute(
         finish(pre.output, 'ok', { injected: true });
         return pre.output;
       }
+      // Hermetic replay only: the recording says this call threw, so it
+      // throws — recorded as the failure it was, not as a missing call.
+      if (pre.action === 'throw') {
+        core.errorNode(node.nodeId, instanceId, pre.error);
+        finish(undefined, 'error');
+        throw pre.error;
+      }
       // 'retry' before execution is equivalent to continue.
       applyEdit(editedArgs(pre));
 
@@ -312,6 +319,12 @@ function makeStreamingExecute(
         finish(pre.output, 'ok', { injected: true });
         yield pre.output;
         return;
+      }
+      // Hermetic replay only (see the non-streaming path).
+      if (pre.action === 'throw') {
+        core.errorNode(node.nodeId, instanceId, pre.error);
+        finish(undefined, 'error');
+        throw pre.error;
       }
       const preEdit = editedArgs(pre);
       const args = preEdit === undefined ? input : preEdit.args;

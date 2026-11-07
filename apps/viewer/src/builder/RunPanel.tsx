@@ -271,9 +271,10 @@ export function RunPanel({
 
   const openRun = () => {
     if (runId === undefined) return;
-    const ui = useUiStore.getState();
-    ui.selectRun(runId);
-    ui.setPage('runs');
+    // `selectRun` IS the navigation — it sets the page to the run. Calling
+    // setPage('runs') after it put you back on the list every time, which
+    // is the one place "Open the run" must not land.
+    useUiStore.getState().selectRun(runId);
   };
 
   const disabledNote = blockedNote ?? (busy !== undefined ? 'Working…' : undefined);
@@ -281,7 +282,15 @@ export function RunPanel({
   return (
     <section className="gm-brun" aria-label="Create and run">
       {blocked !== undefined && <BlockedNotice blocked={blocked} />}
-      <div className="gm-section-label">Create the project</div>
+
+      {/* Three numbered steps. They used to be two labels with the key
+          fields folded under the first; the order you actually do them in
+          — write the files, give it a key, run it — is the order shown. */}
+      <div className="gm-bsection">
+        <span className="gm-connect-n" aria-hidden="true">1</span>
+        <span className="gm-section-label">Create the project</span>
+        {createdHere && <span className="gm-bsection-state gm-bsection-state--ok">written</span>}
+      </div>
       <label className="gm-bfield">
         <span className="gm-bfield-label">
           Directory <span className="gm-bfield-hint">absolute path; blank = the default</span>
@@ -295,10 +304,31 @@ export function RunPanel({
         />
       </label>
 
+      <div className="gm-brun-actions">
+        <label className="gm-bcheck" title="Rewrite the generated files if the directory already has them. Your .env and any file you added are left alone.">
+          <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />
+          overwrite generated files
+        </label>
+        <button
+          className="gm-action gm-action--primary"
+          style={{ flex: 'none', padding: '7px 14px', fontSize: 12 }}
+          onClick={() => void create()}
+          disabled={!canAct || busy !== undefined || preview === undefined}
+          title={disabledNote ?? (createdHere ? 'Write the files again (needs overwrite)' : 'Write the project to disk')}
+        >
+          {busy === 'create' ? 'Writing…' : createdHere ? 'Write again' : 'Create project'}
+        </button>
+      </div>
+
       {envKeys.length > 0 && (
         <div className="gm-bsecrets">
-          <div className="gm-bfield-label">
-            Credentials <span className="gm-bfield-hint">sent once, over loopback; never shown again</span>
+          <div className="gm-bsection">
+            <span className="gm-connect-n" aria-hidden="true">2</span>
+            <span className="gm-section-label">Credentials</span>
+            <span className="gm-bfield-hint">sent once, over loopback; never shown again</span>
+            {createdHere && missingKeys.length === 0 && requiredKeys.length > 0 && (
+              <span className="gm-bsection-state gm-bsection-state--ok">set</span>
+            )}
           </div>
           <div className="gm-bstore" role="radiogroup" aria-label="Where to keep the key">
             <button
@@ -355,49 +385,47 @@ export function RunPanel({
               </label>
             );
           })}
+          {createdHere && Object.keys(secretsToSend).length > 0 && (
+            <div className="gm-brun-actions">
+              <button
+                className="gm-action"
+                style={{ flex: 'none' }}
+                onClick={() => void saveEnv()}
+                disabled={!canAct || busy !== undefined}
+                title={persist ? 'Write the key to .env without rewriting the code' : 'Hold the key in memory for this session'}
+              >
+                {busy === 'env' ? 'Saving…' : persist ? 'Save to .env' : 'Hold for this session'}
+              </button>
+            </div>
+          )}
+          {createdHere && sessionKeys.length > 0 && (
+            <div className="gm-brun-actions">
+              <button
+                className="gm-action"
+                style={{ flex: 'none' }}
+                onClick={() => void forget()}
+                disabled={!canAct || busy !== undefined}
+                title={`Drop ${sessionKeys.join(', ')} from the debugger's memory now`}
+              >
+                Forget {sessionKeys.length === 1 ? 'the key' : 'the keys'}
+              </button>
+            </div>
+          )}
+          {!createdHere && Object.keys(secretsToSend).length > 0 && (
+            <span className="gm-brun-hint">Sent along with Create, above.</span>
+          )}
         </div>
       )}
 
-      <div className="gm-brun-actions">
-        <label className="gm-bcheck" title="Rewrite the generated files if the directory already has them. Your .env and any file you added are left alone.">
-          <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />
-          overwrite generated files
-        </label>
-        <button
-          className="gm-action gm-action--primary"
-          style={{ flex: 'none', padding: '7px 14px', fontSize: 12 }}
-          onClick={() => void create()}
-          disabled={!canAct || busy !== undefined || preview === undefined}
-          title={disabledNote ?? (createdHere ? 'Write the files again (needs overwrite)' : 'Write the project to disk')}
-        >
-          {busy === 'create' ? 'Writing…' : createdHere ? 'Write again' : 'Create project'}
-        </button>
-        {createdHere && Object.keys(secretsToSend).length > 0 && (
-          <button
-            className="gm-action"
-            style={{ flex: 'none' }}
-            onClick={() => void saveEnv()}
-            disabled={!canAct || busy !== undefined}
-            title={persist ? 'Write the key to .env without rewriting the code' : 'Hold the key in memory for this session'}
-          >
-            {busy === 'env' ? 'Saving…' : persist ? 'Save to .env' : 'Hold for this session'}
-          </button>
+      <div className="gm-bsection">
+        <span className="gm-connect-n" aria-hidden="true">3</span>
+        <span className="gm-section-label">Run it</span>
+        {job !== undefined && (
+          <span className={`gm-pill gm-pill--${job.phase === 'running' || job.phase === 'installing' ? 'running' : job.phase === 'exited' ? 'ok' : job.phase === 'stopped' ? 'idle' : 'error'}`}>
+            {phaseLabel(job.phase)}
+            {job.exitCode !== undefined && job.phase !== 'exited' ? ` · exit ${job.exitCode}` : ''}
+          </span>
         )}
-        {createdHere && sessionKeys.length > 0 && (
-          <button
-            className="gm-action"
-            style={{ flex: 'none' }}
-            onClick={() => void forget()}
-            disabled={!canAct || busy !== undefined}
-            title={`Drop ${sessionKeys.join(', ')} from the debugger's memory now`}
-          >
-            Forget {sessionKeys.length === 1 ? 'the key' : 'the keys'}
-          </button>
-        )}
-      </div>
-
-      <div className="gm-section-label" style={{ marginTop: 16 }}>
-        Run it
       </div>
       {toolchainNote !== undefined && <div className="gm-brun-hint">{toolchainNote}</div>}
       <div className="gm-brun-actions">
@@ -425,20 +453,17 @@ export function RunPanel({
             {busy === 'start' ? 'Starting…' : created?.project.installed || job !== undefined ? '▶ Run' : '▶ Install & run'}
           </button>
         )}
-        {job !== undefined && (
-          <span className={`gm-pill gm-pill--${job.phase === 'running' || job.phase === 'installing' ? 'running' : job.phase === 'exited' ? 'ok' : job.phase === 'stopped' ? 'idle' : 'error'}`}>
-            {phaseLabel(job.phase)}
-            {job.exitCode !== undefined && job.phase !== 'exited' ? ` · exit ${job.exitCode}` : ''}
-          </span>
-        )}
         {runId !== undefined && (
           <button className="gm-action" style={{ flex: 'none' }} onClick={openRun} title="Open this run in the debugger">
             Open the run →
           </button>
         )}
+        {canAct && !createdHere && !live && (
+          <span className="gm-brun-hint">Create the project first (step 1); Run starts what it wrote.</span>
+        )}
         {createdHere && !live && missingKeys.length > 0 && (
           <span className="gm-brun-hint">
-            Set {missingKeys.map((k) => k.name).join(', ')} above and save it to run from here.
+            Set {missingKeys.map((k) => k.name).join(', ')} in step 2 and save it to run from here.
           </span>
         )}
       </div>

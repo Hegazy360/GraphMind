@@ -1,0 +1,26 @@
+{
+  "name": "support-desk",
+  "private": true,
+  "description": "GraphMind's realistic example: an e-commerce support agent (Vercel AI SDK + Anthropic) with five ticket scenarios, each engineered to exercise one debugger feature — pause-on-error, edit-and-retry, silent-failure holds, retry loops, context growth.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.42",
+    "@graphmind-ai/sdk": "workspace:*",
+    "ai": "^7.0.79",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "graphmind-ai": "workspace:*",
+    "tsx": "^4.19.0",
+    "typescript": "^7.0.2"
+  }
+}

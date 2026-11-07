@@ -12,6 +12,7 @@
  */
 import { useCallback, useEffect, useRef } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
+import { BehaviorSummary } from '../components/BehaviorSummary.js';
 import { RunCanvas } from '../components/RunCanvas.js';
 import { RunSummary } from '../components/RunSummary.js';
 import { Timeline } from '../components/Timeline.js';
@@ -68,6 +69,7 @@ export function RunPage({ runId }: { runId: string }) {
   return (
     <div className="gm-runpage">
       <RunSummary runId={runId} />
+      <BehaviorSummary runId={runId} />
       <div className="gm-runpage-body">
         <ReactFlowProvider>
           {view !== 'timeline' && (

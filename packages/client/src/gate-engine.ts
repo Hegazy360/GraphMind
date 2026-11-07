@@ -59,7 +59,16 @@ export type GateDecision =
   | { action: 'continue'; input?: unknown }
   | { action: 'retry'; input?: unknown }
   | { action: 'abort' }
-  | { action: 'inject'; output: unknown };
+  | { action: 'inject'; output: unknown }
+  /**
+   * The call must FAIL with `error`, exactly as the recording says it did.
+   * Local to hermetic replay (`replay.ts`): a debugger can never send it —
+   * the wire's `ResumeAction` has no such value — so it reaches an adapter
+   * only while a tape is loaded. An adapter that does not handle it should
+   * fall through to running the call, which `graphmind replay` reports as a
+   * live call rather than a replayed one.
+   */
+  | { action: 'throw'; error: unknown };
 
 /** Extra facts about a release, carried into `exec.resumed`. */
 export interface ResumeInfo {
@@ -87,7 +96,14 @@ export interface ValidationTicket {
   readonly pauseId: string;
 }
 
-export const CONTINUE_DECISION: GateDecision = Object.freeze({ action: 'continue' });
+/**
+ * Every decision except `throw`: what a gate can be released WITH over the
+ * wire. The engine only ever settles these — `throw` is produced locally by
+ * hermetic replay, which never reaches a held gate.
+ */
+export type WireGateDecision = Exclude<GateDecision, { action: 'throw' }>;
+
+export const CONTINUE_DECISION: WireGateDecision = Object.freeze({ action: 'continue' });
 
 export interface GateEngineCallbacks {
   /** A gate was registered and is now held. Emit `exec.paused` here. */
@@ -117,7 +133,7 @@ interface HeldGate {
   /** Monotonic clock reading (see clock.ts) — never wall time. */
   openedAt: number;
   timer: ReturnType<typeof setTimeout> | undefined;
-  resolve: (decision: GateDecision) => void;
+  resolve: (decision: WireGateDecision) => void;
   /** `validating` while an edited input is checked (see the module comment). */
   state: 'held' | 'validating';
   /** The current validation's ticket; undefined while `held`. */
@@ -192,8 +208,8 @@ export class GateEngine {
   }
 
   /** Register a held gate; resolves when released. Call only after `shouldPause`. */
-  hold(point: PausePoint, node: GateNode, runId: string): Promise<GateDecision> {
-    return new Promise<GateDecision>((resolve) => {
+  hold(point: PausePoint, node: GateNode, runId: string): Promise<WireGateDecision> {
+    return new Promise<WireGateDecision>((resolve) => {
       const pauseId = this.callbacks.newPauseId();
       const gate: HeldGate = {
         pauseId,
@@ -223,7 +239,7 @@ export class GateEngine {
    */
   resume(pauseId: string, action: ResumeAction, output?: unknown, info?: ResumeInfo): boolean {
     if (this.held.get(pauseId)?.state !== 'held') return false;
-    const decision: GateDecision =
+    const decision: WireGateDecision =
       action === 'inject' ? { action: 'inject', output } : { action };
     return this.settle(pauseId, decision, action, info);
   }
@@ -275,7 +291,7 @@ export class GateEngine {
    * original input. Also false when the pause deadline passed during
    * validation: the gate is continued with its original input (see `reopen`).
    */
-  completeValidation(ticket: ValidationTicket, decision: GateDecision, info?: ResumeInfo): boolean {
+  completeValidation(ticket: ValidationTicket, decision: WireGateDecision, info?: ResumeInfo): boolean {
     const gate = this.held.get(ticket.pauseId);
     if (gate === undefined || gate.ticket !== ticket) return false;
     if (this.overdue(gate)) {
@@ -328,7 +344,7 @@ export class GateEngine {
 
   private settle(
     pauseId: string,
-    decision: GateDecision,
+    decision: WireGateDecision,
     action: ResumeAction,
     info?: ResumeInfo,
   ): boolean {

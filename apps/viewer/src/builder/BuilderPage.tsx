@@ -15,7 +15,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { isExportedRun } from '../connection/FixtureConnection.js';
 import { useUiStore } from '../store/uiStore.js';
-import { IconClose } from '../components/Icons.js';
+import { IconClose, IconPlus } from '../components/Icons.js';
 import { generateProject, platformOf } from '@workflow/codegen/index.js';
 import { parseSpec } from '@workflow/spec.js';
 import { fetchTargets } from './api.js';
@@ -33,16 +33,29 @@ type Tab = 'node' | 'code' | 'run';
 /** The palette: one button per node kind you can add. */
 const ADDABLE: Exclude<NodeKind, 'agent'>[] = ['tool', 'mcp', 'subagent'];
 const ADD_LABEL: Record<Exclude<NodeKind, 'agent'>, string> = {
-  tool: '+ Tool',
-  mcp: '+ MCP server',
-  subagent: '+ Sub-agent',
+  tool: 'Tool',
+  mcp: 'MCP server',
+  subagent: 'Sub-agent',
 };
+const ADD_HINT: Record<Exclude<NodeKind, 'agent'>, string> = {
+  tool: 'A function the model can call — starts as a stub you replace',
+  mcp: 'An MCP server to connect to; its tools join the agent',
+  subagent: 'A nested agent the root can delegate a task to',
+};
+
+/** The rail's three panels, in the order the work happens. */
+const TABS: { id: Tab; label: string; hint: string }[] = [
+  { id: 'node', label: 'Node', hint: 'The selected card\'s fields' },
+  { id: 'code', label: 'Code', hint: 'The project this canvas becomes' },
+  { id: 'run', label: 'Run', hint: 'Write it to disk and run it here' },
+];
 
 export function BuilderPage() {
   const graph = useBuilderStore((s) => s.graph);
   const selectedId = useBuilderStore((s) => s.selectedId);
   const addNode = useBuilderStore((s) => s.addNode);
   const reset = useBuilderStore((s) => s.reset);
+  const jobPhase = useBuilderStore((s) => s.job?.phase);
   const connection = useUiStore((s) => s.connection);
   const [tab, setTab] = useState<Tab>('node');
   const [workflowsDir, setWorkflowsDir] = useState<string | undefined>(undefined);
@@ -152,12 +165,26 @@ export function BuilderPage() {
     setTab('node');
   };
 
+  const jobTone =
+    jobPhase === undefined
+      ? undefined
+      : jobPhase === 'running' || jobPhase === 'installing'
+        ? 'running'
+        : jobPhase === 'exited'
+          ? 'ok'
+          : jobPhase === 'stopped'
+            ? 'idle'
+            : 'error';
+
   return (
     <div className="gm-builder">
+      {/* The bar names the thing being built, not the page: the crumb
+          already says "Build a workflow", and what you want to see at a
+          glance while you edit is the project and its target. */}
       <header className="gm-topbar gm-builder-bar">
         <div className="gm-topbar-title">
           <span className="gm-pill gm-pill--idle">build</span>
-          <h1>Workflow</h1>
+          <h1 title="The project name — edit it on the agent card">{graph.name || 'workflow'}</h1>
           <span className="gm-builder-sub">
             {target.language === 'typescript' ? 'TypeScript' : 'Python'} · {target.framework} · {graph.provider}
           </span>
@@ -180,21 +207,45 @@ export function BuilderPage() {
         </div>
       </header>
 
+      {/* One quiet line, not a banner: the canvas and the code work with
+          nothing attached, so this is a note about two buttons on the Run
+          tab — which repeat it where they are — not a warning about the
+          page. */}
       {blocked !== undefined && (
-        <div className="gm-builder-blocked">
-          <BlockedNotice blocked={blocked} />
+        <div className="gm-builder-blocked" role="status">
+          <span className="gm-conn gm-conn--detached" aria-hidden="true" />
+          <span className="gm-builder-blocked-text">{blocked.text}</span>
+          {blocked.kind === 'offline' && (
+            <span className="gm-builder-blocked-how">
+              Start it: <code>npx graphmind-ai</code> — this page connects on its own.
+            </span>
+          )}
         </div>
       )}
 
       <div className="gm-builder-body">
         <main className="gm-builder-stage">
           <div className="gm-bpalette" role="toolbar" aria-label="Add a node">
+            <span className="gm-bpalette-label">
+              <IconPlus width={12} height={12} />
+              Add
+            </span>
             {ADDABLE.map((kind) => (
-              <button key={kind} type="button" className={`gm-bpalette-btn gm-bpalette-btn--${kind}`} onClick={() => add(kind)}>
+              <button
+                key={kind}
+                type="button"
+                className={`gm-bpalette-btn gm-bpalette-btn--${kind}`}
+                title={ADD_HINT[kind]}
+                aria-label={`+ ${ADD_LABEL[kind]}`}
+                onClick={() => add(kind)}
+              >
+                <span className="gm-bpalette-dot" aria-hidden="true" />
                 {ADD_LABEL[kind]}
               </button>
             ))}
-            <span className="gm-bpalette-hint">Drag from a card's right edge to wire it to another.</span>
+            <span className="gm-bpalette-hint">
+              Each one arrives wired to the selected agent. Drag from a card's right edge to wire it elsewhere.
+            </span>
           </div>
           {loose.length > 0 && (
             <div className="gm-bloose" role="status">
@@ -205,16 +256,30 @@ export function BuilderPage() {
         </main>
 
         <aside className="gm-builder-rail">
-          <div className="gm-brail-tabs gm-bcode-tabs" role="tablist" aria-label="Builder panels">
-            {(['node', 'code', 'run'] as Tab[]).map((id) => (
+          {/* Three panels in the order the work happens, each carrying the
+              one fact worth knowing before you open it: how many cards have
+              a problem, how many files the code is, how the run is going. */}
+          <div className="gm-brail-tabs" role="tablist" aria-label="Builder panels">
+            {TABS.map(({ id, label, hint }) => (
               <button
                 key={id}
                 role="tab"
                 aria-selected={tab === id}
-                className={`gm-bcode-tab${tab === id ? ' gm-bcode-tab--on' : ''}`}
+                aria-label={label}
+                title={hint}
+                className={`gm-brail-tab${tab === id ? ' gm-brail-tab--on' : ''}`}
                 onClick={() => setTab(id)}
               >
-                {id === 'node' ? 'Node' : id === 'code' ? 'Code' : 'Run'}
+                {label}
+                {id === 'node' && issues.length > 0 && (
+                  <span className="gm-brail-badge gm-brail-badge--err">{issues.length}</span>
+                )}
+                {id === 'code' && preview !== undefined && (
+                  <span className="gm-brail-badge">{preview.files.length}</span>
+                )}
+                {id === 'run' && jobTone !== undefined && (
+                  <span className={`gm-dot gm-dot--${jobTone === 'idle' ? '' : jobTone}`} aria-hidden="true" />
+                )}
               </button>
             ))}
           </div>

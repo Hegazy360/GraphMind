@@ -14,10 +14,10 @@ import { useRunStore } from '../store/runStore.js';
 import { useUiStore } from '../store/uiStore.js';
 import { nodeStatus } from '../store/types.js';
 import { HeldDecision, NodeDetail } from '../components/InspectorPanel.js';
-import { IconArrowRight, IconLink } from '../components/Icons.js';
+import { IconArrowRight, IconCopy, IconLink } from '../components/Icons.js';
 import { KindGlyph } from '../components/KindMark.js';
 import { StatusPill } from '../components/nodes/nodeParts.js';
-import { copyText, deepLink } from '../lib/commands.js';
+import { copyText, counterfactualCommand, deepLink } from '../lib/commands.js';
 
 /**
  * The run's nodes in execution order, so `[` and `]` mean something. Only
@@ -116,6 +116,25 @@ export function NodePage({ runId, nodeId }: { runId: string; nodeId: string }) {
         )}
 
         <div className="gm-nodehead-nav">
+          {/*
+            "What if this call had returned something else?" — the command,
+            pre-filled with what it actually returned, copied for the
+            terminal. The viewer never runs it: see counterfactualCommand.
+          */}
+          {node.kind !== 'llm' && node.kind !== 'agent' && node.executions.length > 0 && (
+            <button
+              className="gm-iconbtn"
+              onClick={() =>
+                void copyText(
+                  counterfactualCommand(runId, nodeId, 0, node.executions[0]?.output),
+                )
+              }
+              title={`Copy a "what if?" command — replay this run with ${node.name} answering differently`}
+              aria-label="Copy a counterfactual replay command for this call"
+            >
+              <IconCopy />
+            </button>
+          )}
           <button
             className="gm-iconbtn"
             onClick={() => void copyText(deepLink(runId, nodeId))}

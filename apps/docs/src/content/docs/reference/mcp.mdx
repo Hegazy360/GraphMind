@@ -1,6 +1,6 @@
 ---
 title: MCP tools
-description: Serve recorded runs to Claude Code, Cursor and other MCP clients — four read-only tools that read the local database directly, each result carrying a deep link into the viewer.
+description: Serve recorded runs to Claude Code, Cursor and other MCP clients — five read-only tools that read the local database directly, each result carrying a deep link into the viewer.
 sidebar:
   order: 4
 ---
@@ -11,7 +11,7 @@ import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 graphmind mcp
 ```
 
-Serves your recorded runs to MCP clients over stdio. Four **read-only** tools, each result
+Serves your recorded runs to MCP clients over stdio. Five **read-only** tools, each result
 carrying a deep link back into the viewer so your coding agent can cite the exact run or node it
 is talking about.
 
@@ -94,6 +94,23 @@ it happened, and a deep link.
 **This is the right first call** for "why did my last run fail?" — it goes straight to the
 failures without walking the run list.
 
+### `get_behavior({ runId })`
+
+How well the run worked, not just whether it finished — the same report as
+`graphmind runs --behavior` and the viewer's Behaviour strip, starting with a one-line verdict:
+
+- **wasted work**: consecutive identical tool calls, 2–4-call cycles, and the same failure three
+  or more times in a row, with the LLM steps and tokens spent while the loops ran;
+- **tool health**: per tool — calls, thrown failures, *silent* failures (an `isError: true`,
+  `success: false`, non-zero exit code or `{error}` result that never threw), p50/p95 run time;
+- **termination**: normalized finish reasons across LLM steps — a rising share of `length` means
+  the context is filling;
+- **context pressure**: input tokens per step and the first-to-last growth factor.
+
+**This is the right first call** for "why was this run slow / expensive / going in circles?" —
+`find_errors` only covers what threw. See
+[the behaviour summary](/debugging/behavior-summary/) for how to read it.
+
 ## What it looks like in practice
 
 > **You:** why did my last support-agent run fail?
@@ -108,6 +125,7 @@ Other things it is good at:
 - "Compare the last two runs of `support-agent` — which node first got different input?"
 - "What did `searchOrders` get called with across this run?"
 - "Which node is eating the tokens in run `run_01H8…`?"
+- "Is the agent going in circles? What did the loop cost?" (`get_behavior`)
 
 <Aside type="tip" title="Why this is more than convenience">
 Your coding agent gets to read what your *other* agent actually did — the real arguments, the

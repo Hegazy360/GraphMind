@@ -11,9 +11,9 @@
  *   - what is happening now is pinned above the history;
  *   - the history is shelved by day or by app, each shelf with its own
  *     tally, long shelves folded to a preview;
- *   - every row is a table row, not a card: the figures line up in
- *     columns, so a run's size, time, tokens and cost can be compared with
- *     the one above it rather than read out of a sentence.
+ *   - every card is self-sufficient: the figures sit under their own
+ *     labels, so a card says what its numbers are without a column header
+ *     to look up to.
  */
 import { useEffect, useMemo, useState } from 'react';
 import { runHeldMs } from '../lib/duration.js';
@@ -21,6 +21,7 @@ import { fmtCost, fmtCount, fmtDuration, fmtRelative, fmtTokens } from '../lib/f
 import {
   NO_FILTER,
   SHELF_PREVIEW,
+  canGroupByApp,
   facetsOf,
   groupRuns,
   isFiltering,
@@ -148,73 +149,82 @@ function RunRowView({ row, now }: { row: RunRow; now: number }) {
         {row.source !== 'live' && <span className="gm-chip gm-chip--tiny">{row.source}</span>}
       </span>
 
-      {/* The figures. `display: contents` keeps them in the grid while the
-          wrapper stays the one hook the tests and the audit use. */}
-      <span className="gm-runcard-meta">
-        <span className="gm-runcard-cell gm-runcard-shape">
-          {stats.nodes > 0 ? (
-            <>
-              <span>{plural(stats.nodes, 'node')}</span>
-              {/* Abbreviated, because this cell holds four figures and the
-                  column is a column: the hover spells each one out. */}
-              {stats.steps > 0 && (
-                <span className="gm-runcard-sub" title={plural(stats.steps, 'llm step')}>
-                  {fmtCount(stats.steps)} llm
-                </span>
-              )}
-              {stats.tools > 0 && (
-                <span className="gm-runcard-sub" title={plural(stats.tools, 'tool call')}>
-                  {fmtCount(stats.tools)} tools
-                </span>
-              )}
-              {stats.errors > 0 && (
-                <span className="gm-runcard-errors" title={plural(stats.errors, 'failed call')}>
-                  {fmtCount(stats.errors)} err
-                </span>
-              )}
-            </>
-          ) : (
-            <span className="gm-runcard-none">—</span>
-          )}
-        </span>
-
-        <span className="gm-runcard-cell gm-runcard-took">
-          {ran !== undefined ? (
-            <span
-              {...(held > 0
-                ? { title: `${fmtDuration(elapsed ?? 0)} wall · ${fmtDuration(held)} held at gates` }
-                : {})}
-            >
-              {fmtDuration(ran)}
-            </span>
-          ) : (
-            <span className="gm-runcard-none">—</span>
-          )}
-          {held > 0 && <span className="gm-runcard-held">+{fmtDuration(held)} held</span>}
-        </span>
-
-        <span className="gm-runcard-cell gm-runcard-spend">
-          {tokens > 0 ? (
-            <span title={`${fmtCount(stats.tokensIn)} in · ${fmtCount(stats.tokensOut)} out`}>
-              {fmtTokens(tokens)} tok
-            </span>
-          ) : (
-            <span className="gm-runcard-none">—</span>
-          )}
-          {cost !== undefined && (
-            <span className="gm-runcard-cost" title={costTotalTitle(cost, 'step')}>
-              {fmtCost(cost.total)}
-            </span>
-          )}
-        </span>
-      </span>
-
       <span className="gm-runcard-when">
         {run.meta.startedTs !== undefined && (
           <span title={fmtStarted(run.meta.startedTs)}>{fmtWhen(run.meta.startedTs, now)}</span>
         )}
+        <IconArrowRight className="gm-runcard-go" width={14} height={14} />
       </span>
-      <IconArrowRight className="gm-runcard-go" width={14} height={14} />
+
+      {/* The figures, each under its own label, so a card reads on its own
+          — there is no column header to look up to, and a card copied
+          into a screenshot still says what its numbers are. */}
+      <span className="gm-runcard-meta">
+        <span className="gm-runcard-stat">
+          <span className="gm-runcard-label">nodes</span>
+          <span className="gm-runcard-value">
+            {stats.nodes > 0 ? fmtCount(stats.nodes) : <span className="gm-runcard-none">—</span>}
+          </span>
+        </span>
+        {stats.steps > 0 && (
+          <span className="gm-runcard-stat" title={plural(stats.steps, 'llm step')}>
+            <span className="gm-runcard-label">llm</span>
+            <span className="gm-runcard-value">{fmtCount(stats.steps)}</span>
+          </span>
+        )}
+        {stats.tools > 0 && (
+          <span className="gm-runcard-stat" title={plural(stats.tools, 'tool call')}>
+            <span className="gm-runcard-label">tools</span>
+            <span className="gm-runcard-value">{fmtCount(stats.tools)}</span>
+          </span>
+        )}
+        {stats.errors > 0 && (
+          <span className="gm-runcard-stat gm-runcard-stat--err" title={plural(stats.errors, 'failed call')}>
+            <span className="gm-runcard-label">errors</span>
+            <span className="gm-runcard-value">{fmtCount(stats.errors)}</span>
+          </span>
+        )}
+
+        <span className="gm-runcard-sep" aria-hidden="true" />
+
+        <span className="gm-runcard-stat">
+          <span className="gm-runcard-label">ran</span>
+          <span className="gm-runcard-value">
+            {ran !== undefined ? (
+              <span
+                {...(held > 0
+                  ? { title: `${fmtDuration(elapsed ?? 0)} wall · ${fmtDuration(held)} held at gates` }
+                  : {})}
+              >
+                {fmtDuration(ran)}
+              </span>
+            ) : (
+              <span className="gm-runcard-none">—</span>
+            )}
+          </span>
+        </span>
+        {held > 0 && (
+          <span className="gm-runcard-stat gm-runcard-stat--held" title="Time the debugger held this run at gates — not counted as run time">
+            <span className="gm-runcard-label">held</span>
+            <span className="gm-runcard-value">{fmtDuration(held)}</span>
+          </span>
+        )}
+
+        {(tokens > 0 || cost !== undefined) && <span className="gm-runcard-sep" aria-hidden="true" />}
+
+        {tokens > 0 && (
+          <span className="gm-runcard-stat" title={`${fmtCount(stats.tokensIn)} in · ${fmtCount(stats.tokensOut)} out`}>
+            <span className="gm-runcard-label">tokens</span>
+            <span className="gm-runcard-value">{fmtTokens(tokens)}</span>
+          </span>
+        )}
+        {cost !== undefined && (
+          <span className="gm-runcard-stat" title={costTotalTitle(cost, 'step')}>
+            <span className="gm-runcard-label">est. cost</span>
+            <span className="gm-runcard-value">{fmtCost(cost.total)}</span>
+          </span>
+        )}
+      </span>
 
       {/* The one line that decides whether you open this run or the next. */}
       {failure !== undefined && (
@@ -305,6 +315,9 @@ function FacetBar({
             className={`gm-facet gm-facet--${facet.value}${on ? ' gm-facet--on' : ''}${count === 0 ? ' gm-facet--none' : ''}`}
             title={facet.hint}
             aria-pressed={on}
+            // Spelled out, because the two spans concatenate to "1Failed"
+            // for anything reading the name rather than looking at it.
+            aria-label={`${facet.label}, ${plural(count, 'run')}`}
             onClick={() => onChange({ ...filter, status: on ? 'all' : facet.value })}
           >
             <span className="gm-facet-count">{fmtCount(count)}</span>
@@ -316,19 +329,31 @@ function FacetBar({
   );
 }
 
-/** Pick one of a short list of values — chips when there are few, a menu when many. */
+/**
+ * Pick one of a short list of values.
+ *
+ * The `All` chip is not decoration: without it the control has no visible
+ * current value — nothing is lit when no app is chosen, so a row of app
+ * names reads as a legend rather than a filter, and the one question it
+ * exists to answer ("which app am I looking at?") has no answer on screen.
+ * Chips while they fit; a menu past that, where a row would wrap twice.
+ */
 function PickOne({
   label,
+  allLabel,
   options,
   value,
   onChange,
 }: {
   label: string;
+  allLabel: string;
   options: { value: string; count: number }[];
   value: string | undefined;
   onChange: (next: string | undefined) => void;
 }) {
   if (options.length <= 1) return null;
+  const total = options.reduce((sum, option) => sum + option.count, 0);
+
   if (options.length > 6) {
     return (
       <label className="gm-pick gm-pick--menu">
@@ -338,7 +363,9 @@ function PickOne({
           aria-label={`Filter by ${label.toLowerCase()}`}
           onChange={(event) => onChange(event.target.value === '' ? undefined : event.target.value)}
         >
-          <option value="">All ({options.length})</option>
+          <option value="">
+            {allLabel} ({total})
+          </option>
           {options.map((option) => (
             <option key={option.value} value={option.value}>
               {option.value} ({option.count})
@@ -348,16 +375,27 @@ function PickOne({
       </label>
     );
   }
+
   return (
     <div className="gm-pick" role="group" aria-label={`Filter by ${label.toLowerCase()}`}>
       <span className="gm-pick-label">{label}</span>
+      <button
+        className={`gm-pickchip${value === undefined ? ' gm-pickchip--on' : ''}`}
+        aria-pressed={value === undefined}
+        aria-label={`${allLabel}, ${plural(total, 'run')}`}
+        onClick={() => onChange(undefined)}
+      >
+        {allLabel}
+        <span className="gm-pick-count">{total}</span>
+      </button>
       {options.map((option) => {
         const on = value === option.value;
         return (
           <button
             key={option.value}
-            className={`gm-chip gm-chip--button${on ? ' gm-chip--on' : ''}`}
+            className={`gm-pickchip${on ? ' gm-pickchip--on' : ''}`}
             aria-pressed={on}
+            aria-label={`${option.value}, ${plural(option.count, 'run')}`}
             onClick={() => onChange(on ? undefined : option.value)}
           >
             {option.value}
@@ -463,7 +501,15 @@ export function RunsPage({ fixtureAvailable }: { fixtureAvailable: boolean }) {
   const rows = useMemo(() => Object.values(runs).map(summariseRun), [runs]);
   const facets = useMemo(() => facetsOf(rows), [rows]);
   const shown = useMemo(() => rows.filter((row) => matchesFilter(row, filter)), [rows, filter]);
-  const groups = useMemo(() => groupRuns(shown, groupBy, now), [shown, groupBy, now]);
+  // Grouping by app says nothing when the list holds one app, or when a
+  // filter has already narrowed it to one. The choice is remembered, so
+  // coming back to a fuller list restores it rather than resetting it.
+  const groupable = canGroupByApp(facets, filter);
+  const effectiveGroupBy: GroupBy = groupable ? groupBy : 'time';
+  const groups = useMemo(
+    () => groupRuns(shown, effectiveGroupBy, now),
+    [shown, effectiveGroupBy, now],
+  );
 
   const total = rows.length;
 
@@ -496,37 +542,51 @@ export function RunsPage({ fixtureAvailable }: { fixtureAvailable: boolean }) {
           <div className="gm-runs-main">
         <FacetBar facets={facets} filter={filter} onChange={setFilter} />
 
+        {/* Which app, on a row of its own: it is the filter people reach
+            for, and as one more chip group sharing a line with the source
+            and the grouping it was simply not found. */}
+        <PickOne
+          label="App"
+          allLabel="All apps"
+          options={facets.apps.map((app) => ({ value: app.name, count: app.count }))}
+          value={filter.app}
+          onChange={(app) => setFilter({ ...filter, app })}
+        />
+
         <div className="gm-runs-tools">
           <PickOne
-            label="App"
-            options={facets.apps.map((app) => ({ value: app.name, count: app.count }))}
-            value={filter.app}
-            onChange={(app) => setFilter({ ...filter, app })}
-          />
-          <PickOne
             label="Source"
+            allLabel="All"
             options={facets.sources.map((source) => ({ value: source.label, count: source.count }))}
             value={filter.source}
             onChange={(source) => setFilter({ ...filter, source })}
           />
           <div className="gm-runs-tools-end">
-            <div className="gm-seg" role="group" aria-label="Group runs by">
-              <span className="gm-pick-label">Group by</span>
-              <button
-                className={`gm-seg-btn${groupBy === 'time' ? ' gm-seg-btn--on' : ''}`}
-                aria-pressed={groupBy === 'time'}
-                onClick={() => setGroupBy('time')}
-              >
-                Day
-              </button>
-              <button
-                className={`gm-seg-btn${groupBy === 'app' ? ' gm-seg-btn--on' : ''}`}
-                aria-pressed={groupBy === 'app'}
-                onClick={() => setGroupBy('app')}
-              >
-                App
-              </button>
-            </div>
+            {/* Offered only when it can change something. With one app in
+                the list — the common case right after building one — "by
+                app" and "by day" draw the same single shelf, and a control
+                that does nothing reads as a broken one. */}
+            {groupable && (
+              <div className="gm-seg" role="group" aria-label="Group runs by">
+                <span className="gm-pick-label">Group by</span>
+                <div className="gm-seg-track">
+                  <button
+                    className={`gm-seg-btn${groupBy === 'time' ? ' gm-seg-btn--on' : ''}`}
+                    aria-pressed={groupBy === 'time'}
+                    onClick={() => setGroupBy('time')}
+                  >
+                    Day
+                  </button>
+                  <button
+                    className={`gm-seg-btn${groupBy === 'app' ? ' gm-seg-btn--on' : ''}`}
+                    aria-pressed={groupBy === 'app'}
+                    onClick={() => setGroupBy('app')}
+                  >
+                    App
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="gm-runs-search">
               <IconSearch width={13} height={13} />
               <input
@@ -549,9 +609,16 @@ export function RunsPage({ fixtureAvailable }: { fixtureAvailable: boolean }) {
           </div>
         </div>
 
-        {filtering && (
+        {/* Only while something is still showing: with an empty list the
+            block below says the same thing and carries the same button,
+            and two "Clear filters" is a choice the reader has to make
+            between identical options. */}
+        {filtering && groups.length > 0 && (
           <div className="gm-runs-showing">
             Showing {plural(shown.length, 'run')} of {total}
+            {filter.app !== undefined && (
+              <span className="gm-runs-showing-what">in {filter.app}</span>
+            )}
             <button className="gm-runs-clear" onClick={() => setFilter(NO_FILTER)}>
               Clear filters
             </button>
@@ -567,15 +634,6 @@ export function RunsPage({ fixtureAvailable }: { fixtureAvailable: boolean }) {
           </div>
         ) : (
           <div className="gm-runs-list">
-            <div className="gm-runs-cols" aria-hidden="true">
-              <span />
-              <span>Run</span>
-              <span>Shape</span>
-              <span>Took</span>
-              <span>Spend</span>
-              <span>Started</span>
-              <span />
-            </div>
             {groups.map((group) => (
               <Shelf
                 key={group.key}

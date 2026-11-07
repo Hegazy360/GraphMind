@@ -114,6 +114,24 @@ export {
   type ResolvedLoopGuard,
 } from './loop-guard.js';
 
+// Hermetic replay (0.7.0): answer a run's gated calls from a recording.
+// `graphmind replay` writes the tape and sets GRAPHMIND_REPLAY; an adapter
+// needs `ReplayTape` only to substitute its model (see replay.ts).
+export {
+  parseTape,
+  liveKey,
+  ReplayMissError,
+  ReplayTape,
+  TAPE_VERSION,
+  type LossyPolicy,
+  type MissPolicy,
+  type ReplayEvent,
+  type ReplayEventKind,
+  type ReplayOptions,
+  type Tape,
+  type TapeEntry,
+} from './replay.js';
+
 // LLM-step capture (contract C1, 0.6.0+): inclusive usage, normalized finish
 // reasons and tool calls, tool definitions recorded once per run by hash,
 // the allow-listed sampling parameters. Shared by every TS adapter.

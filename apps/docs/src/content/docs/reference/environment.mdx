@@ -15,6 +15,9 @@ import { Aside } from '@astrojs/starlight/components';
 | `GRAPHMIND_PAUSE_ON_ERROR` | Scope the default error breakpoint: `on` (default, every node), `off`, or a node kind (`tool`, `llm`, `chain`, `retriever`, `agent`, `custom`). `--pause-on-error` beats it. |
 | `GRAPHMIND_ABANDON_GRACE_MS` | How long a run whose app disconnected mid-flight waits to reconnect before it is marked abandoned rather than left "running" forever (default 15000). |
 | `GRAPHMIND_ALLOWED_ORIGINS` | Extra browser origins allowed to reach the server, comma-separated; `*` disables the check. See [who is allowed to connect](/reference/cli/#who-is-allowed-to-connect). |
+| `GRAPHMIND_REPLAY` | Path to a replay tape. Set by `graphmind replay` for the command it spawns; an app that finds it serves its gated calls (and, under the Vercel AI SDK, its model steps) from the recording instead of the outside world. See [hermetic replay](/debugging/replay/). |
+| `GRAPHMIND_REPLAY_ON_MISS` | `error` (default), `live` or `skip` — a call the tape cannot answer. `--on-miss` sets it. |
+| `GRAPHMIND_REPLAY_ON_LOSSY` | `error` (default) or `live` — a recorded value too large to have been kept in full. `--on-lossy` sets it. |
 | `GRAPHMIND_RETENTION` | `off` disables the startup prune entirely |
 | `GRAPHMIND_KEEP_RUNS` | Runs to keep (default 200); `--keep` beats it |
 | `GRAPHMIND_KEEP_DAYS` | Days to keep (default 30); `--days` beats it |

@@ -179,14 +179,15 @@ afterAll(async () => {
 });
 
 describe('graphmind mcp over stdio', () => {
-  it('starts, identifies itself, and exposes the four tools', async () => {
+  it('starts, identifies itself, and exposes the five tools', async () => {
     expect(seeded.client.getServerVersion()?.name).toBe('graphmind');
     expect(seeded.client.getInstructions()).toContain('GraphMind');
     expect(seeded.client.getInstructions()).toContain('find_errors');
+    expect(seeded.client.getInstructions()).toContain('get_behavior');
 
     const { tools } = await seeded.client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
-      'find_errors', 'get_node', 'get_run', 'list_runs',
+      'find_errors', 'get_behavior', 'get_node', 'get_run', 'list_runs',
     ]);
     for (const tool of tools) {
       expect(tool.description).toBeTruthy();
@@ -317,6 +318,25 @@ describe('graphmind mcp over stdio', () => {
       at: '2026-08-25T10:00:00.140Z',
       link: `${VIEWER}/#/run/run-fail-2/node/tool%3AchargeCard`,
     });
+  });
+
+  it('get_behavior: verdict, waste, tool health and link for one run', async () => {
+    const { isError, value } = await call(seeded.client, 'get_behavior', { runId: 'run-ok-1' });
+    expect(isError).toBe(false);
+    expect(value.runId).toBe('run-ok-1');
+    expect(value.app).toBe('trip-planner');
+    expect(value.verdict).toBe('No wasted work detected across 1 tool call and 1 LLM step.');
+    expect(value.waste.wastedCalls).toBe(0);
+    expect(value.tools).toHaveLength(1);
+    expect(value.tools[0].name).toBe('searchFlights');
+    expect(value.termination.byReason).toEqual({});
+    expect(value.link).toBe(`${VIEWER}/#/run/run-ok-1`);
+  });
+
+  it('get_behavior: unknown run is a tool error, not a crash', async () => {
+    const { isError, text } = await call(seeded.client, 'get_behavior', { runId: 'run-nope' });
+    expect(isError).toBe(true);
+    expect(text).toContain('not found');
   });
 
   it('rejects bad arguments with a tool error', async () => {

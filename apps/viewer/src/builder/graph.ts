@@ -329,6 +329,27 @@ export function slugify(raw: string): string {
 }
 
 /**
+ * The same, for a field being typed into.
+ *
+ * `slugify` trims a trailing dash, which is right for a finished name and
+ * wrong on every keystroke: typing "trip-bot" went t-r-i-p-, and the dash
+ * was deleted the moment it arrived, so the field could only ever produce
+ * "tripbot". The project name a reader is shown by default — "my-agent" —
+ * was one they could not type.
+ *
+ * A trailing dash is left alone, which `PROJECT_NAME_RE` accepts, so every
+ * intermediate value is still a valid name rather than merely a tolerated
+ * one. `slugify` remains the right thing for a name arriving whole.
+ */
+export function slugifyWhileTyping(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+/, '')
+    .slice(0, 48);
+}
+
+/**
  * The agent a new node should be wired to, given what is selected: the
  * selected agent itself, or — when a tool or MCP server is selected — the
  * agent that owns it. Adding a tool to a sub-agent selects the new tool, so

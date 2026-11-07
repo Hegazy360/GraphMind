@@ -133,6 +133,8 @@ export default defineConfig({
             { slug: 'debugging/retry-and-abort' },
             { slug: 'debugging/large-graphs' },
             { slug: 'debugging/comparing-runs' },
+            { slug: 'debugging/behavior-summary' },
+            { slug: 'debugging/replay' },
             { slug: 'debugging/recording-runs' },
             { slug: 'debugging/mcp-servers' },
           ],

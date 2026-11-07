@@ -226,8 +226,9 @@ Full detail: [MCP proxy](/integrations/mcp-proxy/) and
 The other direction: serve **your recorded runs** to MCP clients (Claude Code, Cursor, …) over
 stdio. It has no control tools — releasing a pause from a coding agent goes through
 `graphmind resume`, bounded by `serve --allow-control`. Read-only tools:
-`list_runs`, `get_run`, `get_node`, `find_errors` — each result carries a deep link into the
-viewer. Reads the SQLite database directly, so it works while the server and viewer are closed.
+`list_runs`, `get_run`, `get_node`, `find_errors`, `get_behavior` — each result carries a deep
+link into the viewer. Reads the SQLite database directly, so it works while the server and viewer
+are closed.
 
 ```sh
 claude mcp add graphmind -- npx graphmind-ai mcp
@@ -316,10 +317,12 @@ The file ships in the npm package (`skills/graphmind/SKILL.md`).
 
 ## `graphmind runs`
 
-List what is stored, and keep it from growing forever.
+List what is stored, read how a run *behaved*, and keep the store from growing forever.
 
 ```sh
 graphmind runs                      # list recent runs
+graphmind runs --behavior last      # behaviour report for the newest run
+graphmind runs --behavior <runId>   # ...or a specific one (--json for the raw report)
 graphmind runs --keep 50            # show the 50 newest
 graphmind runs --prune              # apply the retention policy now
 graphmind runs --prune --keep 50    # ...keeping only the 50 newest
@@ -328,14 +331,48 @@ graphmind runs --rm <runId>         # delete one run
 graphmind runs --clear --yes        # delete every run
 ```
 
+`--behavior` prints one verdict line and the evidence under it — wasted tool calls (repeats,
+cycles, identical failures), per-tool health including failures that were *returned* rather than
+thrown, normalized finish reasons, and the prompt-size growth curve. The same numbers appear in
+the viewer's Behaviour strip and the MCP `get_behavior` tool; see
+[the behaviour summary](/debugging/behavior-summary/).
+
 Default retention is **200 runs / 30 days**. `--clear` refuses to act without `--yes`.
 
-## `graphmind record <runId>`
+## `graphmind replay <runId|last|recording.ndjson>`
+
+Re-run your agent against a recording instead of the outside world: tool
+calls and (under the Vercel AI SDK) model steps are served from what was
+recorded, so no provider is called and nothing is charged.
+
+```sh
+graphmind replay last -- node agent.js              # replay, then report
+graphmind replay last --assert -- node agent.js     # ...and fail on a divergence
+graphmind replay last --dry                         # what would a replay cover?
+graphmind replay fixtures/run.ndjson --assert -- node agent.js   # from a committed file
+
+# ask "what if?" — replay up to a call, answer it differently, live after
+graphmind replay last --substitute 'tool:convert={"usd":2693.4}' -- node agent.js
+# hold the tools fixed and let the model decide afresh
+graphmind replay last --live-model -- node agent.js
+```
+
+Everything after `--` is your command, run unchanged — the substitution
+happens inside `@graphmind-ai/sdk`, which reads the `GRAPHMIND_REPLAY`
+environment variable this command sets. `--on-miss` (`error` by default,
+`live`, `skip`) and `--on-lossy` (`error`, `live`) decide what happens to a
+call the recording cannot answer.
+
+Full detail, including exactly what is and is not hermetic:
+[hermetic replay](/debugging/replay/).
+
+## `graphmind record <runId|last>`
 
 Export a persisted run — as NDJSON (one wire envelope per line, the same shape `graphmind demo`
 replays and `WS /ingest` accepts), or as one self-contained HTML page.
 
 ```sh
+graphmind record last                             # the newest run
 graphmind record run_01H8…                        # → graphmind-run-<runId>.ndjson
 graphmind record run_01H8… --out bug-4471.ndjson
 graphmind record run_01H8… --html                 # → graphmind-run-<runId>.html
@@ -444,6 +481,13 @@ of them; something close to nothing gets no guess.
 | `--keep <n>` | (`runs`) keep / show the n newest runs |
 | `--days <n>` | (`runs`) keep runs from the last n days |
 | `--rm <runId>` | (`runs`) delete one run |
+| `--behavior <runId\|last>` | (`runs`) behaviour report for one run; `--json` for the raw report |
+| `--assert` | (`replay`) exit non-zero if the trajectory diverged |
+| `--dry` | (`replay`) report what a replay would cover; run nothing |
+| `--on-miss <error\|live\|skip>` | (`replay`) a call the recording does not have. Default `error` |
+| `--on-lossy <error\|live>` | (`replay`) a recorded value too large to have been kept in full. Default `error` |
+| `--substitute <nodeId>[#n]=<json\|@file>` | (`replay`) answer that call with this value and run everything after it for real. Repeatable; needs a provider key |
+| `--live-model` | (`replay`) serve tool calls from the recording, call the provider for model steps |
 | `--clear` | (`runs`) delete all runs — requires `--yes` |
 | `--yes` | Confirm a destructive command |
 | `-v`, `--version` | Print the version and exit |

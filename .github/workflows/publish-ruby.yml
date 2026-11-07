@@ -1,0 +1,151 @@
+# Publish the Ruby gem to RubyGems via Trusted Publishing (OIDC).
+#
+# No API key exists anywhere: RubyGems is configured to trust this workflow,
+# in this repository, and mints a short-lived credential at push time. Runs
+# on a v* tag, or on demand. Mirrors publish-python.yml's shape — build the
+# artifact first, test after, tolerate re-runs, verify from the registry.
+#
+# ONE-TIME SETUP (the gem has never been published, so the publisher must be
+# created as a PENDING one): rubygems.org → Settings → Trusted publishers →
+# "Create a pending trusted publisher":
+#   gem name graphmind · owner Hegazy360 · repo GraphMind
+#   workflow publish-ruby.yml · environment rubygems
+# A pending publisher reserves the name and expires after ~12 hours if
+# nothing is pushed, so create it right before the first tagged release.
+#
+# SUPPLY-CHAIN NOTES
+#   - The gem is built FIRST, from the pristine checkout, with `gem build`
+#     and nothing else: the gemspec declares ZERO runtime dependencies (the
+#     WebSocket client is hand-rolled over stdlib), so there is no third-
+#     party code to pin into the artifact at all.
+#   - The test dependencies (minitest, json_schemer, the provider SDKs...)
+#     are installed only AFTER the .gem exists, so nothing in that larger set
+#     can touch what ships. The tests run against the BUILT artifact: it is
+#     installed from the .gem file and the suite imports the installed copy.
+#   - The push uses rubygems/configure-rubygems-credentials (OIDC) and the
+#     stock `gem push` — no custom upload code.
+name: Publish Ruby
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# Least privilege: read-only everywhere; the publish job raises id-token for
+# Trusted Publishing and nothing else.
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-ruby-${{ github.ref }}
+  cancel-in-progress: false # never cancel a publish half-way
+
+env:
+  GRAPHMIND_TELEMETRY: '0'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: rubygems
+    permissions:
+      id-token: write # required for Trusted Publishing; nothing else is granted
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          ruby-version: '3.3'
+
+      - name: Tag == gem VERSION (and every other package in the repo)
+        # Lockstep is the whole point of scripts/set-version.mjs; a tag that
+        # names a version the Ruby constant does not carry must not push.
+        if: github.ref_type == 'tag'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.x'
+      - name: Check versions
+        if: github.ref_type == 'tag'
+        env:
+          REF_NAME: ${{ github.ref_name }} # via env, never interpolated into the shell
+        run: node scripts/release/check-versions.mjs --tag "$REF_NAME"
+
+      - name: Build the gem from the pristine checkout
+        working-directory: ruby
+        run: |
+          set -euo pipefail
+          gem build graphmind.gemspec
+          ls -l ./*.gem
+
+      - name: Install the BUILT gem and prove it loads
+        # The artifact, not the source tree: what a stranger gets from
+        # `gem install graphmind` is what must load.
+        working-directory: ruby
+        run: |
+          set -euo pipefail
+          gem install ./graphmind-*.gem
+          ruby -e 'require "graphmind"; puts "graphmind #{Graphmind::VERSION} loads"'
+
+      - name: Test the source (after the artifact exists, so dev deps cannot touch it)
+        working-directory: ruby
+        run: |
+          set -euo pipefail
+          bundle install
+          timeout 11m bundle exec rake test
+
+      # Releases can be re-run; a version already on the registry is a no-op,
+      # not a red build (same reasoning as publish-python.yml).
+      - name: Is this version already on RubyGems?
+        id: existing
+        working-directory: ruby
+        run: |
+          set -euo pipefail
+          VERSION="$(ruby -r ./lib/graphmind/version -e 'puts Graphmind::VERSION')"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if curl -fsS "https://rubygems.org/api/v2/rubygems/graphmind/versions/$VERSION.json" >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::graphmind $VERSION is already on RubyGems — nothing to push. Re-running for a released version is a no-op."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure RubyGems credentials (OIDC — no token stored anywhere)
+        if: steps.existing.outputs.published == 'false' && github.ref_type == 'tag'
+        uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
+
+      - name: Push to RubyGems
+        # Only for a genuinely unpublished version, and only from a tag — so
+        # this step going red means a real release could not ship.
+        if: steps.existing.outputs.published == 'false' && github.ref_type == 'tag'
+        working-directory: ruby
+        run: gem push ./graphmind-*.gem
+
+      - name: Installable from the registry (polls through replica lag)
+        if: github.ref_type == 'tag'
+        env:
+          VERSION: ${{ steps.existing.outputs.version }}
+        run: node scripts/verify-published.mjs "$VERSION" --registries rubygems
+
+      - name: Summary
+        if: always()
+        env:
+          VERSION: ${{ steps.existing.outputs.version }}
+          PUBLISHED: ${{ steps.existing.outputs.published }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          {
+            echo "## Publish Ruby — \`$VERSION\`"
+            if [ "$REF_TYPE" != "tag" ]; then
+              echo "Dispatch run: built, installed and tested the gem; nothing was pushed (a real push runs only from a v* tag)."
+            elif [ "$PUBLISHED" = "true" ]; then
+              echo "Already on RubyGems — no-op re-run."
+            else
+              echo "Built, tested, pushed via Trusted Publishing, and verified installable."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

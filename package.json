@@ -18,7 +18,7 @@
     "test": "pnpm -r --filter './packages/**' --filter './apps/viewer' run test",
     "test:security": "pnpm --filter security-audit run test",
     "test:floor": "node scripts/check-node-floor.mjs pnpm run test:security",
-    "verify:published": "node scripts/verify-published.mjs",
+    "verify:published": "node scripts/verify-published.mjs --registries all",
     "test:e2e": "pnpm --filter viewer run test:e2e",
     "test:all": "pnpm test && pnpm --filter web test",
     "telemetry:report": "pnpm --filter web telemetry",

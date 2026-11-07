@@ -122,6 +122,36 @@ code location; executions light it up.
   it changed since the previous step, with token counts that include cached
   tokens, cache reads and writes, and an estimated cost from a bundled price
   table (no network).
+- **A behaviour verdict per run** *(unreleased)* - one line saying how well
+  the run worked, with the evidence underneath: tool calls that repeated
+  earlier work (the loop guard's repeats, cycles and identical failures,
+  found retrospectively, with the LLM tokens the loop consumed), per-tool
+  health including failures that were *returned* rather than thrown, finish
+  reasons across LLM steps, and the prompt-growth curve. The same report in
+  the viewer (the Behaviour strip), the terminal
+  (`graphmind runs --behavior last`) and your coding agent (MCP
+  `get_behavior`) - one implementation, so they never disagree. It reports
+  only what the recording proves; no scores, no guesses.
+- **Replay a run without the outside world** *(unreleased)* - `graphmind
+  replay last -- node agent.js` re-runs your agent with its tool calls and
+  (under the Vercel AI SDK) its model steps served from the recording: no
+  API key, no token cost, the same result every time. `--assert` turns a
+  recording into a regression test that fails when the trajectory changes -
+  which tools, in what order, with what arguments, how many model turns -
+  classifying a reordering of parallel calls as acceptable rather than a
+  failure. A recording exported with `graphmind record` is a plain NDJSON
+  file you can commit and replay straight from, so CI needs no database and
+  no key. What is hermetic is printed before every replay: GraphMind serves
+  what it gates, and says plainly that a bare `fetch` or a database write
+  still happens for real.
+- **Ask "what if?" and get a real answer** *(unreleased)* - `--substitute
+  'tool:convertCurrency={"usd":2693.4}'` replays the run up to that call,
+  answers it with your value, and runs **everything after it for real** -
+  so you watch the agent take the path it would have taken, without
+  changing a line. The reverse question has its own mode: `--live-model`
+  holds the tools fixed and lets the model decide afresh, which is how you
+  find out whether a reworded tool description or a new prompt actually
+  helped.
 - **Every run is kept** - history persists in SQLite; reopen any past run and
   inspect each node's inputs, outputs, errors, timings, and token usage.
   Export any run with `graphmind record`: `--html` writes a single
@@ -312,6 +342,7 @@ exact JSON record: [packages/cli/TELEMETRY.md](./packages/cli/TELEMETRY.md).
 | Path | What it is |
 |---|---|
 | [`packages/schema`](./packages/schema) | Versioned wire contract (Zod + JSON Schema export) - the envelope/event/control protocol |
+| [`packages/analyze`](./packages/analyze) | Behaviour analysis over recorded runs (wasted work, tool health, termination quality) - one implementation behind the viewer, the CLI and MCP |
 | [`packages/client`](./packages/client) | SDK-agnostic runtime: transport, ring-buffer replay, the gate engine, fail-open logic |
 | [`packages/ai-sdk`](./packages/ai-sdk) | Vercel AI SDK adapter (model middleware + tool wrapping) |
 | [`packages/anthropic`](./packages/anthropic) | Anthropic SDK adapter (client proxy + tool wrapping) |
@@ -324,6 +355,7 @@ exact JSON record: [packages/cli/TELEMETRY.md](./packages/cli/TELEMETRY.md).
 | [`apps/viewer`](./apps/viewer) | The graph debugger UI (ships built inside the CLI package) |
 | [`apps/web`](./apps/web) | graphmind.ai |
 | [`examples/demo-agent`](./examples/demo-agent) | The planted-bug trip-planner demo agent |
+| [`examples/support-desk`](./examples/support-desk) | The realistic example: a support agent with five ticket scenarios, each exercising one debugger feature — add an Anthropic key and run it |
 | [`examples/e2e`](./examples/e2e) | Full-stack smoke test against a running server |
 | [`examples/live-check`](./examples/live-check) | Validation against real Anthropic and OpenAI APIs |
 | [`examples/soak`](./examples/soak) | Production-scale soak battery with a published baseline |

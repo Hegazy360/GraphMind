@@ -419,6 +419,131 @@ a.gm-crumb:hover {
   margin-left: auto;
   flex-shrink: 0;
 }
+/* ── the behaviour strip ─────────────────────────────────────────────────
+   One verdict line under the run summary; the evidence unfolds on demand
+   and the graph keeps the window. */
+.gm-behavior {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.gm-behavior-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-4);
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-xs, 11px);
+  text-align: left;
+  cursor: pointer;
+}
+.gm-behavior-strip:hover .gm-behavior-verdict {
+  color: var(--text);
+}
+.gm-behavior-label {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-faint);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.gm-behavior-verdict {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gm-behavior-chevron {
+  margin-left: auto;
+  color: var(--text-faint);
+}
+.gm-behavior-body {
+  padding: var(--sp-2) var(--sp-4) var(--sp-4);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-5) var(--sp-6);
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.gm-behavior-block h3 {
+  margin: 0 0 var(--sp-2);
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.gm-behavior-block p {
+  margin: var(--sp-2) 0 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs, 11px);
+  max-width: 64ch;
+}
+.gm-behavior-incidents {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.gm-behavior-incident {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  font-size: var(--fs-xs, 11px);
+  color: var(--text-dim);
+}
+.gm-behavior-kind {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  background: var(--amber-soft);
+  color: var(--amber-text);
+}
+.gm-behavior-kind--error-repeat {
+  background: var(--err-soft);
+  color: var(--err-strong);
+}
+.gm-behavior-chain {
+  color: var(--text);
+}
+.gm-behavior-tools {
+  border-collapse: collapse;
+  font-size: var(--fs-xs, 11px);
+}
+.gm-behavior-tools th,
+.gm-behavior-tools td {
+  padding: 2px var(--sp-3) 2px 0;
+  text-align: right;
+  color: var(--text-dim);
+}
+.gm-behavior-tools th {
+  color: var(--text-faint);
+  font-weight: 500;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.gm-behavior-tools th:first-child,
+.gm-behavior-tools td:first-child {
+  text-align: left;
+}
+.gm-behavior-tool-name {
+  color: var(--text);
+}
+.gm-behavior-bad {
+  color: var(--err-strong);
+}
+.gm-behavior-notes p {
+  color: var(--text-faint);
+}
 .gm-runpage-body {
   position: relative;
   display: flex;
@@ -700,6 +825,11 @@ a.gm-crumb:hover {
   align-items: center;
   gap: var(--sp-2);
 }
+/* The app row is a filter people go looking for, so it is readable from
+   across the page rather than a 9px legend beside three other controls. */
+.gm-runs-main > .gm-pick {
+  margin-bottom: var(--sp-3);
+}
 .gm-pick-label {
   font-size: var(--fs-xs);
   font-weight: 600;
@@ -708,13 +838,39 @@ a.gm-crumb:hover {
   color: var(--text-faint);
   margin-right: 2px;
 }
+.gm-pickchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  font-weight: 560;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+}
+.gm-pickchip:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.gm-pickchip--on {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+}
 .gm-pick-count {
   color: var(--text-faint);
+  font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
 }
-.gm-chip--on .gm-pick-count {
+.gm-pickchip--on .gm-pick-count {
   color: inherit;
-  opacity: 0.8;
+  opacity: 0.75;
 }
 .gm-pick--menu select {
   height: 26px;
@@ -726,42 +882,39 @@ a.gm-crumb:hover {
   font-size: var(--fs-sm);
   max-width: 240px;
 }
+/* The label sits outside the track: inside it, the control read as one
+   odd pill saying "GROUP BY Day App" with no obvious current value. */
 .gm-seg {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--sp-2);
 }
-.gm-seg .gm-pick-label {
-  margin-right: var(--sp-2);
+.gm-seg-track {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
 }
 .gm-seg-btn {
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-dim);
+  height: 22px;
+  padding: 0 11px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
   font-size: var(--fs-sm);
-  font-weight: 560;
+  font-weight: 600;
   cursor: pointer;
-  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
-}
-.gm-seg-btn:first-of-type {
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-}
-.gm-seg-btn:last-of-type {
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  margin-left: -1px;
+  transition: background 140ms ease, color 140ms ease;
 }
 .gm-seg-btn:hover {
   color: var(--text);
-  border-color: var(--border-strong);
-  z-index: 1;
 }
 .gm-seg-btn--on {
-  color: var(--text);
-  background: var(--surface-3);
-  border-color: var(--border-strong);
-  z-index: 1;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 .gm-runs-search {
   display: flex;
@@ -798,6 +951,10 @@ a.gm-crumb:hover {
   color: var(--text);
   background: var(--surface-3);
 }
+.gm-runs-showing-what {
+  color: var(--text);
+  font-weight: 560;
+}
 .gm-runs-showing {
   display: flex;
   align-items: center;
@@ -826,25 +983,11 @@ a.gm-crumb:hover {
   border-radius: var(--radius);
 }
 
-/* The list is a table: one grid template shared by the column header and
-   every row, so the figures line up down the page. */
+/* The list: shelves of cards, each one a complete sentence about its run. */
 .gm-runs-list {
-  --runs-cols: 14px minmax(0, 1.6fr) minmax(0, 1.1fr) 104px 110px 78px 14px;
   display: flex;
   flex-direction: column;
   gap: var(--sp-5);
-}
-.gm-runs-cols {
-  display: grid;
-  grid-template-columns: var(--runs-cols);
-  gap: 0 var(--sp-4);
-  padding: 0 15px;
-  margin-bottom: calc(-1 * var(--sp-3));
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-faint);
 }
 .gm-shelf-head {
   display: flex;
@@ -877,7 +1020,7 @@ a.gm-crumb:hover {
 .gm-shelf-rows {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--sp-2);
 }
 .gm-shelf--live .gm-shelf-rows {
   padding: var(--sp-2);
@@ -903,14 +1046,19 @@ a.gm-crumb:hover {
   background: var(--surface-2);
 }
 
+/* ── one card ── */
 .gm-runcard {
   display: grid;
-  grid-template-columns: var(--runs-cols);
-  grid-auto-rows: auto;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  grid-template-areas:
+    'dot name when'
+    '.   meta meta'
+    '.   err  err';
   align-items: center;
-  gap: 0 var(--sp-4);
+  column-gap: var(--sp-3);
+  row-gap: 8px;
   width: 100%;
-  padding: 10px 15px 10px 12px;
+  padding: 11px 15px 11px 12px;
   border: 1px solid var(--border);
   border-left: 3px solid var(--border-strong);
   border-radius: var(--radius);
@@ -937,10 +1085,13 @@ a.gm-crumb:hover {
   border-left-color: var(--ok);
 }
 .gm-runcard-dotcell {
+  grid-area: dot;
   display: flex;
   justify-content: center;
+  align-self: center;
 }
 .gm-runcard-name {
+  grid-area: name;
   display: flex;
   align-items: center;
   gap: var(--sp-3);
@@ -979,54 +1130,78 @@ a.gm-crumb:hover {
 .gm-runcard-status--running {
   color: var(--accent);
 }
-/* The figure cells sit in the grid themselves; the wrapper is a hook only. */
-.gm-runcard-meta {
-  display: contents;
-}
-.gm-runcard-cell {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 7px;
-  min-width: 0;
-  font-size: var(--fs-sm);
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
-}
-.gm-runcard-sub {
-  color: var(--text-faint);
-}
-.gm-runcard-none {
-  color: var(--text-faint);
-  opacity: 0.6;
-}
-.gm-runcard-errors {
-  color: var(--err);
-}
-.gm-runcard-held {
-  color: var(--amber-text);
-  font-size: var(--fs-xs);
-}
-.gm-runcard-cost {
-  color: var(--text);
-}
 .gm-runcard-when {
+  grid-area: when;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
   font-size: var(--fs-sm);
   color: var(--text-faint);
   white-space: nowrap;
-  text-align: right;
 }
 .gm-runcard-go {
   flex: none;
   color: var(--text-faint);
   opacity: 0;
+  transition: opacity 120ms ease, transform 120ms ease;
 }
 .gm-runcard:hover .gm-runcard-go {
   opacity: 1;
+  transform: translateX(2px);
+}
+
+/* The figures: a row of labelled stats. Each pair is label-over-value so
+   a card reads without a header, and the hairlines group them — shape,
+   time, spend — the way the run summary does above a graph. */
+.gm-runcard-meta {
+  grid-area: meta;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 4px 14px;
+  min-width: 0;
+}
+.gm-runcard-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.gm-runcard-label {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.gm-runcard-value {
+  font-size: var(--fs-md);
+  font-weight: 560;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.gm-runcard-stat--err .gm-runcard-label,
+.gm-runcard-stat--err .gm-runcard-value {
+  color: var(--err);
+}
+.gm-runcard-stat--held .gm-runcard-label,
+.gm-runcard-stat--held .gm-runcard-value {
+  color: var(--amber-text);
+}
+.gm-runcard-none {
+  color: var(--text-faint);
+  opacity: 0.6;
+}
+.gm-runcard-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 2px 2px 1px;
 }
 .gm-runcard-error {
-  grid-column: 2 / -1;
-  margin-top: 7px;
+  grid-area: err;
   padding: 5px 9px;
   border-radius: var(--radius-sm);
   background: var(--err-soft);
@@ -1068,34 +1243,8 @@ a.gm-crumb:hover {
   }
 }
 
-/* Narrower than the table: the column header goes, the figures stack
-   under the name, and the facets become two rows. */
+/* Narrow: the facets tighten. The cards already wrap their own figures. */
 @media (max-width: 900px) {
-  .gm-runs-cols {
-    display: none;
-  }
-  .gm-runs-list {
-    --runs-cols: 14px minmax(0, 1fr) 84px 14px;
-  }
-  .gm-runcard-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px var(--sp-4);
-    grid-column: 2 / 3;
-    grid-row: 2;
-    margin-top: 3px;
-  }
-  .gm-runcard-when {
-    grid-column: 3;
-    grid-row: 1;
-  }
-  .gm-runcard-go {
-    grid-column: 4;
-    grid-row: 1;
-  }
-  .gm-runcard-error {
-    grid-column: 2 / -1;
-  }
   .gm-facets {
     grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: var(--sp-2);
@@ -4123,11 +4272,24 @@ span.gm-pause-instance {
   white-space: nowrap;
 }
 .gm-builder-blocked {
-  padding: 8px var(--sp-5);
-  font-size: var(--fs-md);
-  color: var(--amber-text);
-  background: var(--amber-tint);
-  border-bottom: 1px solid color-mix(in srgb, var(--amber) 35%, var(--border));
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  padding: 6px var(--sp-5);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.gm-builder-blocked-text {
+  font-weight: 560;
+}
+.gm-builder-blocked-how {
+  color: var(--text-faint);
+}
+.gm-builder-blocked-how code {
+  color: var(--text-dim);
 }
 /* the way out of a blocked state, wherever it is shown */
 .gm-btoken {
@@ -4136,15 +4298,16 @@ span.gm-pause-instance {
   gap: 6px;
 }
 .gm-builder-railbody .gm-btoken {
-  padding: 8px 10px;
+  padding: 7px 10px;
   color: var(--amber-text);
   background: var(--amber-tint);
-  border: 1px solid color-mix(in srgb, var(--amber) 35%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--amber) 30%, var(--border));
   border-radius: var(--radius-sm);
 }
 .gm-btoken-text {
-  font-size: var(--fs-md);
-  font-weight: 620;
+  font-size: var(--fs-sm);
+  font-weight: 560;
+  line-height: 1.5;
 }
 .gm-btoken-how {
   font-size: var(--fs-sm);
@@ -4204,26 +4367,47 @@ span.gm-pause-instance {
   border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
+.gm-bpalette-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: var(--sp-1);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
 .gm-bpalette-btn {
-  padding: 5px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 11px 0 9px;
   font: inherit;
   font-size: var(--fs-sm);
-  font-weight: 620;
-  color: var(--text-dim);
+  font-weight: 600;
+  color: var(--text);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-left: 2px solid currentColor;
   border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
 }
 .gm-bpalette-btn:hover {
   border-color: var(--border-strong);
-  border-left-color: currentColor;
-  color: var(--text);
+  background: var(--surface-2);
 }
-.gm-bpalette-btn--tool { color: var(--kind-tool); }
-.gm-bpalette-btn--mcp { color: var(--kind-llm); }
-.gm-bpalette-btn--subagent { color: var(--kind-agent); }
+/* The kind's colour is a dot, the same tint the card will carry. */
+.gm-bpalette-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: currentColor;
+}
+.gm-bpalette-btn--tool .gm-bpalette-dot { color: var(--kind-tool); }
+.gm-bpalette-btn--mcp .gm-bpalette-dot { color: var(--kind-llm); }
+.gm-bpalette-btn--subagent .gm-bpalette-dot { color: var(--kind-agent); }
 .gm-bpalette-hint {
   margin-left: auto;
   font-size: var(--fs-xs);
@@ -4239,7 +4423,7 @@ span.gm-pause-instance {
 
 /* the right rail */
 .gm-builder-rail {
-  width: 430px;
+  width: 460px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -4247,12 +4431,92 @@ span.gm-pause-instance {
   border-left: 1px solid var(--border);
   background: var(--bg);
 }
-.gm-builder-rail > .gm-brail-tabs {
-  /* .gm-bcode-tabs sets flex: 1 for the file row; the rail's row is a header. */
+/* The rail's three panels as a segmented control: the one thing on the
+   page that is always there, so it is sized to be found. */
+.gm-brail-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
   flex: 0 0 auto;
-  padding: var(--sp-2) var(--sp-3) 0;
+  padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--border);
   background: var(--bg-canvas);
+}
+.gm-brail-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+.gm-brail-tab:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.gm-brail-tab--on {
+  color: var(--text);
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+.gm-brail-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 99px;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.gm-brail-tab--on .gm-brail-badge {
+  background: var(--bg);
+}
+.gm-brail-badge--err {
+  background: var(--err-soft);
+  color: var(--err);
+}
+/* A section heading inside a panel: a number when the sections are steps. */
+.gm-bsection {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+.gm-bsection:first-child {
+  margin-top: 0;
+}
+.gm-bsection .gm-bfield-hint {
+  flex: 1;
+  font-size: var(--fs-xs);
+}
+.gm-bsection .gm-pill {
+  margin-left: auto;
+}
+.gm-bsection-state {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.gm-bsection-state--ok {
+  color: var(--ok);
 }
 .gm-builder-railbody {
   flex: 1;
@@ -4370,6 +4634,15 @@ textarea.gm-binput {
   grid-template-columns: 1fr 1.4fr 0.7fr;
   gap: var(--sp-3);
 }
+.gm-brow--two {
+  grid-template-columns: 1fr 1.6fr;
+}
+.gm-brow--steps {
+  grid-template-columns: 1fr;
+}
+.gm-binput--short {
+  width: 96px;
+}
 .gm-bcheck {
   display: inline-flex;
   align-items: center;
@@ -4386,23 +4659,43 @@ textarea.gm-binput {
   border: 1px dashed var(--border);
   border-radius: var(--radius-sm);
 }
+/* Five targets as two rows — a language each — rather than a 2×3 grid of
+   cards that read as six equal choices. */
 .gm-btargets {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--sp-2);
-}
-.gm-btarget {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  padding: 7px 10px;
+  gap: 5px;
+}
+.gm-btarget-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.gm-btarget-lang {
+  flex: none;
+  width: 72px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+.gm-btarget-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.gm-btarget {
+  padding: 4px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: 99px;
   background: var(--surface);
   color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 560;
   cursor: pointer;
-  text-align: left;
+  white-space: nowrap;
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
 }
 .gm-btarget:hover {
   border-color: var(--border-strong);
@@ -4412,16 +4705,6 @@ textarea.gm-binput {
   color: var(--accent-strong);
   border-color: color-mix(in srgb, var(--accent) 50%, var(--border-strong));
   background: var(--accent-soft);
-}
-.gm-btarget-lang {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  opacity: 0.8;
-}
-.gm-btarget-fw {
-  font-size: var(--fs-md);
-  font-weight: 620;
 }
 .gm-btools-head {
   display: flex;
@@ -4567,7 +4850,7 @@ textarea.gm-binput {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  padding: 4px var(--sp-3);
+  padding: 0 var(--sp-2);
   border-bottom: 1px solid var(--border);
 }
 .gm-bcode-tabs {
@@ -4575,7 +4858,7 @@ textarea.gm-binput {
   flex: 1;
   min-width: 0;
   gap: 2px;
-  overflow-x: auto;
+  flex-wrap: wrap;
 }
 .gm-bcode-tab {
   flex: none;
@@ -4600,7 +4883,18 @@ textarea.gm-binput {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  flex: none;
+  padding: 6px var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-canvas);
+}
+.gm-bcode-count {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .gm-bcode-pending {
   font-size: var(--fs-xs);
@@ -4611,7 +4905,7 @@ textarea.gm-binput {
   margin: 0;
   padding: var(--sp-4);
   overflow: auto;
-  max-height: 440px;
+  max-height: 58vh;
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
   line-height: 1.6;

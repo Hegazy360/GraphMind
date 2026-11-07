@@ -1,0 +1,46 @@
+{
+  "name": "@graphmind-ai/analyze",
+  "version": "0.6.0",
+  "description": "Behaviour analysis over recorded GraphMind runs — wasted work, tool health, termination quality — shared by the CLI, the MCP server and the viewer.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@graphmind-ai/schema": "workspace:*"
+  },
+  "devDependencies": {
+    "@graphmind-ai/client": "workspace:*",
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hegazy360/GraphMind.git",
+    "directory": "packages/analyze"
+  },
+  "homepage": "https://graphmind.ai"
+}

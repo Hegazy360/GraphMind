@@ -29,6 +29,7 @@ import { AdapterCore } from './core.js';
 import { agentNodeId } from './ids.js';
 import { createDebugMiddleware } from './middleware.js';
 import { peerVersion } from './peer-version.js';
+import { createReplayModel } from './replay-model.js';
 import { wrapToolSet } from './wrap-tools.js';
 
 /** Anything `wrapLanguageModel` accepts (a V2/V3/V4 language model). */
@@ -123,6 +124,37 @@ export function graphmind(options: GraphmindOptions = {}): Graphmind {
       // V2/V3 models directly, so returning the input unchanged is safe.)
       if (!session.enabled) return model as WrappedLanguageModel;
       try {
+        // Hermetic replay: serve the recording instead of the provider. The
+        // substitution happens INSIDE the instrumentation, so the replayed
+        // run is gated and recorded exactly like the original — only the
+        // answers come from the tape. `graphmind replay` announces it; a
+        // process that set GRAPHMIND_REPLAY by hand gets this warning.
+        const tape = session.replay;
+        if (tape !== undefined) {
+          const modelId = typeof (model as { modelId?: unknown }).modelId === 'string'
+            ? (model as { modelId: string }).modelId
+            : 'unknown';
+          // Say which of the three modes this is. "No provider will be
+          // called" is only true of a plain replay: under --live-model, and
+          // past a --substitute cut, the real model IS called and the run
+          // costs tokens. A warning that understates that would be the
+          // worst kind of wrong.
+          const liveModel = tape.liveModel;
+          const cut = tape.hasCut;
+          core.warner.warn(
+            'replay:model',
+            `GRAPHMIND_REPLAY is set: model "${modelId}" is served from a recording — ` +
+              (liveModel
+                ? 'EXCEPT that --live-model was passed, so every model step calls the provider for real'
+                : cut
+                  ? 'up to the substituted call; after it the provider IS called for real (a counterfactual costs tokens)'
+                  : 'no provider will be called'),
+          );
+          return wrapLanguageModel({
+            model: createReplayModel(tape, modelId, model) as WrapModelInput,
+            middleware,
+          });
+        }
         return wrapLanguageModel({ model, middleware });
       } catch (error) {
         core.warner.warn(

@@ -168,9 +168,11 @@ write it to `.claude/skills/graphmind/SKILL.md` in the current directory
 
 Serve recorded runs to MCP clients (Claude Code, Cursor, ...) over stdio. No
 control tools — releasing a pause goes through `graphmind resume`.
-Read-only tools: `list_runs`, `get_run`, `get_node`, `find_errors` — each
-result carries a deep link into the viewer. Reads the SQLite database
-directly, so it works while the server/viewer is closed.
+Read-only tools: `list_runs`, `get_run`, `get_node`, `find_errors`,
+`get_behavior` (one verdict on how well a run worked: wasted calls, silent
+failures, finish reasons, prompt growth) — each result carries a deep link
+into the viewer. Reads the SQLite database directly, so it works while the
+server/viewer is closed.
 
 Register it in Claude Code:
 

@@ -44,6 +44,9 @@ export function CodePanel({ preview }: { preview: PreviewResponse | undefined })
 
   return (
     <section className="gm-bcode" aria-label="Generated code">
+      {/* Files on one row, actions on the next: a 460px rail cannot hold
+          three file names and two buttons side by side without cutting a
+          name to "src/main." */}
       <div className="gm-bcode-head">
         <div className="gm-bcode-tabs" role="tablist" aria-label="Files">
           {preview?.files.map((f) => (
@@ -58,19 +61,22 @@ export function CodePanel({ preview }: { preview: PreviewResponse | undefined })
             </button>
           ))}
         </div>
+      </div>
+      {preview !== undefined && (
         <div className="gm-bcode-actions">
+          <span className="gm-bcode-count">
+            {preview.files.length} {preview.files.length === 1 ? 'file' : 'files'} · generated here, byte for byte what Create writes
+          </span>
           {file !== undefined && (
             <button className="gm-copy" onClick={() => void copy(file.path, file.content)} title={`Copy ${file.path}`}>
               {copied === file.path ? 'copied ✓' : 'copy file'}
             </button>
           )}
-          {preview !== undefined && (
-            <button className="gm-copy" onClick={() => void copy('all', bundle(preview))} title="Copy every file, with separators, and the commands">
-              {copied === 'all' ? 'copied ✓' : 'copy all'}
-            </button>
-          )}
+          <button className="gm-copy" onClick={() => void copy('all', bundle(preview))} title="Copy every file, with separators, and the commands">
+            {copied === 'all' ? 'copied ✓' : 'copy all'}
+          </button>
         </div>
-      </div>
+      )}
       {file === undefined ? (
         <div className="gm-bcode-empty">
           The generated code appears here. Fix what the cards are flagging and it comes straight back.

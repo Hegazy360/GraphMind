@@ -2,6 +2,7 @@
 export default new Map([
 ["src/content/docs/contributing/project.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Fcontributing%2Fproject.mdx&astroContentModuleFlag=true")],
 ["src/content/docs/contributing/writing-an-adapter.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Fcontributing%2Fwriting-an-adapter.mdx&astroContentModuleFlag=true")],
+["src/content/docs/debugging/behavior-summary.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Fdebugging%2Fbehavior-summary.mdx&astroContentModuleFlag=true")],
 ["src/content/docs/debugging/breakpoints-and-step.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Fdebugging%2Fbreakpoints-and-step.mdx&astroContentModuleFlag=true")],
 ["src/content/docs/debugging/comparing-runs.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Fdebugging%2Fcomparing-runs.mdx&astroContentModuleFlag=true")],
 ["src/content/docs/debugging/edit-arguments.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Fdebugging%2Fedit-arguments.mdx&astroContentModuleFlag=true")],
@@ -11,6 +12,7 @@ export default new Map([
 ["src/content/docs/debugging/mcp-servers.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Fdebugging%2Fmcp-servers.mdx&astroContentModuleFlag=true")],
 ["src/content/docs/debugging/pause-on-error.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Fdebugging%2Fpause-on-error.mdx&astroContentModuleFlag=true")],
 ["src/content/docs/debugging/recording-runs.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Fdebugging%2Frecording-runs.mdx&astroContentModuleFlag=true")],
+["src/content/docs/debugging/replay.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Fdebugging%2Freplay.mdx&astroContentModuleFlag=true")],
 ["src/content/docs/debugging/retry-and-abort.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Fdebugging%2Fretry-and-abort.mdx&astroContentModuleFlag=true")],
 ["src/content/docs/guides/build-a-workflow.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Fguides%2Fbuild-a-workflow.mdx&astroContentModuleFlag=true")],
 ["src/content/docs/guides/remote-development.mdx", () => import("astro:content-layer-deferred-module?astro%3Acontent-layer-deferred-module=&fileName=src%2Fcontent%2Fdocs%2Fguides%2Fremote-development.mdx&astroContentModuleFlag=true")],

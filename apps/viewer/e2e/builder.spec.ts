@@ -21,7 +21,7 @@ test('places nodes on the canvas, edits the selected one, and says what needs a 
 
   await page.getByRole('button', { name: 'Build a workflow' }).first().click();
   await expect(page).toHaveURL(/#\/build$/);
-  await expect(page.locator('.gm-builder-bar h1')).toHaveText('Workflow');
+  await expect(page.locator('.gm-builder-bar h1')).toHaveText('my-agent');
 
   // The starter graph: the agent and its two tools.
   const cards = page.locator('.gm-bnode');
@@ -163,6 +163,6 @@ test('offers a key that is never written down, and never shows one back', async 
 test('#/build deep-links straight to the canvas', async ({ page, consoleGuard }) => {
   consoleGuard.allow(WS_FAILURE);
   await openViewer(page, { hash: '#/build' });
-  await expect(page.locator('.gm-builder-bar h1')).toHaveText('Workflow');
+  await expect(page.locator('.gm-builder-bar h1')).toHaveText('my-agent');
   await expect(page.locator('.gm-bnode')).toHaveCount(3);
 });

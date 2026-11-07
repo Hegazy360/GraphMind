@@ -23,6 +23,7 @@ if (!version || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) {
 // Every workspace package that is published to npm.
 const PACKAGES = [
   'schema',
+  'analyze',
   'client',
   'ai-sdk',
   'anthropic',

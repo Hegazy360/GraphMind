@@ -83,9 +83,16 @@ tarballs exactly as published, a CycloneDX 1.6 SBOM
 those tarballs, and `SHA256SUMS`. Compare `sha256sum` of what npm gave you
 against that file.
 
-**RubyGems** — the `graphmind` gem is built from `ruby/` at the same version.
-It is not yet on RubyGems (see "Where things stand" below); when it is, the
-gemspec already sets `rubygems_mfa_required`.
+**RubyGems** — the `graphmind` gem is built from `ruby/` at the same version
+and published through RubyGems Trusted Publishing (OIDC, no stored token) from
+[`publish-ruby.yml`](./.github/workflows/publish-ruby.yml): the gem is built
+from the pristine checkout before any test dependency is installed (it has
+zero runtime dependencies, so nothing third-party ships inside it), installed
+from the built artifact and smoke-loaded, then pushed and verified installable
+from the registry. It is not yet on RubyGems — the first tagged release after
+the publisher is configured (a *pending* trusted publisher, since the name is
+unclaimed) will be the first published version. The gemspec sets
+`rubygems_mfa_required`.
 
 ## Data residency
 

@@ -1,0 +1,198 @@
+---
+title: Hermetic replay
+description: Re-run your agent against a recording instead of the outside world — no API key, no token cost, the same result every time — and assert that its trajectory has not changed.
+sidebar:
+  order: 9
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every run GraphMind recorded can be run again, served from the recording:
+
+```sh
+graphmind replay last -- node agent.js
+```
+
+Your agent runs unchanged. Its tool calls are answered from the recording,
+its model steps are served from the recording, and at the end GraphMind
+compares what it did this time with what it did when recorded.
+
+No API key is needed, nothing is charged, and the result is the same every
+time. That turns a recording into something you can keep: a regression test.
+
+## What is hermetic, exactly
+
+This is the first thing to know, and GraphMind prints it before every
+replay rather than leaving it to a docs page:
+
+| | Replayed from the recording | Runs for real, again |
+|---|---|---|
+| **Tool calls** | ✅ every adapter | |
+| **Model steps** | ✅ Vercel AI SDK | Anthropic, OpenAI, LangGraph adapters |
+| **Your own code** | | orchestration, control flow, schema validation |
+| **Side effects outside GraphMind** | | `fetch`, database writes, files |
+
+<Aside type="caution" title="Replay is hermetic only for what GraphMind gates">
+A tool that writes to your database and returns a value replays its *value*
+— the write already happened once and will happen again if your code makes
+it outside the tool. Replay a run whose side effects you are willing to
+repeat, or point the run at a scratch environment.
+</Aside>
+
+Run `graphmind replay <runId> --dry` to see what a replay would cover
+without running anything.
+
+## What a replay actually catches
+
+Because both the model and the tools are served from the recording, what
+remains live is **your code**: which tools you register, their schemas, your
+control flow, your step caps, how you assemble the answer.
+
+So a replay catches a tool renamed, a schema tightened until the model's
+recorded arguments no longer validate, a step cap lowered, a tool dropped
+from the set, orchestration that stops forwarding a call. It does **not**
+catch a changed tool body (the body never runs) or a changed model (the
+model never runs) — those need a live run. That is a narrower promise than
+"tests your agent", and it is the true one.
+
+## Asserting the trajectory
+
+```sh
+graphmind replay last --assert -- node agent.js
+```
+
+`--assert` exits non-zero when the replay diverged. The comparison is about
+what the agent **did** — which tools, in what order, with what arguments,
+and how many model turns — not the prose it produced. Divergences are
+classified, because they do not all mean the same thing:
+
+| Class | Meaning | `--assert` |
+|---|---|---|
+| `regression` | a recorded call is gone, or newly failed | fails |
+| `arguments` | same call, different arguments | fails |
+| `extra` | a call the recording never made | fails |
+| `alternative` | same calls, same arguments, different order | passes, with a note |
+
+`alternative` exists because parallel tool calls finish in whatever order
+they finish; failing a build for that would be noise.
+
+## In CI, with no key
+
+A recording exported with `graphmind record` is a plain NDJSON file you can
+commit, and `replay` reads one directly — no database to set up:
+
+```sh
+graphmind record <runId> --out fixtures/happy-path.ndjson   # once, locally
+graphmind replay fixtures/happy-path.ndjson --assert -- node agent.js
+```
+
+A copy-paste GitHub Actions workflow is in
+[`examples/support-desk/.github-workflow-example.yml`](https://github.com/Hegazy360/GraphMind/blob/master/examples/support-desk/.github-workflow-example.yml).
+It sets no API key at all: if a replay ever reached a provider, the job
+would fail — the strongest statement of hermeticity available.
+
+<Aside type="tip" title="Do not demand a key at startup">
+An agent that exits early when `ANTHROPIC_API_KEY` is missing cannot be
+replayed in CI. Skip that check when `GRAPHMIND_REPLAY` is set — two lines,
+as in [`examples/support-desk/src/main.ts`](https://github.com/Hegazy360/GraphMind/blob/master/examples/support-desk/src/main.ts).
+</Aside>
+
+## The counterfactual: "what if this had returned something else?"
+
+A recording tells you what happened. `--substitute` answers what *would*
+have happened:
+
+```sh
+graphmind replay last \
+  --substitute 'tool:refundPayment={"success":true,"refundId":"rf_1","amountUsd":89}' \
+  -- node agent.js
+```
+
+Everything the recording captured before that call replays; the call
+returns your value; **everything after it runs for real**.
+
+<Aside type="caution" title="A counterfactual is not hermetic, and cannot be">
+Once one call returns something different, the next model step sees a
+prompt that never existed. The recorded reply answered the *old* prompt —
+serving it would ignore your substitution and make the exercise a lie. So
+past the cut the agent genuinely runs: a provider is called, tools execute,
+and it costs tokens. GraphMind prints this before it starts, and the AI SDK
+warns on each live step.
+</Aside>
+
+The cut is placed by envelope `seq`, so calls the model requested in the
+*same* step as the substituted one — its parallel siblings, decided before
+your value existed — are not treated as consequences of it. Repeat
+`--substitute` to change several calls; the cut lands at the earliest.
+
+The value is JSON, or `@file.json`. Addressing a later call of the same
+tool: `tool:search#2=...` (zero-based). The viewer's node place has a
+button that copies this whole command for you, pre-filled with what the
+call actually returned, so your edit is a diff against reality.
+
+`--assert` is refused with `--substitute`: asserting that a deliberate
+counterfactual did not diverge is a contradiction. The report says what
+changed instead.
+
+## Varying the model against fixed tools
+
+The reverse question — "did my reworded tool description help?" — needs the
+tools held still and the model let loose:
+
+```sh
+graphmind replay last --live-model -- node agent.js
+```
+
+Tool calls are served from the recording; every model step calls the
+provider for real. Because the tool environment is identical to the
+recorded run, any change in what the agent does is attributable to the
+change you made: a new system prompt, a reworded tool description, a
+different model. (Needs a key; costs tokens.)
+
+## When the agent diverges mid-run
+
+A replay stops at the first call the recording cannot answer, rather than
+finishing as a silent mixture of replayed and live work. Two policies change
+that:
+
+```sh
+graphmind replay last --on-miss=live  -- node agent.js   # unmatched calls run for real
+graphmind replay last --on-miss=skip  -- node agent.js   # ...answer with undefined
+graphmind replay last --on-lossy=live -- node agent.js   # re-run calls too big to have been recorded
+```
+
+`--on-miss=live` is the useful one while a test is being written: replay
+what exists, let the rest run, see how far the recording gets you.
+
+### Values too large to replay
+
+A payload over the recording cap (512 KiB — see [limits](/reference/limits/))
+was kept as a preview when it was recorded, so it cannot be reproduced. Such
+an entry refuses to answer by default rather than hand your agent a
+truncated tool result that looks whole. `--on-lossy=live` re-runs those calls
+for real.
+
+## How it works
+
+`graphmind replay` turns the stored run into a **tape** — an ordered answer
+table — writes it to a temp file, and sets `GRAPHMIND_REPLAY=<path>` for your
+command. `@graphmind-ai/sdk` reads it:
+
+- a **tool** call is answered at its `before` gate, with the recorded return
+  value, or by throwing the recorded error;
+- a **model** step is served by a replay model that `wrapModel` installs in
+  place of your provider, reconstructing a native result from the recorded
+  text, tool calls, finish reason and usage.
+
+Each answer is matched by the Nth call of that node, and checked against the
+canonical arguments the recording captured; a mismatch is a divergence, not
+an answer. The replayed run is itself recorded, gated and inspectable like
+any other — so you can open it in the viewer beside the original.
+
+<Aside type="note" title="A replayed model step is a faithful account of decisions, not bytes">
+Reconstructed: the assistant text, every tool call with the arguments the
+model chose, the finish reason, the token usage. Not reconstructed, because
+it was never recorded: provider metadata, the raw HTTP response, reasoning
+parts, and the token-by-token timing (replayed text arrives as one delta).
+The AI SDK surfaces a warning on every replayed step saying so.
+</Aside>

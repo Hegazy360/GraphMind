@@ -149,6 +149,19 @@ export function matchesFilter(row: RunRow, filter: RunFilter): boolean {
 
 export type GroupBy = 'time' | 'app';
 
+/**
+ * Whether grouping by app can change anything.
+ *
+ * With one app in the list — the ordinary case right after building one —
+ * "by app" and "by day" draw the same single shelf, and so does a filter
+ * that has already narrowed the list to one app. A control that cannot
+ * change what you see does not read as a no-op; it reads as broken, and
+ * the next thing tried is the thing that was already working.
+ */
+export function canGroupByApp(facets: Facets, filter: RunFilter): boolean {
+  return facets.apps.length > 1 && filter.app === undefined;
+}
+
 export type TimeBucket = 'live' | 'today' | 'yesterday' | 'week' | 'older';
 
 const DAY_MS = 86_400_000;

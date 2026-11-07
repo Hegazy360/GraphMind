@@ -127,7 +127,51 @@ shows every resume with who did it ("resumed by agent").
 
 `graphmind runs` lists stored runs. `graphmind record <runId> --out run.ndjson`
 exports one. `graphmind mcp` serves the same data read-only to MCP clients
-(`find_errors`, `get_node`, ...).
+(`find_errors`, `get_node`, `get_behavior`, ...).
+
+`graphmind runs --behavior last --json` is the right first read when the
+question is "why was this run slow / expensive / going in circles?" rather
+than "what threw?": it reports wasted tool calls (repeats, cycles, identical
+failures) with the LLM tokens spent inside the loop, per-tool health
+including failures returned as results instead of thrown, finish reasons
+(steps that stopped at the token limit), and prompt growth across steps.
+Start from its verdict, then drill into the named event spans.
+
+## 5. Proving a fix without changing the code
+
+`graphmind replay` re-runs a recorded run with its tool calls (and, under
+the Vercel AI SDK, its model steps) served from the recording. No provider
+is called, nothing is charged, and the result is the same every time.
+
+```sh
+graphmind replay last -- <the command that runs the agent>
+graphmind replay last --assert -- <cmd>   # exit 1 if the trajectory changed
+graphmind replay last --dry               # what would a replay cover?
+```
+
+Use it to close the loop on a hypothesis:
+
+- **"Is this failure caused by that value?"** Substitute it and see:
+  `graphmind replay last --substitute 'tool:convertCurrency={"usd":2693.4}' -- <cmd>`.
+  Everything before that call replays; the call returns your value;
+  **everything after runs for real** (a provider is called and tools
+  execute — it costs tokens). Report what the agent did differently.
+- **"Did my tool-description / prompt / model change help?"**
+  `graphmind replay last --live-model -- <cmd>` holds the tools fixed and
+  lets the model decide afresh, so any change in behaviour is attributable
+  to your edit.
+- **"Did my refactor break the agent?"** `--assert` compares what the agent
+  DID — which tools, in what order, with what arguments, how many model
+  turns. A reordering of parallel calls passes; a missing or differently
+  argued call fails.
+
+What a plain replay catches is changes in the agent's own code (a renamed
+tool, a tightened schema, a lowered step cap, dropped orchestration) — not a
+changed tool body or a changed model, since neither runs. Say which you are
+testing before claiming a replay proves anything.
+
+Run these yourself in the terminal; the MCP server is read-only by design
+and has no tool that executes commands.
 
 ## Safety
 

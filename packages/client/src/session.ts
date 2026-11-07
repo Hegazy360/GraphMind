@@ -14,6 +14,7 @@
  *    holds — see `handleResume`. A refused edit leaves the gate held.
  */
 import { AsyncLocalStorage, AsyncResource } from 'node:async_hooks';
+import { readFileSync } from 'node:fs';
 import {
   KNOWN_CAPABILITIES,
   MAX_PAYLOAD_BYTES,
@@ -70,6 +71,7 @@ import {
 } from './loop-guard.js';
 import { makeCounterIds, newId } from './ids.js';
 import { REDACTED, Redactor, resolveRedaction } from './redaction.js';
+import { parseTape, ReplayTape, type LossyPolicy, type MissPolicy } from './replay.js';
 import { RingBuffer } from './ring-buffer.js';
 import { RateLimitedWarner, type WarnSink } from './safe.js';
 import {
@@ -209,6 +211,57 @@ export interface RunContext {
   readonly signal: AbortSignal;
 }
 
+/**
+ * The tape for this session: the explicit option, else `GRAPHMIND_REPLAY`
+ * (a path written by `graphmind replay`). A tape that cannot be read is a
+ * warning and no replay — never a crash in the host's startup path, and
+ * never a silent half-replay: the CLI checks the file itself before it
+ * spawns anything, so a failure here means something changed underneath.
+ */
+function resolveReplayTape(
+  option: ReplayTape | false | undefined,
+  env: EnvLike,
+  warn: (key: string, message: string) => void,
+): ReplayTape | undefined {
+  if (option === false) return undefined;
+  if (option !== undefined) return option;
+  let path: string | undefined;
+  try {
+    const raw = env['GRAPHMIND_REPLAY'];
+    path = typeof raw === 'string' && raw !== '' ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+  if (path === undefined) return undefined;
+  try {
+    const tape = parseTape(readFileSync(path, 'utf8'));
+    const onMiss = policyFromEnv(env, 'GRAPHMIND_REPLAY_ON_MISS', ['error', 'live', 'skip']);
+    const onLossy = policyFromEnv(env, 'GRAPHMIND_REPLAY_ON_LOSSY', ['error', 'live']);
+    return new ReplayTape(tape, {
+      ...(onMiss !== undefined ? { onMiss: onMiss as MissPolicy } : {}),
+      ...(onLossy !== undefined ? { onLossy: onLossy as LossyPolicy } : {}),
+    });
+  } catch (error) {
+    warn(
+      'replay:load',
+      `GRAPHMIND_REPLAY=${path} could not be loaded (${
+        error instanceof Error ? error.message : String(error)
+      }); running WITHOUT replay — every call will run for real`,
+    );
+    return undefined;
+  }
+}
+
+/** One replay policy read from the environment, or undefined when unset/invalid. */
+function policyFromEnv(env: EnvLike, name: string, allowed: readonly string[]): string | undefined {
+  try {
+    const raw = env[name];
+    return typeof raw === 'string' && allowed.includes(raw) ? raw : undefined;
+  } catch {
+    return undefined; // unreadable environment: the default policy stands
+  }
+}
+
 export interface SessionOptions {
   /** Viewer endpoint. Default: GRAPHMIND_URL or ws://127.0.0.1:4747/ingest. */
   url?: string;
@@ -220,6 +273,14 @@ export interface SessionOptions {
   meta?: Record<string, unknown>;
   /** Force enable/disable. GRAPHMIND_DISABLED=1 still wins. */
   enabled?: boolean;
+  /**
+   * Hermetic replay: answer gated calls from this tape instead of the
+   * outside world (see replay.ts). `graphmind replay` passes one through
+   * `GRAPHMIND_REPLAY=<path>`, which this session loads when the option is
+   * absent; the option exists so tests (and embedders) can supply a tape
+   * without a file. `false` refuses the environment's tape outright.
+   */
+  replay?: ReplayTape | false;
   /** Socket connect budget. Default 300ms. */
   connectTimeoutMs?: number;
   /** hello -> hello.ack budget. Default 1000ms. */
@@ -374,6 +435,13 @@ export interface Session {
    * and makes the pause editable; see GateOptions.
    */
   gate(point: PausePoint, node: GateNode, options?: GateOptions): Promise<GateDecision>;
+  /**
+   * The hermetic-replay tape driving this session, when one was loaded
+   * (`GRAPHMIND_REPLAY`, or the `replay` option). An adapter asks for it to
+   * substitute its MODEL — the one thing a gate cannot replay. Undefined in
+   * every ordinary run.
+   */
+  readonly replay?: ReplayTape | undefined;
   /** Diagnostics snapshot (also used by tests). */
   stats(): SessionStats;
   /** Release held gates, close the socket, stop timers. Idempotent. */
@@ -407,6 +475,13 @@ const DEFAULTS = {
  * would not itself be a guess).
  */
 const MAX_TRACKED_GAP_RUNS = 64;
+
+/**
+ * Open calls whose input is held for a replay gate. The same ceiling the
+ * loop guard puts on open calls per run: a host that emits `node.started`
+ * without ever gating cannot turn this into a leak.
+ */
+const MAX_PENDING_INPUTS = 256;
 
 /**
  * `GateOptions.unsupportedActions` read once, defensively: the `retry` /
@@ -540,6 +615,19 @@ class SessionImpl implements Session {
   private readonly readyWaiters = new Set<(attached: boolean) => void>();
   /** Holes waiting to be announced, keyed by the run they punched through. */
   private readonly pendingGaps = new Map<string, GapRecord>();
+  /**
+   * Hermetic replay (replay.ts), when `graphmind replay` loaded a tape into
+   * this process. Undefined — the overwhelmingly common case — costs one
+   * `undefined` check at each `before` gate.
+   */
+  private readonly replayTape: ReplayTape | undefined;
+  /**
+   * What each open call is about to run with, keyed by its `instanceId`, so
+   * a `before` gate can check the live arguments against the tape's. Written
+   * at `node.started` (the only place the input is known) and taken by the
+   * gate; bounded by the same ceiling as the loop guard's open calls.
+   */
+  private readonly pendingInputs = new Map<string, unknown>();
   /** Events evicted before delivery, ever (see SessionStats.lost). */
   private lostTotal = 0;
   /** Losses past MAX_TRACKED_GAP_RUNS: counted and warned, not attributed. */
@@ -579,6 +667,9 @@ class SessionImpl implements Session {
       // Fail-closed reports (a failed form sent, or an event dropped), one line
       // per key per interval — never the payload, never the error text.
       (key, message) => this.warner.warn(key, message),
+    );
+    this.replayTape = resolveReplayTape(options.replay, env, (key, message) =>
+      this.warner.warn(key, message),
     );
     this.loopGuard = new LoopGuard(resolveLoopGuard(options.loopGuard, env));
     this.smartBreakpoints = resolveSmartBreakpoints(options, env);
@@ -777,6 +868,17 @@ class SessionImpl implements Session {
     if (!this.active()) return CONTINUE_PROMISE;
     try {
       this.ensureStarted();
+      // HERMETIC REPLAY (replay.ts). Answered locally and BEFORE anything
+      // else: no debugger need be attached, nothing is held, and the call
+      // never runs. Only at `before` — an `after` or `error` gate is asking
+      // about a call that already happened, which replay never lets happen.
+      // A tool node only: an LLM step cannot be answered with a recorded
+      // summary (an adapter must hand its SDK a native provider result), so
+      // its replay is the model, not the gate.
+      if (this.replayTape !== undefined && point === 'before' && node.kind !== 'llm') {
+        const decision = this.replayFor(node);
+        if (decision !== undefined) return Promise.resolve(decision);
+      }
       // Fast path: detached, or attached with nothing matching. The loop hold
       // (W5) is a built-in breakpoint consulted only when attached, only at
       // 'before', only in mode 'pause' — detached, the fast path is untouched.
@@ -907,6 +1009,20 @@ class SessionImpl implements Session {
     seq: number | undefined,
   ): void {
     try {
+      // Replay needs the input a `before` gate is about to run with, and
+      // this is the only place it is known. Kept per instance and taken by
+      // the gate; bounded so a run that never gates cannot grow it forever.
+      if (this.replayTape !== undefined) {
+        try {
+          const id: unknown = payload.instanceId;
+          if (typeof id === 'string') {
+            if (this.pendingInputs.size > MAX_PENDING_INPUTS) this.pendingInputs.clear();
+            this.pendingInputs.set(id, payload.input);
+          }
+        } catch {
+          // unreadable: the gate falls back to an ordinal-only match
+        }
+      }
       const guard = this.loopGuard;
       if (!guard.enabled) return;
       let kind: NodeKind;
@@ -967,6 +1083,33 @@ class SessionImpl implements Session {
     } catch {
       // never throw into the host
     }
+  }
+
+  /**
+   * The tape's answer for a gated call, or undefined to let it run. The
+   * input comes from this instance's `node.started` (see `pendingInputs`);
+   * without one the tape matches on the ordinal alone and reports the call
+   * as unchecked rather than claiming the arguments matched.
+   *
+   * A `ReplayMissError` is deliberate and propagates into the host: the run
+   * must stop at the first divergence, not quietly finish as a mixture of
+   * replayed and live work.
+   */
+  private replayFor(node: GateNode): GateDecision | undefined {
+    const tape = this.replayTape;
+    if (tape === undefined) return undefined;
+    let input: unknown = UNREADABLE_INPUT;
+    const instanceId = node.instanceId;
+    if (typeof instanceId === 'string' && this.pendingInputs.has(instanceId)) {
+      input = this.pendingInputs.get(instanceId);
+      this.pendingInputs.delete(instanceId);
+    }
+    return tape.decide(node.nodeId, node.kind, input);
+  }
+
+  /** The loaded tape, for an adapter's replay model (undefined when not replaying). */
+  get replay(): ReplayTape | undefined {
+    return this.replayTape;
   }
 
   /**

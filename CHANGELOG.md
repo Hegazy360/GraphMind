@@ -8,6 +8,157 @@ distribution, and the Ruby `graphmind` gem).
 
 ## Unreleased
 
+### Added — a behaviour verdict per run (`@graphmind-ai/analyze`, `runs --behavior`, MCP `get_behavior`, the Behaviour strip)
+
+A run that finished `ok` can still have gone badly: the same tool called with
+the same arguments four times, a tool that kept *returning* failures nothing
+threw, prompts growing until a step stopped at the token limit. GraphMind now
+reads exactly that out of any recording it already has — one verdict line per
+run, with the evidence underneath, and only from facts the recording proves
+(no scores, no judges, no guessed "dead steps").
+
+- **One implementation, three surfaces.** The new `@graphmind-ai/analyze`
+  package computes the report; the viewer (a **Behaviour** strip under the
+  run's summary line, collapsed to its verdict until clicked), the terminal
+  (`graphmind runs --behavior <runId|last>`, `--json` for the raw report) and
+  the MCP server (new read-only `get_behavior` tool, the right first call for
+  "why was this run slow / expensive / going in circles?") all show the same
+  numbers, so a human and a coding agent never argue from different reports.
+- **Wasted work, retrospectively.** The three behaviours the live loop guard
+  holds on, found after the fact in any run: consecutive identical tool calls
+  (same canonical input, `_meta` ignored — the canonicalization is pinned
+  against the client's by test), 2–4-call cycles repeating identically, and
+  the same tool failing the same way three or more times in a row. Each
+  incident names its event span, and the report counts the LLM steps and
+  tokens spent *inside* the loop — what it actually cost; the viewer adds a
+  dollar estimate from the bundled price table. Overlapping incidents never
+  double-count: totals come from the union of wasted calls.
+- **Tool health.** Per tool: calls, thrown failures, **silent failures** (the
+  `error-result` smart-breakpoint shapes — `isError: true`, `success: false`,
+  a non-zero exit code, a bare `{error}` — returned with status `ok`, pinned
+  against the client's rule by test), failure rate, recoveries, and p50/p95
+  run time with debugger hold time subtracted.
+- **Termination and context pressure.** Normalized finish reasons across LLM
+  steps (the MCP server's `outputFinishReason` moved into the analyze package
+  — one read everywhere), plus the input-tokens-per-step curve with its
+  growth factor: the measurable signature of a context filling with tool
+  output.
+- The report states its own caveats: calls with unreadable inputs sit out
+  duplicate matching, pre-0.6 token counts may exclude cached tokens, an
+  unfinished run is a so-far. An empty run says "nothing to analyze" instead
+  of pretending.
+- **A realistic example to test all of it against**
+  ([`examples/support-desk`](./examples/support-desk)): a support agent
+  (Vercel AI SDK + Anthropic — `cp .env.example .env`, paste a key, done)
+  with five ticket scenarios, each engineered so one feature has something
+  real to catch — a clean baseline, a planted 100× refund bug for
+  pause-on-error and edit-and-retry (retry with `amountUsd: 0.89` and watch
+  it succeed), a `success: false` result for the silent-failure hold, a dead
+  carrier lane plus a "retry transient errors" prompt rule for the loop
+  guard and the behaviour report, and a knowledge base long enough to bend
+  the context curve. The README doubles as a verification checklist: every
+  failure is deterministic, so the debugger's claims can be checked against
+  known ground truth.
+
+### Added — hermetic replay (`graphmind replay`, `--assert`)
+
+Every recorded run can now be run again, served from the recording:
+`graphmind replay last -- node agent.js`. Tool calls are answered from what
+they returned (or re-thrown, if they threw), model steps are served by a
+replay model, and nothing reaches a provider — no API key, no token spend,
+the same result every time. Your agent runs unchanged; the substitution
+happens inside `@graphmind-ai/sdk`, which reads the `GRAPHMIND_REPLAY`
+environment variable the command sets.
+
+- **`--assert` turns a recording into a regression test.** It compares what
+  the agent DID — which tools, in what order, with what arguments, and how
+  many model turns — not the prose it produced, and classifies divergences
+  rather than collapsing them: `regression` (a recorded call is gone or
+  newly failed), `arguments` (same call, different arguments), `extra` (a
+  call the recording never made) all fail; `alternative` (the same calls in
+  a different order, which is just how parallel tool calls land) passes with
+  a note.
+- **CI needs no database and no key.** A recording exported with `graphmind
+  record` is a plain NDJSON file; `graphmind replay fixtures/run.ndjson
+  --assert -- node agent.js` reads it directly. A copy-paste workflow ships
+  in `examples/support-desk/.github-workflow-example.yml`, deliberately with
+  no API key configured: if a replay ever reached a provider, the job fails.
+- **What is hermetic is printed before every replay**, not buried in docs:
+  GraphMind serves what it gates — tool calls everywhere, model steps under
+  the Vercel AI SDK adapter — and says plainly that the Anthropic, OpenAI
+  and LangGraph adapters still call their provider, and that a bare `fetch`
+  or a database write happens for real, again. `--dry` reports the coverage
+  of a replay without running anything.
+- **A divergence stops the run** rather than letting it finish as a silent
+  mixture of replayed and live work: an unmatched call, or one whose
+  arguments differ from the recording, is fatal by default
+  (`--on-miss=live|skip` to change that). A value the recorder had to shrink
+  (over the payload cap) refuses to answer rather than hand an agent a
+  truncated result that looks whole (`--on-lossy=live` re-runs it).
+- A new local gate decision, `throw`, replays a tool that failed as the
+  failure it was. It exists only inside hermetic replay — the wire's
+  `ResumeAction` has no such value, so no debugger can ever send one.
+
+Scope, stated plainly: replay serves the model for the **Vercel AI SDK**
+adapter only; the Anthropic, OpenAI, LangGraph, Python and Ruby adapters
+replay their tool calls and still call their provider for model steps. What
+a replay catches is therefore changes in YOUR code — a renamed tool, a
+tightened schema, a lowered step cap, dropped orchestration — not a changed
+tool body or a changed model, neither of which runs.
+
+### Added — the counterfactual (`replay --substitute`, `--live-model`)
+
+A recording says what happened; these say what *would* have happened.
+
+- **`--substitute '<nodeId>[#n]=<json|@file>'`** replays the run up to that
+  call, answers it with your value, and runs everything after it for real.
+  In the bundled support-desk example, substituting a successful
+  `refundPayment` turns the agent's apology into "I've refunded the full
+  $89" — the same recording, a different ending, and no code changed.
+  Repeatable; the cut lands at the earliest substitution, placed by
+  envelope `seq` so the substituted call's parallel siblings are not
+  mistaken for consequences of it.
+- **A counterfactual is deliberately NOT hermetic, and says so.** Once one
+  call returns something different the next model step sees a prompt that
+  never existed, so the recorded reply would answer a question nobody
+  asked. Past the cut the agent genuinely runs — provider calls, real
+  tools, real tokens — which the CLI prints before starting and the
+  adapter repeats as a warning on the model itself.
+- **`--live-model`** is the mirror image: tool calls are served from the
+  recording and every model step calls the provider. With the tool
+  environment held identical to the recorded run, a change in behaviour is
+  attributable to the change you made — a reworded tool description, a new
+  system prompt, a different model.
+- `--assert` is refused with either mode: asserting that a deliberate
+  counterfactual did not diverge is a contradiction. The report reframes
+  itself around what changed instead of passing or failing.
+- **In the viewer**, a call's node place copies the whole `--substitute`
+  command, pre-filled with what the call actually returned, so the edit is
+  a diff against reality. The viewer composes the command and never runs
+  it: executing a shell command on behalf of a web page would need a
+  command-execution endpoint on the local server, which is a much larger
+  security boundary than a debugger should move for a convenience.
+- The Agent Skill (`graphmind skill`) teaches the loop, including which
+  hypotheses each mode can and cannot prove.
+
+### Added — the release pipeline covers all three registries
+
+- **`.github/workflows/publish-ruby.yml`**: the `graphmind` gem now has a
+  publish path — RubyGems Trusted Publishing (OIDC, no stored token), the
+  gem built from the pristine checkout before any test dependency is
+  installed, installed-and-loaded from the built artifact, pushed only from
+  a `v*` tag, no-op on re-runs, and verified installable from the registry
+  afterwards. (The gem itself ships with the first tagged release after the
+  pending trusted publisher is configured on rubygems.org.)
+- **`scripts/verify-published.mjs` checks PyPI and RubyGems too**, not just
+  npm: `--registries npm|pypi|rubygems|all` (default `npm`, so the npm
+  publish job is never blocked by a registry it does not publish to). Each
+  publish workflow verifies its own registry; `pnpm verify:published` is the
+  human's final check and now covers all eleven artifacts.
+- **`graphmind record last`** exports the most recently started run — the
+  same spelling `replay` and `runs --behavior` accept, because "export the
+  run I just made" is the step right before both of them.
+
 ### Changed — one header, one section
 
 The viewer framed its canvas on three sides — a run rail on the left, a
@@ -55,6 +206,165 @@ runs  →  run  →  node
   so the page you are staring at while you edit your code is the one that
   tells you it worked, with a button into the run. A replay now says it is a
   replay instead of claiming "not connected" and "1 run recorded" at once.
+- **A run card reads on its own.** The column header over the runs list
+  is gone; each card carries its figures under their own small labels —
+  nodes, llm, tools, errors · ran, held · tokens, est. cost — grouped by
+  hairlines the way the run summary groups them above a graph.
+- **The Build page says what it is building.** The bar names the project
+  and its target; the "no server" banner is one quiet line (the canvas and
+  the code never needed one); the rail's Node / Code / Run tabs are a
+  segmented control carrying the one fact worth knowing before opening each
+  — how many cards have a problem, how many files, how the run is going.
+  The agent card's form splits into **Project** (name, language and
+  framework as two rows of chips, provider, model, description) and
+  **Agent** (steps, prompts); the Run tab is three numbered steps — create,
+  credentials, run — with the reason a button is disabled written beside
+  it; and the Code tab's file names get their own row instead of being cut
+  to `src/main.` by the copy buttons.
+### Added — component tests for the viewer
+
+The viewer's suite was 751 pure-function tests and an end-to-end suite, with
+nothing in between: every "is this button wired to that rule?" question was
+answered either by a browser or by hand. There are now 85 component tests
+(jsdom + Testing Library) driving the real pages against the real stores —
+the runs list, Connect, Build, the header and the hold band — covering the
+controls, what each one does to the state behind it, and what the page says
+in each state it can be in. Every bug fixed by hand in this release is
+pinned by one, so the regressions are the kind a test catches.
+
+### Fixed
+
+- **A project name could not contain a dash.** The Build page's name field
+  slugified on every keystroke, and the slug trims a trailing dash — so
+  typing "trip-bot" produced "tripbot", and the default name the page
+  offers, `my-agent`, was one nobody could type. A dash is now kept while
+  typing (`PROJECT_NAME_RE` allows it) and trimmed when the field is left.
+- **Counts were glued to their labels for anything reading the page aloud.**
+  The runs list's facet tiles and app chips are two spans, which concatenate
+  to "1Failed" and "All apps3" as an accessible name. Each now carries a
+  spelled-out one: "Failed, 1 run".
+- **Two "Clear filters" buttons** appeared when a filter matched nothing —
+  one in the "showing N of M" line and one in the empty block, identical and
+  side by side. The line now yields to the block once the list is bare.
+- **"Open the run" on the Build page opened the runs list instead.** It
+  selected the run and then set the page to `runs`, and the second call
+  undid the first — so the one button whose whole job is landing on a run
+  landed on the list, with the run selected but out of sight.
+- **"Group by" on the runs list offered a choice that could not act.** With
+  one app on the list — the ordinary case just after building one — by-app
+  and by-day draw the same single shelf, so the control looked broken. It
+  now appears only when there is more than one app to group by, and
+  withdraws once a filter has narrowed the list to one. Its label moved
+  outside the track and the chosen option is lit, which it previously
+  was not in any way you could see.
+- **The app filter was easy to miss.** It was a 9px grey legend sharing a
+  line with the source picker, the grouping control and the search, and it
+  had no visible current value — nothing was lit when no app was chosen.
+  It is now a row of its own under the facets, with an **All apps** chip,
+  a count on each, and the chosen one filled; the "showing N of M" line
+  names the app as well.
+
+### Added — hermetic replay (`graphmind replay`, `--assert`)
+
+Every recorded run can now be run again, served from the recording:
+`graphmind replay last -- node agent.js`. Tool calls are answered from what
+they returned (or re-thrown, if they threw), model steps are served by a
+replay model, and nothing reaches a provider — no API key, no token spend,
+the same result every time. Your agent runs unchanged; the substitution
+happens inside `@graphmind-ai/sdk`, which reads the `GRAPHMIND_REPLAY`
+environment variable the command sets.
+
+- **`--assert` turns a recording into a regression test.** It compares what
+  the agent DID — which tools, in what order, with what arguments, and how
+  many model turns — not the prose it produced, and classifies divergences
+  rather than collapsing them: `regression` (a recorded call is gone or
+  newly failed), `arguments` (same call, different arguments), `extra` (a
+  call the recording never made) all fail; `alternative` (the same calls in
+  a different order, which is just how parallel tool calls land) passes with
+  a note.
+- **CI needs no database and no key.** A recording exported with `graphmind
+  record` is a plain NDJSON file; `graphmind replay fixtures/run.ndjson
+  --assert -- node agent.js` reads it directly. A copy-paste workflow ships
+  in `examples/support-desk/.github-workflow-example.yml`, deliberately with
+  no API key configured: if a replay ever reached a provider, the job fails.
+- **What is hermetic is printed before every replay**, not buried in docs:
+  GraphMind serves what it gates — tool calls everywhere, model steps under
+  the Vercel AI SDK adapter — and says plainly that the Anthropic, OpenAI
+  and LangGraph adapters still call their provider, and that a bare `fetch`
+  or a database write happens for real, again. `--dry` reports the coverage
+  of a replay without running anything.
+- **A divergence stops the run** rather than letting it finish as a silent
+  mixture of replayed and live work: an unmatched call, or one whose
+  arguments differ from the recording, is fatal by default
+  (`--on-miss=live|skip` to change that). A value the recorder had to shrink
+  (over the payload cap) refuses to answer rather than hand an agent a
+  truncated result that looks whole (`--on-lossy=live` re-runs it).
+- A new local gate decision, `throw`, replays a tool that failed as the
+  failure it was. It exists only inside hermetic replay — the wire's
+  `ResumeAction` has no such value, so no debugger can ever send one.
+
+Scope, stated plainly: replay serves the model for the **Vercel AI SDK**
+adapter only; the Anthropic, OpenAI, LangGraph, Python and Ruby adapters
+replay their tool calls and still call their provider for model steps. What
+a replay catches is therefore changes in YOUR code — a renamed tool, a
+tightened schema, a lowered step cap, dropped orchestration — not a changed
+tool body or a changed model, neither of which runs.
+
+### Added — the counterfactual (`replay --substitute`, `--live-model`)
+
+A recording says what happened; these say what *would* have happened.
+
+- **`--substitute '<nodeId>[#n]=<json|@file>'`** replays the run up to that
+  call, answers it with your value, and runs everything after it for real.
+  In the bundled support-desk example, substituting a successful
+  `refundPayment` turns the agent's apology into "I've refunded the full
+  $89" — the same recording, a different ending, and no code changed.
+  Repeatable; the cut lands at the earliest substitution, placed by
+  envelope `seq` so the substituted call's parallel siblings are not
+  mistaken for consequences of it.
+- **A counterfactual is deliberately NOT hermetic, and says so.** Once one
+  call returns something different the next model step sees a prompt that
+  never existed, so the recorded reply would answer a question nobody
+  asked. Past the cut the agent genuinely runs — provider calls, real
+  tools, real tokens — which the CLI prints before starting and the
+  adapter repeats as a warning on the model itself.
+- **`--live-model`** is the mirror image: tool calls are served from the
+  recording and every model step calls the provider. With the tool
+  environment held identical to the recorded run, a change in behaviour is
+  attributable to the change you made — a reworded tool description, a new
+  system prompt, a different model.
+- `--assert` is refused with either mode: asserting that a deliberate
+  counterfactual did not diverge is a contradiction. The report reframes
+  itself around what changed instead of passing or failing.
+- **In the viewer**, a call's node place copies the whole `--substitute`
+  command, pre-filled with what the call actually returned, so the edit is
+  a diff against reality. The viewer composes the command and never runs
+  it: executing a shell command on behalf of a web page would need a
+  command-execution endpoint on the local server, which is a much larger
+  security boundary than a debugger should move for a convenience.
+- The Agent Skill (`graphmind skill`) teaches the loop, including which
+  hypotheses each mode can and cannot prove.
+
+### Added — the release pipeline covers all three registries
+
+- **`.github/workflows/publish-ruby.yml`**: the `graphmind` gem now has a
+  publish path — RubyGems Trusted Publishing (OIDC, no stored token), the
+  gem built from the pristine checkout before any test dependency is
+  installed, installed-and-loaded from the built artifact, pushed only from
+  a `v*` tag, no-op on re-runs, and verified installable from the registry
+  afterwards. (The gem itself ships with the first tagged release after the
+  pending trusted publisher is configured on rubygems.org.)
+- **`scripts/verify-published.mjs` checks PyPI and RubyGems too**, not just
+  npm: `--registries npm|pypi|rubygems|all` (default `npm`, so the npm
+  publish job is never blocked by a registry it does not publish to). Each
+  publish workflow verifies its own registry; `pnpm verify:published` is the
+  human's final check and now covers all eleven artifacts.
+- **`graphmind record last`** exports the most recently started run — the
+  same spelling `replay` and `runs --behavior` accept, because "export the
+  run I just made" is the step right before both of them.
+
+### Changed — one header, one section (continued)
+
 - **The graph gets the window.** No rail, no docked panel: a seven-node run
   has room and a three-hundred-node one has all of it.
 - **A call is a page.** The decision row pinned above the evidence instead of

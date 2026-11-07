@@ -8,7 +8,8 @@
  * result carries viewer deep links (see links.ts) so coding agents can
  * cite the exact run/node.
  */
-import { normalizeFinishReason, readUsage, type UsageView } from '@graphmind-ai/schema';
+import { analyzeRun, outputFinishReason, sampleFromEvents } from '@graphmind-ai/analyze';
+import { readUsage, type UsageView } from '@graphmind-ai/schema';
 import type { RunSummary, Storage } from '../storage.js';
 import { nodeLink, runLink } from './links.js';
 import {
@@ -133,18 +134,10 @@ export function totalUsageJson(usages: unknown[]) {
   return total === undefined || basis === undefined ? undefined : usageJson(total, basis);
 }
 
-/**
- * The normalized finish reason of an LLM output: 0.6 senders already write it;
- * older ones wrote the provider's string (`finishReason`, or `stopReason` from
- * the 0.5 Anthropic TS adapter), normalized here the same way.
- */
-export function outputFinishReason(output: unknown): string | undefined {
-  if (output === null || typeof output !== 'object' || Array.isArray(output)) return undefined;
-  const record = output as Record<string, unknown>;
-  const calls = record['toolCalls'];
-  const hasCalls = Array.isArray(calls) && calls.length > 0;
-  return normalizeFinishReason(record['finishReason'] ?? record['stopReason'], hasCalls);
-}
+// The normalized finish reason moved to @graphmind-ai/analyze (one read,
+// shared with `runs --behavior` and the viewer); re-exported for the tests
+// that pin its behaviour.
+export { outputFinishReason };
 
 function nodeSummaryJson(node: NodeModel, runId: string, baseUrl: string) {
   const durationMs = nodeDurationMs(node);
@@ -288,5 +281,22 @@ export function findErrors(ctx: ToolContext, args: Record<string, unknown>) {
     errors,
     scannedRuns,
     ...(errors.length === 0 ? { note: 'no failed nodes recorded in any run' } : {}),
+  };
+}
+
+/**
+ * get_behavior({runId}) — the behaviour report for one run, verdict first.
+ * The same `analyzeRun` as `graphmind runs --behavior` and the viewer's
+ * Behaviour section, so a coding agent and the human read the same numbers.
+ */
+export function getBehavior(ctx: ToolContext, args: Record<string, unknown>) {
+  const runId = readString(args, 'runId');
+  const run = requireRun(ctx, runId);
+  const report = analyzeRun(sampleFromEvents(ctx.storage.listEvents(runId).events, runId));
+  return {
+    ...report,
+    status: run.status,
+    app: run.app,
+    link: runLink(ctx.viewerBaseUrl, runId),
   };
 }
