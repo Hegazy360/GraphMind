@@ -1,0 +1,42 @@
+{
+  "name": "@graphmind-ai/circuit-mcp",
+  "version": "0.0.1",
+  "description": "GraphMind Circuit MCP layer: MCP servers as journaled workflow steps (tool pinning, per-tool policy, typed codegen) and workflows exposed as MCP tools.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@graphmind-ai/circuit-engine": "workspace:*",
+    "@graphmind-ai/circuit-schema": "workspace:*",
+    "zod": "^4.4.3",
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0"
+  },
+  "devDependencies": {
+    "@graphmind-ai/circuit-sdk": "workspace:*",
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "circuit-api": "workspace:*"
+  }
+}

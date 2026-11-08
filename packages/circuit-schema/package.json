@@ -1,0 +1,43 @@
+{
+  "name": "@graphmind-ai/circuit-schema",
+  "version": "0.0.1",
+  "description": "GraphMind Circuit — the data contract of the hosted workflow service: journal entries, run lifecycle, resume actions, breakpoints, durations.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hegazy360/GraphMind.git",
+    "directory": "packages/circuit-schema"
+  },
+  "homepage": "https://graphmind.ai"
+}

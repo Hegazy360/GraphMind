@@ -26,6 +26,11 @@
     "live-check": "pnpm --filter live-check run start",
     "build": "pnpm -r --filter './packages/**' --filter './apps/**' run build",
     "build:packages": "pnpm -r --filter './packages/**' run build",
+    "build:circuit": "pnpm --filter '@graphmind-ai/circuit-schema' --filter '@graphmind-ai/circuit-sdk' --filter '@graphmind-ai/circuit-engine' --filter '@graphmind-ai/circuit-mcp' --filter circuit-api --filter '@graphmind-ai/circuit-cli' run build",
+    "circuit": "node packages/circuit-cli/dist/cli.js",
+    "circuit:dev": "pnpm build:circuit && pnpm --filter circuit-onboarding dev",
+    "circuit:demo": "pnpm build:circuit && pnpm --filter circuit-onboarding demo",
+    "circuit:e2e": "pnpm build:circuit && pnpm --filter circuit-api test:e2e",
     "build:viewer": "pnpm --filter viewer run build && node scripts/copy-viewer-dist.mjs"
   }
 }

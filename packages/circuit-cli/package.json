@@ -1,0 +1,51 @@
+{
+  "name": "@graphmind-ai/circuit-cli",
+  "version": "0.0.1",
+  "description": "GraphMind Circuit CLI \u2014 circuit dev | runs | show | resume | record | test | check.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "circuit": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@graphmind-ai/circuit-engine": "workspace:*",
+    "@graphmind-ai/circuit-schema": "workspace:*",
+    "@graphmind-ai/circuit-sdk": "workspace:*",
+    "@hono/node-server": "^1.19.9",
+    "circuit-api": "workspace:*",
+    "@graphmind-ai/circuit-mcp": "workspace:*",
+    "@modelcontextprotocol/server": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hegazy360/GraphMind.git",
+    "directory": "packages/circuit-cli"
+  },
+  "homepage": "https://graphmind.ai"
+}

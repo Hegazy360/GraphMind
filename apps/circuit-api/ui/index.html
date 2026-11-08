@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GraphMind Circuit</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo" aria-hidden="true">◉</span> GraphMind <b>Circuit</b></div>
+    <nav class="actions">
+      <button id="btn-new-run" class="primary" type="button">New run</button>
+      <button id="btn-new-wf" type="button" hidden>New workflow</button>
+      <button id="btn-event" type="button">Send event</button>
+      <button id="btn-deploy-check" type="button">Deploy check</button>
+    </nav>
+    <div id="conn" class="conn" role="status">connecting…</div>
+  </header>
+
+  <main class="layout">
+    <section class="runs" aria-label="Runs">
+      <div class="runs-head">
+        <h2>Runs</h2>
+        <select id="status-filter" aria-label="Filter by status">
+          <option value="">all</option>
+          <option value="paused">paused</option>
+          <option value="suspended">suspended</option>
+          <option value="running">running</option>
+          <option value="queued">queued</option>
+          <option value="completed">completed</option>
+          <option value="failed">failed</option>
+          <option value="aborted">aborted</option>
+          <option value="timed_out">timed out</option>
+        </select>
+      </div>
+      <ul id="run-list" class="run-list"></ul>
+    </section>
+
+    <section id="detail" class="detail" aria-label="Run detail">
+      <div class="empty">
+        <h2>No run selected</h2>
+        <p>Start one with <b>New run</b>, or select a run on the left.</p>
+        <p class="hint">Paused runs (waiting on a human) are highlighted. Open one to fix it and resume.</p>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="dialog"></dialog>
+  <div id="toast" class="toast" role="alert" hidden></div>
+</body>
+</html>

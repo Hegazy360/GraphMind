@@ -1,0 +1,44 @@
+{
+  "name": "@graphmind-ai/circuit-sdk",
+  "version": "0.0.1",
+  "description": "GraphMind Circuit SDK — define durable workflows as plain TypeScript: workflow(), ctx.step, sleep, waitForEvent, approval, invoke.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@graphmind-ai/circuit-schema": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hegazy360/GraphMind.git",
+    "directory": "packages/circuit-sdk"
+  },
+  "homepage": "https://graphmind.ai"
+}

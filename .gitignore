@@ -39,3 +39,8 @@ python/.mypy_cache/
 apps/viewer/dist-try/
 
 python/uv.lock
+
+# GraphMind Circuit local dev state
+.circuit/
+circuit.mcp.d.ts
+packages/circuit-cli/test/.generated-*

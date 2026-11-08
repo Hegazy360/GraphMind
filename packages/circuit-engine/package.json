@@ -1,0 +1,45 @@
+{
+  "name": "@graphmind-ai/circuit-engine",
+  "version": "0.0.1",
+  "description": "GraphMind Circuit engine — durable execution over a step journal: executor, journal store (node:sqlite), gates, retries, timers, fix-and-resume.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@graphmind-ai/analyze": "workspace:*",
+    "@graphmind-ai/circuit-schema": "workspace:*",
+    "@graphmind-ai/circuit-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hegazy360/GraphMind.git",
+    "directory": "packages/circuit-engine"
+  },
+  "homepage": "https://graphmind.ai"
+}

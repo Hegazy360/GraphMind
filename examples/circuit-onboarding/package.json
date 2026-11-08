@@ -1,0 +1,25 @@
+{
+  "name": "circuit-onboarding",
+  "version": "0.0.1",
+  "description": "GraphMind Circuit onboarding example \u2014 the invoice-triage workflow from the docs, runnable with `circuit dev`.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "node ../../packages/circuit-cli/dist/cli.js dev --workflows workflows.mjs --mcp circuit.mcp.json",
+    "demo": "node demo.mjs",
+    "circuit": "node ../../packages/circuit-cli/dist/cli.js"
+  },
+  "dependencies": {
+    "@graphmind-ai/circuit-cli": "workspace:*",
+    "@graphmind-ai/circuit-engine": "workspace:*",
+    "@graphmind-ai/circuit-sdk": "workspace:*",
+    "@hono/node-server": "^1.19.9",
+    "circuit-api": "workspace:*",
+    "zod": "^4.4.3",
+    "@modelcontextprotocol/server": "^2.0.0"
+  }
+}

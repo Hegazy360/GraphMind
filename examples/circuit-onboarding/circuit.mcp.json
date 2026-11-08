@@ -1,0 +1,10 @@
+{
+  "connections": {
+    "billing": {
+      "transport": "stdio",
+      "command": "node",
+      "args": ["billing-mcp-server.mjs"],
+      "policy": { "refund": "approve" }
+    }
+  }
+}
