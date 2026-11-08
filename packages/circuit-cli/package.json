@@ -32,13 +32,13 @@
     "@graphmind-ai/circuit-engine": "workspace:*",
     "@graphmind-ai/circuit-schema": "workspace:*",
     "@graphmind-ai/circuit-sdk": "workspace:*",
-    "@hono/node-server": "^1.19.9",
+    "@hono/node-server": "^2.1.6",
     "circuit-api": "workspace:*",
     "@graphmind-ai/circuit-mcp": "workspace:*",
-    "@modelcontextprotocol/server": "^2.0.0"
+    "@modelcontextprotocol/server": "^2.4.0"
   },
   "devDependencies": {
-    "@types/node": "^26.3.0",
+    "@types/node": "^26.6.6",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
   },
