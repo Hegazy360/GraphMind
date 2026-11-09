@@ -32,7 +32,7 @@
     "@graphmind-ai/client": "workspace:*",
     "@types/node": "^26.3.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^5.1.0"
   },
   "publishConfig": {
     "access": "public"
