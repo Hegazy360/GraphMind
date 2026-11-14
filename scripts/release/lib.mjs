@@ -105,6 +105,41 @@ export async function publishedVersions(name, options) {
 }
 
 /**
+ * Versions PyPI serves for `name`: a Set (empty = never published), or
+ * undefined when the lookup itself failed.
+ */
+export async function pypiVersions(name, { fetch: fetchImpl = globalThis.fetch } = {}) {
+  try {
+    const res = await fetchImpl(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`, {
+      headers: { accept: 'application/json' },
+    });
+    if (res.status === 404) return new Set();
+    if (!res.ok) return undefined;
+    return new Set(Object.keys((await res.json()).releases ?? {}));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Versions RubyGems serves for `name`: a Set (empty = never published), or
+ * undefined when the lookup itself failed.
+ */
+export async function rubygemsVersions(name, { fetch: fetchImpl = globalThis.fetch } = {}) {
+  try {
+    const res = await fetchImpl(`https://rubygems.org/api/v1/versions/${encodeURIComponent(name)}.json`, {
+      headers: { accept: 'application/json' },
+    });
+    if (res.status === 404) return new Set();
+    if (!res.ok) return undefined;
+    const list = await res.json();
+    return Array.isArray(list) ? new Set(list.map((v) => v.number)) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Run a command, streaming its output, and return the exit code. `spawn` is
  * injectable for tests. Never throws on a non-zero exit; throws if the
  * binary cannot be started at all.

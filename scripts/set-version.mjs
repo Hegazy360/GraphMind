@@ -8,7 +8,8 @@
  * Workspace dependencies stay `workspace:*` — pnpm rewrites them to the real
  * version at publish time.
  */
-import { readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { listPublishablePackages } from './release/lib.mjs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,31 +21,14 @@ if (!version || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) {
   process.exit(1);
 }
 
-// Every workspace package that is published to npm.
-const PACKAGES = [
-  'schema',
-  'analyze',
-  'client',
-  'ai-sdk',
-  'anthropic',
-  'openai',
-  'langgraph',
-  'mcp',
-  'cli',
-];
-
+// Every workspace package that is published to npm — discovered exactly the
+// way check-versions, publish-npm and verify-published discover them (every
+// non-private package under packages/). A hand-kept list here drifted from
+// those once already, and a new package then blocked every release.
 let changed = 0;
-for (const name of PACKAGES) {
-  const path = join(root, 'packages', name, 'package.json');
-  if (!existsSync(path)) {
-    console.warn(`skip packages/${name} (not present)`);
-    continue;
-  }
+for (const { dir } of listPublishablePackages(root)) {
+  const path = join(dir, 'package.json');
   const pkg = JSON.parse(readFileSync(path, 'utf8'));
-  if (pkg.private === true) {
-    console.warn(`skip ${pkg.name} (private)`);
-    continue;
-  }
   const before = pkg.version;
   pkg.version = version;
   writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
@@ -99,27 +83,5 @@ if (existsSync(rubyVersion)) {
   }
 }
 
-// A publishable package this script does not know about is the failure mode it
-// exists to prevent, so say so rather than leaving it silently behind.
-const known = new Set(PACKAGES);
-for (const entry of readdirSync(join(root, 'packages'), { withFileTypes: true })) {
-  if (!entry.isDirectory() || known.has(entry.name)) continue;
-  const path = join(root, 'packages', entry.name, 'package.json');
-  if (!existsSync(path)) continue;
-  const pkg = JSON.parse(readFileSync(path, 'utf8'));
-  if (pkg.private === true) continue;
-  console.error(
-    `\nERROR: packages/${entry.name} (${pkg.name}) is publishable but is not in PACKAGES — ` +
-      'it would ship at the wrong version. Add it to scripts/set-version.mjs.',
-  );
-  process.exit(1);
-}
-
 console.log(`\n${changed} package(s) set to ${version}.`);
-console.log(
-  'Next:\n' +
-    '  pnpm install && pnpm -r build && pnpm build:viewer\n' +
-    '  pnpm test && pnpm test:security && pnpm test:floor\n' +
-    '  pnpm -r publish --access public\n' +
-    '  node scripts/verify-published.mjs      <- the release is not done until this passes',
-);
+console.log('Next: pnpm release   (verifies, tags, publishes everywhere, and confirms each step)');

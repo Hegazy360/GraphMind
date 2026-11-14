@@ -20,6 +20,8 @@ import { extractChangelogSection, releaseBody } from '../release-notes.mjs';
 import { validateSbom } from '../sbom.mjs';
 import { summarizeAuditJson } from '../audit-signatures.mjs';
 import { countDependencies } from '../dep-count.mjs';
+import { collectStatus, findBlockers, formatStatus, latestRelease, nextVersions, promoteUnreleased } from '../status.mjs';
+import { pypiVersions, rubygemsVersions } from '../lib.mjs';
 
 const dirs = [];
 afterEach(() => {
@@ -418,5 +420,126 @@ describe('dep-count', () => {
     assert.equal(counts['graphmind-ai'].transitiveCount, 4);
     assert.deepEqual(counts['@graphmind-ai/schema'], { direct: ['zod'], directCount: 1, transitiveCount: 1 });
     assert.equal(counts.missing, undefined);
+  });
+});
+
+describe('publish-npm: from a laptop', () => {
+  it('--no-provenance drops --provenance (npm refuses it outside CI)', async () => {
+    const root = fakeRepo({ version: '0.5.0' });
+    const calls = [];
+    await publishNpm({ root, dryRun: true, provenance: false, lookup: lookupFrom({}), spawn: (cmd, args) => { calls.push([cmd, ...args]); return { status: 0 }; }, log: () => {} });
+    assert.deepEqual(calls, [['pnpm', '-r', 'publish', '--access', 'public', '--no-git-checks', '--dry-run']]);
+  });
+
+  it('only: filters pnpm to the named packages and plans/waits for just those', async () => {
+    const root = fakeRepo({ version: '0.5.0' });
+    const calls = [];
+    const registry = { 'graphmind-ai': ['0.4.0'], '@graphmind-ai/client': [] };
+    const result = await publishNpm({
+      root,
+      only: ['@graphmind-ai/client'],
+      provenance: false,
+      lookup: lookupFrom(registry),
+      spawn: (cmd, args) => { calls.push([cmd, ...args]); registry['@graphmind-ai/client'].push('0.5.0'); return { status: 0 }; },
+      wait: async () => {},
+      log: () => {},
+    });
+    assert.deepEqual(calls, [['pnpm', '-r', '--filter', '@graphmind-ai/client', 'publish', '--access', 'public', '--no-git-checks']]);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.published, ['@graphmind-ai/client']);
+  });
+
+  it('only: a name that is not a publishable package is an error, not a silent no-op', async () => {
+    const root = fakeRepo({ version: '0.5.0' });
+    await assert.rejects(publishNpm({ root, only: ['internal-thing'], lookup: lookupFrom({}), spawn: () => ({ status: 0 }), log: () => {} }), /not publishable: internal-thing/);
+  });
+});
+
+describe('registry lookups', () => {
+  const respond = (status, body) => async () => ({ status, ok: status >= 200 && status < 300, json: async () => body });
+
+  it('PyPI: releases -> Set, 404 -> empty (never published), errors -> undefined', async () => {
+    assert.deepEqual(await pypiVersions('x', { fetch: respond(200, { releases: { '0.5.1': [], '0.6.0': [] } }) }), new Set(['0.5.1', '0.6.0']));
+    assert.deepEqual(await pypiVersions('x', { fetch: respond(404) }), new Set());
+    assert.equal(await pypiVersions('x', { fetch: respond(503) }), undefined);
+    assert.equal(await pypiVersions('x', { fetch: async () => { throw new Error('offline'); } }), undefined);
+  });
+
+  it('RubyGems: version list -> Set, 404 -> empty, errors -> undefined', async () => {
+    assert.deepEqual(await rubygemsVersions('x', { fetch: respond(200, [{ number: '0.6.0' }]) }), new Set(['0.6.0']));
+    assert.deepEqual(await rubygemsVersions('x', { fetch: respond(404) }), new Set());
+    assert.equal(await rubygemsVersions('x', { fetch: respond(500) }), undefined);
+  });
+});
+
+describe('status', () => {
+  const lookups = (table) => ({
+    npm: lookupFrom(table.npm ?? {}),
+    pypi: async () => (table.pypi === null ? undefined : new Set(table.pypi ?? [])),
+    rubygems: async () => (table.rubygems === null ? undefined : new Set(table.rubygems ?? [])),
+  });
+
+  it('classifies every artifact: current, behind, new, unknown', async () => {
+    const root = fakeRepo({ version: '0.6.0' });
+    const status = await collectStatus({
+      root,
+      lookups: lookups({ npm: { 'graphmind-ai': ['0.5.1', '0.6.0'], '@graphmind-ai/client': ['0.5.1'] }, pypi: null, rubygems: [] }),
+    });
+    const by = Object.fromEntries(status.map((a) => [`${a.registry}:${a.name}`, a]));
+    assert.equal(by['npm:graphmind-ai'].state, 'current');
+    assert.equal(by['npm:@graphmind-ai/client'].state, 'behind');
+    assert.equal(by['npm:@graphmind-ai/client'].latest, '0.5.1');
+    assert.equal(by['pypi:graphmind-ai'].state, 'unknown');
+    assert.equal(by['rubygems:graphmind'].state, 'new');
+    assert.equal(status.length, 4, 'private packages are not artifacts');
+    assert.match(formatStatus(status), /NEW .*graphmind .*never published/);
+  });
+
+  it('collectStatus({ version }) asks about the target, not what the repo says', async () => {
+    const root = fakeRepo({ version: '0.6.0' });
+    const status = await collectStatus({ root, version: '0.6.1', lookups: lookups({ npm: { 'graphmind-ai': ['0.6.0'] } }) });
+    assert.equal(status.find((a) => a.name === 'graphmind-ai' && a.registry === 'npm').state, 'behind');
+  });
+
+  it('latestRelease ignores pre-releases; nextVersions bumps (and finishes an RC)', () => {
+    assert.equal(latestRelease(new Set(['0.5.1', '0.10.0', '0.11.0-rc.1'])), '0.10.0');
+    assert.equal(latestRelease(new Set()), undefined);
+    assert.deepEqual(nextVersions('0.6.0'), { patch: '0.6.1', minor: '0.7.0', major: '1.0.0' });
+    assert.equal(nextVersions('0.7.0-rc.2').patch, '0.7.0');
+  });
+
+  it('findBlockers: a public package left out of lockstep, without a repository url', () => {
+    const root = fakeRepo({ version: '0.6.0', extra: { client: { version: '0.0.1', repository: undefined } } });
+    writeFileSync(join(root, 'CHANGELOG.md'), '# Changelog\n\n## 0.6.0\n\nStuff.\n');
+    const blockers = findBlockers({ root, version: '0.6.0' });
+    assert.deepEqual(blockers.map((b) => b.id), ['version-mismatch', 'provenance:@graphmind-ai/client']);
+    assert.deepEqual(blockers[0].fix, { kind: 'set-version', version: '0.6.0', outliers: ['@graphmind-ai/client'] });
+    assert.deepEqual(blockers[1].fix.repository, { type: 'git', url: 'git+https://github.com/Hegazy360/GraphMind.git', directory: 'packages/client' });
+  });
+
+  it('findBlockers: a missing CHANGELOG section, fixable from Unreleased when there is one', () => {
+    const root = fakeRepo({ version: '0.7.0' });
+    writeFileSync(join(root, 'CHANGELOG.md'), '# Changelog\n\n## Unreleased\n\nNew things.\n\n## 0.6.0\n\nOld.\n');
+    const [b] = findBlockers({ root, version: '0.7.0' });
+    assert.equal(b.id, 'changelog');
+    assert.equal(b.fix.kind, 'promote-unreleased');
+
+    writeFileSync(join(root, 'CHANGELOG.md'), '# Changelog\n\n## 0.6.0\n\nOld.\n');
+    const [manual] = findBlockers({ root, version: '0.7.0' });
+    assert.equal(manual.id, 'changelog');
+    assert.equal(manual.fix, undefined, 'no notes to promote: a human writes them');
+  });
+
+  it('findBlockers: nothing to report for a consistent repo', () => {
+    const root = fakeRepo({ version: '0.6.0' });
+    writeFileSync(join(root, 'CHANGELOG.md'), '## 0.6.0\n\nStuff.\n');
+    assert.deepEqual(findBlockers({ root, version: '0.6.0' }), []);
+    assert.equal(findBlockers({ root, version: '0.6.1' })[0].id, 'version-mismatch');
+  });
+
+  it('promoteUnreleased renames the heading and opens an empty Unreleased above it', () => {
+    const out = promoteUnreleased('# C\n\n## Unreleased\n\nNew.\n\n## 0.6.0\n\nOld.\n', '0.7.0');
+    assert.equal(out, '# C\n\n## Unreleased\n\n## 0.7.0\n\nNew.\n\n## 0.6.0\n\nOld.\n');
+    assert.equal(promoteUnreleased('## 0.6.0\n', '0.7.0'), undefined);
   });
 });

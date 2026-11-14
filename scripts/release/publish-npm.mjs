@@ -3,6 +3,10 @@
  * Publish every workspace package at the repo's version — idempotently.
  *
  *   node scripts/release/publish-npm.mjs [--dry-run] [--summary <file>]
+ *                                        [--no-provenance] [--only a,b]
+ *
+ * --no-provenance is for a publish from a laptop (provenance needs a CI OIDC
+ * identity); --only restricts the run to the named packages.
  *
  * Runs `pnpm -r publish --access public --provenance --no-git-checks`, which
  * (a) rewrites `workspace:*` to real versions — `npm publish` does not — and
@@ -75,9 +79,18 @@ export async function waitUntilPublished(names, version, lookup, { deadlineMs = 
  * The whole operation. Injectable: `lookup`, `spawn` (for pnpm), `wait`.
  * Returns `{ ok, version, already, published, missing, dryRun }`.
  */
-export async function publishNpm({ root = REPO_ROOT, dryRun = false, lookup, spawn, wait, deadlineMs, intervalMs, log = console.log } = {}) {
-  const packages = listPublishablePackages(root);
+export async function publishNpm({ root = REPO_ROOT, dryRun = false, provenance = true, only, lookup, spawn, wait, deadlineMs, intervalMs, log = console.log } = {}) {
+  let packages = listPublishablePackages(root);
   if (packages.length === 0) throw new Error('no publishable packages under packages/');
+  // `only`: publish a subset (e.g. the brand-new packages Trusted Publishing
+  // cannot create — see scripts/release.mjs). Unknown names are an error, not
+  // a silent no-op.
+  if (only !== undefined) {
+    const wantedNames = new Set(only);
+    const unknownNames = [...wantedNames].filter((n) => !packages.some((p) => p.name === n));
+    if (unknownNames.length > 0) throw new Error(`--only names packages that are not publishable: ${unknownNames.join(', ')}`);
+    packages = packages.filter((p) => wantedNames.has(p.name));
+  }
   const resolveVersions = lookup ?? ((name) => publishedVersions(name));
 
   const plan = await planPublish(packages, resolveVersions);
@@ -90,7 +103,13 @@ export async function publishNpm({ root = REPO_ROOT, dryRun = false, lookup, spa
     return { ok: true, version: plan.version, already: plan.already, published: [], missing: [], dryRun, noop: true };
   }
 
-  const args = ['-r', 'publish', '--access', 'public', '--provenance', '--no-git-checks'];
+  const args = ['-r'];
+  if (only !== undefined) for (const name of plan.toPublish.concat(plan.unknown)) args.push('--filter', name);
+  args.push('publish', '--access', 'public');
+  // Provenance needs a CI OIDC identity; a publish from a laptop must opt out
+  // (--no-provenance) or npm refuses it.
+  if (provenance) args.push('--provenance');
+  args.push('--no-git-checks');
   // A pre-release (0.5.0-rc.1 — versionFromTag accepts it) must not become
   // `latest`: npm tags whatever it publishes `latest` unless told otherwise,
   // and `npm install graphmind-ai` would then hand every user the RC.
@@ -124,7 +143,9 @@ export async function publishNpm({ root = REPO_ROOT, dryRun = false, lookup, spa
 if (isMain(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   const dryRun = args['dry-run'] === true;
-  const result = await publishNpm({ dryRun });
+  const provenance = args['no-provenance'] !== true;
+  const only = typeof args.only === 'string' ? args.only.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+  const result = await publishNpm({ dryRun, provenance, only });
   if (typeof args.summary === 'string') {
     writeFileSync(args.summary, `${JSON.stringify(result, null, 2)}\n`);
     console.log(`\nsummary written to ${args.summary}`);

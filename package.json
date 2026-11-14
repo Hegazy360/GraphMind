@@ -18,6 +18,8 @@
     "test": "pnpm -r --filter './packages/**' --filter './apps/viewer' --filter jack-api run test",
     "test:security": "pnpm --filter security-audit run test",
     "test:floor": "node scripts/check-node-floor.mjs pnpm run test:security",
+    "release": "node scripts/release.mjs",
+    "release:status": "node scripts/release/status.mjs",
     "verify:published": "node scripts/verify-published.mjs --registries all",
     "test:e2e": "pnpm --filter viewer run test:e2e",
     "test:all": "pnpm test && pnpm --filter web test",

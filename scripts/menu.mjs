@@ -114,6 +114,17 @@ const ITEMS = [
     steps: [['pnpm', 'build:viewer']],
   },
   { label: 'Build everything', hint: 'pnpm build', steps: [['pnpm', 'build']] },
+  { header: 'Release' },
+  {
+    label: 'Is everything published? (npm, PyPI, RubyGems vs. the repo)',
+    hint: 'pnpm release:status',
+    steps: [[node, join(repoRoot, 'scripts', 'release', 'status.mjs')]],
+  },
+  {
+    label: 'Release — guided, confirms every step, safe to re-run',
+    hint: 'pnpm release',
+    steps: [[node, join(repoRoot, 'scripts', 'release.mjs')]],
+  },
   { header: 'More' },
   {
     label: "The graphmind CLI's own command list",

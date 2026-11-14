@@ -37,6 +37,8 @@ All of these run from the repository root.
 | `pnpm cli <args>` | Any CLI command against this checkout: `pnpm cli runs`, `pnpm cli record <runId> --out bug.ndjson`, … `pnpm cli help` lists them all, and a typo gets a "did you mean" suggestion. |
 | `pnpm build:packages` | Rebuild `packages/*` after editing them (the dev commands do **not** watch package sources). |
 | `pnpm build:viewer` | Build the viewer and copy it into `packages/cli/viewer-dist/`, so the CLI serves the real viewer like a published install. |
+| `pnpm release:status` | Read-only: what npm, PyPI and RubyGems serve vs. what the repo says, plus anything that would block the next release. Exits 1 if anything is behind. |
+| `pnpm release` | Guided release from your terminal: fixes blockers, runs the CI gates locally, tags and pushes (or publishes from this machine), watches the registries. Confirms every step; safe to re-run at any point. `--dry-run` shows every command without running any. |
 | `pnpm build` | Build everything (packages, viewer, docs). |
 
 Tests:
