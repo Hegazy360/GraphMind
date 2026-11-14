@@ -1,0 +1,7 @@
+Third-party files served by graphmind.ai, copied by scripts/vendor.mjs:
+
+gsap.min.js  ←  gsap@3.15.1  (Standard 'no charge' license: https://gsap.com/standard-license.)
+ScrollTrigger.min.js  ←  gsap@3.15.1  (Standard 'no charge' license: https://gsap.com/standard-license.)
+bricolage-grotesque-latin-wght.woff2  ←  @fontsource-variable/bricolage-grotesque@5.3.0  (OFL-1.1)
+instrument-sans-latin-wght.woff2  ←  @fontsource-variable/instrument-sans@5.3.0  (OFL-1.1)
+geist-mono-latin-wght.woff2  ←  @fontsource-variable/geist-mono@5.3.0  (OFL-1.1)

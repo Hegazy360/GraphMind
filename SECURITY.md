@@ -98,9 +98,31 @@ unclaimed) will be the first published version. The gemspec sets
 
 - **Run data never leaves your machine.** Prompts, tool arguments and results,
   errors and timings go from your process to `127.0.0.1:4747` over a local
-  WebSocket and are stored in `~/.graphmind/graphmind.db`. There is no cloud
-  component, no account, and no sync. The SDKs make no outbound request other
-  than that loopback WebSocket.
+  WebSocket and are stored in `~/.graphmind/graphmind.db`. The debugger has no
+  cloud component, no account, and no sync. The SDKs make no outbound request
+  other than that loopback WebSocket.
+- **The Circuit and Jack dashboards can have accounts; the debugger does
+  not.** `circuit dev --accounts` and `jack serve --accounts` turn on
+  self-serve sign-up from `@graphmind-ai/accounts`
+  ([`packages/accounts`](./packages/accounts)). What is enforced, each with a
+  test in [`packages/accounts/test`](./packages/accounts/test): scrypt
+  password hashes with stored parameters; sessions as random 256-bit tokens
+  stored hashed, in an `HttpOnly` `SameSite=Lax` cookie that is `Secure` and
+  `__Host-`-prefixed on https; state-changing requests from a session must
+  come from the server's own origin (`Origin` / `Sec-Fetch-Site`); failed
+  sign-ins are rate-limited per address and email, and an unknown email
+  takes as long as a wrong password; personal API tokens are shown once,
+  stored hashed, and can be minted or revoked only from a browser session.
+  Jack keeps each account's projects invisible to every other account
+  (`apps/jack-api/test/accounts.test.ts`); Circuit attributes every
+  intervention to the signed-in email and ignores the caller's claimed actor
+  (`apps/circuit-api/test/accounts.test.ts`). Account databases live next to
+  each server's own (`.jack/serve/accounts.db`, `.circuit/accounts.db`), on
+  the machine running it; the hosted service is not live. Both servers refuse
+  a non-loopback `--host` unless `--accounts` or `--api-key` is given. The
+  security suite's `security/tests/jack-*.test.ts` continue to plant upstream
+  credentials, link secrets and OIDC client secrets and search the dashboard,
+  the control plane, the runtime and the MCP wire for them.
 - **The only network egress in the whole product is CLI telemetry**: one
   record per command — command name, random install id, version, timestamp —
   to `https://graphmind.ai/api/telemetry`. Never arguments, prompts or run

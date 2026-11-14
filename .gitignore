@@ -44,3 +44,9 @@ python/uv.lock
 .circuit/
 circuit.mcp.d.ts
 packages/circuit-cli/test/.generated-*
+
+# GraphMind Jack local dev state
+.jack/
+
+# GraphMind platform local dev state
+.platform/

@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GraphMind — The debugger for AI agents</title>
-  <meta name="description" content="GraphMind is an open-source, local-first debugger for AI agents. Attach to a live run: pause on error, set breakpoints, step through, inspect every input and output, inject a fix, and resume. MIT licensed.">
+  <meta name="description" content="Your agent just failed. GraphMind holds the failing call while it's still running, shows you everything, and lets you fix it and resume. Build agents on a canvas, replay runs as tests, run durable workflows with Circuit, and put your API in Claude with Jack. Open source, free account.">
   <link rel="canonical" href="https://graphmind.ai/">
   <link rel="icon" type="image/png" href="/graphmind.png">
   <link rel="apple-touch-icon" href="/graphmind.png">
   <meta name="theme-color" content="#0a0a0c" media="(prefers-color-scheme: dark)">
   <meta name="theme-color" content="#fbfbfc" media="(prefers-color-scheme: light)">
 
-  <meta property="og:title" content="GraphMind — The debugger for AI agents">
-  <meta property="og:description" content="Holds the call while it's happening. Pause on error, stop a repeating agent, inspect and inject, resume. Local-first, open source, MIT.">
+  <meta property="og:title" content="GraphMind — Fix your agent while it's still running">
+  <meta property="og:description" content="The debugger holds the failing call. You inspect it, hand it the right answer, and the run carries on. Plus a workflow builder, replay as tests, durable workflows and your API as an MCP server. Open source, free account.">
   <meta property="og:url" content="https://graphmind.ai/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="GraphMind">
@@ -22,396 +22,260 @@
   <meta property="og:image:alt" content="GraphMind - the live debugger for AI agents. Attaches while it's happening.">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://graphmind.ai/og.png">
-  <meta name="twitter:title" content="GraphMind — The debugger for AI agents">
-  <meta name="twitter:description" content="Holds the call while it's happening. Pause on error, stop a repeating agent, inspect and inject, resume. Local-first, open source, MIT.">
+  <meta name="twitter:title" content="GraphMind — Fix your agent while it's still running">
+  <meta name="twitter:description" content="The debugger holds the failing call. You inspect it, hand it the right answer, and the run carries on. Open source, free account.">
 
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="preload" as="font" type="font/woff2" href="/vendor/bricolage-grotesque-latin-wght.woff2" crossorigin>
+  <link rel="preload" as="font" type="font/woff2" href="/vendor/instrument-sans-latin-wght.woff2" crossorigin>
   <link rel="stylesheet" href="/styles.css">
+  <script>document.documentElement.classList.add('js');</script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
 
-  <div class="notice">
-    <p><span class="notice-dot" aria-hidden="true"></span>GraphMind is out — open source, MIT, local-first. <a href="https://github.com/Hegazy360/GraphMind" rel="noopener">Star it on GitHub</a>.</p>
-  </div>
-
-  <header class="site-header container">
-    <a class="brand" href="/" aria-label="GraphMind home">
-      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <path d="M6 17 L12 6 M12 6 L19 14 M6 17 L19 14" class="brand-edge"/>
-        <circle cx="6" cy="17" r="2.6" class="brand-node"/>
-        <circle cx="12" cy="6" r="2.6" class="brand-node brand-node-accent"/>
-        <circle cx="19" cy="14" r="2.6" class="brand-node"/>
-      </svg>
-      <span class="brand-name">GraphMind</span>
-    </a>
-    <nav class="site-nav" aria-label="Site">
-      <a class="nav-link" href="https://graphmind.ai/docs">Docs</a>
-      <a class="nav-link" href="https://github.com/Hegazy360/GraphMind" rel="noopener">GitHub<span class="nav-arrow" aria-hidden="true">&#8599;</span></a>
-    </nav>
+  <header class="top" id="top">
+    <div class="wrap top-row">
+      <a class="brand" href="/" aria-label="GraphMind home">
+        <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M6 17 L12 6 M12 6 L19 14 M6 17 L19 14" class="brand-edge"/>
+          <circle cx="6" cy="17" r="2.6" class="brand-node"/>
+          <circle cx="12" cy="6" r="2.6" class="brand-node brand-node-accent"/>
+          <circle cx="19" cy="14" r="2.6" class="brand-node"/>
+        </svg>
+        <span>GraphMind</span>
+      </a>
+      <nav class="top-nav" aria-label="Site">
+        <a class="top-link hide-md" href="#build">Build</a>
+        <a class="top-link hide-md" href="#debug">Debug</a>
+        <a class="top-link hide-md" href="#test">Test</a>
+        <a class="top-link hide-md" href="#run">Run</a>
+        <a class="top-link hide-md" href="#connect">Connect</a>
+        <span class="top-sep hide-md" aria-hidden="true"></span>
+        <a class="top-link" href="https://graphmind.ai/docs">Docs</a>
+        <a class="top-link hide-sm" href="https://github.com/Hegazy360/GraphMind" rel="noopener">GitHub</a>
+        <a class="top-link hide-sm" href="/login" data-track="cta-click" data-where="nav-signin">Sign in</a>
+        <a class="btn btn-solid btn-sm" href="/signup" data-track="cta-click" data-where="nav">Start free</a>
+      </nav>
+    </div>
   </header>
 
   <main id="main">
-    <section class="hero container">
-      <div class="hero-copy">
-        <p class="eyebrow">Open source &middot; MIT &middot; Local-first</p>
-        <h1>The debugger for AI&nbsp;agents.</h1>
-        <p class="tagline">Holds the call while it&rsquo;s happening.</p>
-        <p class="lede">
-          Your traces shouldn&rsquo;t be a post-mortem. GraphMind attaches to the run itself:
-          watch your agent execute as a live graph, hold it before an LLM call or a tool, on an
-          error, or when it repeats the same call &mdash; then inspect every input and output,
-          inject a fix, and resume.
-        </p>
-
-        <div class="trynow" role="group" aria-label="Try GraphMind now">
-          <code class="trynow-cmd" id="trynow-cmd">npx graphmind-ai demo</code>
-          <button class="trynow-copy" id="trynow-copy" type="button" aria-label="Copy command">Copy</button>
-        </div>
-        <p class="trynow-note">One command, no API key — watch a real debug session pause on a planted bug.
-          Or <a class="trynow-link" href="/try/?fixture=1">try the debugger in your browser</a>, nothing to install.</p>
-
-        <form class="waitlist" id="waitlist-form" method="post" action="/api/waitlist" novalidate>
-          <div class="waitlist-row">
-            <label class="sr-only" for="email">Email address</label>
-            <input class="waitlist-input" type="email" id="email" name="email"
-                   placeholder="you@company.com" autocomplete="email" inputmode="email"
-                   spellcheck="false" required>
-            <button class="waitlist-button" id="waitlist-submit" type="submit">Get release notes</button>
-          </div>
-          <div class="hp" aria-hidden="true">
-            <label for="gm_extra">Leave this field empty</label>
-            <input type="text" id="gm_extra" name="gm_extra" tabindex="-1" autocomplete="off">
-          </div>
-          <p class="form-status" id="form-status" role="status" aria-live="polite"></p>
-          <p class="form-note">Occasional release notes as GraphMind grows. No spam, just ships.</p>
-          <noscript>
-            <p class="form-note form-noscript">JavaScript is off in your browser, so this form won&rsquo;t submit —
-            email <a href="mailto:hello@graphmind.ai?subject=Waitlist">hello@graphmind.ai</a> and we&rsquo;ll add you by hand.</p>
-          </noscript>
-        </form>
-      </div>
-
-      <div class="hero-visual">
-        <div class="panel">
-          <div class="panel-chrome" aria-hidden="true">
-            <span class="chrome-dots"><i></i><i></i><i></i></span>
-            <span class="chrome-title">graphmind &mdash; support-agent</span>
-            <span class="chrome-live"><span class="live-dot"></span>attached</span>
-          </div>
-
-          <div class="panel-stage">
-            <svg class="graph" viewBox="0 0 440 288" role="img"
-                 aria-label="The GraphMind debugger attached to a running agent. support-agent has called an LLM step, which fanned out to three tools: searchFlights and getWeather returned, while checkBudget threw a BudgetExceededError. A breakpoint caught it and the run is paused there.">
-              <defs>
-                <linearGradient id="gmCard" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" class="g-top"/>
-                  <stop offset="100%" class="g-bot"/>
-                </linearGradient>
-              </defs>
-
-              <!-- edges -->
-              <path class="ed" d="M220,52 L220,92"/>
-              <path class="ed" d="M180,170 C180,185 72.5,185 72.5,200"/>
-              <path class="ed" d="M220,170 C220,185 202.5,185 202.5,200"/>
-              <path class="ed" d="M260,170 C260,185 350,185 350,200"/>
-              <path class="ed ed-err st-err" d="M260,170 C260,185 350,185 350,200"/>
-
-              <!-- execution travelling along each edge -->
-              <path class="cm cm1" pathLength="100" d="M220,52 L220,92"/>
-              <path class="cm cm2" pathLength="100" d="M180,170 C180,185 72.5,185 72.5,200"/>
-              <path class="cm cm3" pathLength="100" d="M220,170 C220,185 202.5,185 202.5,200"/>
-              <path class="cm cm4" pathLength="100" d="M260,170 C260,185 350,185 350,200"/>
-
-              <!-- arrival pulses, behind the cards -->
-              <rect class="ring ring-live"    x="124" y="92"  width="192" height="78" rx="11"/>
-              <rect class="ring ring-live rb" x="124" y="92"  width="192" height="78" rx="11"/>
-              <rect class="ring ring-err"     x="275" y="200" width="150" height="72" rx="11"/>
-              <rect class="ring ring-err rb"  x="275" y="200" width="150" height="72" rx="11"/>
-
-              <!-- the agent -->
-              <g>
-                <rect class="card-bg" x="132" y="12" width="176" height="40" rx="9"/>
-                <circle class="dot" cx="148" cy="32" r="3.5"/>
-                <text class="c-name" x="160" y="36.5">support-agent</text>
-                <text class="c-type" x="294" y="35.5" text-anchor="end">AGENT</text>
-              </g>
-
-              <!-- the model call, live -->
-              <g>
-                <rect class="card-bg grow-step" x="124" y="92" width="192" height="78" rx="10"/>
-                <rect class="card-tint tint-live st-live grow-step" x="124" y="92" width="192" height="78" rx="10"/>
-                <rect class="card-line line-live st-live grow-step" x="124" y="92" width="192" height="78" rx="10"/>
-                <circle class="dot" cx="140" cy="112" r="3.5"/>
-                <circle class="dot dot-live st-live" cx="140" cy="112" r="3.5"/>
-                <text class="c-name" x="152" y="116.5">step</text>
-                <g class="c-chip">
-                  <rect x="184" y="105" width="23" height="15" rx="4"/>
-                  <text x="195.5" y="115.5">&#215;3</text>
-                </g>
-                <text class="c-type" x="302" y="115.5" text-anchor="end">LLM</text>
-                <g class="st-body">
-                  <rect class="c-inset" x="138" y="125" width="164" height="28" rx="6"/>
-                  <text class="c-code" x="146" y="136.5">Converts to $60,000,000.</text>
-                  <text class="c-code" x="146" y="147.5">Checking against budget.</text>
-                  <text class="c-meta" x="138" y="164">184 &#8594; 52 tok</text>
-                  <text class="c-meta" x="302" y="164" text-anchor="end">581ms</text>
-                </g>
-              </g>
-
-              <!-- tool: returned -->
-              <g>
-                <rect class="card-bg" x="15" y="200" width="115" height="50" rx="9"/>
-                <rect class="card-line line-done st-a-flash" x="15" y="200" width="115" height="50" rx="9"/>
-                <circle class="dot" cx="30" cy="216" r="3.5"/>
-                <text class="c-name c-name-sm" x="41" y="220.5">searchFlights</text>
-                <g class="st-a">
-                  <g class="c-badge">
-                    <rect x="29" y="228" width="35" height="14" rx="4"/>
-                    <text x="46.5" y="238.5">DONE</text>
-                  </g>
-                  <text class="c-meta" x="116" y="238.5" text-anchor="end">312ms</text>
-                </g>
-              </g>
-
-              <!-- tool: returned -->
-              <g>
-                <rect class="card-bg" x="145" y="200" width="115" height="50" rx="9"/>
-                <rect class="card-line line-done st-b-flash" x="145" y="200" width="115" height="50" rx="9"/>
-                <circle class="dot" cx="160" cy="216" r="3.5"/>
-                <text class="c-name c-name-sm" x="171" y="220.5">getWeather</text>
-                <g class="st-b">
-                  <g class="c-badge">
-                    <rect x="159" y="228" width="35" height="14" rx="4"/>
-                    <text x="176.5" y="238.5">DONE</text>
-                  </g>
-                  <text class="c-meta" x="246" y="238.5" text-anchor="end">88ms</text>
-                </g>
-              </g>
-
-              <!-- tool: threw, breakpoint caught it, run is paused here -->
-              <g>
-                <rect class="card-bg grow-err" x="275" y="200" width="150" height="72" rx="10"/>
-                <rect class="card-tint tint-err st-err grow-err" x="275" y="200" width="150" height="72" rx="10"/>
-                <rect class="card-line line-err st-err grow-err" x="275" y="200" width="150" height="72" rx="10"/>
-                <circle class="dot" cx="291" cy="216" r="3.5"/>
-                <circle class="dot dot-err st-err" cx="291" cy="216" r="3.5"/>
-                <text class="c-name" x="303" y="220.5">checkBudget</text>
-                <text class="c-type" x="411" y="219.5" text-anchor="end">TOOL</text>
-                <g class="st-err2">
-                  <rect class="c-err-strip" x="291" y="230" width="120" height="19" rx="5"/>
-                  <text class="c-err-msg" x="298" y="243">BudgetExceededError</text>
-                  <circle class="c-err-dot" cx="295" cy="258.5" r="2.5"/>
-                  <text class="c-err-note" x="303" y="262">paused on error</text>
-                </g>
-                <circle class="c-bp st-bp" cx="275" cy="239.5" r="4.5"/>
-              </g>
-            </svg>
-          </div>
-
-          <div class="panel-toolbar" aria-hidden="true">
-            <span class="tb-note"><i class="tb-bp"></i>breakpoint &middot; checkBudget</span>
-            <span class="tb-chips">
-              <span class="tb-chip tb-chip-accent">Continue</span>
-              <span class="tb-chip">Step</span>
-              <span class="tb-chip">Inject&hellip;</span>
+    <!-- ================================ hero ================================ -->
+    <section class="hero" id="debugger" aria-labelledby="h1">
+      <div class="wrap">
+        <div class="hero-copy">
+          <h1 id="h1" class="h-display" data-split>Your agent just failed. Fix it while it&rsquo;s still running.</h1>
+          <p class="hero-lede">GraphMind holds the failing call, shows you what it saw, and lets you hand it the right answer. The run carries on from there.</p>
+          <div class="hero-actions">
+            <a class="btn btn-solid" href="/signup" data-track="cta-click" data-where="hero">Start free</a>
+            <span class="cmd" role="group" aria-label="Run the local demo">
+              <code id="cmd">npx graphmind-ai demo</code>
+              <button type="button" class="cmd-copy" id="cmd-copy" aria-label="Copy command">Copy</button>
             </span>
           </div>
+          <p class="hero-fine">Open source, MIT. The debugger runs on your machine and needs no account. Circuit and Jack are free with one.</p>
+        </div>
+
+        <!-- the live debugger: a real run, in the page, and the visitor fixes it -->
+        <div class="demo" id="demo" data-demo data-try="/try/?fixture=1&amp;tour=1&amp;embed=1">
+          <div class="demo-bar">
+            <span class="demo-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span class="demo-title">graphmind &mdash; trip-planner</span>
+            <span class="demo-state" id="demo-state" data-step="idle" aria-live="polite">
+              <i class="demo-state-dot" aria-hidden="true"></i><span id="demo-state-text">Live demo</span>
+            </span>
+          </div>
+          <div class="demo-stage">
+            <!-- the iframe is added here on capable screens; below is the fallback clip -->
+            <video class="demo-clip" data-clip muted loop playsinline preload="metadata" poster="/media/debugger.webp"
+                   aria-label="Recording of the GraphMind debugger: a trip-planner agent runs as a live graph, the currencyConvert tool hits a rate limit and the run holds; a corrected result is injected and the agent finishes.">
+              <source src="/media/debugger.webm" type="video/webm">
+            </video>
+            <button class="clip-toggle" type="button" hidden>Pause</button>
+            <button class="demo-load btn btn-solid" type="button" id="demo-load" hidden>Try it yourself &rarr;</button>
+          </div>
+          <p class="demo-after" id="demo-after" hidden>
+            <span>You just debugged an agent.</span>
+            <a class="btn btn-solid btn-sm" href="/signup" data-track="cta-click" data-where="demo-done">Do it with yours &mdash; start free</a>
+          </p>
         </div>
       </div>
     </section>
 
-    <section class="features container" aria-labelledby="features-title">
-      <p class="eyebrow" id="features-title">What it does</p>
-      <div class="feature-grid">
-        <article class="feature">
-          <p class="feature-index">01</p>
-          <h2>Live attach</h2>
-          <p>Attach to a running workflow and watch it execute as a graph — every node,
-             edge, and tool call, while it happens. Not a trace viewer for afterwards.</p>
+    <!-- ============================== the graph ============================== -->
+    <section class="story" aria-label="What GraphMind does">
+      <div class="wrap story-wrap">
+        <svg class="spine" viewBox="0 0 24 1000" preserveAspectRatio="none" aria-hidden="true">
+          <path class="spine-track" d="M12 0 V1000"/>
+          <path class="spine-line" d="M12 0 V1000"/>
+        </svg>
+
+        <header class="story-head">
+          <p class="story-kicker">One graph, from the first draft to production.</p>
+          <h2 class="h-section">Five things GraphMind does for an agent. You just did the second.</h2>
+        </header>
+
+        <!-- 01 Build -->
+        <article class="stage" id="build" data-stage>
+          <div class="stage-mark" aria-hidden="true"><i></i></div>
+          <div class="stage-copy">
+            <p class="stage-n">01 &middot; Build</p>
+            <h3 class="h-stage">Draw the agent. Get the&nbsp;code.</h3>
+            <p>Place an agent, tools, MCP servers and sub-agents on a canvas. GraphMind writes the project in TypeScript or Python, already instrumented, and runs it beside the debugger.</p>
+            <a class="more" href="https://graphmind.ai/docs/guides/build-a-workflow/">How the builder works</a>
+          </div>
+          <figure class="shot" data-parallax>
+            <div class="shot-media">
+              <video data-clip muted loop playsinline preload="none" poster="/media/builder.webp"
+                     aria-label="Recording of the workflow builder: an MCP server and a researcher sub-agent are added on the canvas, then the generated project appears.">
+                <source src="/media/builder.webm" type="video/webm">
+              </video>
+              <button class="clip-toggle" type="button">Play</button>
+            </div>
+          </figure>
         </article>
-        <article class="feature">
-          <p class="feature-index">02</p>
-          <h2>Pause &amp; step</h2>
-          <p>Set breakpoints on any node. Pause automatically on error. Step through
-             the run the way you step through code.</p>
+
+        <!-- 02 Debug -->
+        <article class="stage stage-debug" id="debug" data-stage>
+          <div class="stage-mark" aria-hidden="true"><i></i></div>
+          <div class="stage-copy">
+            <p class="stage-n">02 &middot; Debug</p>
+            <h3 class="h-stage">Hold the failing call. Then decide.</h3>
+            <p>Thrown errors, errors a tool <em>returns</em>, a call repeating itself, a call cut off mid-way: the run stops there, with every input, output, prompt and token in front of you.</p>
+            <a class="more" href="#debugger">Back to the demo</a>
+          </div>
+          <div class="nodes" aria-label="What you can do at a held call">
+            <div class="node"><span class="node-k">tool</span><b>Edit the arguments</b><span>and run the real call with them</span></div>
+            <div class="node node-live"><span class="node-k">tool</span><b>Inject a result</b><span>and skip the call entirely</span></div>
+            <div class="node"><span class="node-k">tool</span><b>Retry, continue or abort</b><span>with the error, cleanly</span></div>
+          </div>
         </article>
-        <article class="feature">
-          <p class="feature-index">03</p>
-          <h2>Inspect &amp; inject</h2>
-          <p>Open any node and read its exact inputs and outputs. Edit state, inject
-             a fix, and resume — no restart, no replay.</p>
+
+        <!-- 03 Test -->
+        <article class="stage" id="test" data-stage>
+          <div class="stage-mark" aria-hidden="true"><i></i></div>
+          <div class="stage-copy">
+            <p class="stage-n">03 &middot; Test</p>
+            <h3 class="h-stage">Every run is a test case.</h3>
+            <p>Replay a recording with its tools and model served from the tape: no key, no cost, the same result. Each run gets a one-line verdict with the evidence under it.</p>
+            <pre class="term" aria-label="Replay commands"><span class="p">$</span> graphmind replay fixtures/run.ndjson --assert -- node agent.js
+<span class="p">$</span> graphmind runs --behavior last</pre>
+          </div>
+          <figure class="shot" data-parallax>
+            <div class="shot-media">
+              <img src="/media/behaviour.webp" loading="lazy" decoding="async" width="1280" height="800"
+                   alt="The run page with the Behaviour strip open: one of seven tool calls repeated earlier work, per-tool calls, failures and timings, and the input-token curve across three LLM steps.">
+            </div>
+          </figure>
         </article>
-        <article class="feature">
-          <p class="feature-index">04</p>
-          <h2>Local-first, MIT</h2>
-          <p><code>npx graphmind-ai</code> and you&rsquo;re debugging. Loopback-only server,
-             keys kept out of the recording, run data that stays put. MIT licensed.</p>
+
+        <!-- 04 Run -->
+        <article class="stage" id="run" data-stage>
+          <div class="stage-mark" aria-hidden="true"><i></i></div>
+          <div class="stage-copy">
+            <p class="stage-n">04 &middot; Run <span class="stage-product">Circuit</span></p>
+            <h3 class="h-stage">Workflows that wait for you instead of&nbsp;failing.</h3>
+            <p>Write a workflow in TypeScript, start it over HTTP. When a step fails, the run pauses for a fix or an approval and keeps going; every change is recorded. MCP connectors, deploy checks and importers included.</p>
+            <a class="more" href="/signup?start=circuit" data-track="cta-click" data-where="stage-run">Open Circuit with a free account</a>
+          </div>
+          <figure class="shot" data-parallax>
+            <div class="shot-media">
+              <video data-clip muted loop playsinline preload="none" poster="/media/circuit.webp"
+                     aria-label="Recording of Circuit: an invoice-triage run pauses when the ERP fetch fails; a corrected invoice is injected with a reason and finance approves it.">
+                <source src="/media/circuit.webm" type="video/webm">
+              </video>
+              <button class="clip-toggle" type="button">Play</button>
+            </div>
+          </figure>
+        </article>
+
+        <!-- 05 Connect -->
+        <article class="stage" id="connect" data-stage>
+          <div class="stage-mark" aria-hidden="true"><i></i></div>
+          <div class="stage-copy">
+            <p class="stage-n">05 &middot; Connect <span class="stage-product">Jack</span></p>
+            <h3 class="h-stage">Your API, in Claude, in&nbsp;minutes.</h3>
+            <p>Import an OpenAPI spec, choose what AI clients may do, and deploy a hosted, OAuth-protected MCP server your users sign in to as themselves. Reads on, writes off, until you say so.</p>
+            <a class="more" href="/signup?start=jack" data-track="cta-click" data-where="stage-connect">Open Jack with a free account</a>
+          </div>
+          <figure class="shot" data-parallax>
+            <div class="shot-media">
+              <video data-clip muted loop playsinline preload="none" poster="/media/jack.webp"
+                     aria-label="Recording of Jack: the Acme Tasks OpenAPI spec is imported, a write tool is switched on, and the project is deployed to an MCP URL with a ready claude mcp add command.">
+                <source src="/media/jack.webm" type="video/webm">
+              </video>
+              <button class="clip-toggle" type="button">Play</button>
+            </div>
+          </figure>
         </article>
       </div>
     </section>
 
-    <section class="how container" aria-labelledby="how-title">
-      <div class="how-copy">
-        <p class="eyebrow">How it works</p>
-        <h2 id="how-title">The graph is your code.</h2>
-        <p>
-          GraphMind never authors your workflow — the graph is a projection of the code
-          you already wrote. Wrap your model and tools, run your agent, and the debugger
-          attaches. There are adapters for the Vercel AI SDK, the Anthropic and OpenAI SDKs,
-          LangGraph/LangChain and Python, plus generic OpenTelemetry and OpenInference
-          trace import — and a proxy that debugs an MCP server in any language with no code
-          changes at all.
-        </p>
-        <ol class="steps">
-          <li><code>npx graphmind-ai init</code> detects your framework and prints the snippet to add.</li>
-          <li><code>npx graphmind-ai</code> starts the local debugger.</li>
-          <li>Run your agent. The graph lights up: breakpoints, stepping, inject-and-resume, live state.</li>
-        </ol>
-        <p class="how-share">Need to hand a bug to someone else?
-          <code>npx graphmind-ai record &lt;run&gt; --html</code> writes the whole run to a single
-          self-contained HTML file &mdash; it opens in any browser, with no server and no account.</p>
+    <!-- ============================== proof ============================== -->
+    <section class="proof" aria-labelledby="proof-title">
+      <div class="wrap proof-grid">
+        <div>
+          <h2 class="h-small" id="proof-title">Two lines in the code you already have.</h2>
+          <p class="muted"><code>npx graphmind-ai init</code> reads your project and prints them.</p>
+        </div>
+        <ul class="chips" aria-label="Supported frameworks">
+          <li>Vercel AI SDK</li><li>Anthropic</li><li>OpenAI</li><li>LangGraph</li><li>Python</li><li>Ruby</li><li>MCP servers</li><li>OpenTelemetry import</li>
+        </ul>
+        <ul class="facts" aria-label="How it is built">
+          <li><b>Open source, MIT.</b> The debugger is yours, forever.</li>
+          <li><b>Local-first.</b> Binds <code>127.0.0.1</code>; your keys never enter a recording.</li>
+          <li><b>One account.</b> Circuit and Jack share a sign-in and your API tokens.</li>
+        </ul>
       </div>
-      <div class="how-code">
-        <figure class="code-card">
-          <figcaption class="code-head">
-            <span class="code-pill">Vercel AI SDK</span>
-            <span class="code-file">agent.ts</span>
-          </figcaption>
-          <pre><code><span class="tok-kw">import</span> { graphmind } <span class="tok-kw">from</span> <span class="tok-str">'@graphmind-ai/sdk'</span>;
+    </section>
 
-<span class="tok-kw">const</span> gm = <span class="tok-fn">graphmind</span>({ app: <span class="tok-str">'support-agent'</span> });
-
-<span class="tok-kw">const</span> model = gm.<span class="tok-fn">wrapModel</span>(<span class="tok-fn">anthropic</span>(<span class="tok-str">'claude-sonnet-4-5'</span>));
-<span class="tok-kw">const</span> tools = gm.<span class="tok-fn">wrapTools</span>({ searchFlights, checkBudget });</code></pre>
+    <!-- ============================== close ============================== -->
+    <section class="close" aria-labelledby="close-title">
+      <div class="wrap close-grid">
+        <div class="close-copy">
+          <h2 class="h-section" id="close-title">See the next failure while it&rsquo;s happening.</h2>
+          <p class="muted">Free while GraphMind is in early access. No plans, no card, nothing held back.</p>
+          <div class="hero-actions">
+            <a class="btn btn-solid" href="/signup" data-track="cta-click" data-where="close">Start free</a>
+            <a class="btn btn-line" href="https://graphmind.ai/docs/start/install/">Install guide</a>
+          </div>
+        </div>
+        <figure class="shot shot-still">
+          <div class="shot-media">
+            <img src="/media/hub.webp" loading="lazy" decoding="async" width="1280" height="800"
+                 alt="The GraphMind hub after signing in: one top bar with Home, Circuit and Jack, and cards to open Circuit, Jack and the local debugger.">
+          </div>
         </figure>
-        <p class="how-note">Local-first, precisely: the server binds <code>127.0.0.1</code> only and
-          refuses connections from foreign browser origins. Your API keys never enter the recording &mdash;
-          a dedicated credential-leak audit asserts it on every build. Your prompts, outputs and traces
-          stay on your machine. The CLI does send one anonymous ping per command (its name, a random
-          install id, the version &mdash; never arguments, prompts or run data), which
-          <code>GRAPHMIND_TELEMETRY=0</code> turns off;
-          <a href="https://github.com/Hegazy360/GraphMind/blob/master/packages/cli/TELEMETRY.md" rel="noopener">here is exactly what it sends</a>.</p>
-      </div>
-    </section>
-    <section class="frameworks container" aria-labelledby="fw-title">
-      <p class="eyebrow">Works with your stack</p>
-      <h2 id="fw-title">Instrument what you already wrote.</h2>
-      <ul class="fw-grid">
-        <li><span class="fw-name">Vercel AI SDK</span><code>@graphmind-ai/sdk</code></li>
-        <li><span class="fw-name">Anthropic SDK</span><code>@graphmind-ai/anthropic</code></li>
-        <li><span class="fw-name">OpenAI SDK</span><code>@graphmind-ai/openai</code></li>
-        <li><span class="fw-name">LangGraph &middot; LangChain</span><code>@graphmind-ai/langgraph</code></li>
-        <li><span class="fw-name">Python</span><code>pip install graphmind-ai</code></li>
-        <li><span class="fw-name">MCP servers &middot; any language</span><code>graphmind mcp-proxy -- your-server</code></li>
-        <li><span class="fw-name">Everything else</span><code>npx graphmind-ai import trace.json</code></li>
-      </ul>
-      <p class="fw-note">Not sure which you need? <code>npx graphmind-ai init</code> reads your project and tells you.</p>
-    </section>
-
-    <section class="teams container" aria-labelledby="teams-title">
-      <div class="teams-inner">
-        <p class="eyebrow">For teams</p>
-        <h2 id="teams-title">The debugger is free forever. Teams get more.</h2>
-        <p>
-          A self-hosted Team edition is in the works: shared run history, workspaces,
-          and SSO, running entirely on your own infrastructure with flat annual pricing.
-          No per-seat metering, no traces leaving your network.
-        </p>
-        <p class="teams-cta">
-          Want it early, or want to shape it? Email
-          <a href="mailto:hello@graphmind.ai?subject=GraphMind%20for%20teams">hello@graphmind.ai</a>
-          &mdash; design partners get it first, at a permanent discount.
-        </p>
       </div>
     </section>
   </main>
 
-  <footer class="site-footer">
-    <div class="container footer-row">
-      <p class="footer-left">&copy; 2026 GraphMind &middot; MIT License</p>
-      <nav class="footer-links" aria-label="Footer">
+  <footer class="foot">
+    <div class="wrap foot-grid">
+      <form class="notes" id="waitlist-form" method="post" action="/api/waitlist" novalidate>
+        <label for="email" class="notes-label">Release notes, occasionally</label>
+        <div class="notes-row">
+          <input class="notes-input" type="email" id="email" name="email" placeholder="you@company.com" autocomplete="email" inputmode="email" spellcheck="false" required>
+          <button class="btn btn-line btn-sm" id="waitlist-submit" type="submit">Subscribe</button>
+        </div>
+        <div class="hp" aria-hidden="true"><label for="gm_extra">Leave this field empty</label><input type="text" id="gm_extra" name="gm_extra" tabindex="-1" autocomplete="off"></div>
+        <p class="form-status" id="form-status" role="status" aria-live="polite"></p>
+      </form>
+      <nav class="foot-links" aria-label="Footer">
         <a href="https://graphmind.ai/docs">Docs</a>
         <a href="https://github.com/Hegazy360/GraphMind" rel="noopener">GitHub</a>
         <a href="https://www.npmjs.com/package/graphmind-ai" rel="noopener">npm</a>
+        <a href="/login">Sign in</a>
+        <a href="https://github.com/Hegazy360/GraphMind/blob/master/packages/cli/TELEMETRY.md" rel="noopener">Telemetry</a>
         <a href="mailto:hello@graphmind.ai">hello@graphmind.ai</a>
       </nav>
+      <p class="foot-fine">&copy; 2026 GraphMind &middot; MIT License &middot; The CLI sends one anonymous ping per command; <code>GRAPHMIND_TELEMETRY=0</code> turns it off. This page keeps an anonymous count of its own steps, with no cookies.</p>
     </div>
   </footer>
 
-  <script>
-    (function () {
-      var form = document.getElementById('waitlist-form');
-      if (!form) return;
-      var email = document.getElementById('email');
-      var button = document.getElementById('waitlist-submit');
-      var status = document.getElementById('form-status');
-      var honeypot = document.getElementById('gm_extra');
-      var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-      function setStatus(message, kind) {
-        status.textContent = message;
-        status.className = 'form-status' + (kind ? ' is-' + kind : '');
-      }
-
-      form.addEventListener('submit', async function (event) {
-        event.preventDefault();
-        var value = (email.value || '').trim();
-
-        if (honeypot && honeypot.value) {
-          form.classList.add('is-done');
-          setStatus('You’re on the list — watch your inbox.', 'ok');
-          return;
-        }
-        if (!EMAIL_RE.test(value) || value.length > 254) {
-          setStatus('That email doesn’t look right — check it and try again.', 'error');
-          email.focus();
-          return;
-        }
-
-        var label = button.textContent;
-        button.disabled = true;
-        button.textContent = 'Joining…';
-        setStatus('', null);
-
-        try {
-          var res = await fetch('/api/waitlist', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: value })
-          });
-          if (res.ok) {
-            form.classList.add('is-done');
-            setStatus('You’re on the list — watch your inbox.', 'ok');
-          } else if (res.status === 400) {
-            setStatus('That email doesn’t look right — check it and try again.', 'error');
-          } else {
-            setStatus('Something went wrong on our end — email hello@graphmind.ai and we’ll add you.', 'error');
-          }
-        } catch (err) {
-          setStatus('Network hiccup — try again, or email hello@graphmind.ai.', 'error');
-        } finally {
-          button.disabled = false;
-          button.textContent = label;
-        }
-      });
-    })();
-  </script>
-  <script>
-    (function () {
-      var btn = document.getElementById('trynow-copy');
-      var cmd = document.getElementById('trynow-cmd');
-      if (!btn || !cmd || !navigator.clipboard) return;
-      btn.addEventListener('click', function () {
-        navigator.clipboard.writeText(cmd.textContent).then(function () {
-          btn.textContent = 'Copied';
-          setTimeout(function () { btn.textContent = 'Copy'; }, 1600);
-        }, function () {});
-      });
-    })();
-  </script>
+  <script src="/vendor/gsap.min.js" defer></script>
+  <script src="/vendor/ScrollTrigger.min.js" defer></script>
+  <script src="/home.js" defer></script>
   <script defer src="/_vercel/insights/script.js"></script>
 </body>
 </html>

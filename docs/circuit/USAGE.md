@@ -19,15 +19,16 @@ machine:
 | HTTP API (the same routes the hosted service will expose) | built | `apps/circuit-api` |
 | CLI (`circuit dev / runs / show / resume / record / test / check`) | built | `packages/circuit-cli` |
 | Web dashboard (runs list, step timeline, inspector, fix / approve / fork, events, deploy check) | built (M5) | `apps/circuit-api/ui`, served at `/` by `circuit dev` |
-| Hosted service: accounts, API keys per environment, deploys, Postgres, isolated runners, billing | **not built** (after this session) | — |
+| Accounts (sign-up, sessions, personal API tokens) | built | `circuit dev --accounts`, `packages/accounts` |
+| Hosted service: deploys, Postgres, isolated runners | **not built** | — |
 | MCP connectors (`ctx.mcp`, tool pinning, per-tool policy, typed codegen, workflows as MCP tools) — on the v2 MCP SDK, protocol 2026-07-28 with fallback for older clients | built (M6) | `packages/circuit-mcp` |
 | Importers: `circuit import n8n\|pipedream` → runnable Circuit skeleton | built (M7) | `packages/circuit-cli` |
 | Dev conveniences: hot reload of the workflows file; "New workflow" templates in the dashboard | built | `circuit dev` |
 
 So right now you try Circuit **locally**, in the dashboard at `http://127.0.0.1:4810/` or from a terminal. Everything you do
 below goes through the same HTTP API the hosted version will serve. Moving
-online changes where the server runs and adds the dashboard and accounts;
-the workflow code and the API calls stay the same.
+online changes where the server runs; the dashboard and accounts already
+exist (§3a), and the workflow code and the API calls stay the same.
 
 ## 1. Setup (once)
 
@@ -99,7 +100,47 @@ Everything the API can do, from the browser:
   It defaults to `dashboard`.
 
 If the server was started with `--api-key`, the page asks for the key and
-keeps it only for that browser tab (fixture downloads send it too).
+keeps it only for that browser tab (fixture downloads send it too). With
+`--accounts` it asks you to sign in or create an account instead (§3a), and
+"your name" is then your account's email, not something you type.
+
+## 3a. Accounts
+
+```sh
+node packages/circuit-cli/dist/cli.js dev --workflows examples/circuit-onboarding/workflows.mjs --accounts
+# circuit dev — … workflow(s): …
+#   accounts   anyone can sign up · 0 user(s) · examples/circuit-onboarding/.circuit/accounts.db
+```
+
+`--accounts` turns on self-serve accounts from `@graphmind-ai/accounts`
+(`packages/accounts`), the same code the hosted service will use:
+
+- **Sign-up.** The dashboard opens on a sign-in overlay; the first visitor
+  creates an account with an email and a password (10 characters or more).
+  Registration is open and free, with no plans or quotas, by decision.
+  `--no-signup` closes it while keeping existing accounts working.
+- **Attribution.** Every resume, approval, fork and cancel is recorded under
+  the signed-in account's email. The `x-circuit-actor` header and the `by`
+  field of an approval are overridden when someone is signed in; they still
+  apply to callers using a static `--api-key`.
+- **Sessions** are an `HttpOnly` `SameSite=Lax` cookie, 30 days by default,
+  `Secure` and `__Host-`-prefixed on https. State-changing requests from a
+  session must come from the dashboard's own origin.
+- **API tokens for the CLI.** `/v1` needs a session or a token, so `curl` and
+  `pnpm circuit runs|show|resume|…` need a personal token: click your name in
+  the dashboard header, **Create token**, copy the `gmt_…` value (it is shown
+  once), then pass it as `--api-key gmt_…` or `Authorization: Bearer gmt_…`.
+  Tokens are stored hashed and can be revoked from the same place, which
+  also has **Sign out**.
+- **A static `--api-key` still works** beside accounts, as the operator.
+- **Hosting.** `--host <addr>` binds another interface and is refused unless
+  `--accounts` or `--api-key` is given. `--public-origin https://…` is the
+  origin the server believes it has behind a proxy: it decides the cookie
+  flags and the URLs printed.
+
+Account data lives in `accounts.db` next to the dev database. `GET /health`
+(no auth) reports `accounts` and `signup`; `GET /v1/health` adds the
+signed-in `user`.
 
 ## 3b. Drive it from a terminal
 
@@ -400,7 +441,11 @@ Base URL locally: `http://127.0.0.1:4810/v1`. Errors are JSON
 
 Optional header `x-circuit-actor: <who>` names the person behind an
 intervention. To require an API key locally, start with `--api-key ck_test_123`
-and send `Authorization: Bearer ck_test_123`.
+and send `Authorization: Bearer ck_test_123`. With `--accounts` (§3a) every
+`/v1` call needs a session cookie or a personal token
+(`Authorization: Bearer gmt_…`), the actor is the account's email, and
+`x-circuit-actor` is ignored for signed-in callers. `GET /health` without the
+`/v1` prefix is public either way.
 
 ## 8. Troubleshooting
 
@@ -425,9 +470,11 @@ To make this a service users try on graphmind.ai, the remaining work (§4 of
 1. ~~M5 dashboard~~ done.
 2. ~~M6 MCP connectors~~ done.
 3. ~~M7 importers~~ done (plus hot reload and dashboard scaffolding).
-4. **Hosted control plane**: accounts and orgs, an API key per environment,
-   a Postgres journal store, `circuit deploy` uploading workflow bundles, and
-   isolated runners per customer (microVMs).
-5. A public **try-it page** on the website: a sandboxed, throwaway workspace
+4. ~~Accounts~~ done 2026-11-11 (`--accounts`, §3a, `packages/accounts`).
+5. **Hosted control plane**: orgs and roles, a Postgres journal store,
+   `circuit deploy` uploading workflow bundles, and isolated runners per
+   customer (microVMs). Then a domain for the dashboard: graphmind.ai's
+   sign-in links point at a placeholder until then.
+6. A public **try-it page** on the website: a sandboxed, throwaway workspace
    with the onboarding workflow preloaded, like the debugger's existing
    "Try in browser". This is the closest online equivalent of `pnpm circuit:demo`.

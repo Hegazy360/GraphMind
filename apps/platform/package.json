@@ -1,0 +1,51 @@
+{
+  "name": "platform",
+  "version": "0.0.1",
+  "description": "GraphMind platform — one origin for the end-user experience: the homepage, sign-up, a hub page, Circuit and Jack under a single account. What app.graphmind.ai runs; `pnpm platform` runs it locally.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "graphmind-platform": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "ui",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "test:e2e": "node --test e2e/journey.e2e.mjs"
+  },
+  "dependencies": {
+    "@graphmind-ai/accounts": "workspace:*",
+    "@graphmind-ai/circuit-cli": "workspace:*",
+    "@graphmind-ai/circuit-engine": "workspace:*",
+    "@hono/node-server": "^1.19.9",
+    "circuit-api": "workspace:*",
+    "hono": "^4.13.5",
+    "jack-api": "workspace:*",
+    "@graphmind-ai/circuit-mcp": "workspace:*",
+    "@graphmind-ai/ui": "workspace:*"
+  },
+  "devDependencies": {
+    "@graphmind-ai/circuit-sdk": "workspace:*",
+    "@types/node": "^26.3.0",
+    "playwright": "1.59.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

@@ -1,7 +1,7 @@
 {
   "name": "@graphmind-ai/circuit-cli",
   "version": "0.0.1",
-  "description": "GraphMind Circuit CLI \u2014 circuit dev | runs | show | resume | record | test | check.",
+  "description": "GraphMind Circuit CLI — circuit dev | runs | show | resume | record | test | check.",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -35,7 +35,8 @@
     "@hono/node-server": "^1.19.9",
     "circuit-api": "workspace:*",
     "@graphmind-ai/circuit-mcp": "workspace:*",
-    "@modelcontextprotocol/server": "^2.0.0"
+    "@modelcontextprotocol/server": "^2.0.0",
+    "@graphmind-ai/accounts": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",

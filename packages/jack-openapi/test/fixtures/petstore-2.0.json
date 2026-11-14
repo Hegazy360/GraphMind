@@ -1,0 +1,80 @@
+{
+  "swagger": "2.0",
+  "info": { "title": "Swagger Petstore", "version": "1.0.7" },
+  "host": "petstore.swagger.io",
+  "basePath": "/v2",
+  "schemes": ["https", "http"],
+  "consumes": ["application/json"],
+  "paths": {
+    "/pet": {
+      "post": {
+        "tags": ["pet"],
+        "summary": "Add a new pet to the store",
+        "operationId": "addPet",
+        "parameters": [
+          { "in": "body", "name": "body", "description": "Pet object that needs to be added to the store", "required": true, "schema": { "$ref": "#/definitions/Pet" } }
+        ],
+        "responses": { "405": { "description": "Invalid input" } }
+      }
+    },
+    "/pet/{petId}": {
+      "get": {
+        "tags": ["pet"],
+        "summary": "Find pet by ID",
+        "description": "Returns a single pet",
+        "operationId": "getPetById",
+        "parameters": [{ "name": "petId", "in": "path", "required": true, "type": "integer", "format": "int64" }],
+        "responses": { "200": { "description": "successful operation" } }
+      },
+      "post": {
+        "tags": ["pet"],
+        "summary": "Updates a pet in the store with form data",
+        "operationId": "updatePetWithForm",
+        "consumes": ["application/x-www-form-urlencoded"],
+        "parameters": [
+          { "name": "petId", "in": "path", "required": true, "type": "integer", "format": "int64" },
+          { "name": "name", "in": "formData", "description": "Updated name of the pet", "required": false, "type": "string" },
+          { "name": "status", "in": "formData", "required": false, "type": "string", "x-nullable": true }
+        ],
+        "responses": { "405": { "description": "Invalid input" } }
+      }
+    },
+    "/pet/{petId}/uploadImage": {
+      "post": {
+        "tags": ["pet"],
+        "summary": "uploads an image",
+        "operationId": "uploadFile",
+        "consumes": ["multipart/form-data"],
+        "parameters": [
+          { "name": "petId", "in": "path", "required": true, "type": "integer" },
+          { "name": "file", "in": "formData", "required": false, "type": "file" }
+        ],
+        "responses": { "200": { "description": "successful operation" } }
+      }
+    },
+    "/store/order": {
+      "post": {
+        "tags": ["store"],
+        "summary": "Place an order for a pet",
+        "operationId": "placeOrder",
+        "parameters": [{ "in": "body", "name": "body", "required": true, "schema": { "type": "array", "items": { "$ref": "#/definitions/Order" } } }],
+        "responses": { "200": { "description": "successful operation" } }
+      }
+    }
+  },
+  "definitions": {
+    "Pet": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "id": { "type": "integer", "format": "int64", "readOnly": true },
+        "name": { "type": "string" },
+        "status": { "type": "string", "enum": ["available", "pending", "sold"] }
+      }
+    },
+    "Order": {
+      "type": "object",
+      "properties": { "petId": { "type": "integer" }, "quantity": { "type": "integer" } }
+    }
+  }
+}

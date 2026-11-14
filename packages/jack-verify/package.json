@@ -1,0 +1,36 @@
+{
+  "name": "@graphmind-ai/jack-verify",
+  "version": "0.0.1",
+  "description": "GraphMind Jack — zero-dependency verifier for Jack's account-linking mode: verify link requests, sign link responses, verify per-call Jack-Assertion headers (Express/Hono helpers).",
+  "license": "MIT",
+  "private": false,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "jose": "^6.2.10"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

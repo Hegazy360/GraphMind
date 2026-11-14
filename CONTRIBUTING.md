@@ -103,9 +103,18 @@ contains your prompts and tool payloads).
 
 ## Scope
 
-Things GraphMind deliberately does not do: hosted services, eval or
-prompt-management platforms, visual workflow authoring, per-execution billing.
-Proposals in those directions will be declined — not because they are bad
-ideas, but because staying small is what keeps this maintainable.
+Things the debugger deliberately does not do: eval or prompt-management
+platforms, running or hosting your agent, per-execution billing. The Build
+page writes a starter project to your disk and steps away. Proposals in those
+directions will be declined — not because they are bad ideas, but because
+staying small is what keeps this maintainable.
+
+The service side of the repo is a separate matter: GraphMind Circuit (durable
+workflows) and GraphMind Jack (your API as an MCP server) are dashboards with
+accounts, built to be hosted and running locally today. Their scope is in
+[`docs/circuit/USAGE.md`](./docs/circuit/USAGE.md),
+[`docs/jack/USAGE.md`](./docs/jack/USAGE.md) and the plans under
+[`docs/plans/`](./docs/plans/). Plans, quotas and payments are deliberately
+not built there either; `--no-signup` is the only knob on registration.
 
 By contributing you agree your work is licensed under the MIT License.

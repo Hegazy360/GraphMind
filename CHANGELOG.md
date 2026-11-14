@@ -8,6 +8,287 @@ distribution, and the Ruby `graphmind` gem).
 
 ## Unreleased
 
+### Added — GraphMind Circuit (durable workflows)
+
+A second product in the repo, under the GraphMind brand and MIT like the
+rest. The debugger holds a call while it happens; Circuit holds a *workflow*:
+you write it in TypeScript or JavaScript, your apps start and feed it over
+HTTP, and when a step fails the run pauses so a person can fix it and resume
+it instead of losing it. It runs from a checkout today (`pnpm circuit:demo`,
+`pnpm circuit:dev`); the hosted service on graphmind.ai is not live.
+
+- **Workflow SDK** (`@graphmind-ai/circuit-sdk`): `workflow()` with a Zod
+  input schema, `ctx.step` with retries and backoff, `ctx.sleep` (no process
+  held while sleeping), `ctx.waitForEvent`, `ctx.approval`, `ctx.invoke` for
+  child runs, `ctx.mcp(connection).call(tool, args)` for any MCP server as a
+  step. Step results must be JSON; anything else is refused loudly.
+- **Durable engine** (`@graphmind-ai/circuit-engine`): one journal entry per
+  `ctx.*` call, memoized re-invocation, lease-based crash recovery, durable
+  timers and waits, and a divergence guard (`NonDeterminismError`) that
+  refuses to mix an old journal into changed code.
+- **Fix-and-resume**: a step that runs out of retries pauses the run
+  (`onError: 'pause'`, the default). Six resume actions — `retry`, `inject`,
+  `continue`, `edit`, `skip`, `abort` — each recorded on the entry with who,
+  when and why. Breakpoints pause a step *before* it runs. `fork` reruns a
+  run from any completed step with a substituted result; the original is
+  untouched.
+- **Replay as tests, and the deploy check**: `circuit record` saves a
+  finished run as a JSON fixture, `circuit test` replays every fixture
+  against the current code without running a step for real, and
+  `circuit check` (also the dashboard's **Deploy check** button and
+  `POST /deploy-check`) replays every in-flight run and names the ones a
+  deploy would break.
+- **HTTP control plane** (`apps/circuit-api`, Hono): start runs with
+  idempotency keys, list and inspect runs with their journals, deliver
+  events, resume / approve / fork / cancel, breakpoints, fixture export.
+  Errors are RFC 9457 problem+json. Same routes the hosted version will
+  serve.
+- **Web dashboard** (`circuit dev`, at `/`): runs list with status filter,
+  step timeline, inspector per step with every attempt and every human
+  change, the fix panel, approvals, fork-from-here, send event, deploy check,
+  and **New workflow** templates appended to the loaded file and
+  hot-reloaded.
+- **MCP connectors** (`@graphmind-ai/circuit-mcp`, on the v2 MCP SDK,
+  protocol 2026-07-28 with fallback): returned `isError` results fail the
+  step rather than passing as data; per-tool policy (`allow` / `approve` /
+  `deny`) pauses a call before it runs so a person can check or edit the
+  arguments; tool pinning pauses when a server changes a tool's definition
+  until someone accepts it; `circuit mcp pull` writes typed declarations;
+  `circuit mcp serve` exposes every workflow as a `run_<workflow>` tool for
+  Claude Code.
+- **Importers**: `circuit import n8n|pipedream <export>` writes a runnable
+  skeleton; nodes that cannot be ported mechanically throw
+  `TODO(circuit-import)` with the original parameters in a comment, so
+  porting is the normal fix-and-resume loop.
+- `pnpm circuit:demo` plays the whole invoice story in one process and prints
+  every HTTP call; `pnpm circuit:e2e` clicks through it in headless Chromium.
+  The guide is [`docs/circuit/USAGE.md`](./docs/circuit/USAGE.md).
+
+### Added — GraphMind Jack (your API as an MCP server)
+
+Point Jack at the OpenAPI document you already have and get an MCP server
+that any AI client can connect to, with the MCP authorization profile
+(RFC 9728 resource metadata, RFC 8414 server metadata, OAuth 2.1 with PKCE,
+CIMD and DCR client identification, audience-bound tokens) handled for you.
+Runs from a checkout today (`pnpm jack …`); the hosted service is not live.
+
+- **`jack init <openapi>`** reads Swagger 2.0 / OpenAPI 3.0 / 3.1 (JSON or
+  YAML) and writes `jack.yaml` listing *every* operation with an explicit
+  `enabled:` — reads on, writes and deprecated operations off — so the
+  pull-request review is complete. Thirteen lint codes (J001–J013) cover
+  too many tools, weak descriptions, dropped cookies, unsupported bodies,
+  invisible Unicode, prompt-injection-shaped descriptions and more;
+  `jack check --strict` fails CI while any warning remains.
+- **The compiler** (`@graphmind-ai/jack-openapi`) turns parameters and
+  bodies into tool arguments, drops credential headers so a model can never
+  set them, inlines `$ref` cycles, and derives `readOnlyHint` /
+  `idempotentHint` / `destructiveHint` from the method.
+- **The runtime** (`@graphmind-ai/jack-runtime`): scopes hide tools the
+  caller cannot use, arguments are validated before anything reaches your
+  API, `confirm: true` tools need the user's signed approval of the exact
+  arguments (MCP `input_required`), path values are percent-encoded and
+  `..` refused, redirects are never followed, responses are projected with
+  `response.pick` and cut at `response.maxBytes`, egress is `public` or
+  `any` and only ever to the `upstream` origin.
+- **Sign-in** (`@graphmind-ai/jack-auth`): `oidc` (your identity provider;
+  Jack is a confidential client), `apikey` (each user pastes their own key,
+  optionally checked with a `whoamiTool`), `link` (your app's session login
+  answers a signed link request; every call then carries a 60-second
+  single-use `Jack-Assertion` your middleware verifies with
+  `@graphmind-ai/jack-verify`, `graphmind.jack` in Python or
+  `Graphmind::Jack` in Ruby — stdlib only, all three), or `none`. ES256
+  access tokens bound to the MCP URL, 15 minutes; rotating refresh tokens,
+  30 days; a replayed code or refresh token revokes the grant. Upstream
+  credentials are sealed with AES-256-GCM and never shown again.
+- **`jack preview`** serves `jack.yaml` as a real MCP server on 127.0.0.1
+  and reloads on change; **`jack tools` / `jack call` / `jack login` /
+  `jack logout`** are a terminal client (official MCP client, 2026-07-28).
+- **The dashboard** (`jack serve`, `apps/jack-api`): New project from a
+  pasted spec or URL, Tools (rename, rewrite descriptions, require approval,
+  set permissions, lint as you type), Sign-in with the values to copy into
+  your app, Try it (a real test sign-in, then live calls through `/mcp`),
+  Deploy with diff, history and one-click rollback, Users with instant
+  disconnect, Activity (never arguments, results or credentials), Settings.
+  One server holds the dashboard, `/v1` and every project's
+  `/p/<slug>/mcp` with its own `/p/<slug>/oauth`; the planes are separate
+  routers that share only the store. **`jack deploy`** compiles locally
+  first and pushes `jack.yaml` as the next version.
+- **Ports and worktrees**: `--port auto` derives a stable port from the
+  worktree path (20000–20999 for `serve`, 21000–21999 for `preview`), and a
+  running server records itself in `.jack/run/` so the CLI in one worktree
+  never talks to another's server. `${NAME:-default}` substitution in
+  `jack.yaml`, after parsing, so a value can never add keys.
+- A complete worked example in [`examples/jack-tasks`](./examples/jack-tasks)
+  (a multi-user tasks API with its own login, every sign-in mode) and the
+  guide in [`docs/jack/USAGE.md`](./docs/jack/USAGE.md). The security suite
+  gained `security/tests/jack-*.test.ts`: upstream credentials, link
+  secrets and OIDC client secrets are planted and then searched for in the
+  dashboard, the control plane, the runtime's logs and the MCP wire.
+
+### Changed — graphmind.ai, redesigned around doing, not reading
+
+The page was rebuilt from the research in `docs/plans/homepage-redesign.md`:
+
+- **The visitor fixes an agent in the first screen.** The hero embeds the
+  viewer's real fixture run (`/try/?fixture=1&tour=1&embed=1`): the graph
+  builds, a call is held, a small card says what to do, and finishing it turns
+  the frame into "You just debugged an agent — do it with yours". The viewer
+  gained `tour=1` (the card + `postMessage` steps to the parent) and `embed=1`
+  (no canvas controls). On phones, under reduced motion or without WebM, a
+  recording stands in.
+- **One story, five nodes.** The page is drawn as the product's own graph: an
+  edge draws itself down the page as you scroll, and the stages — Build, Debug,
+  Test, Run (Circuit), Connect (Jack) — light up as they enter. ~300 words
+  instead of ~720; one primary action ("Start free") everywhere, docs in the nav.
+- **A look of its own.** Bricolage Grotesque for display, Instrument Sans for
+  text, Geist Mono for code (self-hosted, OFL); hairlines, the debugger's dot
+  grid, and its states (green live, amber held) instead of glows, pills and
+  check-lists. GSAP 3 + ScrollTrigger (free licence) drives the motion; all of
+  it is off under `prefers-reduced-motion`; every clip has a pause control.
+- **Measured.** `api/events.ts` + `home.js`: eight anonymous, cookie-free funnel
+  events (home view → demo → inject → sign-up → first product use) stored as
+  blobs, so the funnel can be read weekly before and after changes.
+- Clips re-cut to 14–20 s; the local platform serves `/try`, `/vendor` and
+  `/api/events` so `pnpm platform` is the whole page, demo included.
+- Still to do from the plan: GitHub sign-in, and a "pick one" first screen in
+  the hub with sample data loaded.
+
+### Changed — graphmind.ai shows the products instead of describing them
+
+The homepage was mostly text. It is now built around recordings of the real
+products, with short copy beside each one:
+
+- **A video hero**: the debugger's own recording of a run that builds as a
+  live graph, holds on a rate-limited tool, takes an injected fix and
+  finishes. Under it, three one-line points (holds the failing call, shows
+  what really happened, fix it and resume).
+- **A jump strip** to the five products, then **one section each** for the
+  workflow builder, replay and the behaviour verdict, Circuit, Jack, and the
+  account, each with a clip or screenshot in a window frame, three ticks and
+  one link. The stack is a row of chips; the release-notes form moved into
+  the closing band.
+- **Clips are recorded, not drawn**: `pnpm media` (`apps/platform/scripts/capture-media.mjs`)
+  drives the built viewer and the platform with a visible cursor, records the
+  page's own frames and encodes WebM with WebP posters into `apps/web/media/`.
+  Clips play only while on screen, each has a pause control, and the poster
+  stands in under reduced motion or where WebM cannot play.
+- The local platform serves `/media/*` with byte ranges, so the clips play
+  (and loop) in `pnpm platform` as they will on Vercel.
+
+### Changed — one look and one account space across the hub, Circuit and Jack (`@graphmind-ai/ui`)
+
+The hub followed graphmind.ai, Circuit had a GitHub-dark palette of its own
+and Jack was light-only with a navy sidebar, so the three read as three
+products. Account settings were three different things too: a page on the
+hub, a token dialog behind your name in Circuit, a sidebar page in Jack.
+
+- **A shared UI package**, `packages/ui`: graphmind.ai's design tokens (dark
+  first, light via `prefers-color-scheme`; a test pins them to
+  `apps/web/styles.css`) and components, plus the shell every surface uses:
+  the same top bar (logo, Home / Circuit / Jack switcher, Docs, user menu).
+  Each server serves it under `gm/`, so the dashboards look the same inside
+  the platform and on their own.
+- **Circuit and Jack re-themed** onto those tokens, with the same layout
+  pattern: the shared bar, an action row, and a tinted left column headed by
+  the product. Buttons, inputs, panels, dialogs and toasts are the shared ones.
+- **One account space.** Sign-in and the account page (profile, plan, API
+  tokens with the right `jack deploy` / `circuit mcp serve` lines for this
+  server, sign out) are one component. Inside the platform every "Account &
+  API tokens" link and every sign-in goes to the hub; a signed-out visit to a
+  dashboard lands on the hub's sign-in and returns where it was going
+  (`?next=`, same origin only). `jack serve --accounts` and
+  `circuit dev --accounts` render the same component in place at `#/account`.
+- Removed: Jack's own sign-in and account pages, Circuit's sign-in overlay
+  and tokens dialog (each replaced by the shared one).
+
+### Added — the platform: the online experience on one origin (`apps/platform`)
+
+The homepage, sign-up, Circuit and Jack used to be four separate things with
+no path between them. `apps/platform` is one Hono server that composes them
+behind a single account: the hub (sign in, your products, your account and
+API tokens) with Circuit at `circuit/` and Jack at `jack/` beneath it, the
+accounts routes shared so one session is good everywhere, and every Jack
+project's MCP server and OAuth sign-in at the origin root (`/p/<slug>/…`),
+which is the URL AI clients hold.
+
+- **`pnpm platform`** runs it locally with the homepage in front: `/` is
+  graphmind.ai's page, `/signup` and `/login` redirect to the hub at `/app/`
+  exactly as the production `vercel.json` does, Circuit at `/app/circuit/`,
+  Jack at `/app/jack/`. The Circuit onboarding workflows and their MCP
+  billing server are loaded by default (`--workflows`, `--mcp` to change).
+- **`graphmind-platform serve --public-origin https://app.graphmind.ai`** is
+  the hosted shape: the hub at `/`, no homepage, accounts required.
+- **Both dashboards now use page-relative URLs** (`v1/…`, `auth/…`,
+  `./app.js`), so the same files serve at the origin root (`circuit dev`,
+  `jack serve`) and under the platform's prefixes. Jack's test sign-in
+  redirects back to a configurable `dashboardPath`.
+- **Tests:** request-level composition tests (`apps/platform/test`) and a
+  browser journey (`pnpm platform:e2e`): homepage → Create a free account →
+  hub → Circuit (the demo run pauses) → Jack (import an API, MCP URL at the
+  root) → account token → sign out.
+
+### Added — accounts for the dashboards (`@graphmind-ai/accounts`)
+
+Circuit and Jack are meant to be hosted, which needs more than one shared
+key. A new package gives both dashboards self-serve accounts; the debugger
+does not use it and still needs none.
+
+- **Email and password sign-up, sessions, personal API tokens.** Passwords
+  are scrypt hashes with their parameters stored alongside; sessions are
+  random 256-bit tokens stored hashed, in an `HttpOnly` `SameSite=Lax`
+  cookie (`Secure` and `__Host-`-prefixed on https), 30 days by default.
+  Personal tokens (`gmt_…`) are shown once, stored hashed, and work as
+  `Authorization: Bearer` for the CLIs (`jack deploy --api-key gmt_…`,
+  `circuit … --api-key gmt_…`); they can be minted or revoked only from a
+  browser session. Failed sign-ins are rate-limited (10 per 15 minutes per
+  address and email) and an unknown email takes as long as a wrong password.
+  State-changing requests from a session must come from the server's own
+  origin (`Origin` / `Sec-Fetch-Site`). Registration is open; there are no
+  plans, quotas or payments, by decision, and `allowSignup` is the only
+  knob. SQLite on `node:sqlite`, next to each server's own database
+  (`.jack/serve/accounts.db`, `.circuit/accounts.db`).
+- **`jack serve --accounts`.** Every project belongs to the account that
+  created it; other accounts get a 404, as if it did not exist (slugs stay
+  global). Deployments record who deployed, by email. A static `--api-key`
+  beside accounts acts as the operator and sees every project; projects
+  created before accounts existed have no owner and are visible to the
+  operator only. The dashboard gained sign-in and sign-up pages
+  (`#/signin`, `#/signup`) and an **Account** page with API tokens.
+  `jack deploy` against an accounts server needs a personal token.
+- **`circuit dev --accounts`.** `/v1` needs a session or a token, and every
+  resume, approval, fork and cancel is attributed to the signed-in account's
+  email: the `x-circuit-actor` header and the `by` field are overridden when
+  someone is signed in. The dashboard shows a sign-in overlay first; click
+  your name in the header for API tokens and sign out.
+- **Hosting flags on both**: `--no-signup` closes registration;
+  `--host <addr>` is refused unless `--accounts` or `--api-key` is given,
+  so an open control plane never ends up on a network interface;
+  `--public-origin <url>` sets the origin used for cookies and printed URLs.
+  `GET /health` is public and reports whether accounts and sign-up are on;
+  `/v1/health` adds the signed-in user.
+- Tested in `packages/accounts/test` (12 tests: hashing, cookie flags on
+  http and https, duplicate and malformed sign-ups, rate limiting, session
+  expiry, cross-site refusal, closed sign-up, token minting, revocation and
+  isolation between users), `apps/jack-api/test/accounts.test.ts` (8:
+  per-account projects, deploy attribution, token vs cookie-less calls,
+  operator key, closed sign-up, ownerless projects) and
+  `apps/circuit-api/test/accounts.test.ts` (4: gated `/v1`, attribution
+  overriding the header, token and operator key, cross-site refusal), plus
+  browser tests in each app's `e2e/accounts.e2e.mjs` (sign up, work as
+  yourself, mint a token, sign out and in; a second account sees none of
+  the first one's projects), run by `test:e2e`.
+
+### Changed — graphmind.ai covers the platform
+
+The homepage described the debugger alone. It now covers what the repo
+holds: the workflow builder, replay as a test, the behaviour verdict,
+coding-agent control, Circuit and Jack, with a **Sign in** / **Create
+account** pair that points at the hosted dashboard. The hosted service is
+not live yet: `/signup` and `/login` redirect to a placeholder
+(`https://app.graphmind.ai`, set in `apps/web/vercel.json`) to be changed
+when the service has a domain. The debugger's own pages (`/try`, the docs)
+are unchanged and still need no account.
+
 ### Added — a behaviour verdict per run (`@graphmind-ai/analyze`, `runs --behavior`, MCP `get_behavior`, the Behaviour strip)
 
 A run that finished `ok` can still have gone badly: the same tool called with

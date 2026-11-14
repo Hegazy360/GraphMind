@@ -1,0 +1,49 @@
+{
+  "name": "@graphmind-ai/jack-auth",
+  "version": "0.0.1",
+  "description": "GraphMind Jack — the per-project OAuth 2.1 authorization server for MCP clients: PKCE, CIMD, DCR fallback, consent, upstream federation (M3).",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js",
+      "default": "./dist/testing.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@graphmind-ai/jack-schema": "workspace:*",
+    "jose": "^6.2.10",
+    "zod": "^4.4.3",
+    "@graphmind-ai/jack-runtime": "workspace:*",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "hono": "^4.13.5",
+    "@graphmind-ai/jack-verify": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "@modelcontextprotocol/client": "^2.4.0",
+    "@hono/node-server": "^1.19.9"
+  }
+}

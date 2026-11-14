@@ -5671,3 +5671,38 @@ textarea.gm-binput {
   }
 }
 
+
+/* ---- tour mode (?fixture=1&tour=1): the homepage's guided first run ---- */
+.gm-tour {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  z-index: 60;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: min(520px, calc(100vw - 32px));
+  padding: 12px 14px 12px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.gm-tour-dot { flex: none; margin-top: 5px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.gm-tour--held .gm-tour-dot { background: var(--amber); box-shadow: 0 0 0 4px var(--amber-soft); animation: gm-tour-pulse 1.4s ease-in-out infinite; }
+.gm-tour--held { border-color: color-mix(in srgb, var(--amber) 55%, var(--border-strong)); }
+.gm-tour-text { display: grid; gap: 2px; }
+.gm-tour-text b { font-weight: 600; }
+.gm-tour-text span { color: var(--text-dim); }
+.gm-tour-close { flex: none; margin: -4px -6px 0 0; width: 26px; height: 26px; border: 0; border-radius: 7px; background: none; color: var(--text-faint); font-size: 18px; line-height: 1; cursor: pointer; }
+.gm-tour-close:hover { background: var(--accent-soft); color: var(--text); }
+@keyframes gm-tour-pulse { 50% { box-shadow: 0 0 0 7px var(--amber-tint); } }
+@media (prefers-reduced-motion: reduce) { .gm-tour--held .gm-tour-dot { animation: none; } }
+
+/* ---- embed mode (?embed=1): framed in another page, so the frame is the whole canvas ---- */
+.gm-embed .gm-canvas-controls { display: none; }

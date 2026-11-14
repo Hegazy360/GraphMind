@@ -1,0 +1,99 @@
+# jack.yaml for Acme Tasks — started with `jack init openapi.json`, then
+# reviewed. Every change from the generated defaults has a comment saying why.
+#
+#   pnpm --filter jack-tasks jack check     # what will be published
+#   pnpm --filter jack-tasks preview        # serve it as an MCP server
+
+name: "Acme Tasks"
+description: >-
+  Projects, tasks and comments for the signed-in Acme Tasks user. List or
+  search before acting on an id; ids look like prj_0001 and tsk_0003.
+source: "./openapi.json"
+# Each worktree runs its own API; `pnpm start` / `pnpm dev` set ACME_TASKS_URL.
+upstream: "${ACME_TASKS_URL:-http://127.0.0.1:4830}"
+
+# Each user signs in with their own Acme API key on Jack's sign-in page (the
+# AI app never sees it). `JACK_UPSTREAM_API_KEY=… jack preview` instead runs as
+# that one key. For the OIDC variant (users log in with Acme's own login), see
+# jack.oidc.yaml, which extends this file and only changes `auth`.
+auth:
+  mode: apikey
+  header: Authorization
+  prefix: "Bearer "
+  whoamiTool: get_me   # checks a pasted key (and learns whose it is) before accepting it
+
+lint:
+  maxTools: 30
+
+toolsets:
+  tasks:
+    description: Find, create and change tasks.
+    tools: [list_tasks, get_task, create_task, update_task, delete_task, replace_task_labels]
+  projects:
+    tools: [list_projects, create_project]
+  comments:
+    tools: [list_comments, add_comment]
+  reports:
+    tools: [get_me, get_activity_report]
+
+tools:
+  # --- reads: enabled by default; two descriptions rewritten for models ---
+  get_me:
+    enabled: true
+  list_projects:
+    enabled: true
+  list_tasks:
+    enabled: true
+    description: >-
+      List the user's tasks, most urgent first, 20 per page. Filter by status
+      (todo, in_progress, done), projectId, label, or free text with q. When
+      nextCursor is not null, call again with cursor=nextCursor for more.
+  get_task:
+    enabled: true
+    # The spec says only "Get a task" (lint J002). Models need more than that.
+    description: >-
+      Get one task by id (tsk_…), including its status, priority, labels,
+      due date and comment count. Use list_tasks first if you don't know the id.
+  list_comments:
+    enabled: true
+  get_activity_report:
+    enabled: true
+    description: >-
+      Activity totals (tasks created, completed, comments) and the event
+      history for the last `days` days (default 30). Use a small `days` value:
+      the history is long.
+    # The full report lists every event and can be tens of KB. Cap what the
+    # model receives; the truncation note tells it to narrow `days`.
+    response:
+      maxBytes: 6000
+
+  # --- writes: off by default; enabled one by one with model-facing text ---
+  create_project:
+    enabled: true
+    description: "Create a project for the user. Names must be unique per user (409 if taken)."
+  create_task:
+    enabled: true
+    description: >-
+      Create a task in one of the user's projects (call list_projects for the
+      projectId). Priority is low, normal, high or urgent; dueDate is YYYY-MM-DD.
+  update_task:
+    enabled: true
+    description: >-
+      Change some fields of a task. To complete a task set status to "done".
+      Only send the fields that change.
+  replace_task_labels:
+    enabled: true
+    description: "Set a task's labels to exactly this list (lowercase, dashes allowed). Send [] to remove all labels."
+  add_comment:
+    enabled: true
+    description: "Add a comment to a task, as the user."
+
+  # --- destructive: enabled, but the user must approve every call ---
+  delete_task:
+    enabled: true
+    confirm: true
+    description: "Permanently delete a task and its comments. The user is asked to approve first. Cannot be undone."
+
+  # --- deliberately not published ---
+  search_tasks:
+    enabled: false   # deprecated; list_tasks with q= does the same

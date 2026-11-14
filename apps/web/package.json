@@ -4,12 +4,19 @@
   "type": "module",
   "description": "graphmind.ai \u2014 static landing page + waitlist function",
   "scripts": {
-    "test": "node --experimental-test-module-mocks --test test/waitlist.test.mjs test/telemetry.test.mjs test/telemetry-charts.test.mjs",
+    "test": "node --experimental-test-module-mocks --test test/waitlist.test.mjs test/telemetry.test.mjs test/telemetry-charts.test.mjs test/events.test.mjs",
     "waitlist": "node scripts/waitlist.mjs",
-    "telemetry": "node scripts/telemetry-report.mjs"
+    "telemetry": "node scripts/telemetry-report.mjs",
+    "vendor": "node scripts/vendor.mjs"
   },
   "dependencies": {
-    "@vercel/blob": "^2.8.0",
-    "@types/node": "^24.13.3"
+    "@types/node": "^24.13.3",
+    "@vercel/blob": "^2.8.0"
+  },
+  "devDependencies": {
+    "@fontsource-variable/bricolage-grotesque": "5.3.0",
+    "@fontsource-variable/geist-mono": "5.3.0",
+    "@fontsource-variable/instrument-sans": "5.3.0",
+    "gsap": "3.15.1"
   }
 }

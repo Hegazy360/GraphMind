@@ -3,14 +3,20 @@
  * surface spec'd in docs/plans/hosted-workflow-platform.md §3.6, minus the
  * hosted-only parts (deployment bundles, MCP endpoint — M6+).
  *
- * Auth: optional static bearer keys for now (dev mode allows none). The
- * hosted service replaces this with hashed per-environment keys; the route
- * shapes are the contract that stays.
+ * Auth, in order of preference:
+ *   - `accounts` (@graphmind-ai/accounts): self-serve sign-up, browser
+ *     sessions and personal API tokens. Every intervention is attributed to
+ *     the signed-in account's email. `circuit dev --accounts` and the hosted
+ *     service.
+ *   - static bearer `apiKeys`: one shared key (`--api-key`). With accounts on
+ *     as well, a static key still works, as the operator.
+ *   - neither: open, for local `circuit dev` on 127.0.0.1.
+ * The route shapes are the contract that stays whichever is in use.
  *
  * Errors follow RFC 9457 (application/problem+json).
  */
 import { readFile } from 'node:fs/promises';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import {
   checkDeploy,
@@ -28,6 +34,8 @@ import {
   type JsonValue,
 } from '@graphmind-ai/circuit-schema';
 import type { AnyWorkflow } from '@graphmind-ai/circuit-sdk';
+import type { Accounts } from '@graphmind-ai/accounts';
+import { uiAsset } from '@graphmind-ai/ui';
 
 export interface ApiOptions {
   executor: Executor;
@@ -39,6 +47,8 @@ export interface ApiOptions {
   workflows?: ReadonlyArray<AnyWorkflow> | (() => ReadonlyArray<AnyWorkflow>);
   /** Accepted bearer keys. Empty/omitted = open (local dev only). */
   apiKeys?: readonly string[];
+  /** User accounts (sign-up, sessions, personal tokens). When set, /v1 requires a signed-in user. */
+  accounts?: Accounts;
   /** Kick the engine after writes so `circuit dev` feels immediate. */
   onWork?: () => void;
   /** Serve the web dashboard at `/` (default true). */
@@ -132,9 +142,23 @@ export function createApi(opts: ApiOptions): Hono {
     typeof opts.workflows === 'function' ? opts.workflows() : (opts.workflows ?? []);
   const keys = new Set(opts.apiKeys ?? []);
   const kick = opts.onWork ?? (() => {});
+  const accounts = opts.accounts;
   const app = new Hono();
 
+  // Public: the dashboard reads this before anyone is signed in.
+  app.get('/health', (c) =>
+    c.json({
+      ok: true,
+      service: 'circuit',
+      auth: keys.size > 0 || accounts !== undefined,
+      accounts: accounts !== undefined,
+      signup: accounts?.status().signup ?? false,
+    }),
+  );
+
   if (opts.dashboard !== false) {
+    // The shared GraphMind look and shell (top bar, sign-in, account page).
+    app.get('/gm/:name', async (c) => (await uiAsset(c.req.param('name'))) ?? problem(404, 'Not found'));
     // Registered before auth: the page itself holds no data; every data call
     // it makes goes through /v1 and is authenticated there.
     for (const [route, file] of Object.entries(UI_FILES)) {
@@ -154,16 +178,20 @@ export function createApi(opts: ApiOptions): Hono {
     }
   }
 
+  if (accounts) app.route('/', accounts.routes);
+
   app.use('/v1/*', async (c, next) => {
-    if (keys.size > 0) {
-      const header = c.req.header('authorization') ?? '';
-      const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-      if (!keys.has(token)) return problem(401, 'Unauthorized', 'missing or unknown API key');
-    }
-    // The acting identity for audit trails: the key's label or 'anonymous'.
-    c.set('actor' as never, (c.req.header('x-circuit-actor') ?? 'api') as never);
+    const header = c.req.header('authorization') ?? '';
+    const bearer = header.startsWith('Bearer ') ? header.slice(7) : '';
+    if (keys.size > 0 && keys.has(bearer)) return next();
+    if (accounts) return accounts.requireUser()(c, next);
+    if (keys.size > 0) return problem(401, 'Unauthorized', 'missing or unknown API key');
     await next();
   });
+
+  /** The acting identity for audit trails: the signed-in account's email, else what the caller claims, else 'api'. */
+  const actor = (c: Context): string =>
+    accounts?.principal(c)?.user.email ?? c.req.header('x-circuit-actor') ?? 'api';
 
   app.onError((err) => {
     if (err instanceof InvalidResumeError) return problem(409, 'Invalid resume', err.message);
@@ -176,9 +204,12 @@ export function createApi(opts: ApiOptions): Hono {
     c.json({
       ok: true,
       service: 'circuit',
-      auth: keys.size > 0,
+      auth: keys.size > 0 || accounts !== undefined,
+      accounts: accounts !== undefined,
+      signup: accounts?.status().signup ?? false,
       dev: opts.devTools !== undefined,
       ...(opts.devTools !== undefined ? { templates: opts.devTools.templates } : {}),
+      ...(accounts?.principal(c) ? { user: { email: accounts.principal(c)!.user.email, name: accounts.principal(c)!.user.name } } : {}),
     }),
   );
 
@@ -230,7 +261,7 @@ export function createApi(opts: ApiOptions): Hono {
   app.post('/v1/runs/:id/entries/:seq/resume', async (c) => {
     const body = resumeBody.parse(await c.req.json());
     const run = executor.resume(c.req.param('id'), Number(c.req.param('seq')), body.action, {
-      actor: c.req.header('x-circuit-actor') ?? 'api',
+      actor: actor(c),
       ...(body.reason !== undefined ? { reason: body.reason } : {}),
       ...(body.input !== undefined ? { input: body.input } : {}),
       ...(body.output !== undefined ? { output: body.output } : {}),
@@ -241,14 +272,14 @@ export function createApi(opts: ApiOptions): Hono {
 
   app.post('/v1/runs/:id/cancel', async (c) => {
     if (!executor.getRun(c.req.param('id'))) return problem(404, 'Run not found');
-    const run = executor.cancel(c.req.param('id'), { actor: c.req.header('x-circuit-actor') ?? 'api' });
+    const run = executor.cancel(c.req.param('id'), { actor: actor(c) });
     return c.json({ run });
   });
 
   app.post('/v1/runs/:id/fork', async (c) => {
     const body = forkBody.parse(await c.req.json());
     const fork = executor.fork(c.req.param('id'), {
-      actor: c.req.header('x-circuit-actor') ?? 'api',
+      actor: actor(c),
       ...(body.uptoSeq !== undefined ? { uptoSeq: body.uptoSeq } : {}),
       ...(body.substitute !== undefined ? { substitute: body.substitute } : {}),
     });
@@ -260,7 +291,8 @@ export function createApi(opts: ApiOptions): Hono {
     const body = approvalBody.parse(await c.req.json());
     const run = executor.approve(c.req.param('id'), Number(c.req.param('seq')), {
       approved: body.approved,
-      by: body.by,
+      // A signed-in account approves as itself; the body's `by` is for API keys and open dev servers.
+      by: accounts?.principal(c)?.user.email ?? body.by,
       ...(body.comment !== undefined ? { comment: body.comment } : {}),
     });
     kick();

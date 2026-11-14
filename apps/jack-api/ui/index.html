@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jack · GraphMind</title>
+<link rel="stylesheet" href="./gm/graphmind.css">
+<link rel="stylesheet" href="./style.css">
+<script type="module" src="./app.js"></script>
+</head>
+<body>
+<header id="gm-bar" class="gm-bar"></header>
+<div class="shell" data-gm-app>
+  <aside class="side">
+    <a class="side-head" href="#/"><span class="gm-pill gm-pill-accent">Jack</span><span class="side-sub">Your API as an MCP server</span></a>
+    <p class="side-label">Projects</p>
+    <nav id="project-list" aria-label="Projects"></nav>
+    <a class="new" href="#/new" id="new-project">+ New project</a>
+    <div class="side-foot" id="server-info"></div>
+  </aside>
+  <main id="main" aria-live="polite">
+    <!-- Replaced by app.js as soon as it runs. If you can read this, it did not load. -->
+    <div class="panel" id="boot-failed">
+      <h1>The dashboard did not load</h1>
+      <p>This page loaded, but its script (<code>/app.js</code>) did not. That usually means the
+      server is older than the page: Jack's compiled code was not rebuilt after its source changed.</p>
+      <p>Stop <code>jack serve</code>, run <code>pnpm build:jack</code> from the repository root, and start it again.
+      (<code>pnpm jack serve</code> now rebuilds automatically when it needs to.)</p>
+    </div>
+  </main>
+</div>
+</body>
+</html>

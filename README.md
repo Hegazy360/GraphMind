@@ -256,6 +256,46 @@ the run appearing live next to it. The code is plain files that are yours
 from then on; GraphMind never edits them again. Needs the viewer token. See
 [build a workflow](https://graphmind.ai/docs/guides/build-a-workflow/).
 
+### Beyond the debugger: Circuit and Jack
+
+Two services share this repo with the debugger. Both run from a checkout
+today (neither is on npm yet) and are being readied for hosting on
+graphmind.ai; the hosted service is not live.
+
+- **GraphMind Circuit** runs durable workflows. You write them in TypeScript
+  or JavaScript, your apps start and feed them over HTTP, and when a step
+  fails the run *pauses* so you can retry, inject a result, skip or edit it
+  and resume, instead of losing the run. Recorded runs replay as tests, a
+  deploy check refuses code that would break in-flight runs, any MCP server
+  can be a step, and `circuit import n8n|pipedream` writes a skeleton to port.
+  `pnpm circuit:demo` plays the whole story in one command. See
+  [docs/circuit/USAGE.md](./docs/circuit/USAGE.md).
+- **GraphMind Jack** turns the HTTP API you already have into an MCP server.
+  `jack init openapi.json` writes a reviewable `jack.yaml` (reads on, writes
+  off), `jack preview` serves it locally, and `jack serve` is the dashboard
+  plus the server that hosts each project's `/mcp` endpoint, with its own
+  OAuth sign-in so each user of your API connects Claude, Cursor or ChatGPT
+  as themselves. See [docs/jack/USAGE.md](./docs/jack/USAGE.md).
+
+**Accounts.** Both dashboards can take accounts: start them with
+`circuit dev --accounts` or `jack serve --accounts` and the first visitor
+creates one with an email and a password. Registration is open and free -
+no plans, no quotas - and what you make belongs to your account: Jack
+projects are visible only to the account that created them, Circuit fixes
+and approvals are recorded under your email. Personal API tokens (`gmt_…`,
+shown once) let the CLIs act as you (`jack deploy --api-key gmt_…`). Without
+the flag both servers stay open on `127.0.0.1`, as before. The debugger
+(`npx graphmind-ai`) needs no account and has none; nothing about it
+changed. The code is [`packages/accounts`](./packages/accounts).
+
+**The whole journey, locally.** `pnpm platform` serves what a visitor gets
+online on one origin: the homepage at `http://127.0.0.1:4800/`, "Create a
+free account" leading to the hub at `/app/`, Circuit at `/app/circuit/` and
+Jack at `/app/jack/`, one session for all of it, every Jack project's MCP
+server at `/p/<slug>/mcp`. `pnpm platform:e2e` walks that path in a browser.
+The same server (`apps/platform`) is what `app.graphmind.ai` runs, with the
+homepage served by graphmind.ai in front.
+
 ### 3. Import traces from any other framework
 
 ```sh
@@ -327,8 +367,11 @@ GraphMind is **not**:
 - a hosted agent builder - the viewer's Build page writes a *starter* project
   to your own disk and then steps away; GraphMind never owns or runs your
   workflow code for you, and there is nothing to deploy to
-- a hosted service - there is no cloud, no dashboard login, no data retention
-  to think about
+- a hosted service, as a debugger - `npx graphmind-ai` has no cloud, no
+  dashboard login and no data retention to think about. Circuit and Jack are
+  the service side of the repo: dashboards with accounts that run locally
+  today and are being readied for hosting. The debugger does not depend on
+  them
 
 ## Telemetry
 
@@ -353,9 +396,18 @@ exact JSON record: [packages/cli/TELEMETRY.md](./packages/cli/TELEMETRY.md).
 | [`ruby`](./ruby) | The Ruby SDK (ruby-openai + ruby_llm); builds and installs, not yet published to RubyGems |
 | [`packages/cli`](./packages/cli) | `graphmind-ai` (bin `graphmind`): local server, SQLite storage, demo, trace importer, MCP server, MCP debugging proxy, viewer host |
 | [`apps/viewer`](./apps/viewer) | The graph debugger UI (ships built inside the CLI package) |
+| [`packages/circuit-schema`](./packages/circuit-schema), [`circuit-sdk`](./packages/circuit-sdk), [`circuit-engine`](./packages/circuit-engine), [`circuit-mcp`](./packages/circuit-mcp), [`circuit-cli`](./packages/circuit-cli) | GraphMind Circuit: the workflow SDK, the durable engine, MCP connectors and the `circuit` CLI |
+| [`apps/circuit-api`](./apps/circuit-api) | Circuit's HTTP control plane (`/v1`) and web dashboard, served by `circuit dev` |
+| [`packages/jack-schema`](./packages/jack-schema), [`jack-openapi`](./packages/jack-openapi), [`jack-runtime`](./packages/jack-runtime), [`jack-auth`](./packages/jack-auth), [`jack-verify`](./packages/jack-verify), [`jack-cli`](./packages/jack-cli) | GraphMind Jack: the manifest schema, the OpenAPI compiler, the tool-call runtime, the OAuth authorization server, the account-linking verifier and the `jack` CLI |
+| [`apps/jack-api`](./apps/jack-api) | Jack's server: dashboard, control plane (`/v1`) and every project's MCP endpoint, served by `jack serve` |
+| [`packages/accounts`](./packages/accounts) | Accounts for the Circuit and Jack dashboards: sign-up, sessions, personal API tokens. The debugger does not use it |
+| [`packages/ui`](./packages/ui) | The shared web UI of the hub, Circuit and Jack: graphmind.ai's design tokens and components, and the shell (top bar, product switcher, user menu, sign-in, the one account page with API tokens) |
+| [`apps/platform`](./apps/platform) | One origin for the online experience: the homepage, the hub, Circuit and Jack behind a single account (`pnpm platform`) |
 | [`apps/web`](./apps/web) | graphmind.ai |
 | [`examples/demo-agent`](./examples/demo-agent) | The planted-bug trip-planner demo agent |
 | [`examples/support-desk`](./examples/support-desk) | The realistic example: a support agent with five ticket scenarios, each exercising one debugger feature — add an Anthropic key and run it |
+| [`examples/circuit-onboarding`](./examples/circuit-onboarding) | Circuit's invoice-triage workflows, the `pnpm circuit:demo` script and the file `pnpm circuit:dev` serves |
+| [`examples/jack-tasks`](./examples/jack-tasks) | Jack's worked example: a multi-user tasks API with its own login, turned into an MCP server without changing it |
 | [`examples/e2e`](./examples/e2e) | Full-stack smoke test against a running server |
 | [`examples/live-check`](./examples/live-check) | Validation against real Anthropic and OpenAI APIs |
 | [`examples/soak`](./examples/soak) | Production-scale soak battery with a published baseline |

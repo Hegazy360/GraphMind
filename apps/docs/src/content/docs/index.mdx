@@ -69,6 +69,21 @@ import { withBase } from '../../lib/with-base.js';
     description="Vercel AI SDK, Anthropic, OpenAI, LangGraph, MCP, Python, Ruby — copy-pasteable end to end."
     href="/integrations/"
   />
+  <LinkCard
+    title="Build a workflow"
+    description="Place an agent, tools, MCP servers and sub-agents on a canvas, read the code they become, run it with your key."
+    href="/guides/build-a-workflow/"
+  />
+  <LinkCard
+    title="Replay as a test"
+    description="graphmind replay last --assert: re-run the agent from the recording, no API key, and fail when the trajectory changes."
+    href="/debugging/replay/"
+  />
+  <LinkCard
+    title="A behaviour verdict"
+    description="One line per run on how well it worked, with the evidence: repeats, returned failures, finish reasons, prompt growth."
+    href="/debugging/behavior-summary/"
+  />
 </CardGrid>
 
 ## What you can actually do
@@ -119,4 +134,17 @@ import { withBase } from '../../lib/with-base.js';
   <LinkCard title="Python" href="/integrations/python/" description="openai · anthropic · langgraph" />
   <LinkCard title="Ruby" href="/integrations/ruby/" description="gated callables · ruby-openai · RubyLLM (not on RubyGems yet)" />
   <LinkCard title="Anything else" href="/integrations/other-frameworks/" description="Import a trace, or write a 200-line adapter" />
+</CardGrid>
+
+## The platform
+
+Two services share the repository with the debugger: Circuit runs durable workflows that pause
+on failure, and Jack serves your API as an MCP server. Both run locally today; the hosted service
+is not live yet. Their dashboards take an account, which is free and open while in early access.
+The debugger itself still needs none.
+
+<CardGrid>
+  <LinkCard title="Circuit" href="/platform/circuit/" description="Durable workflows: a failed step pauses the run; fix it and resume. Engine, API, CLI, dashboard, MCP connectors." />
+  <LinkCard title="Jack" href="/platform/jack/" description="Your OpenAPI document as an MCP server, with per-user sign-in, approvals and a deploy history." />
+  <LinkCard title="Accounts" href="/platform/accounts/" description="Email + password sign-up, sessions, personal API tokens for the CLIs, and the --accounts / --host flags." />
 </CardGrid>

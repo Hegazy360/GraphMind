@@ -1,0 +1,39 @@
+{
+  "name": "@graphmind-ai/jack-runtime",
+  "version": "0.0.1",
+  "description": "GraphMind Jack — serves a tool manifest as an MCP 2026-07-28 server: request builder, response shaper, egress guard (M2).",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@graphmind-ai/jack-schema": "workspace:*",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "@modelcontextprotocol/client": "^2.4.0"
+  }
+}

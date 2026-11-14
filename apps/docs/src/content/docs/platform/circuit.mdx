@@ -1,0 +1,163 @@
+---
+title: Circuit — durable workflows
+description: Circuit is GraphMind's workflow service. Write a workflow as TypeScript or JavaScript, start it over HTTP, and when a step fails the run pauses so you can fix it and resume it instead of losing it. The engine, API, CLI and dashboard run locally today; the hosted service is coming.
+sidebar:
+  label: Circuit
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Circuit is a durable workflow engine with the debugger's attitude: a step that runs out of
+retries **pauses the run** instead of failing it, and a person retries it, injects a result,
+skips it or aborts — then the run carries on from exactly where it stopped. Every `ctx.*` call is
+journaled with its input, output, attempts and every human intervention, so a run survives a
+crash, a deploy and a week-long `sleep`.
+
+This page is the short version. The long guide, with the full HTTP reference and a worked
+invoice story, is
+[`docs/circuit/USAGE.md`](https://github.com/Hegazy360/GraphMind/blob/master/docs/circuit/USAGE.md).
+
+<Aside title="Separate from the debugger">
+The GraphMind debugger (`npx graphmind-ai`) is local-first and needs no account; nothing about
+that changed. Circuit is a second product in the same repository: a server your applications
+talk to, with its own dashboard and, optionally, [accounts](/platform/accounts/).
+</Aside>
+
+## What exists today, and what does not
+
+| Piece | Status | Where |
+| --- | --- | --- |
+| Workflow SDK (`workflow`, `ctx.step`, `sleep`, `waitForEvent`, `approval`, `invoke`) | built | `packages/circuit-sdk` |
+| Durable engine: retries, crash recovery, pause on error, fix-and-resume, replay, deploy check, fork | built | `packages/circuit-engine` |
+| HTTP API (the routes the hosted service will expose) | built | `apps/circuit-api` |
+| CLI: `circuit dev / runs / show / resume / record / test / check / import / mcp` | built | `packages/circuit-cli` |
+| Web dashboard: runs, step timeline, inspector, fix / approve / fork, events, deploy check | built | `apps/circuit-api/ui`, served at `/` by `circuit dev` |
+| MCP connectors (`ctx.mcp`), tool pinning, per-tool policy, typed codegen, workflows as MCP tools | built | `packages/circuit-mcp` |
+| Importers: `circuit import n8n\|pipedream` | built | `packages/circuit-cli` |
+| Self-serve accounts for the dashboard (`circuit dev --accounts`) | built | `packages/accounts` |
+| **Hosted service on graphmind.ai**: deploys, Postgres, isolated runners | **not live yet** | — |
+
+So today you run Circuit on your own machine, from a checkout of the repository. Everything below
+goes through the same HTTP API the hosted version will serve; when it goes live, the workflow
+code and the API calls stay the same and the server moves.
+
+## Run it locally
+
+Requirements: a clone of the repo, Node 22.13 or newer (23.6+ to load `.ts` workflow files
+directly) and pnpm.
+
+```sh
+pnpm install
+pnpm circuit:demo     # one command: the whole story in a throwaway in-memory server
+pnpm circuit:dev      # the real server + dashboard at http://127.0.0.1:4810/
+```
+
+`circuit:demo` starts the API, runs an invoice-triage workflow whose simulated ERP fails, pauses
+at the error, retries it with a recorded reason, waits for an approval, receives a
+`payment.settled` event, completes, forks the run with a different amount and runs the deploy
+check — printing every HTTP call. Nothing is kept afterwards.
+
+`circuit:dev` keeps runs in a SQLite file (`examples/circuit-onboarding/.circuit/dev.db`) so they
+survive restarts, hot-reloads the workflows file when you save it, and serves the dashboard. It
+binds `127.0.0.1` only unless you pass `--host` (see [accounts](/platform/accounts/#the-flags)).
+
+To run your own file: `circuit dev --workflows path/to/my-workflows.mjs`. The file imports
+`@graphmind-ai/circuit-sdk`, so keep it inside the workspace for now.
+
+## Writing a workflow
+
+```js
+import { workflow, z } from '@graphmind-ai/circuit-sdk';
+
+export const onboardUser = workflow(
+  { name: 'onboard-user', input: z.object({ email: z.string() }), retries: 3, onError: 'pause' },
+  async (ctx, input) => {
+    const user = await ctx.step('create-account', () => db.createUser(input.email));
+    await ctx.step('send-welcome', { retries: 5 }, () => mail.send(input.email));
+    await ctx.sleep('wait-a-day', '1d');
+    const done = await ctx.waitForEvent('profile', { name: 'profile.completed', timeout: '14d' });
+    if (!done) await ctx.step('nudge', () => mail.nudge(input.email));
+    return { userId: user.id, completed: Boolean(done) };
+  },
+);
+```
+
+When a run continues — after a sleep, an event, an approval or a crash — Circuit calls your
+function again from the top, and steps that already completed return their recorded result
+without running again. Step results must be JSON. If you change a workflow under an in-flight
+run (rename a step, say), that run fails with `NonDeterminismError` naming both sides rather
+than mixing old results into new code; `circuit check` tells you before you deploy.
+
+## The dashboard
+
+`pnpm circuit:dev`, then open `http://127.0.0.1:4810/`. It does everything the API does:
+start a run with a JSON input pre-filled from the workflow's schema; a runs list that refreshes
+every 1.5 s with runs waiting on a person outlined in orange; a run page with the steps as a
+timeline and an inspector per step (input, output, error, every attempt, every human change);
+**Approve / Deny** with a comment; **Fork from here…** on any completed step to ask "what if this
+had returned X?"; **Send event** and **Deploy check** in the header; and **New workflow**
+templates on the dev server.
+
+Your name (top right) is recorded on every fix and approval. Without accounts it defaults to
+`dashboard`; with `--accounts` it is the signed-in account's email.
+
+## Fix and resume
+
+A paused run opens straight on the held step, and these are the actions:
+
+| action | effect |
+| --- | --- |
+| `retry` | run the step again for real, optionally with a new `input` |
+| `inject` | do not run it; use the `output` you supply as its result |
+| `continue` | at an error, let the original error through; before a step, run it |
+| `edit` | before a step (breakpoint or policy hold): change its input, then run it |
+| `skip` | the step returns `undefined` |
+| `abort` | end the run as `aborted` |
+
+Each one is recorded on the journal entry with who did it, when, and why. From a terminal:
+`circuit resume <runId> <seq> retry --reason "ERP back up" --actor you@team`, or
+`POST /v1/runs/:id/entries/:seq/resume`.
+
+## MCP connectors
+
+Any MCP server can be a step. List connections in `circuit.mcp.json`, start with `--mcp`, and
+call `ctx.mcp('billing').call('refund', { chargeId, amount })`. Each call is a normal journaled
+step plus three protections: a tool that returns `isError` fails the step (so it retries, then
+pauses) instead of passing an error message on as data; a per-tool **policy** (`allow`,
+`approve`, `deny`) where `approve` pauses *before* the call so a person can check or edit the
+arguments; and **tool pinning**, which stores a hash of each tool's name, description and schema
+on first use and pauses with `ToolDefinitionChanged` if the server changes it later.
+
+`circuit mcp pull` writes a `.d.ts` so tool names and arguments autocomplete in TypeScript.
+`circuit mcp serve` goes the other way: it exposes every workflow as a `run_<workflow>` MCP tool,
+so Claude Code or any MCP client can start runs that appear in the dashboard like any other.
+
+## Tests and the deploy check
+
+```sh
+circuit record <runId> --out circuit.fixtures/paid-big-invoice.json   # a finished run as a fixture
+circuit test  --workflows workflows.mjs    # replay every fixture against the current code; exit 1 on change
+circuit check --workflows workflows.mjs    # replay every in-flight run; list the ones that would break
+```
+
+`test` runs no step for real and fails if the steps or the final output changed. `check` is the
+same replay applied to runs that are still in flight, which is what a deploy would otherwise
+break; the dashboard's **Deploy check** button runs the same thing.
+
+## Importers
+
+`circuit import n8n my-export.json` or `circuit import pipedream my-export.json` writes a
+`<name>.circuit.mjs` skeleton: every node becomes a step in order, waits become `ctx.sleep`,
+HTTP-request nodes become real `fetch` steps to verify, and anything that cannot be ported
+mechanically becomes a step that throws `TODO(circuit-import)` with the original parameters in a
+comment. A run then pauses at the first unported step, and porting is the usual loop: fix the
+step in the file, save (hot reload), press **Retry**.
+
+## Where it is going
+
+The hosted service — sign in, deploy workflows, point your apps at a graphmind.ai URL — is the
+plan, and its sign-up is the [accounts](/platform/accounts/) package already in the dashboard.
+What is still missing before it is live: deploy bundles, a Postgres journal store and isolated
+runners per customer. Until then, the local server is the product, and it is complete enough to
+build on.

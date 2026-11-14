@@ -48,6 +48,10 @@ should have got and watch the rest of the run play out — without editing a lin
 | Production monitoring | **Yes** | Disabled in production by default |
 | Where your prompts go | Their servers (or self-host) | Nowhere. `127.0.0.1` and a local file |
 
+That row about hosted history is about the debugger. The same repository also has
+[Circuit](/platform/circuit/), a workflow service whose runs and fixes live on a shared server
+with [accounts](/platform/accounts/) — a different product, documented separately.
+
 These are not competitors so much as different halves of the loop. Keep your tracing tool for
 production and evals. Reach for GraphMind when a specific run is doing something you cannot
 explain.

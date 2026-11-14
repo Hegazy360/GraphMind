@@ -39,6 +39,7 @@ import { AppHeader } from './components/AppHeader.js';
 import { CommandPalette } from './components/CommandPalette.js';
 import { CustomizePanel } from './components/CustomizePanel.js';
 import { HoldStrip } from './components/HoldStrip.js';
+import { Tour, parseTourParam } from './components/Tour.js';
 import { BuilderPage } from './builder/BuilderPage.js';
 import { NodePage } from './pages/NodePage.js';
 import { RunPage } from './pages/RunPage.js';
@@ -69,10 +70,12 @@ const SETTLE_MS = 900;
 const ARRIVED_AT = typeof location === 'undefined' ? '' : routeFromHash(location.hash);
 
 export default function App() {
-  const { fixtureParam, serverUrl, stress } = useMemo(() => {
+  const { fixtureParam, serverUrl, stress, tour, embed } = useMemo(() => {
     const search = location.search;
     return {
       fixtureParam: parseFixtureParam(search),
+      tour: parseTourParam(search),
+      embed: new URLSearchParams(search).get('embed') === '1',
       serverUrl: resolveServerUrl(search),
       stress: parseStressParams(search),
     };
@@ -377,10 +380,11 @@ export default function App() {
   else main = <RunsPage fixtureAvailable={fixtureAvailable} />;
 
   return (
-    <div className="gm-app">
+    <div className={embed ? 'gm-app gm-embed' : 'gm-app'}>
       <AppHeader />
       <HoldStrip />
       <main className="gm-main">{main}</main>
+      {tour && fixture !== null && <Tour />}
       {paletteOpen && <CommandPalette />}
       <CustomizePanel />
     </div>

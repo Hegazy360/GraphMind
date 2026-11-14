@@ -3,6 +3,7 @@
  * circuit — the GraphMind Circuit CLI.
  *
  *   circuit dev     --workflows <module> [--port 4810] [--db <path>] [--api-key <key>]
+ *                   [--accounts] [--no-signup] [--host <addr>] [--public-origin <url>]   --accounts: self-serve sign-up for the dashboard
  *   circuit runs    [--db <path>] [--workflow <name>] [--status <s>]
  *   circuit show    <runId> [--db <path>]
  *   circuit resume  <runId> <seq> <action> [--output <json>] [--input <json>] [--reason <text>] [--actor <who>] [--db]
@@ -25,6 +26,7 @@ import {
 } from '@graphmind-ai/circuit-engine';
 import { resumeAction, type JsonValue } from '@graphmind-ai/circuit-schema';
 import { createApi, startEngineLoop } from 'circuit-api';
+import { createAccounts, SqliteAccountStore } from '@graphmind-ai/accounts';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import {
   createWorkflowMcpServer,
@@ -69,6 +71,8 @@ function openMcp(configPath: string, db: string | undefined): McpConnections {
 
 const USAGE = `usage:
   circuit dev     --workflows <module> [--port 4810] [--db ${DEFAULT_DB}] [--api-key <key>]
+                  [--accounts] [--no-signup] [--host <addr>] [--public-origin <url>]
+                  --accounts: users sign up for their own account; every fix is recorded under it
   circuit runs    [--db] [--workflow <name>] [--status <s>]
   circuit show    <runId> [--db]
   circuit resume  <runId> <seq> <continue|retry|inject|edit|skip|abort> [--output <json>] [--input <json>] [--reason] [--actor] [--db]
@@ -90,6 +94,10 @@ export async function main(argv: string[]): Promise<void> {
       db: { type: 'string' },
       port: { type: 'string' },
       'api-key': { type: 'string' },
+      accounts: { type: 'boolean' },
+      'no-signup': { type: 'boolean' },
+      host: { type: 'string' },
+      'public-origin': { type: 'string' },
       workflow: { type: 'string' },
       status: { type: 'string' },
       output: { type: 'string' },
@@ -145,6 +153,25 @@ export async function main(argv: string[]): Promise<void> {
         debounce = setTimeout(() => void reload(), 200);
       });
 
+      const host = values.host ?? '127.0.0.1';
+      const port = Number(values.port ?? 4810);
+      if (values['public-origin'] !== undefined) {
+        try {
+          new URL(values['public-origin']);
+        } catch {
+          fail('--public-origin must be a URL, e.g. https://circuit.example.com');
+        }
+      }
+      // Hosting (a non-loopback --host) needs accounts or a key: never an open control plane on the internet.
+      if (host !== '127.0.0.1' && host !== 'localhost' && !values.accounts && values['api-key'] === undefined) {
+        fail(`--host ${host} exposes the dashboard beyond this machine: add --accounts (self-serve sign-up) or --api-key`);
+      }
+      const shownHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
+      const publicOrigin = (values['public-origin'] ?? `http://${shownHost}:${port}`).replace(/\/$/, '');
+      const accountsDb = resolve(dirname(resolve(values.db ?? DEFAULT_DB)), 'accounts.db');
+      const accounts = values.accounts
+        ? createAccounts({ store: new SqliteAccountStore(accountsDb), publicOrigin, allowSignup: !values['no-signup'] })
+        : undefined;
       const app = createApi({
         executor,
         store,
@@ -155,13 +182,19 @@ export async function main(argv: string[]): Promise<void> {
           scaffold: (name, template) => scaffoldWorkflow(workflowsFile, name, template),
         },
         ...(values['api-key'] !== undefined ? { apiKeys: [values['api-key']] } : {}),
+        ...(accounts ? { accounts } : {}),
       });
-      const port = Number(values.port ?? 4810);
-      serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, (info) => {
+      serve({ fetch: app.fetch, port, hostname: host }, (info) => {
         console.log(`circuit dev — ${defs.length} workflow(s): ${defs.map((d) => d.config.name).join(', ')}`);
-        console.log(`  dashboard  http://127.0.0.1:${info.port}/`);
-        console.log(`  api        http://127.0.0.1:${info.port}/v1`);
+        console.log(`  dashboard  ${publicOrigin}/`);
+        console.log(`  api        ${publicOrigin}/v1`);
         console.log(`  db         ${resolve(values.db ?? DEFAULT_DB)}`);
+        if (accounts) {
+          const st = accounts.status();
+          console.log(`  accounts   ${st.signup ? 'anyone can sign up' : 'sign-up closed'} · ${st.users} user(s) · ${accountsDb}`);
+          console.log(`             CLI commands against this server need a personal API token (dashboard → your name → API tokens) as --api-key`);
+        }
+        if (info.port !== port) console.log(`  listening on port ${info.port}`);
         console.log(`  start a run: POST http://127.0.0.1:${info.port}/v1/workflows/<name>/runs  {"input": ...}`);
         console.log(`  guide: docs/circuit/USAGE.md`);
       });

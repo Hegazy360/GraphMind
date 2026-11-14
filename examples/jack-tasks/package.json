@@ -1,0 +1,42 @@
+{
+  "name": "jack-tasks",
+  "version": "0.0.1",
+  "description": "GraphMind Jack example: Acme Tasks, an ordinary multi-user REST API with its own OIDC login, turned into an MCP server with a curated jack.yaml.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "start": "node ../../scripts/jack-ensure-built.mjs && JACK_LINK_SECRET=${JACK_LINK_SECRET:-acme-dev-link-secret-change-me-0123456789abcdef} node dist/server.js",
+    "spec": "node dist/server.js --spec",
+    "jack": "node ../../scripts/jack-ensure-built.mjs && node ../../packages/jack-cli/dist/cli.js",
+    "preview": "node ../../scripts/jack-ensure-built.mjs && node dist/with-api.js preview",
+    "test": "vitest run",
+    "preview:single": "node ../../scripts/jack-ensure-built.mjs && JACK_UPSTREAM_API_KEY=${JACK_UPSTREAM_API_KEY:-tk_demo_alice} node dist/with-api.js preview",
+    "preview:oidc": "node ../../scripts/jack-ensure-built.mjs && node dist/with-api.js preview --config jack.oidc.yaml",
+    "dev": "node ../../scripts/jack-ensure-built.mjs && node dist/dev.js",
+    "preview:link": "node ../../scripts/jack-ensure-built.mjs && node dist/with-api.js preview --config jack.link.yaml"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.9",
+    "hono": "^4.13.5",
+    "zod": "^4.4.3",
+    "jose": "^6.2.10",
+    "@graphmind-ai/jack-cli": "workspace:*",
+    "@graphmind-ai/jack-verify": "workspace:*"
+  },
+  "devDependencies": {
+    "@graphmind-ai/jack-openapi": "workspace:*",
+    "@graphmind-ai/jack-runtime": "workspace:*",
+    "@graphmind-ai/jack-schema": "workspace:*",
+    "@modelcontextprotocol/client": "^2.4.0",
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "@graphmind-ai/jack-auth": "workspace:*"
+  }
+}

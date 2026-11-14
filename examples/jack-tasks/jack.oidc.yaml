@@ -1,0 +1,14 @@
+# The same tools as jack.yaml; users sign in with Acme's own login (OIDC)
+# instead of pasting an API key. Jack is registered with Acme's identity
+# provider as the confidential client `jack-preview`.
+#
+#   pnpm --filter jack-tasks dev          (API + preview, wired, free ports)
+#   pnpm --filter jack-tasks preview:oidc (preview only; run `pnpm start` first)
+extends: ./jack.yaml
+
+auth:
+  mode: oidc
+  issuer: "${ACME_TASKS_URL:-http://127.0.0.1:4830}"
+  clientId: jack-preview
+  clientSecretRef: "env:ACME_OIDC_CLIENT_SECRET"   # never in the file: an environment variable
+  scopes: [openid, profile, email]

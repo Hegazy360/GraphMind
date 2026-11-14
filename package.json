@@ -15,7 +15,7 @@
     "cli": "node scripts/cli.mjs",
     "demo": "node scripts/cli.mjs demo",
     "typecheck": "pnpm -r run typecheck",
-    "test": "pnpm -r --filter './packages/**' --filter './apps/viewer' run test",
+    "test": "pnpm -r --filter './packages/**' --filter './apps/viewer' --filter jack-api run test",
     "test:security": "pnpm --filter security-audit run test",
     "test:floor": "node scripts/check-node-floor.mjs pnpm run test:security",
     "verify:published": "node scripts/verify-published.mjs --registries all",
@@ -26,11 +26,22 @@
     "live-check": "pnpm --filter live-check run start",
     "build": "pnpm -r --filter './packages/**' --filter './apps/**' run build",
     "build:packages": "pnpm -r --filter './packages/**' run build",
-    "build:circuit": "pnpm --filter '@graphmind-ai/circuit-schema' --filter '@graphmind-ai/circuit-sdk' --filter '@graphmind-ai/circuit-engine' --filter '@graphmind-ai/circuit-mcp' --filter circuit-api --filter '@graphmind-ai/circuit-cli' run build",
+    "build:circuit": "pnpm --filter '@graphmind-ai/accounts' --filter '@graphmind-ai/ui' --filter '@graphmind-ai/circuit-schema' --filter '@graphmind-ai/circuit-sdk' --filter '@graphmind-ai/circuit-engine' --filter '@graphmind-ai/circuit-mcp' --filter circuit-api --filter '@graphmind-ai/circuit-cli' run build",
     "circuit": "node packages/circuit-cli/dist/cli.js",
     "circuit:dev": "pnpm build:circuit && pnpm --filter circuit-onboarding dev",
     "circuit:demo": "pnpm build:circuit && pnpm --filter circuit-onboarding demo",
     "circuit:e2e": "pnpm build:circuit && pnpm --filter circuit-api test:e2e",
-    "build:viewer": "pnpm --filter viewer run build && node scripts/copy-viewer-dist.mjs"
+    "build:viewer": "pnpm --filter viewer run build && node scripts/copy-viewer-dist.mjs",
+    "build:jack": "pnpm --filter '@graphmind-ai/accounts' --filter '@graphmind-ai/ui' --filter '@graphmind-ai/jack-schema' --filter '@graphmind-ai/jack-openapi' --filter '@graphmind-ai/jack-runtime' --filter '@graphmind-ai/jack-auth' --filter '@graphmind-ai/jack-verify' --filter jack-api --filter '@graphmind-ai/jack-cli' run build && pnpm --filter jack-tasks run build",
+    "jack": "node scripts/jack-ensure-built.mjs && node packages/jack-cli/dist/cli.js",
+    "jack:dev": "pnpm build:jack && node packages/jack-cli/dist/cli.js serve",
+    "test:jack": "pnpm --filter '@graphmind-ai/accounts' --filter './packages/jack-*' --filter jack-api --filter jack-tasks run test",
+    "jack:example": "pnpm build:jack && pnpm --filter jack-tasks start",
+    "test:jack:e2e": "pnpm build:jack && pnpm --filter jack-api test:e2e",
+    "jack:serve": "node scripts/jack-ensure-built.mjs && node packages/jack-cli/dist/cli.js serve",
+    "build:platform": "pnpm build:circuit && pnpm build:jack && pnpm --filter platform run build",
+    "platform": "pnpm build:platform && pnpm --filter viewer build:try && node apps/platform/dist/cli.js dev",
+    "platform:e2e": "pnpm build:platform && pnpm --filter platform test:e2e",
+    "media": "pnpm build:packages && pnpm build:viewer && pnpm build:platform && node apps/platform/scripts/capture-media.mjs"
   }
 }

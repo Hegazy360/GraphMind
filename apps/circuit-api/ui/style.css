@@ -1,38 +1,48 @@
+/* Circuit dashboard. The look (tokens, bar, buttons, panels) comes from
+   gm/graphmind.css, shared with the hub and Jack; this file is Circuit's
+   layout and its run-status colours, expressed in those tokens. */
 :root {
-  --bg: #0d1117; --panel: #161b22; --panel-2: #1c2230; --border: #2a3140;
-  --text: #e6edf3; --muted: #8b949e; --accent: #4ade80;
-  --paused: #f5a623; --failed: #f85149; --completed: #4ade80; --running: #58a6ff;
-  --suspended: #a371f7; --queued: #8b949e; --skipped: #6e7681;
-  font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  color-scheme: dark;
+  --bg: var(--gm-bg); --panel: var(--gm-card); --panel-2: var(--gm-bg-soft); --border: var(--gm-border);
+  --text: var(--gm-text); --muted: var(--gm-text-2); --accent: var(--gm-accent);
+  --paused: var(--gm-warn); --failed: var(--gm-danger); --completed: var(--gm-accent); --running: var(--gm-blue);
+  --suspended: var(--gm-violet); --queued: var(--gm-text-3); --skipped: var(--gm-text-3);
 }
-@media (prefers-color-scheme: light) {
-  :root { --bg: #f6f8fa; --panel: #fff; --panel-2: #f0f3f6; --border: #d0d7de; --text: #1f2328; --muted: #59636e; color-scheme: light; }
-}
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
-button, select, input, textarea { font: inherit; color: inherit; }
-button { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
-button:hover { border-color: var(--muted); }
-button.primary { background: var(--accent); color: #062b12; border-color: var(--accent); font-weight: 600; }
-button.danger { border-color: var(--failed); color: var(--failed); }
-button:disabled { opacity: .5; cursor: default; }
-code, pre, textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+body { height: 100vh; display: flex; flex-direction: column; }
+.app { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
-.topbar { display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
-.brand { font-size: 15px; } .logo { color: var(--accent); }
-.actions { display: flex; gap: 8px; }
-.conn { margin-left: auto; color: var(--muted); font-size: 12px; }
+/* Circuit's buttons are the shared buttons. */
+button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 7px 13px; border: 1px solid var(--gm-border-strong); border-radius: 9px;
+  background: var(--gm-card); color: var(--gm-text); font-size: 13.5px; font-weight: 600; cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+button:hover { border-color: var(--gm-accent); color: var(--gm-accent); }
+button.primary { background: var(--gm-btn-bg); color: var(--gm-btn-text); border-color: transparent; }
+button.primary:hover { background: var(--gm-btn-bg-hover); color: var(--gm-btn-text); }
+button.danger { color: var(--gm-danger); }
+button.danger:hover { border-color: var(--gm-danger-line); background: var(--gm-danger-dim); }
+button:disabled { opacity: .5; cursor: default; }
+code, pre, textarea { font-family: var(--gm-mono); font-size: 12.5px; }
+select { background: var(--gm-inset); border: 1px solid var(--gm-border-strong); border-radius: 8px; padding: 5px 8px; }
+
+.toolbar { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+/* The left column matches Jack's: a tinted sidebar headed by the product. */
+.side-head { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; padding: 18px 20px 6px; text-decoration: none; }
+.side-sub { font-size: 12.5px; color: var(--gm-text-3); }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.conn { margin-left: auto; color: var(--muted); font-size: 12.5px; }
 .conn.ok::before { content: "● "; color: var(--accent); }
 .conn.bad::before { content: "● "; color: var(--failed); }
 
 .layout { flex: 1; display: grid; grid-template-columns: 340px 1fr; min-height: 0; }
-.runs { border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
-.runs-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; }
-.runs-head h2, .detail h2 { margin: 0; font-size: 14px; }
-.runs-head select { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+.runs { border-right: 1px solid var(--border); background: var(--gm-bg-soft); display: flex; flex-direction: column; min-height: 0; }
+.run-list li:hover, .run-list li.selected { background: var(--gm-card) !important; }
+.runs-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px 10px 20px; }
+.runs-head h2, .detail h2 { margin: 0; font-size: 14px; letter-spacing: -0.01em; }
+
 .run-list { list-style: none; margin: 0; padding: 0 8px 12px; overflow: auto; }
-.run-list li { padding: 8px 10px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; margin-bottom: 4px; }
+.run-list li { padding: 9px 11px; border-radius: 9px; cursor: pointer; border: 1px solid transparent; margin-bottom: 4px; }
 .run-list li:hover { background: var(--panel-2); }
 .run-list li.selected { background: var(--panel-2); border-color: var(--border); }
 .run-list li.needs-human { border-left: 3px solid var(--paused); }
@@ -73,10 +83,10 @@ code, pre, textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospac
 .node .fix { color: var(--paused); font-size: 12px; }
 .node.output-node { cursor: default; }
 
-.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; }
 .panel h3 { margin: 0 0 10px; font-size: 14px; }
 .panel h4 { margin: 14px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-pre.json { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 0; overflow: auto; max-height: 280px; white-space: pre-wrap; word-break: break-word; }
+pre.json { background: var(--gm-inset); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 0; overflow: auto; max-height: 280px; white-space: pre-wrap; word-break: break-word; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; font-size: 12.5px; }
 .kv dt { color: var(--muted); } .kv dd { margin: 0; }
 .list { margin: 0; padding-left: 18px; font-size: 12.5px; }
@@ -87,17 +97,19 @@ pre.json { background: var(--panel-2); border: 1px solid var(--border); border-r
 .tabs button.on { border-color: var(--paused); color: var(--paused); }
 .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
 .field label { font-size: 12px; color: var(--muted); }
-.field input, .field textarea, .field select { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+.field input, .field textarea, .field select { background: var(--gm-inset); border: 1px solid var(--gm-border-strong); border-radius: 9px; padding: 8px 10px; }
+.field input:focus-visible, .field textarea:focus-visible, .field select:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+.field label { font-weight: 600; color: var(--text) !important; font-size: 12.5px; }
 .field textarea { min-height: 110px; resize: vertical; }
 .field .err { color: var(--failed); font-size: 12px; }
 .explain { font-size: 12.5px; color: var(--muted); margin: 0 0 10px; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
-dialog { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); color: var(--text); width: min(560px, 92vw); padding: 18px; }
+dialog { border: 1px solid var(--gm-border-strong); border-radius: 14px; background: var(--panel); color: var(--text); width: min(560px, 92vw); padding: 22px; box-shadow: var(--gm-shadow); }
 dialog::backdrop { background: rgb(0 0 0 / .5); }
 dialog h3 { margin: 0 0 12px; }
 
-.toast { position: fixed; bottom: 18px; right: 18px; max-width: 460px; background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 10px 14px; box-shadow: 0 6px 24px rgb(0 0 0 / .3); }
+.toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); max-width: min(560px, 90vw); background: var(--gm-card); border: 1px solid var(--gm-border-strong); border-left: 3px solid var(--accent); border-radius: 10px; padding: 10px 16px; box-shadow: var(--gm-shadow); }
 .toast.err { border-left-color: var(--failed); }
 
 @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .runs { max-height: 35vh; border-right: 0; border-bottom: 1px solid var(--border); } .cols { grid-template-columns: 1fr; } }

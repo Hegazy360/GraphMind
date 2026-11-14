@@ -1,0 +1,30 @@
+/* The hub's own page (the products). Everything else comes from gm/graphmind.css. */
+.hub { max-width: 1040px; margin: 0 auto; padding: 36px 24px 80px; }
+.hub-lede { margin: 12px 0 0; max-width: 62ch; color: var(--gm-text-2); }
+.hub-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; margin-top: 28px; }
+.hub-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--gm-card);
+  border: 1px solid var(--gm-border);
+  border-radius: 14px;
+  padding: 22px 22px 18px;
+  text-decoration: none;
+  transition: border-color 0.15s;
+}
+a.hub-card:hover { border-color: var(--gm-border-strong); }
+.hub-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  border-radius: 14px 14px 0 0;
+  background: linear-gradient(90deg, var(--gm-accent), transparent 70%);
+  opacity: 0.8;
+}
+.hub-card.quiet::before { display: none; }
+.hub-kind { margin-left: 8px; font-size: 13px; color: var(--gm-text-3); }
+.hub-card h2 { margin: 14px 0 0; font-size: 19px; letter-spacing: -0.01em; }
+.hub-card p { margin: 10px 0 0; font-size: 14px; color: var(--gm-text-2); flex: 1; }
+.hub-go { margin-top: 16px; color: var(--gm-accent); font-weight: 600; font-size: 14px; text-decoration: none; }

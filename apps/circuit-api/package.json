@@ -1,7 +1,7 @@
 {
   "name": "circuit-api",
   "version": "0.0.1",
-  "description": "GraphMind Circuit control plane \u2014 the HTTP API: runs, events, resume/approve, fork, breakpoints, deploy check.",
+  "description": "GraphMind Circuit control plane — the HTTP API: runs, events, resume/approve, fork, breakpoints, deploy check.",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -17,23 +17,27 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run test/api.test.ts",
+    "test": "vitest run",
     "build": "tsc -p tsconfig.build.json",
-    "test:e2e": "node --test e2e/dashboard.e2e.mjs"
+    "test:e2e": "node --test e2e/dashboard.e2e.mjs e2e/accounts.e2e.mjs"
   },
   "dependencies": {
     "@graphmind-ai/circuit-engine": "workspace:*",
     "@graphmind-ai/circuit-schema": "workspace:*",
     "@graphmind-ai/circuit-sdk": "workspace:*",
     "hono": "^4.13.5",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@graphmind-ai/accounts": "workspace:*",
+    "@graphmind-ai/ui": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
     "playwright": "1.59.1",
-    "@hono/node-server": "^1.19.9"
+    "@hono/node-server": "^1.19.9",
+    "@graphmind-ai/accounts": "workspace:*",
+    "@graphmind-ai/circuit-sdk": "workspace:*"
   },
   "files": [
     "dist",

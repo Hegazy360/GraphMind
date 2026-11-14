@@ -378,6 +378,10 @@ for execution; dashboard seats free up to 10.
 > fixture `tools/list` cast in `workflow-server.ts` (v2 SDK exports no TS result types); generated
 > importer files must live where the SDK resolves. Next: validation track (§5), then hosted control
 > plane (§ "Later").
+>
+> **2026-11-11:** accounts built (`circuit dev --accounts`, shared `@graphmind-ai/accounts`): sign-up,
+> sessions, personal API tokens, attribution by account email; 4 API tests + a browser test. Orgs,
+> RBAC and billing remain in "Later". The hosted deployment itself is not live.
 
 ### M0 — Scaffold (small)
 - Packages `circuit-schema`, `circuit-sdk`, `circuit-engine` added to this monorepo (workspace globs already cover `packages/*`).
@@ -430,9 +434,15 @@ for execution; dashboard seats free up to 10.
 - **Demo:** import a sample n8n workflow, then `circuit dev` runs the generated skeleton.
 
 ### Later (post-session, needs infra & money)
-Hosted multi-tenant deploy (Postgres, S3, Firecracker runners), real OAuth broker, auth/orgs/RBAC
+Hosted multi-tenant deploy (Postgres, S3, Firecracker runners), real OAuth broker, orgs/RBAC
 UI, metering & Stripe billing, SOC 2 prep, EU region, server-side deploy check, Python SDK,
 canvas editor that round-trips to code, BYOC.
+
+Accounts (sign-up, sessions, personal API tokens) were pulled forward and built 2026-11-11 as
+the shared `@graphmind-ai/accounts` package (`packages/accounts`, `circuit dev --accounts`,
+`--no-signup`, `--host`, `--public-origin`); every intervention is attributed to the signed-in
+email. Orgs, roles and billing are still later, and deliberately so: open registration, no plans
+or quotas.
 
 ---
 

@@ -1,0 +1,138 @@
+---
+title: Accounts and API tokens
+description: Self-serve accounts for the Circuit and Jack dashboards — email and password sign-up, browser sessions, and personal API tokens for the CLIs. Free and open while in early access. The GraphMind debugger needs none of this.
+sidebar:
+  label: Accounts
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The [Circuit](/platform/circuit/) and [Jack](/platform/jack/) dashboards can be started with
+accounts on: anyone who reaches the server creates their own account with an email and a
+password, signs in, and gets personal API tokens for the CLIs. The code is one package,
+[`@graphmind-ai/accounts`](https://github.com/Hegazy360/GraphMind/tree/master/packages/accounts),
+mounted by both servers.
+
+<Aside title="The debugger has no account">
+`npx graphmind-ai` — the live debugger, the viewer, the Build page, replay, the MCP proxy —
+is local-first and has no sign-in of any kind. Nothing on this page applies to it. Accounts
+exist only for the two dashboard servers, and only when you turn them on.
+</Aside>
+
+## What is open, and what is not
+
+Registration is **open**: there are no plans, no quotas and no payments, by decision. The only
+knob is whether sign-up is allowed at all (`--no-signup`). An account is free while the platform
+is in early access, and the homepage's **Create account** and **Sign in** links (`/signup`,
+`/login` on graphmind.ai) will redirect to the hosted dashboard once it has a domain.
+
+What is **not** there: organisations or teams, roles, invitations, password reset by email,
+two-factor sign-in, OAuth sign-in to the dashboard itself. Those are later work, and this page
+will say so when they land.
+
+## Creating an account
+
+The way a visitor does it: from graphmind.ai, **Create a free account** opens the hub, where
+sign-up takes an email and a password; the hub then lists Circuit and Jack, and the same session
+is valid in both. To walk that path on your machine, run `pnpm platform` from the repository and
+open `http://127.0.0.1:4800/` (see `apps/platform`). Each service can also run on its own:
+
+Start a server with `--accounts` and open the dashboard. It asks you to sign in or sign up;
+sign-up wants an email, a password of at least 10 characters and an optional name. Signing up
+signs you in. From a terminal:
+
+```sh
+curl -s -X POST http://127.0.0.1:4810/auth/signup -H 'content-type: application/json' \
+  -d '{"email":"you@example.com","password":"correct horse battery","name":"You"}'
+# 201 {"user":{…}} and a Set-Cookie for the session
+```
+
+A session is a random 256-bit token stored hashed on the server and held by the browser in an
+`HttpOnly`, `SameSite=Lax` cookie; on https it is also `Secure` and carries the `__Host-` prefix.
+Sessions last 30 days. Failed sign-ins are rate-limited per address and email (10 per 15
+minutes), and an unknown email takes as long to reject as a wrong password.
+
+| Route | Does |
+| --- | --- |
+| `POST /auth/signup` | `{email, password, name?}` → `201 {user}`, sets the session cookie (`403` when sign-up is closed) |
+| `POST /auth/login` | `{email, password}` → `200 {user}`, sets the cookie |
+| `POST /auth/logout` | `204`, clears it |
+| `GET /auth/me` | `200 {user, via}` — `via` is `session` or `token` — or `401` |
+| `GET /auth/status` | `200 {accounts: true, signup, users}`; public, for the sign-in page and health checks |
+| `GET /auth/tokens` | your API tokens, names and dates only (session only) |
+| `POST /auth/tokens` | `{name}` → `201` with the token value, **shown once** (session only) |
+| `DELETE /auth/tokens/:id` | `204`, revoked for the very next request |
+
+Errors are RFC 9457 problem documents (`application/problem+json`).
+
+## API tokens, for the CLI
+
+A browser session is for the dashboard. A CLI needs a **personal API token**: open your name in
+the top bar → **Account & API tokens** → create one. The account page is the same in every
+product; inside the platform it lives on the hub, so there is one place for account settings
+whichever product you start from. It starts with
+`gmt_`, is shown once, and is stored hashed, so the server cannot show it again — make another
+if you lose it. Tokens can only be minted or revoked from a browser session, never from another
+token.
+
+Send it as a bearer credential:
+
+```sh
+jack deploy --api-key gmt_…                                   # Jack
+curl -H 'Authorization: Bearer gmt_…' http://127.0.0.1:4810/v1/runs   # Circuit
+```
+
+Every protected route accepts either credential. A request that carries both is resolved by the
+token.
+
+## The flags
+
+Both `jack serve` and `circuit dev` take the same four:
+
+| Flag | Effect |
+| --- | --- |
+| `--accounts` | Turn accounts on. `/v1` then needs a signed-in user or a token; the account database is `accounts.db` next to the server's own data |
+| `--no-signup` | Keep accounts on but close registration: existing users sign in, `POST /auth/signup` answers `403` |
+| `--host <addr>` | Bind beyond loopback (for example `0.0.0.0`). **Refused** unless `--accounts` or `--api-key` is also given — the servers never expose an open control plane |
+| `--public-origin <url>` | The origin browsers use to reach the server (e.g. `https://circuit.example.com`), which sets the cookie's `Secure`/`__Host-` flags and the same-origin check. Defaults to `http://<host>:<port>` |
+
+```sh
+circuit dev --workflows workflows.mjs --accounts --host 0.0.0.0 --public-origin https://circuit.example.com
+jack serve --accounts --no-signup --host 0.0.0.0 --public-origin https://jack.example.com
+```
+
+A static `--api-key` still works alongside accounts. It acts as **the operator**: in Jack it
+sees every project, in Circuit its interventions are attributed to it rather than to an account.
+Without either flag a server is open, which is why it binds `127.0.0.1` only.
+
+## What accounts change in each product
+
+**Jack.** Every project belongs to the account that created it. Other accounts cannot list it,
+open it or deploy to it — they get a `404`, not a `403`, so a slug's existence is not revealed.
+`jack deploy` against an `--accounts` server needs a token.
+
+**Circuit.** Runs and workflows are shared among everyone on the server (there are no
+per-account workspaces yet), but every fix, approval and abort is recorded under the signed-in
+account's email instead of the free-text name the dashboard used before. The journal says who
+did what.
+
+## What is enforced
+
+Each of these has a test, in `packages/accounts/test/accounts.test.ts` or
+`security/tests/jack-accounts-leak.test.ts`:
+
+- Passwords are hashed with scrypt, with the parameters stored next to the hash.
+- Sessions and tokens are random 256-bit values, stored as SHA-256 hashes; a database read
+  yields nothing usable.
+- The session cookie is `HttpOnly` and `SameSite=Lax`, plus `Secure` and `__Host-` on https.
+- A state-changing request authenticated by a **session** must come from the server's own
+  origin, checked against `Origin` and then `Sec-Fetch-Site`; anything else is `403`. A token
+  request is exempt, because a cross-site page cannot add an `Authorization` header.
+- Failed sign-ins are rate-limited; unknown emails and wrong passwords take the same time.
+- Tokens are shown once, stored hashed, and can be created or revoked only from a session.
+- `--host` beyond loopback without `--accounts` or `--api-key` is refused at startup.
+- Responses never carry a password hash, a session token or a stored API token.
+
+What is **not** enforced yet: a shared rate-limit store across several server processes (the
+counter is in memory, per process), and email verification. Both are hosted-tier work.

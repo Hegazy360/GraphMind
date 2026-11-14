@@ -108,6 +108,10 @@ export default defineConfig({
           items: [{ slug: 'guides/build-a-workflow' }, { slug: 'guides/remote-development' }],
         },
         {
+          label: 'Platform',
+          items: [{ slug: 'platform/circuit' }, { slug: 'platform/jack' }, { slug: 'platform/accounts' }],
+        },
+        {
           label: 'Integrations',
           items: [
             { slug: 'integrations' },

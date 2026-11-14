@@ -15,15 +15,29 @@ import { fileURLToPath } from 'node:url';
 
 export const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
+/**
+ * Two workspace apps are libraries as far as the packages are concerned:
+ * `packages/circuit-cli` imports `circuit-api` and `packages/jack-cli`
+ * imports `jack-api`, both through their `dist/`. They must be built (and
+ * fresh) for `./packages/**` to compile, so they are part of this check and
+ * of the build.
+ */
+const appsThatPackagesImport = ['circuit-api', 'jack-api'];
+
 /** One built file per package that something in the dev loop imports. */
 const sentinels = [
   join(repoRoot, 'packages', 'cli', 'dist', 'cli.js'),
   join(repoRoot, 'packages', 'schema', 'dist', 'index.js'),
   join(repoRoot, 'packages', 'client', 'dist', 'index.js'),
+  ...appsThatPackagesImport.map((name) => join(repoRoot, 'apps', name, 'dist', 'index.js')),
 ];
 
+const buildFilters = ['--filter', './packages/**', ...appsThatPackagesImport.flatMap((name) => ['--filter', name])];
+
 /** The newest mtime under `dir`, skipping what is not source. */
-function newestMtime(dir, skip = new Set(['node_modules', 'dist', '.turbo'])) {
+// `schema.json` is written by packages/schema's build, after its dist/, and is
+// committed: it is output, not source, so it must not count as a newer edit.
+function newestMtime(dir, skip = new Set(['node_modules', 'dist', '.turbo', 'schema.json'])) {
   let newest = 0;
   let entries;
   try {
@@ -53,18 +67,23 @@ export function packagesAreBuilt() {
   } catch {
     return true;
   }
-  for (const name of names) {
-    const dist = join(packagesDir, name, 'dist');
+  const dirs = [
+    ...names.map((name) => join(packagesDir, name)),
+    ...appsThatPackagesImport.map((name) => join(repoRoot, 'apps', name)),
+  ];
+  for (const dir of dirs) {
+    const dist = join(dir, 'dist');
     if (!existsSync(dist)) continue;
-    if (newestMtime(join(packagesDir, name)) > newestMtime(dist)) return false;
+    if (newestMtime(dir) > newestMtime(dist)) return false;
   }
   return true;
 }
 
 /**
- * Build `./packages/**` if any sentinel is missing. Returns false (after
- * printing the error) when the build fails, so callers can exit(1) without
- * a stack trace on top of tsc's own output.
+ * Build `./packages/**` (plus the apps they import) if any sentinel is
+ * missing or stale. Returns false (after printing the error) when the build
+ * fails, so callers can exit(1) without a stack trace on top of tsc's own
+ * output.
  */
 export function ensurePackagesBuilt() {
   // stderr throughout: `pnpm cli pauses --json | jq` must see only the CLI's
@@ -74,14 +93,14 @@ export function ensurePackagesBuilt() {
     return true;
   }
   console.error('Building the workspace packages (missing or out of date)...');
-  const result = spawnSync('pnpm', ['-r', '--filter', './packages/**', 'run', 'build'], {
+  const result = spawnSync('pnpm', ['-r', ...buildFilters, 'run', 'build'], {
     cwd: repoRoot,
     stdio: 'inherit',
     // pnpm is pnpm.cmd on Windows; a shell resolves it either way.
     shell: process.platform === 'win32',
   });
   if (result.status !== 0) {
-    console.error('ensure-packages-built: `pnpm -r --filter ./packages/** run build` failed.');
+    console.error(`ensure-packages-built: \`pnpm -r ${buildFilters.join(' ')} run build\` failed.`);
     return false;
   }
   return true;

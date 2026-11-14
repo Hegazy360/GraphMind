@@ -15,6 +15,9 @@ importers:
 
   apps/circuit-api:
     dependencies:
+      '@graphmind-ai/accounts':
+        specifier: workspace:*
+        version: link:../../packages/accounts
       '@graphmind-ai/circuit-engine':
         specifier: workspace:*
         version: link:../../packages/circuit-engine
@@ -24,6 +27,9 @@ importers:
       '@graphmind-ai/circuit-sdk':
         specifier: workspace:*
         version: link:../../packages/circuit-sdk
+      '@graphmind-ai/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       hono:
         specifier: '>=4.13.5'
         version: 4.13.7
@@ -61,6 +67,104 @@ importers:
       sharp:
         specifier: ^0.35.4
         version: 0.35.4(@types/node@26.3.0)
+
+  apps/jack-api:
+    dependencies:
+      '@graphmind-ai/accounts':
+        specifier: workspace:*
+        version: link:../../packages/accounts
+      '@graphmind-ai/jack-auth':
+        specifier: workspace:*
+        version: link:../../packages/jack-auth
+      '@graphmind-ai/jack-openapi':
+        specifier: workspace:*
+        version: link:../../packages/jack-openapi
+      '@graphmind-ai/jack-runtime':
+        specifier: workspace:*
+        version: link:../../packages/jack-runtime
+      '@graphmind-ai/jack-schema':
+        specifier: workspace:*
+        version: link:../../packages/jack-schema
+      '@graphmind-ai/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@modelcontextprotocol/client':
+        specifier: ^2.4.0
+        version: 2.4.0
+      '@modelcontextprotocol/server':
+        specifier: ^2.4.0
+        version: 2.4.0
+      hono:
+        specifier: '>=4.13.5'
+        version: 4.13.7
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@hono/node-server':
+        specifier: ^1.19.9
+        version: 1.19.17(hono@4.13.7)
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.3.0
+      playwright:
+        specifier: 1.59.1
+        version: 1.59.1
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.3.0)(jsdom@30.1.3)(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+
+  apps/platform:
+    dependencies:
+      '@graphmind-ai/accounts':
+        specifier: workspace:*
+        version: link:../../packages/accounts
+      '@graphmind-ai/circuit-cli':
+        specifier: workspace:*
+        version: link:../../packages/circuit-cli
+      '@graphmind-ai/circuit-engine':
+        specifier: workspace:*
+        version: link:../../packages/circuit-engine
+      '@graphmind-ai/circuit-mcp':
+        specifier: workspace:*
+        version: link:../../packages/circuit-mcp
+      '@graphmind-ai/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@hono/node-server':
+        specifier: ^1.19.9
+        version: 1.19.17(hono@4.13.7)
+      circuit-api:
+        specifier: workspace:*
+        version: link:../circuit-api
+      hono:
+        specifier: '>=4.13.5'
+        version: 4.13.7
+      jack-api:
+        specifier: workspace:*
+        version: link:../jack-api
+    devDependencies:
+      '@graphmind-ai/circuit-sdk':
+        specifier: workspace:*
+        version: link:../../packages/circuit-sdk
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.3.0
+      playwright:
+        specifier: 1.59.1
+        version: 1.59.1
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.3.0)(jsdom@30.1.3)(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
 
   apps/viewer:
     dependencies:
@@ -140,6 +244,19 @@ importers:
       '@vercel/blob':
         specifier: ^2.8.0
         version: 2.8.0
+    devDependencies:
+      '@fontsource-variable/bricolage-grotesque':
+        specifier: 5.3.0
+        version: 5.3.0
+      '@fontsource-variable/geist-mono':
+        specifier: 5.3.0
+        version: 5.3.0
+      '@fontsource-variable/instrument-sans':
+        specifier: 5.3.0
+        version: 5.3.0
+      gsap:
+        specifier: 3.15.1
+        version: 3.15.1
 
   examples/circuit-onboarding:
     dependencies:
@@ -235,6 +352,52 @@ importers:
       tsx:
         specifier: ^4.19.0
         version: 4.23.12
+
+  examples/jack-tasks:
+    dependencies:
+      '@graphmind-ai/jack-cli':
+        specifier: workspace:*
+        version: link:../../packages/jack-cli
+      '@graphmind-ai/jack-verify':
+        specifier: workspace:*
+        version: link:../../packages/jack-verify
+      '@hono/node-server':
+        specifier: ^1.19.9
+        version: 1.19.17(hono@4.13.7)
+      hono:
+        specifier: '>=4.13.5'
+        version: 4.13.7
+      jose:
+        specifier: ^6.2.10
+        version: 6.2.10
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@graphmind-ai/jack-auth':
+        specifier: workspace:*
+        version: link:../../packages/jack-auth
+      '@graphmind-ai/jack-openapi':
+        specifier: workspace:*
+        version: link:../../packages/jack-openapi
+      '@graphmind-ai/jack-runtime':
+        specifier: workspace:*
+        version: link:../../packages/jack-runtime
+      '@graphmind-ai/jack-schema':
+        specifier: workspace:*
+        version: link:../../packages/jack-schema
+      '@modelcontextprotocol/client':
+        specifier: ^2.4.0
+        version: 2.4.0
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.3.0
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.3.0)(jsdom@30.1.3)(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
 
   examples/live-check:
     dependencies:
@@ -381,6 +544,25 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  packages/accounts:
+    dependencies:
+      hono:
+        specifier: '>=4.13.5'
+        version: 4.13.7
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.3.0
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.3.0)(jsdom@30.1.3)(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+
   packages/ai-sdk:
     dependencies:
       '@graphmind-ai/client':
@@ -464,6 +646,9 @@ importers:
 
   packages/circuit-cli:
     dependencies:
+      '@graphmind-ai/accounts':
+        specifier: workspace:*
+        version: link:../accounts
       '@graphmind-ai/circuit-engine':
         specifier: workspace:*
         version: link:../circuit-engine
@@ -655,6 +840,168 @@ importers:
         specifier: ^8.21.3
         version: 8.21.3
 
+  packages/jack-auth:
+    dependencies:
+      '@graphmind-ai/jack-runtime':
+        specifier: workspace:*
+        version: link:../jack-runtime
+      '@graphmind-ai/jack-schema':
+        specifier: workspace:*
+        version: link:../jack-schema
+      '@graphmind-ai/jack-verify':
+        specifier: workspace:*
+        version: link:../jack-verify
+      '@modelcontextprotocol/server':
+        specifier: ^2.4.0
+        version: 2.4.0
+      hono:
+        specifier: '>=4.13.5'
+        version: 4.13.7
+      jose:
+        specifier: ^6.2.10
+        version: 6.2.10
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@hono/node-server':
+        specifier: ^1.19.9
+        version: 1.19.17(hono@4.13.7)
+      '@modelcontextprotocol/client':
+        specifier: ^2.4.0
+        version: 2.4.0
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.3.0
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.3.0)(jsdom@30.1.3)(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+
+  packages/jack-cli:
+    dependencies:
+      '@graphmind-ai/accounts':
+        specifier: workspace:*
+        version: link:../accounts
+      '@graphmind-ai/jack-auth':
+        specifier: workspace:*
+        version: link:../jack-auth
+      '@graphmind-ai/jack-openapi':
+        specifier: workspace:*
+        version: link:../jack-openapi
+      '@graphmind-ai/jack-runtime':
+        specifier: workspace:*
+        version: link:../jack-runtime
+      '@graphmind-ai/jack-schema':
+        specifier: workspace:*
+        version: link:../jack-schema
+      '@hono/node-server':
+        specifier: ^1.19.9
+        version: 1.19.17(hono@4.13.7)
+      '@modelcontextprotocol/client':
+        specifier: ^2.4.0
+        version: 2.4.0
+      '@modelcontextprotocol/server':
+        specifier: ^2.4.0
+        version: 2.4.0
+      hono:
+        specifier: '>=4.13.5'
+        version: 4.13.7
+      jack-api:
+        specifier: workspace:*
+        version: link:../../apps/jack-api
+    devDependencies:
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.3.0
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.3.0)(jsdom@30.1.3)(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+
+  packages/jack-openapi:
+    dependencies:
+      '@graphmind-ai/jack-schema':
+        specifier: workspace:*
+        version: link:../jack-schema
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.3.0
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.3.0)(jsdom@30.1.3)(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+
+  packages/jack-runtime:
+    dependencies:
+      '@graphmind-ai/jack-schema':
+        specifier: workspace:*
+        version: link:../jack-schema
+      '@modelcontextprotocol/server':
+        specifier: ^2.4.0
+        version: 2.4.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@modelcontextprotocol/client':
+        specifier: ^2.4.0
+        version: 2.4.0
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.3.0
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.3.0)(jsdom@30.1.3)(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+
+  packages/jack-schema:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.3.0
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.3.0)(jsdom@30.1.3)(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+
+  packages/jack-verify:
+    dependencies:
+      jose:
+        specifier: ^6.2.10
+        version: 6.2.10
+    devDependencies:
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.3.0
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.3.0)(jsdom@30.1.3)(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+
   packages/langgraph:
     dependencies:
       '@graphmind-ai/client':
@@ -779,6 +1126,18 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@types/node@26.3.0)(jsdom@30.1.3)(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
 
+  packages/ui:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.3.0
+        version: 26.3.0
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.3.0)(jsdom@30.1.3)(vite@8.2.2(@types/node@26.3.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+
   security:
     devDependencies:
       '@ai-sdk/provider':
@@ -787,12 +1146,27 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.121.0
         version: 0.121.0(zod@4.4.3)
+      '@graphmind-ai/accounts':
+        specifier: workspace:*
+        version: link:../packages/accounts
       '@graphmind-ai/anthropic':
         specifier: workspace:*
         version: link:../packages/anthropic
       '@graphmind-ai/client':
         specifier: workspace:*
         version: link:../packages/client
+      '@graphmind-ai/jack-auth':
+        specifier: workspace:*
+        version: link:../packages/jack-auth
+      '@graphmind-ai/jack-runtime':
+        specifier: workspace:*
+        version: link:../packages/jack-runtime
+      '@graphmind-ai/jack-schema':
+        specifier: workspace:*
+        version: link:../packages/jack-schema
+      '@graphmind-ai/jack-verify':
+        specifier: workspace:*
+        version: link:../packages/jack-verify
       '@graphmind-ai/mcp':
         specifier: workspace:*
         version: link:../packages/mcp
@@ -805,6 +1179,9 @@ importers:
       '@graphmind-ai/sdk':
         specifier: workspace:*
         version: link:../packages/ai-sdk
+      '@modelcontextprotocol/client':
+        specifier: ^2.4.0
+        version: 2.4.0
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
@@ -823,6 +1200,12 @@ importers:
       graphmind-ai:
         specifier: workspace:*
         version: link:../packages/cli
+      hono:
+        specifier: '>=4.13.5'
+        version: 4.13.7
+      jack-api:
+        specifier: workspace:*
+        version: link:../apps/jack-api
       openai:
         specifier: ^6.9.0
         version: 6.49.0(ws@8.21.3)(zod@4.4.3)
@@ -1430,6 +1813,15 @@ packages:
   '@expressive-code/plugin-text-markers@0.44.1':
     resolution: {integrity: sha512-B3BsJoJ8CFMlcIX9f+X9tcI3C4zPDO601+YuLi9GheSTNro7ZfqSjLptMQKBHOWZvxnAtY5zvIX7iO/qtBhNBg==}
 
+  '@fontsource-variable/bricolage-grotesque@5.3.0':
+    resolution: {integrity: sha512-TLi9Q4hJjS2UvoTMRSS2nHu6c4R56lAw60NR9QYtVRCHn0XtsFpiEhNffZ8Glsoxu6wEEwLKBP8lb94J52PNBA==}
+
+  '@fontsource-variable/geist-mono@5.3.0':
+    resolution: {integrity: sha512-vBbuwDEo9AkrqADMXOrlAR3DFcJi4/JxeuU43FoiQERnNwsfXNnvxvReZG02cQKmyk4DZkZdBZX3oTDvy2zBAw==}
+
+  '@fontsource-variable/instrument-sans@5.3.0':
+    resolution: {integrity: sha512-u4gKbDBTNFGkg997tfQn3eHOhHuquWUFTRT/rwzuKtrxX5P2ekfs2x+LgBPP4P32+cC+vUwF1Cr+IdRoPQbrGw==}
+
   '@hono/node-server@1.19.17':
     resolution: {integrity: sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ==}
     engines: {node: '>=18.14.1'}
@@ -1662,8 +2054,16 @@ packages:
     resolution: {integrity: sha512-8f1OghQ2rjzIOfqgUCP+8GiUWqRs89njoWLNqAe8kWmDePv3s1fZXseej+QXemssEuuOvLLmLO/kqM3IQHtISw==}
     engines: {node: '>=20'}
 
+  '@modelcontextprotocol/client@2.4.0':
+    resolution: {integrity: sha512-LgrD2OphHuG12vfKFKz6SOnq7bKHQmhGJIAYdD+MZBn2npHEyry6uD8zvktodtl5CQM85MO0anUyD9JwmUmxww==}
+    engines: {node: '>=20'}
+
   '@modelcontextprotocol/core@2.0.0':
     resolution: {integrity: sha512-pJCEwGG7Lfr/+PQp9ZTwKXNeO5wzbfKL7H3MYpCorM4oFBoQrdjnBgEoqG+RjhsvS1FKrDbKux+M1HhlnGWqcA==}
+    engines: {node: '>=20'}
+
+  '@modelcontextprotocol/core@2.4.0':
+    resolution: {integrity: sha512-z8QBKqdfXLPzkLQuG4xp8hrVEMm1PZ1IgxMN2sMbJiFiAKOWXnAzogXn2W4aqIBlP1ea6U5yiqVquvUNM1Cj6Q==}
     engines: {node: '>=20'}
 
   '@modelcontextprotocol/sdk@1.26.0':
@@ -1688,6 +2088,10 @@ packages:
 
   '@modelcontextprotocol/server@2.0.0':
     resolution: {integrity: sha512-YhHWdHfpFMQfd0prsEnxKeS3Qz3ytIGmsS0sth4KDjnacIT7hxk6hXHkJ9KysxlkvTM+WZAtQbbcUhdoP4Hvtw==}
+    engines: {node: '>=20'}
+
+  '@modelcontextprotocol/server@2.4.0':
+    resolution: {integrity: sha512-rgR9yxSaAJ+bcsi/XroT/S2AfPiIWloXAnrdfYSCms9ivVju0ishu/wW0J21Ho6+ZOR1r7RyeRbjiRuF87ix5Q==}
     engines: {node: '>=20'}
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
@@ -3058,6 +3462,9 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
+  gsap@3.15.1:
+    resolution: {integrity: sha512-63yjWRFWj3QRP1UOuD8kcidCcy3nxb1mMRpwHr/xJRvPfm9GtWOXFAYUiL0ro1fgPq2nY53LR+98pAgy9BumBg==}
+
   h3@1.15.11:
     resolution: {integrity: sha512-L3THSe2MPeBwgIZVSH5zLdBBU90TOxarvhK9d04IDY2AmVS8j2Jz2LIWtwsGOU3lu2I5jCN7FNvVfY2+XyF+mg==}
 
@@ -4279,6 +4686,7 @@ packages:
 
   tldts-core@7.4.20:
     resolution: {integrity: sha512-C630TWXZCZmLq0F2bW4QqwnaaxCQ/svpAqvJwnC4JvgEM5ohhBnGsEzTLSOXcN+xjz+kEaHS5uoWIw2klnqd0A==}
+    deprecated: Partial release, see https://github.com/remusao/tldts/issues/2735. Use >=7.4.22.
 
   tldts@7.4.19:
     resolution: {integrity: sha512-48dH6aSpQnpbzDUc4vIQZ1VjB8tkK+e8c1yx05/SZK+rkssgjEOlxDd/yU8/a4vGYQ9vRgJr9dwMq9TJ0b3X2Q==}
@@ -5326,6 +5734,12 @@ snapshots:
     dependencies:
       '@expressive-code/core': 0.44.1
 
+  '@fontsource-variable/bricolage-grotesque@5.3.0': {}
+
+  '@fontsource-variable/geist-mono@5.3.0': {}
+
+  '@fontsource-variable/instrument-sans@5.3.0': {}
+
   '@hono/node-server@1.19.17(hono@4.13.7)':
     dependencies:
       hono: 4.13.7
@@ -5597,7 +6011,21 @@ snapshots:
       pkce-challenge: 5.0.1
       zod: 4.4.3
 
+  '@modelcontextprotocol/client@2.4.0':
+    dependencies:
+      '@modelcontextprotocol/core': 2.4.0
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.1.1
+      jose: 6.2.10
+      pkce-challenge: 5.0.1
+      zod: 4.4.3
+
   '@modelcontextprotocol/core@2.0.0':
+    dependencies:
+      zod: 4.4.3
+
+  '@modelcontextprotocol/core@2.4.0':
     dependencies:
       zod: 4.4.3
 
@@ -5652,6 +6080,11 @@ snapshots:
   '@modelcontextprotocol/server@2.0.0':
     dependencies:
       '@modelcontextprotocol/core': 2.0.0
+      zod: 4.4.3
+
+  '@modelcontextprotocol/server@2.4.0':
+    dependencies:
+      '@modelcontextprotocol/core': 2.4.0
       zod: 4.4.3
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
@@ -6954,6 +7387,8 @@ snapshots:
   gopd@1.2.0: {}
 
   graceful-fs@4.2.11: {}
+
+  gsap@3.15.1: {}
 
   h3@1.15.11:
     dependencies:
@@ -8961,8 +9396,7 @@ snapshots:
 
   yallist@3.1.1: {}
 
-  yaml@2.9.0:
-    optional: true
+  yaml@2.9.0: {}
 
   yargs-parser@22.0.0: {}
 

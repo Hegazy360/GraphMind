@@ -52,9 +52,47 @@ const ITEMS = [
     hint: 'pnpm demo',
     steps: [[node, join(repoRoot, 'scripts', 'cli.mjs'), 'demo']],
   },
+  { header: 'The platform (what users get online)' },
+  {
+    label: 'Whole journey: homepage → sign up → Circuit + Jack, one origin',
+    hint: 'pnpm platform',
+    steps: [['pnpm', 'platform']],
+  },
+  {
+    label: 'Re-record the homepage clips and screenshots from the real apps',
+    hint: 'pnpm media',
+    steps: [['pnpm', 'media']],
+  },
+  {
+    label: 'Browser test of that journey (Playwright)',
+    hint: 'pnpm platform:e2e',
+    steps: [['pnpm', 'platform:e2e']],
+  },
+  { header: 'Circuit & Jack (the services)' },
+  {
+    label: 'Circuit — guided demo: a run pauses, gets fixed, is forked',
+    hint: 'pnpm circuit:demo',
+    steps: [['pnpm', 'circuit:demo']],
+  },
+  {
+    label: 'Circuit — dev server + dashboard (add --accounts for sign-up)',
+    hint: 'pnpm circuit:dev',
+    steps: [['pnpm', 'circuit:dev']],
+  },
+  {
+    label: 'Jack — dashboard with self-serve accounts',
+    hint: 'pnpm jack serve --accounts',
+    steps: [['pnpm', 'jack', 'serve', '--accounts']],
+  },
+  {
+    label: 'Jack — the example API + preview, wired together',
+    hint: 'pnpm --filter jack-tasks dev',
+    steps: [['pnpm', '--filter', 'jack-tasks', 'dev']],
+  },
   { header: 'Check' },
   { label: 'Typecheck everything', hint: 'pnpm typecheck', steps: [['pnpm', 'typecheck']] },
-  { label: 'Unit tests (packages + viewer)', hint: 'pnpm test', steps: [['pnpm', 'test']] },
+  { label: 'Unit tests (packages + viewer + jack-api)', hint: 'pnpm test', steps: [['pnpm', 'test']] },
+  { label: 'Jack tests (accounts, auth server, control plane, example)', hint: 'pnpm test:jack', steps: [['pnpm', 'test:jack']] },
   { label: "Viewer end-to-end tests (Playwright)", hint: 'pnpm test:e2e', steps: [['pnpm', 'test:e2e']] },
   {
     label: 'Security regression suite',

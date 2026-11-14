@@ -3,13 +3,13 @@
   "redirects": [
     {
       "source": "/login",
-      "destination": "/",
-      "permanent": true
+      "destination": "https://app.graphmind.ai/#/signin",
+      "permanent": false
     },
     {
       "source": "/signup",
-      "destination": "/",
-      "permanent": true
+      "destination": "https://app.graphmind.ai/#/signup",
+      "permanent": false
     },
     {
       "source": "/graphs",
@@ -23,8 +23,8 @@
     },
     {
       "source": "/subscriptions",
-      "destination": "/",
-      "permanent": true
+      "destination": "/#account",
+      "permanent": false
     }
   ],
   "rewrites": [

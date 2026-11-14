@@ -1,0 +1,143 @@
+---
+title: Jack — your API as an MCP server
+description: Jack turns the HTTP API you already have into a hosted MCP server. Point it at an OpenAPI document, review which operations become tools, add sign-in, and deploy. The compiler, runtime, CLI and dashboard run locally today; the hosted service is coming.
+sidebar:
+  label: Jack
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Jack reads your OpenAPI (or Swagger 2.0) document and serves it as an MCP server: every
+operation can become a tool, each person who connects an AI app signs in as themselves, and
+Jack calls your API with *their* credential. You control which operations are published, what
+the model is told about them, and which ones need a human to approve each call.
+
+This page is the short version. The long guide, with the `jack.yaml` reference, the lint
+codes and the account-linking protocol, is
+[`docs/jack/USAGE.md`](https://github.com/Hegazy360/GraphMind/blob/master/docs/jack/USAGE.md);
+a complete worked example is
+[`examples/jack-tasks`](https://github.com/Hegazy360/GraphMind/tree/master/examples/jack-tasks).
+
+<Aside title="Separate from the debugger">
+The GraphMind debugger needs no account and nothing about it changed. Jack is a server you run
+for your API, with its own dashboard and, optionally, [accounts](/platform/accounts/). If you
+want to *debug* an MCP server rather than publish one, that is
+[`graphmind mcp-proxy`](/debugging/mcp-servers/).
+</Aside>
+
+## What exists today, and what does not
+
+| Piece | Status | Where |
+| --- | --- | --- |
+| Compiler: OpenAPI 3.x / Swagger 2.0 → MCP tools, with lint (`J001`–`J013`) | built | `packages/jack-openapi`, `packages/jack-schema` |
+| Runtime: validation, scopes, approvals, egress guard, response projection and caps | built | `packages/jack-runtime` |
+| Sign-in: MCP authorization (OAuth, PKCE, CIMD/DCR) with `oidc`, `apikey` and `link` modes | built | `packages/jack-auth` |
+| `@graphmind-ai/jack-verify` (Node), `graphmind.jack` (Python), `Graphmind::Jack` (Ruby) for `link` mode | built | `packages/jack-verify`, `python/`, `ruby/` |
+| CLI: `jack init / check / build / preview / tools / call / login / logout / serve / deploy` | built | `packages/jack-cli` |
+| Dashboard and control plane: projects, tools, sign-in, try it, deploy, users, activity | built | `apps/jack-api` |
+| Self-serve accounts for the dashboard (`jack serve --accounts`), one owner per project | built | `packages/accounts` |
+| **Hosted service on graphmind.ai** | **not live yet** | — |
+
+Everything runs from a checkout of the repository today. `jack serve` is the same server the
+hosted service will run, so a project you build locally is the project you will deploy.
+
+## Run it locally
+
+```sh
+pnpm build:jack
+pnpm jack init https://petstore3.swagger.io/api/v3/openapi.json   # writes jack.yaml
+pnpm jack check                                                   # every tool + every finding
+pnpm jack preview                                                 # serve jack.yaml as an MCP server
+pnpm jack tools                                                   # list tools as an AI client sees them
+pnpm jack call find_pets_by_status --args '{"status":"available"}'
+```
+
+`jack init` writes `jack.yaml` listing **every** operation with an explicit `enabled:`, so a
+pull-request review is complete. Reads (`GET`/`HEAD`) start enabled; everything else, and every
+deprecated operation, starts disabled. That is a heuristic — a `GET /user/logout` that changes
+state is classified as a read — so review the enabled list.
+
+`jack preview` serves the file at `http://127.0.0.1:<port>/mcp` with the same runtime and
+authorization server as the hosted service, reloading when the file changes. It binds loopback,
+refuses non-localhost `Host`/`Origin`, logs one line per call and never arguments or
+credentials. Ports are derived from the worktree path so several previews can run side by side.
+
+## `jack.yaml`
+
+```yaml
+name: "Acme Billing"
+source: "./openapi.json"
+upstream: "https://api.acme.com/v2"
+auth: { mode: none }                    # oidc | link | apikey | none
+tools:
+  refund_invoice:
+    enabled: true
+    name: refund
+    description: "Refund one invoice in full. Use list_invoices first to find its id."
+    annotations: { destructiveHint: true }
+    requiredScopes: [invoices:write]
+    confirm: true                       # the user approves every call
+    response: { maxBytes: 20000 }
+```
+
+A tool that is not listed follows the defaults, so an operation added to the spec later is never
+published by accident. `jack check --strict` exits non-zero while any lint warning remains.
+
+## Sign-in
+
+In sign-in mode every AI client that connects gets Jack's OAuth flow and each person signs in as
+themselves. Their upstream credential stays sealed in Jack (AES-256-GCM); the model never sees
+it, and arguments cannot set `Authorization`, `Cookie` or `Host`.
+
+| `auth:` | Who the API sees |
+| --- | --- |
+| `none` | nobody; no credentials sent |
+| `apikey` | each user's own key, pasted on Jack's sign-in page (or one shared `JACK_UPSTREAM_API_KEY`) |
+| `oidc` | each user's own token from *your* login; Jack is a confidential client |
+| `link` | each user, through your app's existing session login; calls carry a signed `Jack-Assertion` header your middleware verifies |
+
+What is enforced, each with a test: PKCE S256 and `resource` required; exact redirect-URI match;
+single-use 60-second codes, with a replayed code revoking the grant; rotating refresh tokens
+where reuse revokes the grant; revocation on the very next call; tokens for one MCP URL refused
+by another; `403 insufficient_scope` naming the scopes to ask for.
+
+## What a tool call does
+
+Tools whose scopes the caller lacks are hidden from `tools/list`. Arguments are validated
+against the tool's JSON schema before anything reaches your API. With `confirm: true` the user
+sees the exact arguments and approves through MCP `input_required`; the approval is HMAC-bound to
+that call. The request itself percent-encodes path values, refuses `.`/`..`, never follows
+redirects, has a per-tool timeout and a 5 MB download cap. JSON responses are projected with
+`response.pick`, pretty-printed and cut at `response.maxBytes` with a note telling the model how
+to narrow the request; API errors come back as tool errors carrying the API's own explanation.
+
+## The dashboard and `jack deploy`
+
+```sh
+pnpm jack serve     # prints: jack serve — dashboard at http://127.0.0.1:<port>
+pnpm jack deploy    # compile jack.yaml locally, push it, make it live
+```
+
+One server holds the dashboard, the control plane (`/v1`) and every project's MCP endpoint
+(`/p/<slug>/mcp`, with its own sign-in). Pages: **New project** (paste a spec or its URL),
+**Tools** (turn on and off, rename, rewrite descriptions, require approval), **Sign-in**,
+**Try it** (the real sign-in and consent pages, then call any tool as that user), **Deploy**
+(diff against what is live, history, one-click roll back, the `claude mcp add` line),
+**Users** (disconnect anyone immediately), **Activity** (every call, never arguments or
+results) and **Settings**.
+
+Nothing changes for AI clients until you deploy. `jack deploy` and the dashboard are two editors
+of the same configuration: Settings → *Export jack.yaml* gives you the file, `jack deploy` sends
+it back. The CLI finds this worktree's `jack serve` on its own; `--server` points elsewhere.
+
+With `--accounts` on the server, every project belongs to the account that created it, other
+accounts cannot see it (they get a 404), and `jack deploy` needs a personal API token:
+`jack deploy --api-key gmt_…`. See [accounts](/platform/accounts/).
+
+## Where it is going
+
+The hosted service — sign in on graphmind.ai, create a project, hand the MCP URL to your users —
+is the plan, and the dashboard, sign-in and accounts are already the ones it will use. Still
+missing: the public deployment itself, with `--egress public` (no private addresses) as the
+rule. Until then, `jack serve` on your own machine or server is the product.

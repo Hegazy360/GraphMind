@@ -1,0 +1,49 @@
+{
+  "name": "jack-api",
+  "version": "0.0.1",
+  "description": "GraphMind Jack control plane and data plane — projects, deployments, the hosted /mcp and /oauth endpoints.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "test:e2e": "node --test e2e/dashboard.e2e.mjs e2e/accounts.e2e.mjs"
+  },
+  "dependencies": {
+    "@graphmind-ai/jack-schema": "workspace:*",
+    "hono": "^4.13.5",
+    "zod": "^4.4.3",
+    "@graphmind-ai/jack-openapi": "workspace:*",
+    "@graphmind-ai/jack-runtime": "workspace:*",
+    "@graphmind-ai/jack-auth": "workspace:*",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "@modelcontextprotocol/client": "^2.4.0",
+    "yaml": "^2.9.0",
+    "@graphmind-ai/accounts": "workspace:*",
+    "@graphmind-ai/ui": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "@hono/node-server": "^1.19.9",
+    "playwright": "1.59.1"
+  }
+}

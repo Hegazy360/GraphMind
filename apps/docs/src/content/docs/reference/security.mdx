@@ -20,8 +20,10 @@ GraphMind is a **local-only** developer tool. `npx graphmind-ai` starts a server
 local WebSocket. It records those events in a SQLite database under `~/.graphmind` and can hold the
 agent at a gate (before an LLM step, before/after a tool call, on error) until the developer — or a
 coding agent the developer allowed, through `graphmind resume` — resumes it. From 0.6.0 a resume can
-run a held tool call with **edited arguments**, which is why control carries a credential. There is no cloud component, no account, and no data path off the machine other than a
-four-field CLI telemetry record that is off with one environment variable. The whole product is MIT
+run a held tool call with **edited arguments**, which is why control carries a credential. The debugger has no cloud component, no account, and no data path off the machine other than a
+four-field CLI telemetry record that is off with one environment variable. (The Circuit and Jack
+dashboards in the same repository do have optional accounts, documented at
+[accounts](/platform/accounts/); they are separate servers and nothing here depends on them.) The whole product is MIT
 licensed and built in the open.
 
 ## Threat model

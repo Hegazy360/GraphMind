@@ -1,8 +1,14 @@
-// GraphMind Circuit dashboard. Dependency-free; talks only to /v1 on the
-// same origin. All run data is rendered with textContent (never innerHTML):
+import { startShell, toast as gmToast } from './gm/shell.js';
+
+// GraphMind Circuit dashboard. Dependency-free; talks only to its own
+// server's /v1 and /auth, by URLs relative to the page, so the same files
+// work at the origin root (`circuit dev`) and under a prefix (the platform's
+// /circuit/). All run data is rendered with textContent (never innerHTML):
 // step inputs/outputs are customer data and must never be interpreted.
 
 const POLL_MS = 1500;
+// The shared GraphMind shell: top bar, sign-in, and the one account page (on the hub inside the platform).
+const shell = await startShell({ product: 'circuit' });
 const state = {
   apiKey: sessionStorage.getItem('circuit.apiKey') ?? '',
   workflows: [],
@@ -53,24 +59,26 @@ const until = (ts) => {
 };
 const badge = (status) => h('span', { class: `badge s-${status}` }, status.replace('_', ' '));
 
-function toast(message, isError = false) {
-  const t = $('toast');
-  t.textContent = message;
-  t.className = `toast${isError ? ' err' : ''}`;
-  t.hidden = false;
-  clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => (t.hidden = true), isError ? 7000 : 3500);
-}
+const toast = gmToast;
 
 // ---------- API ----------
-async function api(method, path, body) {
+async function api(method, path, body, retried = false) {
   const headers = { 'x-circuit-actor': actor() };
   if (body !== undefined) headers['content-type'] = 'application/json';
   if (state.apiKey) headers.authorization = `Bearer ${state.apiKey}`;
-  const res = await fetch(`/v1${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  const res = await fetch(`v1${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   let data = null;
   try { data = await res.json(); } catch { /* empty body */ }
-  if (res.status === 401) { askForKey(); throw new Error('API key required'); }
+  if (res.status === 401) {
+    if (shell.server.accounts && !retried) {
+      shell.user = null; // the session ended: sign in (on the hub inside the platform), then try again
+      await shell.requireSession();
+      shell.renderBar();
+      return api(method, path, body, true);
+    }
+    askForKey();
+    throw new Error('API key required');
+  }
   if (!res.ok && !(path === '/deploy-check' && res.status === 409)) {
     throw new Error(data?.detail ?? data?.title ?? `HTTP ${res.status}`);
   }
@@ -78,7 +86,7 @@ async function api(method, path, body) {
 }
 
 function actor() {
-  return localStorage.getItem('circuit.actor') || 'dashboard';
+  return shell.user?.email || localStorage.getItem('circuit.actor') || 'dashboard';
 }
 
 // ---------- routing: #/runs/<id>[/<seq>] ----------
@@ -550,6 +558,7 @@ async function settleThenRefresh() {
 }
 
 async function boot() {
+  await shell.requireSession(); // no-op without accounts; inside the platform, the hub's sign-in
   const { data: health } = await api('GET', '/health');
   state.dev = health.dev === true;
   state.templates = health.templates ?? [];
@@ -557,6 +566,7 @@ async function boot() {
   const { data } = await api('GET', '/workflows');
   state.workflows = data.workflows;
   await refresh();
+  state.booted = true;
 }
 
 function openNewWorkflowDialog() {
@@ -576,7 +586,7 @@ function openNewWorkflowDialog() {
 async function downloadFixture(run) {
   try {
     const headers = state.apiKey ? { authorization: `Bearer ${state.apiKey}` } : {};
-    const res = await fetch(`/v1/runs/${run.id}/fixture`, { headers });
+    const res = await fetch(`v1/runs/${run.id}/fixture`, { headers });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -594,10 +604,11 @@ $('btn-event').addEventListener('click', openEventDialog);
 $('btn-deploy-check').addEventListener('click', runDeployCheck);
 $('status-filter').addEventListener('change', (ev) => { state.filter = ev.target.value; refresh(); });
 $('conn').addEventListener('click', () => {
+  if (shell.user) { location.href = shell.accountHref(); return; } // your name comes from your account
   const name = prompt('Your name, recorded on every fix and approval you make:', actor());
   if (name && name.trim()) { localStorage.setItem('circuit.actor', name.trim()); refresh(); }
 });
 
 readRoute();
 boot().catch(() => {});
-setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
+setInterval(() => { if (!document.hidden && state.booted) refresh(); }, POLL_MS);

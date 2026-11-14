@@ -1,0 +1,11 @@
+# The same tools as jack.yaml; users sign in through ACME'S OWN SESSION LOGIN
+# (no OAuth server anywhere in Acme). Acme added one route (/jack/link) and one
+# middleware — see src/link.ts. Jack and Acme share one secret.
+#
+#   pnpm --filter jack-tasks dev -- --auth link
+extends: ./jack.yaml
+
+auth:
+  mode: link
+  linkUrl: "${ACME_TASKS_URL:-http://127.0.0.1:4830}/jack/link"
+  secretRef: "env:JACK_LINK_SECRET"    # never in the file; the app reads the same variable
