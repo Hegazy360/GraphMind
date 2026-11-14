@@ -22,10 +22,10 @@
     "preview:link": "node ../../scripts/jack-ensure-built.mjs && node dist/with-api.js preview --config jack.link.yaml"
   },
   "dependencies": {
-    "@hono/node-server": "^1.19.9",
-    "hono": "^4.13.5",
-    "zod": "^4.4.3",
-    "jose": "^6.2.10",
+    "@hono/node-server": "^2.1.6",
+    "hono": "^4.13.17",
+    "zod": "^4.6.7",
+    "jose": "^6.2.17",
     "@graphmind-ai/jack-cli": "workspace:*",
     "@graphmind-ai/jack-verify": "workspace:*"
   },
@@ -34,7 +34,7 @@
     "@graphmind-ai/jack-runtime": "workspace:*",
     "@graphmind-ai/jack-schema": "workspace:*",
     "@modelcontextprotocol/client": "^2.4.0",
-    "@types/node": "^26.3.0",
+    "@types/node": "^26.6.6",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
     "@graphmind-ai/jack-auth": "workspace:*"
