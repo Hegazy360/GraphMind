@@ -34,16 +34,16 @@
     "@graphmind-ai/accounts": "workspace:*",
     "@graphmind-ai/circuit-cli": "workspace:*",
     "@graphmind-ai/circuit-engine": "workspace:*",
-    "@hono/node-server": "^1.19.9",
+    "@hono/node-server": "^2.1.6",
     "circuit-api": "workspace:*",
-    "hono": "^4.13.5",
+    "hono": "^4.13.17",
     "jack-api": "workspace:*",
     "@graphmind-ai/circuit-mcp": "workspace:*",
     "@graphmind-ai/ui": "workspace:*"
   },
   "devDependencies": {
     "@graphmind-ai/circuit-sdk": "workspace:*",
-    "@types/node": "^26.3.0",
+    "@types/node": "^26.6.6",
     "playwright": "1.59.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"

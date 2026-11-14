@@ -28,22 +28,22 @@
   },
   "dependencies": {
     "@graphmind-ai/jack-schema": "workspace:*",
-    "hono": "^4.13.5",
-    "zod": "^4.4.3",
+    "hono": "^4.13.17",
+    "zod": "^4.6.7",
     "@graphmind-ai/jack-openapi": "workspace:*",
     "@graphmind-ai/jack-runtime": "workspace:*",
     "@graphmind-ai/jack-auth": "workspace:*",
     "@modelcontextprotocol/server": "^2.4.0",
     "@modelcontextprotocol/client": "^2.4.0",
-    "yaml": "^2.9.0",
+    "yaml": "^2.9.1",
     "@graphmind-ai/accounts": "workspace:*",
     "@graphmind-ai/ui": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^26.3.0",
+    "@types/node": "^26.6.6",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
-    "@hono/node-server": "^1.19.9",
+    "@hono/node-server": "^2.1.6",
     "playwright": "1.59.1"
   }
 }
