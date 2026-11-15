@@ -120,10 +120,12 @@ const has = (bin) => spawnSync(bin, ['--version'], { stdio: 'ignore' }).status =
 
 /**
  * The one way this script changes anything: say what and why, show the exact
- * commands, ask, run them in order. A failure offers retry / skip / quit.
- * Returns true when every command ran and succeeded.
+ * commands, ask, run them in order. A failure offers retry / skip / quit, and
+ * — when the step knows how to repair its own environment (`repair`:
+ * `{ label, commands }`, run from the repo root) — repair-then-retry, which
+ * becomes the default answer. Returns true when every command succeeded.
  */
-async function step(why, commands, { cwd = REPO_ROOT, defaultYes = true, env } = {}) {
+async function step(why, commands, { cwd = REPO_ROOT, defaultYes = true, env, repair } = {}) {
   console.log(`\n${why}`);
   for (const c of commands) console.log(dim(`    $ ${cwd === REPO_ROOT ? '' : `(cd ${cwd.replace(`${REPO_ROOT}/`, '')}) `}${show(c)}`));
   if (DRY_RUN) {
@@ -143,11 +145,23 @@ async function step(why, commands, { cwd = REPO_ROOT, defaultYes = true, env } =
       continue;
     }
     bad(`${show(commands[i])} ${r.error ? `could not start (${r.error.code})` : `exited ${r.status}`}`);
-    const next = await choose('What now?', [
+    const choices = [
+      ...(repair ? [{ key: 'f', label: `${repair.label}, then retry` }] : []),
       { key: 'r', label: 'retry this command' },
       { key: 's', label: 'skip the rest of this step and carry on' },
-    ], 'r');
+    ];
+    const next = await choose('What now?', choices, repair ? 'f' : 'r');
     if (next === 's') return false;
+    if (next === 'f') {
+      for (const c of repair.commands) {
+        console.log(dim(`\n$ ${show(c)}`));
+        const fixed = spawnSync(c[0], c.slice(1), { cwd: REPO_ROOT, stdio: 'inherit', env: process.env });
+        if (fixed.status !== 0) {
+          bad(`${show(c)} ${fixed.error ? `could not start (${fixed.error.code})` : `exited ${fixed.status}`} — the repair did not work either.`);
+          break;
+        }
+      }
+    }
   }
   return true;
 }
@@ -347,7 +361,14 @@ async function verifyLocally() {
     [process.execPath, '--test', 'scripts/release/test/*.test.mjs'],
     [process.execPath, 'scripts/release/pack.mjs', '--out', pack],
   ]);
-  if (has('make')) await step('Python: tests (python/.venv; the host interpreter is untouched)', [['make', '-C', 'python', 'test']]);
+  // `make test` creates or repairs python/.venv itself (and reinstalls when
+  // pyproject.toml changes); `make reset` is the last resort for a venv that
+  // looks fine but is not — a half-finished pip install, a moved interpreter.
+  if (has('make')) {
+    await step('Python: tests (python/.venv is created or repaired as needed; the host interpreter is untouched)', [['make', '-C', 'python', 'test']], {
+      repair: { label: 'rebuild python/.venv from scratch (make -C python reset)', commands: [['make', '-C', 'python', 'reset']] },
+    });
+  }
   if (has('bundle')) await step('Ruby: build the gem and run its tests', [['gem', 'build', 'graphmind.gemspec', '--output', join(mkdtempSync(join(tmpdir(), 'graphmind-gem-')), 'check.gem')], ['bundle', 'install'], ['bundle', 'exec', 'rake', 'test']], { cwd: join(REPO_ROOT, 'ruby') });
 }
 

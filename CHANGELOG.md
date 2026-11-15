@@ -436,6 +436,33 @@ A recording says what happened; these say what *would* have happened.
   publish job is never blocked by a registry it does not publish to). Each
   publish workflow verifies its own registry; `pnpm verify:published` is the
   human's final check and now covers all eleven artifacts.
+- **`pnpm release`**: one guided command from your own terminal that gets
+  every artifact (npm x10, PyPI, RubyGems) to one version. It compares the
+  repo with what the registries serve, fixes what would stop the workflows
+  (a package out of lockstep, a manifest without `repository.url`, a missing
+  CHANGELOG section), runs the CI gates locally, then tags and pushes — or
+  publishes from the machine for what CI cannot do (a brand-new npm package,
+  a never-published gem) — and watches the registries until everything lands.
+  Every command is shown and confirmed first; it keeps no state, so quitting
+  and re-running resumes. `pnpm release:status` is the read-only report;
+  `--dry-run` walks the flow without running anything. `scripts/set-version.mjs`
+  now discovers the publishable packages the same way the checks do instead of
+  keeping its own list (which had already drifted and would have blocked the
+  release).
+- **`make -C python test` (and lint/typecheck/build) set up `python/.venv`
+  themselves** — created when missing, rebuilt when half-made (an interrupted
+  `uv venv` leaves a directory uv then refuses to reuse) or when its Python
+  has gone, dependencies reinstalled when `pyproject.toml` changes. `make
+  reset` starts the venv over; `pnpm release` offers it when the Python step
+  fails.
+- **Python `anthropic` extra: floor raised `>=0.34` → `>=0.43`, and the 2.x
+  SDK is covered.** The beta test asserted on the `?beta=true` URL suffix the
+  SDK stopped sending in 2.3.0; it now proves the call went through the beta
+  surface by the `anthropic-beta` header, which every supported version
+  sends. The suite was run against 0.39 through 2.8.0: 0.39–0.42 fail six
+  beta tests (hence the new floor), 0.43–0.70 lack `beta.messages.parse`
+  (that one test now skips, as the integration already treats `parse` as
+  optional), 0.75+ and 1.x and 2.x pass everything.
 - **`graphmind record last`** exports the most recently started run — the
   same spelling `replay` and `runs --behavior` accept, because "export the
   run I just made" is the step right before both of them.

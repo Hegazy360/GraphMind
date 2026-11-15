@@ -28,6 +28,8 @@ from .helpers.providers import (
 
 MESSAGES = [{"role": "user", "content": "weather in Lisbon?"}]
 MODEL = "claude-test"
+#: Any beta flag will do: the server is canned, the SDK forwards it verbatim.
+BETA_FLAG = "interleaved-thinking-2025-05-14"
 EVENT_TYPES = [e["type"] for e in ANTHROPIC_STREAM_EVENTS]
 
 
@@ -77,9 +79,16 @@ def test_beta_create_emits_a_gated_llm_node_with_usage(attached: Any) -> None:
     instance.instrument_anthropic(client)
 
     with instance.run("agent"):
-        message = client.beta.messages.create(model=MODEL, max_tokens=64, messages=MESSAGES)
+        message = client.beta.messages.create(
+            model=MODEL, max_tokens=64, messages=MESSAGES, betas=[BETA_FLAG]
+        )
     assert message.content[0].text == "Lisbon is sunny."
-    assert "beta=true" in str(recorder.requests[0].url)
+    # Proof the call went through the real beta surface, not a plain `messages`
+    # call: the beta-only `betas=` argument became the `anthropic-beta` header.
+    # (SDK 1.x also appended `?beta=true` to the URL; 2.3.0 dropped that, so
+    # the header is the one signal every supported version sends.)
+    assert BETA_FLAG in recorder.requests[0].headers.get("anthropic-beta", "")
+    assert recorder.requests[0].url.path == "/v1/messages"
 
     started = viewer.wait_for(
         lambda f: f.get("type") == "node.started" and f["payload"]["nodeId"] == "llm:step"
@@ -229,6 +238,10 @@ def test_beta_stream_gates_in_enter_and_observes_text_stream(attached: Any) -> N
 def test_beta_parse_is_recorded(attached: Any) -> None:
     instance, viewer = attached()
     client, _ = make_anthropic(_responder())
+    if not hasattr(client.beta.messages, "parse"):
+        # `beta.messages.parse` arrived in the 0.7x SDKs; the integration
+        # patches it only when present, so older SDKs have nothing to test here.
+        pytest.skip("this anthropic SDK has no beta.messages.parse")
     instance.instrument_anthropic(client)
 
     with instance.run("agent"):

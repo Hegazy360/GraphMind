@@ -13,15 +13,22 @@ UV      := $(shell command -v uv 2>/dev/null)
 VENV    := .venv
 BIN     := $(VENV)/bin
 PYTHON  := $(BIN)/python
+# Written after a successful install; older than pyproject.toml = reinstall.
+STAMP   := $(VENV)/.installed
 
 .DEFAULT_GOAL := help
-.PHONY: help install test test-verbose lint format typecheck check build clean
+.PHONY: help install reset test test-verbose lint format typecheck check build clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-$(BIN)/python:
+# Only runs when .venv/bin/python is missing: never created, half-created by
+# an interrupted run (uv leaves .venv/.lock behind and then refuses to reuse
+# the directory, even with --clear), or a dangling link after its Python was
+# removed. A venv without an interpreter is unusable, so start it over.
+$(PYTHON):
+	rm -rf $(VENV)
 ifneq ($(UV),)
 	$(UV) venv --quiet --python '>=3.10' $(VENV)
 	$(UV) pip install --quiet --python $(PYTHON) pip
@@ -32,29 +39,38 @@ else
 	$(PYTHON) -m pip install --upgrade pip
 endif
 
-install: $(BIN)/python ## Create the venv and install the package + dev deps (editable)
+$(STAMP): $(PYTHON) pyproject.toml
 	$(PYTHON) -m pip install -e ".[dev]" pytest-timeout
+	@touch $@
 
-test: ## Run the test suite (no network, no API keys)
+install: $(STAMP) ## Create/repair the venv and install the package + dev deps (editable)
+
+reset: ## Delete the venv and build it again from scratch
+	rm -rf $(VENV)
+	$(MAKE) install
+
+# Every target below sets up (or repairs) the venv first, so `make test` works
+# on a fresh clone and after an interrupted install.
+test: $(STAMP) ## Run the test suite (no network, no API keys)
 	$(PYTHON) -m pytest -q --timeout=60 --timeout-method=thread
 
-test-verbose: ## Run the test suite with per-test output
+test-verbose: $(STAMP) ## Run the test suite with per-test output
 	$(PYTHON) -m pytest -vv -s --timeout=60 --timeout-method=thread
 
-lint: ## Lint and check formatting
+lint: $(STAMP) ## Lint and check formatting
 	$(BIN)/ruff check .
 	$(BIN)/ruff format --check .
 
-format: ## Apply formatting and safe lint fixes
+format: $(STAMP) ## Apply formatting and safe lint fixes
 	$(BIN)/ruff check --fix .
 	$(BIN)/ruff format .
 
-typecheck: ## Type-check the package
+typecheck: $(STAMP) ## Type-check the package
 	$(BIN)/mypy
 
 check: lint typecheck test ## Everything CI runs
 
-build: ## Build the wheel and sdist into dist/
+build: $(STAMP) ## Build the wheel and sdist into dist/
 	rm -rf dist
 	$(PYTHON) -m build
 	@ls -la dist

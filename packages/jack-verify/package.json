@@ -1,8 +1,13 @@
 {
   "name": "@graphmind-ai/jack-verify",
-  "version": "0.0.1",
+  "version": "0.6.0",
   "description": "GraphMind Jack — zero-dependency verifier for Jack's account-linking mode: verify link requests, sign link responses, verify per-call Jack-Assertion headers (Express/Hono helpers).",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hegazy360/GraphMind.git",
+    "directory": "packages/jack-verify"
+  },
   "private": false,
   "type": "module",
   "engines": {

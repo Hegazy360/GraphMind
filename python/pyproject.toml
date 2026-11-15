@@ -44,9 +44,9 @@ Issues = "https://github.com/Hegazy360/GraphMind/issues"
 
 [project.optional-dependencies]
 openai = ["openai>=1.40"]
-anthropic = ["anthropic>=0.34"]
+anthropic = ["anthropic>=0.43"]
 langchain = ["langchain-core>=0.3"]
-all = ["openai>=1.40", "anthropic>=0.34", "langchain-core>=0.3"]
+all = ["openai>=1.40", "anthropic>=0.43", "langchain-core>=0.3"]
 dev = [
   "pytest>=8",
   "pytest-asyncio>=0.24",
@@ -56,7 +56,7 @@ dev = [
   "mypy>=1.11",
   "build>=1.2",
   "openai>=1.40",
-  "anthropic>=0.34",
+  "anthropic>=0.43",
   "langchain-core>=0.3",
 ]
 
