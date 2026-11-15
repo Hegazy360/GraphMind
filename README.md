@@ -10,7 +10,7 @@
 
 **The live debugger for AI agents. Holds the call while it's happening.**
 
-[graphmind.ai](https://graphmind.ai) · [Try in browser](https://graphmind.ai/try/?fixture=1) · [Docs](https://graphmind.ai/docs) · [Quick start](#quick-start) · [How it compares](#how-it-compares) · [MCP](#use-it-from-claude-code-or-cursor) · [Telemetry](#telemetry)
+[graphmind.ai](https://graphmind.ai) · [Try in browser](https://graphmind.ai/try/?fixture=1) · [Docs](https://graphmind.ai/docs) · [Changelog](./CHANGELOG.md) · [Quick start](#quick-start) · [How it compares](#how-it-compares) · [MCP](#use-it-from-claude-code-or-cursor) · [Telemetry](#telemetry)
 
 [![npm version](https://img.shields.io/npm/v/graphmind-ai?label=npm&color=4ade80)](https://www.npmjs.com/package/graphmind-ai) [![CI](https://github.com/Hegazy360/GraphMind/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Hegazy360/GraphMind/actions/workflows/ci.yml) [![license](https://img.shields.io/npm/l/graphmind-ai)](./LICENSE) [![node](https://img.shields.io/node/v/graphmind-ai)](https://nodejs.org) [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Hegazy360/GraphMind/badge)](https://scorecard.dev/viewer/?uri=github.com/Hegazy360/GraphMind) [![CodeQL](https://github.com/Hegazy360/GraphMind/actions/workflows/codeql.yml/badge.svg?branch=master)](https://github.com/Hegazy360/GraphMind/actions/workflows/codeql.yml) [![PRs welcome](https://img.shields.io/badge/PRs-welcome-4ade80)](#contributing)
 <!-- Re-enable once npm's downloads API has data for the fresh package (shows a red error until then):
@@ -190,6 +190,13 @@ corrected result (the agent finishes happily), **continue** (it apologizes),
 **retry**, or **abort**.
 
 ### 2. Debug your own agent
+
+<img alt="How GraphMind connects: your agent code, wrapped by an adapter, sends events over a loopback WebSocket to graphmind serve, which stores them in SQLite and shows them in the viewer and to a coding agent over MCP; a held gate waits for the viewer's decision" src="./docs/assets/how-it-connects.svg" width="100%">
+
+Three parts, all on your machine: an **adapter** wrapping your SDK client and
+tools, the local **`graphmind serve`** process they report to, and the
+**viewer** (or your coding agent, over MCP) that reads the run and answers a
+held gate.
 
 A viewer with nothing attached opens **Connect an agent** (`#/connect`): pick
 your SDK, copy the install command and the two lines it needs. One screen, no

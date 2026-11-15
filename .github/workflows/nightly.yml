@@ -77,7 +77,7 @@ jobs:
       - name: Build packages
         # The harness spawns the real `startServer()` out of graphmind-ai's
         # dist; build:viewer is not needed (nothing renders here).
-        run: pnpm -r --filter './packages/**' run build
+        run: pnpm -r --filter './packages/**' --filter jack-api --filter circuit-api run build
 
       - name: Soak
         run: |

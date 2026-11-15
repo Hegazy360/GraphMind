@@ -84,32 +84,32 @@ node's lifecycle:
       <path d="M0,0 L6,3 L0,6 z" fill="var(--gm-border-strong)" />
     </marker>
   </defs>
-  <g fontFamily="var(--sl-font-mono)" fontSize="11.5">
-    <line x1="88" y1="42" x2="126" y2="42" stroke="var(--gm-border-strong)" strokeWidth="1.4" markerEnd="url(#gm-arrow)" />
-    <line x1="238" y1="42" x2="276" y2="42" stroke="var(--gm-border-strong)" strokeWidth="1.4" markerEnd="url(#gm-arrow)" />
-    <line x1="388" y1="42" x2="426" y2="42" stroke="var(--gm-border-strong)" strokeWidth="1.4" markerEnd="url(#gm-arrow)" />
-    <line x1="538" y1="42" x2="576" y2="42" stroke="var(--gm-border-strong)" strokeWidth="1.4" markerEnd="url(#gm-arrow)" />
-    <path d="M313 62 L313 96 L426 96" fill="none" stroke="var(--gm-danger)" strokeWidth="1.4" strokeDasharray="3 4" markerEnd="url(#gm-arrow)" />
+  <g font-family="var(--sl-font-mono)" font-size="11.5">
+    <line x1="88" y1="42" x2="126" y2="42" stroke="var(--gm-border-strong)" stroke-width="1.4" marker-end="url(#gm-arrow)" />
+    <line x1="238" y1="42" x2="276" y2="42" stroke="var(--gm-border-strong)" stroke-width="1.4" marker-end="url(#gm-arrow)" />
+    <line x1="388" y1="42" x2="426" y2="42" stroke="var(--gm-border-strong)" stroke-width="1.4" marker-end="url(#gm-arrow)" />
+    <line x1="538" y1="42" x2="576" y2="42" stroke="var(--gm-border-strong)" stroke-width="1.4" marker-end="url(#gm-arrow)" />
+    <path d="M313 62 L313 96 L426 96" fill="none" stroke="var(--gm-danger)" stroke-width="1.4" stroke-dasharray="3 4" marker-end="url(#gm-arrow)" />
 
     <rect x="8" y="26" width="80" height="32" rx="8" fill="var(--gm-bg-card)" stroke="var(--gm-border)" />
-    <text x="48" y="46" textAnchor="middle" fill="var(--gm-text-3)">call</text>
+    <text x="48" y="46" text-anchor="middle" fill="var(--gm-text-3)">call</text>
 
     <rect x="126" y="26" width="112" height="32" rx="8" fill="var(--gm-accent-dim)" stroke="var(--gm-accent)" />
-    <text x="182" y="46" textAnchor="middle" fill="var(--gm-accent)">before gate</text>
+    <text x="182" y="46" text-anchor="middle" fill="var(--gm-accent)">before gate</text>
 
     <rect x="276" y="26" width="112" height="32" rx="8" fill="var(--gm-bg-card)" stroke="var(--gm-border-strong)" />
-    <text x="332" y="46" textAnchor="middle" fill="var(--gm-text)">execute</text>
+    <text x="332" y="46" text-anchor="middle" fill="var(--gm-text)">execute</text>
 
     <rect x="426" y="26" width="112" height="32" rx="8" fill="var(--gm-accent-dim)" stroke="var(--gm-accent)" />
-    <text x="482" y="46" textAnchor="middle" fill="var(--gm-accent)">after gate</text>
+    <text x="482" y="46" text-anchor="middle" fill="var(--gm-accent)">after gate</text>
 
     <rect x="576" y="26" width="80" height="32" rx="8" fill="var(--gm-bg-card)" stroke="var(--gm-border)" />
-    <text x="616" y="46" textAnchor="middle" fill="var(--gm-text-3)">return</text>
+    <text x="616" y="46" text-anchor="middle" fill="var(--gm-text-3)">return</text>
 
     <rect x="426" y="80" width="112" height="32" rx="8" fill="var(--gm-danger-dim)" stroke="var(--gm-danger)" />
-    <text x="482" y="100" textAnchor="middle" fill="var(--gm-danger)">error gate</text>
+    <text x="482" y="100" text-anchor="middle" fill="var(--gm-danger)">error gate</text>
 
-    <text x="332" y="82" textAnchor="middle" fill="var(--gm-danger)" fontSize="10.5">throws</text>
+    <text x="332" y="82" text-anchor="middle" fill="var(--gm-danger)" font-size="10.5">throws</text>
   </g>
 </svg>
 </figure>
@@ -163,6 +163,63 @@ Practically: you can start a long agent, notice it misbehaving, launch the debug
 get the graph from the beginning.
 
 ## Local-first storage
+
+Three parts, all on one machine: the adapter inside your process, the `graphmind serve` process
+it reports to, and whoever reads the run — the viewer in a browser, or a coding agent over
+[MCP](/reference/mcp/). A held gate is a question travelling right to left.
+
+<figure class="not-content">
+<svg viewBox="0 0 760 236" width="100%" height="auto" role="img" aria-label="How GraphMind connects: your agent, wrapped by an adapter, sends events over a loopback WebSocket to graphmind serve, which stores them in SQLite and shows them in the viewer and to a coding agent over MCP. A held gate waits for the viewer's decision: continue, retry, inject or abort." style="max-width:760px;display:block;margin:1.6rem auto;">
+  <defs>
+    <marker id="hc-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="var(--gm-border-strong)"/></marker>
+    <marker id="hc-arrow-accent" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="var(--gm-accent)"/></marker>
+  </defs>
+  <g font-family="'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace" font-size="11.5">
+    
+    <rect x="8" y="22" width="222" height="124" rx="10" fill="var(--gm-bg-card)" stroke="var(--gm-border)"/>
+    <text x="22" y="44" fill="var(--gm-text-3)" font-size="10" letter-spacing="1.2">YOUR PROCESS</text>
+    <rect x="22" y="56" width="194" height="34" rx="8" fill="var(--gm-bg-inset)" stroke="var(--gm-border-strong)"/>
+    <text x="119" y="77" text-anchor="middle" fill="var(--gm-text)">your agent code</text>
+    <rect x="22" y="100" width="194" height="34" rx="8" fill="var(--gm-accent-dim)" stroke="var(--gm-accent)"/>
+    <text x="119" y="121" text-anchor="middle" fill="var(--gm-accent)">adapter · @graphmind-ai/*</text>
+
+    
+    <rect x="300" y="22" width="190" height="124" rx="10" fill="var(--gm-bg-card)" stroke="var(--gm-border)"/>
+    <text x="314" y="44" fill="var(--gm-text-3)" font-size="10" letter-spacing="1.2">DEBUGGER</text>
+    <rect x="314" y="56" width="162" height="34" rx="8" fill="var(--gm-bg-inset)" stroke="var(--gm-border-strong)"/>
+    <text x="395" y="77" text-anchor="middle" fill="var(--gm-text)">graphmind serve</text>
+    <rect x="314" y="100" width="162" height="34" rx="8" fill="var(--gm-bg-inset)" stroke="var(--gm-border)"/>
+    <text x="395" y="121" text-anchor="middle" fill="var(--gm-text-3)">SQLite · ~/.graphmind</text>
+
+    
+    <rect x="560" y="22" width="192" height="124" rx="10" fill="var(--gm-bg-card)" stroke="var(--gm-border)"/>
+    <text x="574" y="44" fill="var(--gm-text-3)" font-size="10" letter-spacing="1.2">YOU</text>
+    <rect x="574" y="56" width="164" height="34" rx="8" fill="var(--gm-bg-inset)" stroke="var(--gm-border-strong)"/>
+    <text x="656" y="77" text-anchor="middle" fill="var(--gm-text)">viewer · browser</text>
+    <rect x="574" y="100" width="164" height="34" rx="8" fill="var(--gm-bg-inset)" stroke="var(--gm-border)"/>
+    <text x="656" y="121" text-anchor="middle" fill="var(--gm-text-3)">coding agent · MCP</text>
+
+    
+    <line x1="230" y1="72" x2="296" y2="72" stroke="var(--gm-border-strong)" stroke-width="1.4" marker-end="url(#hc-arrow)"/>
+    <text x="263" y="62" text-anchor="middle" fill="var(--gm-text-3)" font-size="9.5">events</text>
+    
+    <line x1="490" y1="72" x2="556" y2="72" stroke="var(--gm-border-strong)" stroke-width="1.4" marker-end="url(#hc-arrow)"/>
+    
+    <line x1="556" y1="117" x2="494" y2="117" stroke="var(--gm-accent)" stroke-width="1.4" stroke-dasharray="3 4" marker-end="url(#hc-arrow-accent)"/>
+    <line x1="296" y1="117" x2="234" y2="117" stroke="var(--gm-accent)" stroke-width="1.4" stroke-dasharray="3 4" marker-end="url(#hc-arrow-accent)"/>
+    <text x="263" y="107" text-anchor="middle" fill="var(--gm-accent)" font-size="9.5">decision</text>
+    <text x="523" y="107" text-anchor="middle" fill="var(--gm-accent)" font-size="9.5">decision</text>
+
+    
+    <text x="380" y="170" text-anchor="middle" fill="var(--gm-text-3)" font-size="10.5">everything on ws://127.0.0.1:4747 — nothing leaves the machine</text>
+
+    
+    <rect x="8" y="186" width="744" height="42" rx="10" fill="var(--gm-accent-dim)" stroke="var(--gm-accent)"/>
+    <text x="380" y="205" text-anchor="middle" fill="var(--gm-accent)" font-size="11">a gate holds the call <tspan fill="var(--gm-text)">before</tspan> the model or tool runs, for as long as you need</text>
+    <text x="380" y="221" text-anchor="middle" fill="var(--gm-text-3)" font-size="10.5">release it with continue · retry · inject · edit arguments · abort — no viewer attached? the gate is a no-op</text>
+  </g>
+</svg>
+</figure>
 
 The server binds `127.0.0.1`. Reading runs needs no credential; since 0.6.0 controlling a paused
 agent carries one for input edits and every non-GET API route (see

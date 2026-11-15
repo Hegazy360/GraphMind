@@ -451,6 +451,11 @@ A recording says what happened; these say what *would* have happened.
   release). The Ruby test gems install into `ruby/vendor/bundle`, never the
   interpreter's own gem home (Homebrew's Ruby links its `plugins/` into a
   read-only keg, so `bundle install` there failed with EACCES on rdoc).
+  PyPI from the machine takes an API token only — from `UV_PUBLISH_TOKEN` or
+  a hidden prompt that refuses anything not starting `pypi-` (PyPI answers a
+  username/password with 403) — or is left to `publish-python.yml`, which
+  publishes through Trusted Publishing once the tag is pushed; the script
+  then watches the registries instead of reporting it behind.
 - **`make -C python test` (and lint/typecheck/build) set up `python/.venv`
   themselves** — created when missing, rebuilt when half-made (an interrupted
   `uv venv` leaves a directory uv then refuses to reuse) or when its Python
@@ -573,105 +578,34 @@ pinned by one, so the regressions are the kind a test catches.
   It is now a row of its own under the facets, with an **All apps** chip,
   a count on each, and the chosen one filled; the "showing N of M" line
   names the app as well.
-
-### Added — hermetic replay (`graphmind replay`, `--assert`)
-
-Every recorded run can now be run again, served from the recording:
-`graphmind replay last -- node agent.js`. Tool calls are answered from what
-they returned (or re-thrown, if they threw), model steps are served by a
-replay model, and nothing reaches a provider — no API key, no token spend,
-the same result every time. Your agent runs unchanged; the substitution
-happens inside `@graphmind-ai/sdk`, which reads the `GRAPHMIND_REPLAY`
-environment variable the command sets.
-
-- **`--assert` turns a recording into a regression test.** It compares what
-  the agent DID — which tools, in what order, with what arguments, and how
-  many model turns — not the prose it produced, and classifies divergences
-  rather than collapsing them: `regression` (a recorded call is gone or
-  newly failed), `arguments` (same call, different arguments), `extra` (a
-  call the recording never made) all fail; `alternative` (the same calls in
-  a different order, which is just how parallel tool calls land) passes with
-  a note.
-- **CI needs no database and no key.** A recording exported with `graphmind
-  record` is a plain NDJSON file; `graphmind replay fixtures/run.ndjson
-  --assert -- node agent.js` reads it directly. A copy-paste workflow ships
-  in `examples/support-desk/.github-workflow-example.yml`, deliberately with
-  no API key configured: if a replay ever reached a provider, the job fails.
-- **What is hermetic is printed before every replay**, not buried in docs:
-  GraphMind serves what it gates — tool calls everywhere, model steps under
-  the Vercel AI SDK adapter — and says plainly that the Anthropic, OpenAI
-  and LangGraph adapters still call their provider, and that a bare `fetch`
-  or a database write happens for real, again. `--dry` reports the coverage
-  of a replay without running anything.
-- **A divergence stops the run** rather than letting it finish as a silent
-  mixture of replayed and live work: an unmatched call, or one whose
-  arguments differ from the recording, is fatal by default
-  (`--on-miss=live|skip` to change that). A value the recorder had to shrink
-  (over the payload cap) refuses to answer rather than hand an agent a
-  truncated result that looks whole (`--on-lossy=live` re-runs it).
-- A new local gate decision, `throw`, replays a tool that failed as the
-  failure it was. It exists only inside hermetic replay — the wire's
-  `ResumeAction` has no such value, so no debugger can ever send one.
-
-Scope, stated plainly: replay serves the model for the **Vercel AI SDK**
-adapter only; the Anthropic, OpenAI, LangGraph, Python and Ruby adapters
-replay their tool calls and still call their provider for model steps. What
-a replay catches is therefore changes in YOUR code — a renamed tool, a
-tightened schema, a lowered step cap, dropped orchestration — not a changed
-tool body or a changed model, neither of which runs.
-
-### Added — the counterfactual (`replay --substitute`, `--live-model`)
-
-A recording says what happened; these say what *would* have happened.
-
-- **`--substitute '<nodeId>[#n]=<json|@file>'`** replays the run up to that
-  call, answers it with your value, and runs everything after it for real.
-  In the bundled support-desk example, substituting a successful
-  `refundPayment` turns the agent's apology into "I've refunded the full
-  $89" — the same recording, a different ending, and no code changed.
-  Repeatable; the cut lands at the earliest substitution, placed by
-  envelope `seq` so the substituted call's parallel siblings are not
-  mistaken for consequences of it.
-- **A counterfactual is deliberately NOT hermetic, and says so.** Once one
-  call returns something different the next model step sees a prompt that
-  never existed, so the recorded reply would answer a question nobody
-  asked. Past the cut the agent genuinely runs — provider calls, real
-  tools, real tokens — which the CLI prints before starting and the
-  adapter repeats as a warning on the model itself.
-- **`--live-model`** is the mirror image: tool calls are served from the
-  recording and every model step calls the provider. With the tool
-  environment held identical to the recorded run, a change in behaviour is
-  attributable to the change you made — a reworded tool description, a new
-  system prompt, a different model.
-- `--assert` is refused with either mode: asserting that a deliberate
-  counterfactual did not diverge is a contradiction. The report reframes
-  itself around what changed instead of passing or failing.
-- **In the viewer**, a call's node place copies the whole `--substitute`
-  command, pre-filled with what the call actually returned, so the edit is
-  a diff against reality. The viewer composes the command and never runs
-  it: executing a shell command on behalf of a web page would need a
-  command-execution endpoint on the local server, which is a much larger
-  security boundary than a debugger should move for a convenience.
-- The Agent Skill (`graphmind skill`) teaches the loop, including which
-  hypotheses each mode can and cannot prove.
-
-### Added — the release pipeline covers all three registries
-
-- **`.github/workflows/publish-ruby.yml`**: the `graphmind` gem now has a
-  publish path — RubyGems Trusted Publishing (OIDC, no stored token), the
-  gem built from the pristine checkout before any test dependency is
-  installed, installed-and-loaded from the built artifact, pushed only from
-  a `v*` tag, no-op on re-runs, and verified installable from the registry
-  afterwards. (The gem itself ships with the first tagged release after the
-  pending trusted publisher is configured on rubygems.org.)
-- **`scripts/verify-published.mjs` checks PyPI and RubyGems too**, not just
-  npm: `--registries npm|pypi|rubygems|all` (default `npm`, so the npm
-  publish job is never blocked by a registry it does not publish to). Each
-  publish workflow verifies its own registry; `pnpm verify:published` is the
-  human's final check and now covers all eleven artifacts.
-- **`graphmind record last`** exports the most recently started run — the
-  same spelling `replay` and `runs --behavior` accept, because "export the
-  run I just made" is the step right before both of them.
+- **CI could not build a fresh checkout, so the v0.6.0 tag never got its
+  GitHub Release.** `@graphmind-ai/jack-cli` and `@graphmind-ai/circuit-cli`
+  import `jack-api` and `circuit-api`, which live under `apps/`, and every
+  workflow built `./packages/**` alone — green on a machine with old `dist/`
+  folders, `Cannot find module 'jack-api'` on CI since the Circuit service
+  landed. The two apps are now part of the package build everywhere
+  (`pnpm build:packages`, ci.yml, nightly.yml, publish-npm.yml). And because
+  re-running a tag's workflow uses the workflow file as it was *at the tag*,
+  `publish-npm.yml` now takes a `tag` input: dispatched from `master` for an
+  existing tag it checks that tag out, skips what npm already has and
+  creates the GitHub Release — the repair path after a release published
+  from a laptop. `pnpm release` prints the command.
+- **The docs site was deployed by hand and had fallen 55 days behind** —
+  seven pages (edit arguments, replay, the behaviour verdict, the platform)
+  were in the repo and not on graphmind.ai/docs. `deploy-docs.yml` now
+  builds, link-checks and deploys `apps/docs` to Vercel on every push to
+  `master` that touches it (needs `VERCEL_TOKEN`, `VERCEL_ORG_ID` and
+  `VERCEL_PROJECT_ID` as repository secrets); `pnpm --filter docs deploy:vercel` is
+  the same from a machine.
+- **Docs: long lines ran off the right edge.** Code blocks now wrap instead
+  of scrolling sideways (shell one-liners, log output and JSON samples were
+  the worst; one `mcp-proxy` message overflowed by 1,900px), and the landing
+  page's hero glow no longer widens the page by 24px on narrow windows. The
+  docs README pointed at a `docs.graphmind.ai` subdomain that does not
+  exist; the site is `graphmind.ai/docs`.
+- **This changelog repeated three Unreleased sections** (hermetic replay,
+  the counterfactual, the release pipeline) — an older copy sat between
+  "one header, one section" and its continuation. The copies are gone.
 
 ### Changed — one header, one section (continued)
 

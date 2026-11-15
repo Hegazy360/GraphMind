@@ -39,6 +39,8 @@ All of these run from the repository root.
 | `pnpm build:viewer` | Build the viewer and copy it into `packages/cli/viewer-dist/`, so the CLI serves the real viewer like a published install. |
 | `pnpm release:status` | Read-only: what npm, PyPI and RubyGems serve vs. what the repo says, plus anything that would block the next release. Exits 1 if anything is behind. |
 | `pnpm release` | Guided release from your terminal: fixes blockers, runs the CI gates locally, tags and pushes (or publishes from this machine), watches the registries. Confirms every step; safe to re-run at any point. `--dry-run` shows every command without running any. |
+| `gh workflow run publish-npm.yml --ref master -f tag=vX.Y.Z -f dry_run=false` | Run the publish workflow for a tag that already exists, with the workflow file from `master`. Use it when the tag's own run failed for a reason fixed since: a re-run uses the file as it was at the tag. Already-published packages are skipped; the GitHub Release is created if missing. |
+| `pnpm --filter docs deploy:vercel` | Deploy the docs site to production on Vercel from this machine (`vercel link` once, first). `deploy-docs.yml` does the same on every push to `master` that touches `apps/docs/`. |
 | `pnpm build` | Build everything (packages, viewer, docs). |
 
 Tests:

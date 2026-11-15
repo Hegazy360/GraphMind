@@ -441,7 +441,9 @@ starlight-tabs [role='tab'][aria-selected='true'] {
 .gm-hero::before {
   content: '';
   position: absolute;
-  inset: -160px -40px auto auto;
+  /* right: 0, not negative — a glow past the edge widens the page and lets it
+     scroll sideways (visible as a 24px horizontal scrollbar on narrow windows). */
+  inset: -160px 0 auto auto;
   width: 620px;
   height: 480px;
   max-width: 100%;

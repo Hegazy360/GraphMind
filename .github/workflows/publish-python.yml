@@ -36,6 +36,7 @@ permissions:
   contents: read
 jobs:
   publish:
+    name: 'PyPI: publish'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: pypi

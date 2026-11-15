@@ -50,3 +50,5 @@ packages/circuit-cli/test/.generated-*
 
 # GraphMind platform local dev state
 .platform/
+.vercel
+.env*

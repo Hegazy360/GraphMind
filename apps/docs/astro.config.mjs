@@ -78,6 +78,11 @@ export default defineConfig({
       ],
       expressiveCode: {
         themes: ['github-dark-default', 'github-light-default'],
+        // Wrap long lines instead of scrolling sideways: the content column is
+        // 48rem, and shell one-liners, log output and JSON samples otherwise run
+        // off the right edge (dozens of blocks did). `preserveIndent` keeps a
+        // wrapped continuation aligned under its own indentation.
+        defaultProps: { wrap: true, preserveIndent: true },
         styleOverrides: {
           borderRadius: '10px',
           codeFontFamily: "'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace",

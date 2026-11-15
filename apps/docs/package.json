@@ -2,7 +2,7 @@
   "name": "docs",
   "private": true,
   "type": "module",
-  "description": "docs.graphmind.ai — GraphMind documentation (Astro + Starlight, static)",
+  "description": "docs.graphmind.ai \u2014 GraphMind documentation (Astro + Starlight, static)",
   "engines": {
     "node": ">=22.13"
   },
@@ -12,7 +12,8 @@
     "build": "astro build",
     "preview": "astro preview",
     "typecheck": "astro sync",
-    "check:links": "node scripts/check-links.mjs dist/docs /docs"
+    "check:links": "node scripts/check-links.mjs dist/docs /docs",
+    "deploy:vercel": "vercel deploy --prod"
   },
   "dependencies": {
     "@astrojs/markdown-remark": "^7.2.4",

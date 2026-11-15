@@ -1,6 +1,6 @@
 # docs
 
-The GraphMind documentation site — [docs.graphmind.ai](https://docs.graphmind.ai).
+The GraphMind documentation site — [graphmind.ai/docs](https://graphmind.ai/docs).
 
 **Astro + Starlight**, static output. Sidebar nav, full-text search (Pagefind), dark/light
 themes, tabbed code blocks and callouts come from Starlight; the GraphMind look comes from
@@ -93,6 +93,17 @@ Starlight components (`Tabs`, `TabItem`, `Aside`, `Steps`, `Card`, `CardGrid`, `
 Assets are copied from the repo's `docs/assets/`; re-copy from there if the originals change.
 
 ## Deploying
+
+The site lives in the Vercel project `graphmind-docs`, which is **not connected to the Git
+repository** — nothing deploys by itself when `master` changes. Two ways to ship it:
+
+- **Automatically**: `.github/workflows/deploy-docs.yml` builds, runs `check:links` and deploys
+  to production on every push to `master` that touches `apps/docs/` (and on manual dispatch). It
+  needs three repository secrets: `VERCEL_TOKEN` (Vercel → Account settings → Tokens),
+  `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` (both printed by `vercel link`, into
+  `.vercel/project.json`).
+- **From a machine**: `pnpm --filter docs deploy:vercel` (`vercel deploy --prod`). Run `vercel link`
+  once in `apps/docs/` and pick `graphmind-docs`.
 
 Zero-config on Vercel beyond framework detection: it picks up Astro, builds with `astro build`,
 and serves `dist/`. Fully static — no server runtime, no environment variables.

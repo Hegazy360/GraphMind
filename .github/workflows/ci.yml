@@ -82,7 +82,7 @@ jobs:
       # @graphmind-ai/schema through its published dist (no src alias), so a
       # fresh checkout fails `pnpm typecheck` until schema is built.
       - name: Build packages
-        run: pnpm -r --filter './packages/**' run build
+        run: pnpm -r --filter './packages/**' --filter jack-api --filter circuit-api run build
 
       - name: Typecheck
         run: pnpm typecheck
@@ -172,7 +172,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build packages
-        run: pnpm -r --filter './packages/**' run build
+        # jack-api and circuit-api live under apps/ but @graphmind-ai/jack-cli
+        # and @graphmind-ai/circuit-cli import them, so a packages-only build
+        # fails on a fresh checkout with "Cannot find module 'jack-api'".
+        run: pnpm -r --filter './packages/**' --filter jack-api --filter circuit-api run build
 
       - name: Build viewer (and bundle into CLI)
         run: pnpm build:viewer
@@ -496,7 +499,7 @@ jobs:
         # (on CI a missing build fails that spec rather than skipping it).
         # The viewer's own build is run by playwright.config.ts's webServer,
         # which insists on a fresh one.
-        run: pnpm -r --filter './packages/**' run build
+        run: pnpm -r --filter './packages/**' --filter jack-api --filter circuit-api run build
 
       - name: E2E
         run: |
@@ -544,7 +547,7 @@ jobs:
         # The audit imports the adapters and the CLI through their PUBLISHED
         # entry points (dist/), not src/, because the question it asks is what
         # the thing on npm does. Without a build it would audit nothing.
-        run: pnpm -r --filter './packages/**' run build
+        run: pnpm -r --filter './packages/**' --filter jack-api --filter circuit-api run build
 
       - name: Build viewer (and bundle into CLI)
         # Not for serving: `graphmind record --html` hard-fails when
@@ -644,7 +647,7 @@ jobs:
         # dist. It does NOT need build:viewer: it imports the viewer's
         # reducer and layout from apps/viewer/src through tsx, and the server
         # it starts serves a placeholder when viewer-dist is absent.
-        run: pnpm -r --filter './packages/**' run build
+        run: pnpm -r --filter './packages/**' --filter jack-api --filter circuit-api run build
 
       - name: Soak
         # Deliberately does NOT fail the job here: the guard step below reads
@@ -727,7 +730,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build packages
-        run: pnpm -r --filter './packages/**' run build
+        run: pnpm -r --filter './packages/**' --filter jack-api --filter circuit-api run build
 
       - name: Live-check (no keys — must skip loudly, not silently)
         # `--no-env-file` stops the harness reading a repo-root .env.local, so

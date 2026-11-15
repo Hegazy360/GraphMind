@@ -92,6 +92,52 @@ async function ask(question, fallback = '') {
   }
 }
 
+/**
+ * A secret, typed or pasted without echo (raw mode; one '*' per character so
+ * a paste is visibly received). Never logged, never put on a command line.
+ */
+function askSecret(question) {
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    process.stdout.write(`${paint(36, '?')} ${question} `);
+    const wasRaw = stdin.isRaw;
+    stdin.setRawMode(true);
+    stdin.setEncoding('utf8');
+    stdin.resume();
+    let value = '';
+    const cleanup = () => {
+      stdin.off('data', onData);
+      stdin.setRawMode(wasRaw);
+      stdin.pause();
+      process.stdout.write('\n');
+    };
+    function onData(chunk) {
+      for (const ch of chunk) {
+        if (ch === '\r' || ch === '\n') {
+          cleanup();
+          // A terminal in bracketed-paste mode wraps a paste in ESC[200~ … ESC[201~.
+          resolve(value.replace(/\[20[01]~/g, '').trim());
+          return;
+        }
+        if (ch === '\u0003') {
+          cleanup();
+          quit(130);
+        }
+        if (ch === '\u007f' || ch === '\b') {
+          if (value.length > 0) {
+            value = value.slice(0, -1);
+            process.stdout.write('\b \b');
+          }
+        } else if (ch >= ' ') {
+          value += ch;
+          process.stdout.write('*');
+        }
+      }
+    }
+    stdin.on('data', onData);
+  });
+}
+
 async function yes(question, defaultYes = true) {
   const answer = (await ask(`${question} ${dim(defaultYes ? '[Y/n/q]' : '[y/N/q]')}`, defaultYes ? 'y' : 'n')).toLowerCase();
   if (answer === 'q') quit();
@@ -129,7 +175,10 @@ async function step(why, commands, { cwd = REPO_ROOT, defaultYes = true, env, re
   console.log(`\n${why}`);
   // Shown exactly as it will run, environment included: what you confirm is what happens.
   // Paths relative to the directory the command runs in, so a copy-paste of the line works.
-  const envShown = Object.entries(env ?? {}).map(([k, v]) => `${k}=${quote(String(v).replace(`${cwd}/`, ''))} `).join('');
+  // Secrets (anything named like a token/key/password) show as ***.
+  const envShown = Object.entries(env ?? {})
+    .map(([k, v]) => `${k}=${/TOKEN|KEY|PASSWORD|SECRET/i.test(k) ? '***' : quote(String(v).replace(`${cwd}/`, ''))} `)
+    .join('');
   for (const c of commands) console.log(dim(`    $ ${cwd === REPO_ROOT ? '' : `(cd ${cwd.replace(`${REPO_ROOT}/`, '')}) `}${envShown}${show(c)}`));
   if (DRY_RUN) {
     console.log(dim('    (dry run — not running)'));
@@ -474,14 +523,50 @@ async function publishNpmLocally(version, names, { all }) {
   }
 }
 
-async function publishPypiLocally(version) {
+/**
+ * PyPI accepts only API tokens and Trusted Publishing — a username/password
+ * gets 403. So uv is never left to prompt for credentials (its "username"
+ * prompt invites exactly that mistake): the token comes from
+ * UV_PUBLISH_TOKEN or a hidden prompt here, and reaches uv through its
+ * environment, never argv. `offerCi`: the tag has not been pushed yet, so
+ * publish-python.yml (Trusted Publishing, no token at all) can do it instead.
+ */
+async function publishPypiLocally(version, { offerCi = false } = {}) {
   if (!has('uv')) return bad('uv is not on PATH (https://docs.astral.sh/uv/) — it builds and uploads the Python package.');
+  if (offerCi) {
+    const how = await choose('PyPI: who uploads graphmind-ai?', [
+      { key: 'c', label: 'CI — publish-python.yml uploads it when the tag is pushed (Trusted Publishing, no token)' },
+      { key: 't', label: 'this machine — with a PyPI API token' },
+    ], 'c');
+    if (how === 'c') return;
+  }
+
+  let token = process.env.UV_PUBLISH_TOKEN;
+  if (token) {
+    console.log(dim('\n  Using the PyPI token in UV_PUBLISH_TOKEN.'));
+  } else if (DRY_RUN) {
+    token = 'pypi-(dry run)';
+  } else {
+    console.log(`\n${paint(33, '■')} ${bold('PyPI needs an API token')} ${dim('(username/password uploads are refused with 403)')}`);
+    console.log(indent(
+      'Create one at https://pypi.org/manage/account/token/ — scope it to the project graphmind-ai.\n' +
+        'It is used for this upload only and not stored. (To skip this prompt next time: export UV_PUBLISH_TOKEN=pypi-…)',
+    ));
+    for (;;) {
+      token = await askSecret('PyPI API token (starts with pypi-; empty to skip):');
+      if (token === '') return warn('No token — PyPI not uploaded from here.');
+      if (token.startsWith('pypi-')) break;
+      bad('That is not a PyPI API token (they start with "pypi-"). A username or password will not work.');
+    }
+  }
+
   const out = mkdtempSync(join(tmpdir(), 'graphmind-pypi-'));
   if (!(await step(`Build graphmind-ai ${version} (wheel + sdist) into a fresh directory:`, [['uv', 'build', '--out-dir', out]], { cwd: join(REPO_ROOT, 'python') }))) return;
   const files = DRY_RUN ? [`${out}/*`] : readdirSync(out).filter((f) => f.includes(version)).map((f) => join(out, f));
   if (!DRY_RUN && files.length === 0) return bad(`uv build produced nothing named ${version} in ${out}.`);
-  if (!process.env.UV_PUBLISH_TOKEN) console.log(dim('\n  No UV_PUBLISH_TOKEN set: when asked, enter __token__ as the username and a PyPI API token as the password.'));
-  await step('Upload to PyPI:', [['uv', 'publish', ...files]]);
+  // --check-url: a file PyPI already has is skipped, so a retry after a
+  // half-finished upload (wheel in, sdist failed) does not fail on the wheel.
+  await step('Upload to PyPI:', [['uv', 'publish', '--check-url', 'https://pypi.org/simple/', ...files]], { env: { UV_PUBLISH_TOKEN: token } });
 }
 
 async function publishGemLocally(version, isNew) {
@@ -510,14 +595,14 @@ async function publishGemLocally(version, isNew) {
   }
 }
 
-async function publishLocally(version, status) {
+async function publishLocally(version, status, { offerCi = false } = {}) {
   const left = status.filter((a) => a.state !== 'current');
   const npmLeft = left.filter((a) => a.registry === 'npm');
   if (npmLeft.length > 0) {
     const allNpm = npmLeft.length === status.filter((a) => a.registry === 'npm').length;
     await publishNpmLocally(version, npmLeft.map((a) => a.name), { all: allNpm });
   }
-  if (left.some((a) => a.registry === 'pypi')) await publishPypiLocally(version);
+  if (left.some((a) => a.registry === 'pypi')) await publishPypiLocally(version, { offerCi });
   const gem = left.find((a) => a.registry === 'rubygems');
   if (gem) await publishGemLocally(version, gem.state === 'new');
 }
@@ -555,11 +640,27 @@ async function publish(version, branch) {
   await commitRelease(version);
 
   if (route === 'l') {
-    await publishLocally(version, status);
-    // Pushed after the uploads, so the workflows find everything already
-    // published (a no-op each) and publish-npm.yml just cuts the GitHub Release.
-    await tagAndPush(version, branch, 'CI then finds everything published and only creates the GitHub Release');
-    return collectStatus({ version });
+    await publishLocally(version, status, { offerCi: true });
+    // Pushed after the uploads: the workflows skip whatever already landed,
+    // publish what was left to them, and publish-npm.yml cuts the GitHub Release.
+    const pushed = await tagAndPush(version, branch, 'CI publishes whatever is still missing and creates the GitHub Release');
+    if (pushed) {
+      console.log(dim(indent(
+        `If the tag's "Publish npm" run fails for a reason this commit does not have (its workflow file is the one AT the tag),
+` +
+          `run the workflow from master for the same tag instead of re-running it:
+` +
+          `  gh workflow run publish-npm.yml --ref master -f tag=v${version} -f dry_run=false
+` +
+          `(or Actions → Publish npm → Run workflow → tag). Published packages are skipped; the GitHub Release is created.`,
+      )));
+    }
+    let after = await collectStatus({ version });
+    if (pushed && !DRY_RUN && after.some((a) => a.state !== 'current')) {
+      console.log(`\nStill pending: ${after.filter((a) => a.state !== 'current').map((a) => `${a.name} (${a.registry})`).join(', ')} — the workflows the tag just started may publish them.`);
+      if (await yes('Watch the registries until they land?')) after = await watch(version);
+    }
+    return after;
   }
 
   // What CI cannot do on its own — settle it before the tag goes out.
