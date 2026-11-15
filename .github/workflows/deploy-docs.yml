@@ -7,10 +7,11 @@
 #   including the 0.6.0 ones, missing from graphmind.ai/docs). This workflow
 #   makes a docs change on master reach production on its own.
 #
-# SECRETS (Settings → Secrets and variables → Actions)
+# ONE SECRET (Settings → Secrets and variables → Actions)
 #   VERCEL_TOKEN        Vercel → Account settings → Tokens (scope: the team)
-#   VERCEL_ORG_ID       `orgId`     from .vercel/project.json after `vercel link`
-#   VERCEL_PROJECT_ID   `projectId` from .vercel/project.json after `vercel link`
+# The team and project ids are not secrets; they are pinned below so the
+# workflow cannot silently deploy to the wrong project. Both come from
+# `vercel link` in apps/docs (.vercel/project.json).
 #
 # The build happens here, not on Vercel: `vercel build` runs `astro build` in
 # the already-installed workspace and `vercel deploy --prebuilt` uploads the
@@ -34,8 +35,8 @@ concurrency:
 
 env:
   GRAPHMIND_TELEMETRY: '0'
-  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+  VERCEL_ORG_ID: team_Dp8LiV7XQFRYPkyucddtu5Na # hegazy360s-projects
+  VERCEL_PROJECT_ID: prj_20Bpu7TrkQSoNnZHkeJzuWAFmCB6 # graphmind-docs
 
 jobs:
   deploy:
@@ -65,17 +66,15 @@ jobs:
           pnpm --filter docs build
           pnpm --filter docs check:links
 
-      - name: Refuse to deploy without the Vercel secrets
-        run: |
-          set -euo pipefail
-          for v in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
-            if [ -z "${!v:-}" ]; then
-              echo "::error::$v is not set — add it under Settings → Secrets and variables → Actions (see the header of this file)."
-              exit 1
-            fi
-          done
+      - name: Refuse to deploy without the Vercel token
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
+            echo "::error::VERCEL_TOKEN is not set — add it under Settings → Secrets and variables → Actions (see the header of this file)."
+            exit 1
+          fi
 
       - name: Deploy to production
         working-directory: apps/docs

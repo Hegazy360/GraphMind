@@ -30,7 +30,7 @@ SCHEMA_PATH = REPO_ROOT / "packages" / "schema" / "schema.json"
 def wire_schema() -> dict[str, Any]:
     if not SCHEMA_PATH.exists():  # pragma: no cover - only in a partial checkout
         pytest.skip(f"wire schema artifact not found at {SCHEMA_PATH}")
-    return json.loads(SCHEMA_PATH.read_text())
+    return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="session")

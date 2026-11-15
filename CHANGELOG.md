@@ -594,9 +594,16 @@ pinned by one, so the regressions are the kind a test catches.
   seven pages (edit arguments, replay, the behaviour verdict, the platform)
   were in the repo and not on graphmind.ai/docs. `deploy-docs.yml` now
   builds, link-checks and deploys `apps/docs` to Vercel on every push to
-  `master` that touches it (needs `VERCEL_TOKEN`, `VERCEL_ORG_ID` and
-  `VERCEL_PROJECT_ID` as repository secrets); `pnpm --filter docs deploy:vercel` is
-  the same from a machine.
+  `master` that touches it (one repository secret, `VERCEL_TOKEN`);
+  `pnpm --filter docs deploy:vercel` is the same from a machine.
+- **Three tests failed only on the hosted runners.** The Python suite read
+  `llm.json` with the locale's encoding, so on Windows (cp1252) a fixture
+  holding `é😀` hashed differently; it is read as UTF-8 now. jack-api's
+  dashboard test removed its temp directory while SQLite files were still
+  open, which Windows refuses (`EBUSY`); every store and Jack is closed first
+  and the removal retries. The schema shrink timing guard allows twice its
+  budget under `CI`: the hosted macOS runner took 654 ms against a 626 ms
+  limit on an idle run, while the regression it exists to catch took seconds.
 - **Docs: long lines ran off the right edge.** Code blocks now wrap instead
   of scrolling sideways (shell one-liners, log output and JSON samples were
   the worst; one `mcp-proxy` message overflowed by 1,900px), and the landing

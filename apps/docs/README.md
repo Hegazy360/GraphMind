@@ -99,9 +99,8 @@ repository** — nothing deploys by itself when `master` changes. Two ways to sh
 
 - **Automatically**: `.github/workflows/deploy-docs.yml` builds, runs `check:links` and deploys
   to production on every push to `master` that touches `apps/docs/` (and on manual dispatch). It
-  needs three repository secrets: `VERCEL_TOKEN` (Vercel → Account settings → Tokens),
-  `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` (both printed by `vercel link`, into
-  `.vercel/project.json`).
+  needs one repository secret, `VERCEL_TOKEN` (Vercel → Account settings → Tokens); the team and
+  project ids are pinned in the workflow file.
 - **From a machine**: `pnpm --filter docs deploy:vercel` (`vercel deploy --prod`). Run `vercel link`
   once in `apps/docs/` and pick `graphmind-docs`.
 

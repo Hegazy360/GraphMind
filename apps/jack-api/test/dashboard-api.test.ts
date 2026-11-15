@@ -30,15 +30,28 @@ beforeAll(async () => {
   acmeUrl = `http://127.0.0.1:${(acme.address() as AddressInfo).port}`;
   holder.f = (await createTasksApp({ origin: acmeUrl })).app.fetch;
 });
+// Every Jack and store opened by setup(), so afterAll can close them before the
+// directory goes: Windows refuses to unlink a SQLite file something still has
+// open (EBUSY / EPERM), which is how this file failed on the Windows runners.
+const opened: { jack: Jack; store: SqliteStore }[] = [];
 afterAll(async () => {
   await new Promise<void>((r) => acme.close(() => r()));
-  rmSync(dir, { recursive: true, force: true });
+  for (const { jack, store } of opened) {
+    await jack.close().catch(() => {});
+    try {
+      store.close();
+    } catch {
+      // already closed by the test itself
+    }
+  }
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 function setup(name: string, extra: Partial<Parameters<typeof createJack>[0]> = {}) {
   const dbPath = join(dir, `${name}.db`);
   const store = new SqliteStore(dbPath);
   const jack: Jack = createJack({ store, publicOrigin: ORIGIN, dataDir: join(dir, name), secretKey: randomBytes(32), egress: 'any', ...extra });
+  opened.push({ jack, store });
   const call = async (method: string, path: string, body?: unknown) => {
     const res = await jack.app.request(`${ORIGIN}${path}`, {
       method,

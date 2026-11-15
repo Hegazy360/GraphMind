@@ -47,7 +47,9 @@ from .helpers.providers import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = json.loads(
-    (REPO_ROOT / "packages" / "client" / "test" / "fixtures" / "llm.json").read_text()
+    (REPO_ROOT / "packages" / "client" / "test" / "fixtures" / "llm.json").read_text(
+        encoding="utf-8"
+    )
 )
 
 MAPPERS = {
