@@ -28,7 +28,7 @@
  * scripts/release/status.mjs and is unit-tested.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -127,7 +127,10 @@ const has = (bin) => spawnSync(bin, ['--version'], { stdio: 'ignore' }).status =
  */
 async function step(why, commands, { cwd = REPO_ROOT, defaultYes = true, env, repair } = {}) {
   console.log(`\n${why}`);
-  for (const c of commands) console.log(dim(`    $ ${cwd === REPO_ROOT ? '' : `(cd ${cwd.replace(`${REPO_ROOT}/`, '')}) `}${show(c)}`));
+  // Shown exactly as it will run, environment included: what you confirm is what happens.
+  // Paths relative to the directory the command runs in, so a copy-paste of the line works.
+  const envShown = Object.entries(env ?? {}).map(([k, v]) => `${k}=${quote(String(v).replace(`${cwd}/`, ''))} `).join('');
+  for (const c of commands) console.log(dim(`    $ ${cwd === REPO_ROOT ? '' : `(cd ${cwd.replace(`${REPO_ROOT}/`, '')}) `}${envShown}${show(c)}`));
   if (DRY_RUN) {
     console.log(dim('    (dry run — not running)'));
     return true;
@@ -369,7 +372,29 @@ async function verifyLocally() {
       repair: { label: 'rebuild python/.venv from scratch (make -C python reset)', commands: [['make', '-C', 'python', 'reset']] },
     });
   }
-  if (has('bundle')) await step('Ruby: build the gem and run its tests', [['gem', 'build', 'graphmind.gemspec', '--output', join(mkdtempSync(join(tmpdir(), 'graphmind-gem-')), 'check.gem')], ['bundle', 'install'], ['bundle', 'exec', 'rake', 'test']], { cwd: join(REPO_ROOT, 'ruby') });
+  // The test gems go into ruby/vendor/bundle (gitignored), the Ruby
+  // equivalent of python/.venv — never into the interpreter's shared gem
+  // home. Homebrew's Ruby makes that home's plugins/*.rb symlinks into its
+  // read-only keg, so installing any gem that ships a RubyGems plugin there
+  // (rdoc, pulled in by railties) dies with EACCES; system and rbenv Rubies
+  // have their own versions of "not yours to write". Repo-local sidesteps all
+  // of them, and leaves the user's Ruby exactly as it was.
+  if (has('bundle')) {
+    const bundlePath = join(REPO_ROOT, 'ruby', 'vendor', 'bundle');
+    await step(
+      'Ruby: build the gem and run its tests (test gems go into ruby/vendor/bundle, not your Ruby install)',
+      [
+        ['gem', 'build', 'graphmind.gemspec', '--output', join(mkdtempSync(join(tmpdir(), 'graphmind-gem-')), 'check.gem')],
+        ['bundle', 'install'],
+        ['bundle', 'exec', 'rake', 'test'],
+      ],
+      {
+        cwd: join(REPO_ROOT, 'ruby'),
+        env: { BUNDLE_PATH: bundlePath },
+        repair: { label: 'delete ruby/vendor/bundle so it is installed from scratch', commands: [['rm', '-rf', bundlePath]] },
+      },
+    );
+  }
 }
 
 async function commitRelease(version) {
@@ -463,7 +488,22 @@ async function publishGemLocally(version, isNew) {
   if (!has('gem')) return bad('gem is not on PATH.');
   const file = join(mkdtempSync(join(tmpdir(), 'graphmind-gem-')), `graphmind-${version}.gem`);
   if (!(await step(`Build graphmind ${version}.gem:`, [['gem', 'build', 'graphmind.gemspec', '--output', file]], { cwd: join(REPO_ROOT, 'ruby') }))) return;
-  const ok = await step('Push it to RubyGems (gem asks for your login / OTP if it needs to):', [['gem', 'push', file]]);
+
+  // Signed in? `gem signin` writes this file; GEM_HOST_API_KEY is the env alternative.
+  const credentials = capture('ruby', ['-e', 'print Gem.configuration.credentials_path']).out;
+  if (!process.env.GEM_HOST_API_KEY && !(credentials && existsSync(credentials))) {
+    console.log(`\n${paint(33, '■')} ${bold('Not signed in to RubyGems on this machine')}`);
+    console.log(indent(
+      'If you have no account yet, first:\n' +
+        '  1. sign up at https://rubygems.org/sign_up and confirm the email\n' +
+        '  2. turn on multi-factor authentication (Settings → Multi-factor authentication):\n' +
+        '     the gemspec sets rubygems_mfa_required, so every push needs a one-time code',
+    ));
+    if (!(await step('Then sign in (asks for email, password and an MFA code; stores an API key for gem push):', [['gem', 'signin']]))) {
+      warn('Not signed in — gem push will ask for the same details itself.');
+    }
+  }
+  const ok = await step('Push it to RubyGems (asks for an MFA code):', [['gem', 'push', file]]);
   if (ok && isNew) {
     console.log('\nThe gem exists now, so CI can push the next one: add a Trusted Publisher at rubygems.org → graphmind → Trusted publishers');
     console.log(dim('    (owner Hegazy360 · repo GraphMind · workflow publish-ruby.yml · environment rubygems)'));

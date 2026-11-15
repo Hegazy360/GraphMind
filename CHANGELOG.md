@@ -448,7 +448,9 @@ A recording says what happened; these say what *would* have happened.
   `--dry-run` walks the flow without running anything. `scripts/set-version.mjs`
   now discovers the publishable packages the same way the checks do instead of
   keeping its own list (which had already drifted and would have blocked the
-  release).
+  release). The Ruby test gems install into `ruby/vendor/bundle`, never the
+  interpreter's own gem home (Homebrew's Ruby links its `plugins/` into a
+  read-only keg, so `bundle install` there failed with EACCES on rdoc).
 - **`make -C python test` (and lint/typecheck/build) set up `python/.venv`
   themselves** — created when missing, rebuilt when half-made (an interrupted
   `uv venv` leaves a directory uv then refuses to reuse) or when its Python
