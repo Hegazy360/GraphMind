@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import time
 from typing import Any
@@ -42,8 +43,14 @@ def test_a_disconnect_auto_continues_held_gates_within_100ms(attached: Any) -> N
 
 
 #: Far longer than one gate poll, far shorter than any reconnect (make_gm sets
-#: retry_interval=60 s, and there is no pause timeout by default).
-_RACE_DEADLINE = 3.0
+#: retry_interval=60 s, and there is no pause timeout by default). The tests
+#: using it disable the disconnect callback on purpose, so what is left is the
+#: wait loop's own re-check every _GATE_POLL (0.25 s) plus however long the
+#: transport takes to notice the socket went away — and what they assert is
+#: that the gate continues at all, not how quickly. (The 100 ms budget is
+#: asserted above, on the path that is actually fast.) Three seconds is
+#: generous on a developer machine; a loaded CI runner has overshot it.
+_RACE_DEADLINE = 15.0 if os.environ.get("CI") else 3.0
 
 
 def _detach_inside_the_gate_window(instance: Any, viewer: Any) -> dict[str, Any]:

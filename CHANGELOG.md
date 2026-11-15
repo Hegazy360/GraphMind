@@ -601,6 +601,18 @@ pinned by one, so the regressions are the kind a test catches.
   encoding: cp1252 on a Windows runner, so `'é😀'` arrived as different
   characters and `schema_hash` disagreed with the TypeScript fixture. Both
   now pass `encoding="utf-8"`, as every other fixture read already did.
+  **Windows, `jack-api` (again)** — each Jack also opens an `auth.db` per
+  project through its data plane, so closing the store it was handed left
+  those behind (`EBUSY` this time). The test closes each Jack itself.
+  **Any platform, `@graphmind-ai/anthropic` and `@graphmind-ai/sdk`** — a
+  gate test read the viewer's frames straight after the agent's promise
+  resolved, but events reach the viewer over the socket a moment later; it
+  failed about one run in five. The three assertions that read an
+  end-of-run frame now wait for it, as `observe.test.ts` already did.
+  **Windows, Python** — the fail-open race deadline (3 s for a held gate to
+  continue once the debugger is gone *with the disconnect callback disabled*)
+  was overshot on a loaded runner. It is 15 s on CI; the real 100 ms budget
+  is asserted by a different test, on the path that is actually fast.
   **macOS, `@graphmind-ai/schema`** — the shrink invariant's time budget
   (200 ms over twice the measured `JSON.stringify`) is an algorithmic guard
   against a regression that took *seconds*, but a shared macOS runner
