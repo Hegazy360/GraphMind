@@ -58,7 +58,7 @@ class Hub:
     ) -> None:
         self.home = home
         self.port = _free_port()
-        self._log = (home / "serve.log").open("w")
+        self._log = (home / "serve.log").open("w", encoding="utf-8")
         env = {
             **os.environ,
             "GRAPHMIND_HOME": str(home),
@@ -94,7 +94,7 @@ class Hub:
         started = json.loads(line)
         assert started["port"] == self.port
         run_file = home / "run" / f"serve-{self.port}.json"
-        self.agent_token: str = json.loads(run_file.read_text())["agentToken"]
+        self.agent_token: str = json.loads(run_file.read_text(encoding="utf-8"))["agentToken"]
         self.base = f"http://127.0.0.1:{self.port}"
 
     @property

@@ -590,19 +590,39 @@ pinned by one, so the regressions are the kind a test catches.
   existing tag it checks that tag out, skips what npm already has and
   creates the GitHub Release — the repair path after a release published
   from a laptop. `pnpm release` prints the command.
+- **The three platform-specific test failures that kept CI red** once the
+  build was fixed, each a real portability bug rather than a flake:
+  **Windows, `jack-api`** — `dashboard-api.test.ts` opened ten SQLite stores
+  and closed one, then removed the temp directory in `afterAll`. POSIX
+  unlinks an open file; Windows answers `EPERM`. Every store the helper
+  opens is now closed before the directory goes.
+  **Windows, Python** — `test_llm_capture.py` and `conftest.py` read their
+  JSON fixtures with `Path.read_text()`, which decodes using the *locale*
+  encoding: cp1252 on a Windows runner, so `'é😀'` arrived as different
+  characters and `schema_hash` disagreed with the TypeScript fixture. Both
+  now pass `encoding="utf-8"`, as every other fixture read already did.
+  **macOS, `@graphmind-ai/schema`** — the shrink invariant's time budget
+  (200 ms over twice the measured `JSON.stringify`) is an algorithmic guard
+  against a regression that took *seconds*, but a shared macOS runner
+  missed it by 90 ms. On CI the budget is 600 ms, which still fails anything
+  near a second.
 - **The docs site was deployed by hand and had fallen 55 days behind** —
   seven pages (edit arguments, replay, the behaviour verdict, the platform)
   were in the repo and not on graphmind.ai/docs. `deploy-docs.yml` now
   builds, link-checks and deploys `apps/docs` to Vercel on every push to
-  `master` that touches it (needs `VERCEL_TOKEN`, `VERCEL_ORG_ID` and
-  `VERCEL_PROJECT_ID` as repository secrets); `pnpm --filter docs deploy:vercel` is
-  the same from a machine.
+  `master` that touches it (one secret, `VERCEL_TOKEN`; the org and project
+  ids are identifiers, not credentials, and sit in the workflow);
+  `pnpm --filter docs deploy:vercel` is the same from a machine.
 - **Docs: long lines ran off the right edge.** Code blocks now wrap instead
   of scrolling sideways (shell one-liners, log output and JSON samples were
   the worst; one `mcp-proxy` message overflowed by 1,900px), and the landing
   page's hero glow no longer widens the page by 24px on narrow windows. The
   docs README pointed at a `docs.graphmind.ai` subdomain that does not
   exist; the site is `graphmind.ai/docs`.
+- **Two publish jobs shared the display name `publish`**
+  (`publish-python.yml`, `publish-ruby.yml`), which the CI wiring check
+  refuses because required checks cannot tell them apart — so `ci wiring`
+  was red on every run. They are now `PyPI: publish` and `RubyGems: publish`.
 - **This changelog repeated three Unreleased sections** (hermetic replay,
   the counterfactual, the release pipeline) — an older copy sat between
   "one header, one section" and its continuation. The copies are gone.

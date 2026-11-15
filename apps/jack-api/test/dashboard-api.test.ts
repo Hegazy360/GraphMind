@@ -30,14 +30,27 @@ beforeAll(async () => {
   acmeUrl = `http://127.0.0.1:${(acme.address() as AddressInfo).port}`;
   holder.f = (await createTasksApp({ origin: acmeUrl })).app.fetch;
 });
+// Every store opened here, so afterAll can close the ones a test did not:
+// Windows refuses to remove a directory that still holds an open file handle
+// (EPERM on rm), where POSIX happily unlinks an open file.
+const stores: SqliteStore[] = [];
+
 afterAll(async () => {
   await new Promise<void>((r) => acme.close(() => r()));
-  rmSync(dir, { recursive: true, force: true });
+  for (const store of stores) {
+    try {
+      store.close();
+    } catch {
+      /* already closed by its test */
+    }
+  }
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 function setup(name: string, extra: Partial<Parameters<typeof createJack>[0]> = {}) {
   const dbPath = join(dir, `${name}.db`);
   const store = new SqliteStore(dbPath);
+  stores.push(store);
   const jack: Jack = createJack({ store, publicOrigin: ORIGIN, dataDir: join(dir, name), secretKey: randomBytes(32), egress: 'any', ...extra });
   const call = async (method: string, path: string, body?: unknown) => {
     const res = await jack.app.request(`${ORIGIN}${path}`, {

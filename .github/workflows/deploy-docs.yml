@@ -7,10 +7,12 @@
 #   including the 0.6.0 ones, missing from graphmind.ai/docs). This workflow
 #   makes a docs change on master reach production on its own.
 #
-# SECRETS (Settings → Secrets and variables → Actions)
-#   VERCEL_TOKEN        Vercel → Account settings → Tokens (scope: the team)
-#   VERCEL_ORG_ID       `orgId`     from .vercel/project.json after `vercel link`
-#   VERCEL_PROJECT_ID   `projectId` from .vercel/project.json after `vercel link`
+# SECRET (Settings → Secrets and variables → Actions)
+#   VERCEL_TOKEN   Vercel → Account settings → Tokens (scope: hegazy360's projects)
+#
+# The org and project ids below are identifiers, not credentials (they are what
+# `vercel link` writes into .vercel/project.json), so they live here rather than
+# in secrets — one less thing to set up, and a wrong value fails loudly.
 #
 # The build happens here, not on Vercel: `vercel build` runs `astro build` in
 # the already-installed workspace and `vercel deploy --prebuilt` uploads the
@@ -34,8 +36,8 @@ concurrency:
 
 env:
   GRAPHMIND_TELEMETRY: '0'
-  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+  VERCEL_ORG_ID: team_Dp8LiV7XQFRYPkyucddtu5Na # hegazy360's projects
+  VERCEL_PROJECT_ID: prj_20Bpu7TrkQSoNnZHkeJzuWAFmCB6 # graphmind-docs
 
 jobs:
   deploy:
@@ -65,15 +67,13 @@ jobs:
           pnpm --filter docs build
           pnpm --filter docs check:links
 
-      - name: Refuse to deploy without the Vercel secrets
+      - name: Refuse to deploy without the Vercel token
         run: |
           set -euo pipefail
-          for v in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
-            if [ -z "${!v:-}" ]; then
-              echo "::error::$v is not set — add it under Settings → Secrets and variables → Actions (see the header of this file)."
-              exit 1
-            fi
-          done
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
+            echo "::error::VERCEL_TOKEN is not set — add it under Settings → Secrets and variables → Actions (see the header of this file)."
+            exit 1
+          fi
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
 

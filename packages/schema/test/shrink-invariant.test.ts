@@ -34,7 +34,12 @@ import {
 } from '../src/shrink.js';
 
 const BUDGETS = [4096, 65_536, 524_288] as const;
-const TIME_LIMIT_MS = 200;
+// The shrink's own work, on top of the unavoidable JSON.stringify (see
+// checkOne). This guards against an algorithmic regression — v1 took
+// *seconds* — not against a slow machine, so a shared CI runner (macOS
+// especially: a noisy host, no vCPU guarantee) gets three times the headroom.
+// A regression that matters still fails: at 3x it would have to beat ~1 s.
+const TIME_LIMIT_MS = process.env['CI'] !== undefined ? 600 : 200;
 const SEED = Number(process.env['GM_SHRINK_SEED'] ?? 20260914);
 
 /** mulberry32: a small, well-distributed, seedable PRNG. */
