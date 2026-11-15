@@ -278,6 +278,14 @@ describe('error gate', () => {
     expect(result.text).toContain('91.3');
     expect(result.text).toContain('INJECTED-BY-DEBUGGER');
 
+    // The run's promise resolving does not mean the viewer has the frames yet:
+    // events travel to it over the socket, after the gate released the call.
+    await waitUntil(
+      () =>
+        viewer.ofType('node.finished').some((f) => f.payload['nodeId'] === 'tool:convertCurrency'),
+      5000,
+      'the convertCurrency node.finished frame',
+    );
     const finished = viewer
       .ofType('node.finished')
       .find((f) => f.payload['nodeId'] === 'tool:convertCurrency');
@@ -311,6 +319,7 @@ describe('error gate', () => {
       ),
     ).toHaveLength(2);
     expect(result.text).toContain('91.3');
+    await waitUntil(() => viewer.ofType('node.error').length >= 1, 5000, 'a node.error frame');
     expect(viewer.ofType('node.error').length).toBeGreaterThanOrEqual(1);
   });
 
@@ -333,6 +342,12 @@ describe('error gate', () => {
     expect(result.turns).toBe(3);
     expect(result.toolErrors).toEqual(['FX rate service returned HTTP 500']);
     expect(result.text).toContain('FX rate service returned HTTP 500');
+    await waitUntil(
+      () =>
+        viewer.ofType('node.finished').some((f) => f.payload['nodeId'] === 'tool:convertCurrency'),
+      5000,
+      'the convertCurrency node.finished frame',
+    );
     const finished = viewer
       .ofType('node.finished')
       .find((f) => f.payload['nodeId'] === 'tool:convertCurrency');

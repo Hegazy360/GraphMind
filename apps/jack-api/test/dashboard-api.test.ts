@@ -30,13 +30,17 @@ beforeAll(async () => {
   acmeUrl = `http://127.0.0.1:${(acme.address() as AddressInfo).port}`;
   holder.f = (await createTasksApp({ origin: acmeUrl })).app.fetch;
 });
-// Every store opened here, so afterAll can close the ones a test did not:
-// Windows refuses to remove a directory that still holds an open file handle
-// (EPERM on rm), where POSIX happily unlinks an open file.
+// Everything opened here, so afterAll can close what a test did not: Windows
+// refuses to unlink a file that still has an open handle (EPERM / EBUSY on
+// rm), where POSIX happily unlinks an open file. Each Jack owns more than the
+// store it was given — the data plane opens an auth.db per project under
+// dataDir — so the Jack itself has to be closed, not just the store.
 const stores: SqliteStore[] = [];
+const jacks: Jack[] = [];
 
 afterAll(async () => {
   await new Promise<void>((r) => acme.close(() => r()));
+  await Promise.all(jacks.map((jack) => jack.close()));
   for (const store of stores) {
     try {
       store.close();
@@ -52,6 +56,7 @@ function setup(name: string, extra: Partial<Parameters<typeof createJack>[0]> = 
   const store = new SqliteStore(dbPath);
   stores.push(store);
   const jack: Jack = createJack({ store, publicOrigin: ORIGIN, dataDir: join(dir, name), secretKey: randomBytes(32), egress: 'any', ...extra });
+  jacks.push(jack);
   const call = async (method: string, path: string, body?: unknown) => {
     const res = await jack.app.request(`${ORIGIN}${path}`, {
       method,
