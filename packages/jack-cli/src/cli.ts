@@ -137,16 +137,16 @@ export async function main(argv: string[]): Promise<void> {
         }
         console.log(`  projects are served at ${publicOrigin}/p/<slug>/mcp`);
         console.log('  registered for this worktree: `jack deploy` finds this server without --server');
-        const stop = () => {
+        const stop = async () => {
           unregister();
-          void jack?.close();
+          await jack?.close().catch(() => {});
           server.close();
-          store.close();
+          await store.close().catch(() => {});
           accountStore?.close();
           process.exit(0);
         };
-        process.on('SIGINT', stop);
-        process.on('SIGTERM', stop);
+        process.on('SIGINT', () => void stop());
+        process.on('SIGTERM', () => void stop());
       });
       return;
     }

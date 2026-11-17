@@ -78,8 +78,8 @@ export interface AuthServer {
   /** Wrap the MCP handler: bearer auth (401 + resource_metadata), step-up (403 insufficient_scope). */
   protect(mcp: (req: Request, authInfo: AuthInfo) => Promise<Response>): (req: Request) => Promise<Response>;
   resourceMetadataUrl: string;
-  listGrants(): GrantRecord[];
-  revokeGrant(id: string): void;
+  listGrants(): Promise<GrantRecord[]>;
+  revokeGrant(id: string): Promise<void>;
 }
 
 const COOKIE = 'jack_signin';
@@ -143,9 +143,9 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
   const page = (html: string, status = 200, extra: Record<string, string> = {}) => new Response(html, { status, headers: { ...PAGE_HEADERS, ...extra } });
 
   /** Load an in-flight sign-in, enforcing expiry and that it belongs to THIS browser. */
-  function loadRequest(c: Context, id: string | undefined): { ok: true; r: AuthRequestRecord } | { ok: false; res: Response } {
+  async function loadRequest(c: Context, id: string | undefined): Promise<{ ok: true; r: AuthRequestRecord } | { ok: false; res: Response }> {
     if (!id) return { ok: false, res: page(errorPage('Sign-in not found', 'This sign-in link is incomplete.'), 400) };
-    const r = opts.store.getAuthRequest(id);
+    const r = await opts.store.getAuthRequest(id);
     if (!r || r.expiresAt < now()) return { ok: false, res: page(errorPage('Sign-in expired', 'This sign-in took too long or was already finished.'), 400) };
     const cookie = cookieValue(c.req.header('cookie'), COOKIE);
     if (!cookie || !safeEqual(sha256(cookie), r.browserHash)) {
@@ -160,8 +160,8 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
     return origin === undefined || origin === issuerOrigin;
   }
 
-  const failToClient = (r: AuthRequestRecord, error: string, description: string) => {
-    opts.store.deleteAuthRequest(r.id);
+  const failToClient = async (r: AuthRequestRecord, error: string, description: string) => {
+    await opts.store.deleteAuthRequest(r.id);
     return redirectTo(r.redirectUri, { error, error_description: description, state: r.state, iss: issuer });
   };
 
@@ -179,14 +179,14 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
       .setJti(randomToken(12))
       .sign(key.privateKey);
     const refreshToken = `jrt_${randomToken(32)}`;
-    opts.store.putRefresh({ tokenHash: sha256(refreshToken), grantId: grant.id, expiresAt: now() + refreshTtl * 1000, rotatedAt: null });
+    await opts.store.putRefresh({ tokenHash: sha256(refreshToken), grantId: grant.id, expiresAt: now() + refreshTtl * 1000, rotatedAt: null });
     return { access_token: accessToken, token_type: 'Bearer', expires_in: accessTtl, refresh_token: refreshToken, scope: scopes.join(' ') };
   }
 
-  function revoke(grantId: string, why: AuthEvent['type'] = 'grant.revoked', detail?: string) {
-    const g = opts.store.getGrant(grantId);
+  async function revoke(grantId: string, why: AuthEvent['type'] = 'grant.revoked', detail?: string) {
+    const g = await opts.store.getGrant(grantId);
     if (!g || g.revokedAt !== null) return;
-    opts.store.revokeGrant(grantId, now());
+    await opts.store.revokeGrant(grantId, now());
     emit({ type: why, grantId, clientId: g.clientId, ...(detail ? { detail } : {}) });
     if (why !== 'grant.revoked') emit({ type: 'grant.revoked', grantId, clientId: g.clientId, detail: why });
   }
@@ -228,14 +228,14 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
 
   app.get(`${P}/oauth/jwks`, async (c) => {
     await keys.signingKey(); // make sure one exists before anyone asks
-    return c.json(keys.jwks(), 200, { 'cache-control': 'public, max-age=300' });
+    return c.json(await keys.jwks(), 200, { 'cache-control': 'public, max-age=300' });
   });
 
   app.post(`${P}/oauth/register`, async (c) => {
     const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body || typeof body !== 'object') return oauthError(c, 400, 'invalid_client_metadata', 'expected a JSON object');
     try {
-      const registered = registry.register(body);
+      const registered = await registry.register(body);
       emit({ type: 'client.registered', clientId: String(registered.client_id) });
       return c.json(registered, 201, { 'cache-control': 'no-store' });
     } catch (err) {
@@ -247,7 +247,7 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
   app.get(`${P}/oauth/authorize`, async (c) => {
     if (now() - lastSweep > 300_000) {
       lastSweep = now();
-      opts.store.sweep(now());
+      await opts.store.sweep(now());
     }
     const q = c.req.query();
     // Until client_id and redirect_uri are validated, never redirect anywhere: show an error page.
@@ -298,41 +298,41 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
       }
       // The upstream state carries our request id, so the callback can find the request.
       record.data = { upstreamState: `${id}.${start.state}`, nonce: start.nonce, verifier: start.verifier };
-      opts.store.putAuthRequest(record);
+      await opts.store.putAuthRequest(record);
       const to = new URL(start.url);
       to.searchParams.set('state', `${id}.${start.state}`);
       return new Response(null, { status: 302, headers: { location: to.href, 'set-cookie': cookie, 'cache-control': 'no-store' } });
     }
     if (link) {
-      opts.store.putAuthRequest(record);
+      await opts.store.putAuthRequest(record);
       return new Response(null, { status: 302, headers: { location: link.start(id, linkCallback, record.scopes), 'set-cookie': cookie, 'cache-control': 'no-store' } });
     }
     if (opts.auth.mode === 'none') {
       const anon: Identity = { subject: `anon:${randomToken(12)}`, display: 'Guest' };
       record.data = { identity: anon, sealed: box.seal(JSON.stringify({ kind: 'none' } satisfies UpstreamCredential), `req:${id}`) };
     }
-    opts.store.putAuthRequest(record);
+    await opts.store.putAuthRequest(record);
     const next = opts.auth.mode === 'apikey' ? `/oauth/apikey?request=${id}` : `/oauth/consent?request=${id}`;
     return new Response(null, { status: 302, headers: { location: `${issuer}${next}`, 'set-cookie': cookie, 'cache-control': 'no-store' } });
   });
 
   app.get(`${P}/oauth/upstream/callback`, async (c) => {
     const state = c.req.query('state') ?? '';
-    const loaded = loadRequest(c, state.split('.')[0]);
+    const loaded = await loadRequest(c, state.split('.')[0]);
     if (!loaded.ok) return loaded.res;
     const r = loaded.r;
     if (typeof r.data.upstreamState !== 'string' || !safeEqual(r.data.upstreamState, state)) {
       return page(errorPage('Sign-in failed', 'The sign-in response does not match this sign-in.'), 400);
     }
-    if (c.req.query('error')) return failToClient(r, 'access_denied', 'sign-in was cancelled at the identity provider');
+    if (c.req.query('error')) return await failToClient(r, 'access_denied', 'sign-in was cancelled at the identity provider');
     const code = c.req.query('code');
-    if (!code || !oidc) return failToClient(r, 'server_error', 'the identity provider returned no code');
+    if (!code || !oidc) return await failToClient(r, 'server_error', 'the identity provider returned no code');
     try {
       const { identity, credential } = await oidc.finish(code, upstreamCallback, { nonce: String(r.data.nonce), verifier: String(r.data.verifier) });
-      opts.store.updateAuthRequest(r.id, { identity, sealed: box.seal(JSON.stringify(credential), `req:${r.id}`) });
+      await opts.store.updateAuthRequest(r.id, { identity, sealed: box.seal(JSON.stringify(credential), `req:${r.id}`) });
     } catch (err) {
       emit({ type: 'signin.failed', clientId: r.clientId, detail: err instanceof Error ? err.message : String(err) });
-      return failToClient(r, 'access_denied', err instanceof UpstreamAuthError ? err.message : 'sign-in failed');
+      return await failToClient(r, 'access_denied', err instanceof UpstreamAuthError ? err.message : 'sign-in failed');
     }
     return new Response(null, { status: 302, headers: { location: `${issuer}/oauth/consent?request=${r.id}`, 'cache-control': 'no-store' } });
   });
@@ -340,7 +340,7 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
   // The customer's app sends the user back here with its signed response. The
   // request id is inside the response token; the browser cookie proves it is
   // the same browser that started, and the signature proves the app answered.
-  app.get(`${P}/oauth/link/callback`, (c) => {
+  app.get(`${P}/oauth/link/callback`, async (c) => {
     const response = c.req.query('response') ?? '';
     let requestId = '';
     try {
@@ -348,23 +348,23 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
     } catch {
       /* verified (and rejected) below */
     }
-    const loaded = loadRequest(c, requestId || undefined);
+    const loaded = await loadRequest(c, requestId || undefined);
     if (!loaded.ok) return loaded.res;
     const r = loaded.r;
-    if (!link) return failToClient(r, 'server_error', 'this project no longer uses account linking');
-    if (c.req.query('error')) return failToClient(r, 'access_denied', 'the app did not link the account');
+    if (!link) return await failToClient(r, 'server_error', 'this project no longer uses account linking');
+    if (c.req.query('error')) return await failToClient(r, 'access_denied', 'the app did not link the account');
     try {
       const { identity, credential } = link.finish(response, r.id);
-      opts.store.updateAuthRequest(r.id, { identity, sealed: box.seal(JSON.stringify(credential), `req:${r.id}`) });
+      await opts.store.updateAuthRequest(r.id, { identity, sealed: box.seal(JSON.stringify(credential), `req:${r.id}`) });
     } catch (err) {
       emit({ type: 'signin.failed', clientId: r.clientId, detail: err instanceof Error ? err.message : String(err) });
-      return failToClient(r, 'access_denied', err instanceof UpstreamAuthError ? err.message : 'account linking failed');
+      return await failToClient(r, 'access_denied', err instanceof UpstreamAuthError ? err.message : 'account linking failed');
     }
     return new Response(null, { status: 302, headers: { location: `${issuer}/oauth/consent?request=${r.id}`, 'cache-control': 'no-store' } });
   });
 
-  app.get(`${P}/oauth/apikey`, (c) => {
-    const loaded = loadRequest(c, c.req.query('request'));
+  app.get(`${P}/oauth/apikey`, async (c) => {
+    const loaded = await loadRequest(c, c.req.query('request'));
     if (!loaded.ok) return loaded.res;
     const r = loaded.r;
     return page(apiKeyPage({ project: opts.projectName, requestId: r.id, base: P }));
@@ -373,7 +373,7 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
   app.post(`${P}/oauth/apikey`, async (c) => {
     if (!sameOrigin(c)) return page(errorPage('Blocked', 'This form must be submitted from the sign-in page.'), 403);
     const form = await c.req.parseBody();
-    const loaded = loadRequest(c, typeof form.request === 'string' ? form.request : undefined);
+    const loaded = await loadRequest(c, typeof form.request === 'string' ? form.request : undefined);
     if (!loaded.ok) return loaded.res;
     const r = loaded.r;
     if (opts.auth.mode !== 'apikey') return page(errorPage('Not available', 'This project does not use API keys.'), 400);
@@ -388,20 +388,20 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
       emit({ type: 'signin.failed', clientId: r.clientId, detail: 'api key rejected' });
       return page(apiKeyPage({ project: opts.projectName, requestId: r.id, base: P, error: err instanceof UpstreamAuthError ? err.message : 'That key could not be checked.' }), 400);
     }
-    opts.store.updateAuthRequest(r.id, { identity, sealed: box.seal(JSON.stringify({ kind: 'apikey', key } satisfies UpstreamCredential), `req:${r.id}`) });
+    await opts.store.updateAuthRequest(r.id, { identity, sealed: box.seal(JSON.stringify({ kind: 'apikey', key } satisfies UpstreamCredential), `req:${r.id}`) });
     return new Response(null, { status: 303, headers: { location: `${issuer}/oauth/consent?request=${r.id}`, 'cache-control': 'no-store' } });
   });
 
   const consentTools = (scopes: string[]) => opts.manifest().tools.filter((t) => t.requiredScopes.every((s) => scopes.includes(s)));
 
   app.get(`${P}/oauth/consent`, async (c) => {
-    const loaded = loadRequest(c, c.req.query('request'));
+    const loaded = await loadRequest(c, c.req.query('request'));
     if (!loaded.ok) return loaded.res;
     const r = loaded.r;
     const identity = r.data.identity as Identity | undefined;
     if (!identity) return page(errorPage('Not signed in', 'Sign in first.'), 400);
     const client = await registry.resolve(r.clientId).catch(() => null);
-    if (!client) return failToClient(r, 'invalid_client', 'the app is no longer registered');
+    if (!client) return await failToClient(r, 'invalid_client', 'the app is no longer registered');
     return page(
       consentPage({
         project: opts.projectName,
@@ -418,12 +418,12 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
   app.post(`${P}/oauth/consent`, async (c) => {
     if (!sameOrigin(c)) return page(errorPage('Blocked', 'This form must be submitted from the consent page.'), 403);
     const form = await c.req.parseBody();
-    const loaded = loadRequest(c, typeof form.request === 'string' ? form.request : undefined);
+    const loaded = await loadRequest(c, typeof form.request === 'string' ? form.request : undefined);
     if (!loaded.ok) return loaded.res;
     const r = loaded.r;
     const identity = r.data.identity as Identity | undefined;
     if (!identity || typeof r.data.sealed !== 'string') return page(errorPage('Not signed in', 'Sign in first.'), 400);
-    if (form.decision !== 'approve') return failToClient(r, 'access_denied', 'the user declined');
+    if (form.decision !== 'approve') return await failToClient(r, 'access_denied', 'the user declined');
 
     const grant: GrantRecord = {
       id: `grt_${randomToken(18)}`,
@@ -435,11 +435,11 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
       createdAt: now(),
       revokedAt: null,
     };
-    opts.store.putGrant(grant);
+    await opts.store.putGrant(grant);
     // Re-seal the credential to the grant: the request-bound ciphertext cannot be moved elsewhere.
-    opts.store.putUpstream(grant.id, box.seal(box.open(r.data.sealed, `req:${r.id}`), `grant:${grant.id}`), now());
+    await opts.store.putUpstream(grant.id, box.seal(box.open(r.data.sealed, `req:${r.id}`), `grant:${grant.id}`), now());
     const code = randomToken(32);
-    opts.store.putCode({
+    await opts.store.putCode({
       codeHash: sha256(code),
       grantId: grant.id,
       clientId: r.clientId,
@@ -449,7 +449,7 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
       expiresAt: now() + CODE_TTL_MS,
       usedAt: null,
     });
-    opts.store.deleteAuthRequest(r.id);
+    await opts.store.deleteAuthRequest(r.id);
     emit({ type: 'grant.created', grantId: grant.id, clientId: grant.clientId });
     return redirectTo(r.redirectUri, { code, state: r.state, iss: issuer });
   });
@@ -463,11 +463,11 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
     if (f.grant_type === 'authorization_code') {
       if (!f.code || !f.code_verifier || !f.redirect_uri) return oauthError(c, 400, 'invalid_request', 'code, code_verifier and redirect_uri are required');
       const hash = sha256(f.code);
-      const rec = opts.store.getCode(hash);
+      const rec = await opts.store.getCode(hash);
       if (!rec) return oauthError(c, 400, 'invalid_grant', 'unknown or expired code');
       // RFC 6749 §4.1.2: a code used twice means it leaked — revoke everything it produced.
-      if (rec.usedAt !== null || !opts.store.useCode(hash, now())) {
-        revoke(rec.grantId, 'code.replayed');
+      if (rec.usedAt !== null || !(await opts.store.useCode(hash, now()))) {
+        await revoke(rec.grantId, 'code.replayed');
         return oauthError(c, 400, 'invalid_grant', 'code already used');
       }
       if (rec.expiresAt < now()) return oauthError(c, 400, 'invalid_grant', 'code expired');
@@ -475,7 +475,7 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
       if (rec.redirectUri !== f.redirect_uri) return oauthError(c, 400, 'invalid_grant', 'redirect_uri does not match the authorization request');
       if (!verifyPkce(f.code_verifier, rec.codeChallenge)) return oauthError(c, 400, 'invalid_grant', 'PKCE verification failed');
       if (f.resource && f.resource.replace(/\/$/, '') !== rec.resource) return oauthError(c, 400, 'invalid_target', 'resource does not match the authorization');
-      const grant = opts.store.getGrant(rec.grantId);
+      const grant = await opts.store.getGrant(rec.grantId);
       if (!grant || grant.revokedAt !== null) return oauthError(c, 400, 'invalid_grant', 'the authorization was revoked');
       return c.json(await issueTokens(grant, grant.scopes), 200, { 'cache-control': 'no-store', pragma: 'no-cache' });
     }
@@ -483,15 +483,15 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
     if (f.grant_type === 'refresh_token') {
       if (!f.refresh_token) return oauthError(c, 400, 'invalid_request', 'refresh_token is required');
       const hash = sha256(f.refresh_token);
-      const rec = opts.store.getRefresh(hash);
+      const rec = await opts.store.getRefresh(hash);
       if (!rec) return oauthError(c, 400, 'invalid_grant', 'unknown refresh token');
       // OAuth 2.1 §4.3.1: a rotated refresh token coming back means two parties hold it.
       if (rec.rotatedAt !== null) {
-        revoke(rec.grantId, 'refresh.replayed');
+        await revoke(rec.grantId, 'refresh.replayed');
         return oauthError(c, 400, 'invalid_grant', 'refresh token already used');
       }
       if (rec.expiresAt < now()) return oauthError(c, 400, 'invalid_grant', 'refresh token expired');
-      const grant = opts.store.getGrant(rec.grantId);
+      const grant = await opts.store.getGrant(rec.grantId);
       if (!grant || grant.revokedAt !== null) return oauthError(c, 400, 'invalid_grant', 'the authorization was revoked');
       if (grant.clientId !== f.client_id) return oauthError(c, 400, 'invalid_grant', 'refresh token was issued to another client');
       if (f.resource && f.resource.replace(/\/$/, '') !== grant.resource) return oauthError(c, 400, 'invalid_target', 'resource does not match the authorization');
@@ -501,8 +501,8 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
         if (!asked.every((s) => grant.scopes.includes(s))) return oauthError(c, 400, 'invalid_scope', 'a refresh can only narrow the granted scopes');
         scopes = asked;
       }
-      if (!opts.store.rotateRefresh(hash, now())) {
-        revoke(rec.grantId, 'refresh.replayed');
+      if (!(await opts.store.rotateRefresh(hash, now()))) {
+        await revoke(rec.grantId, 'refresh.replayed');
         return oauthError(c, 400, 'invalid_grant', 'refresh token already used');
       }
       return c.json(await issueTokens(grant, scopes), 200, { 'cache-control': 'no-store', pragma: 'no-cache' });
@@ -515,12 +515,12 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
     const f = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
     const token = typeof f.token === 'string' ? f.token : '';
     // RFC 7009: answer 200 whether or not the token was valid.
-    const refresh = token.startsWith('jrt_') ? opts.store.getRefresh(sha256(token)) : null;
-    if (refresh) revoke(refresh.grantId);
+    const refresh = token.startsWith('jrt_') ? await opts.store.getRefresh(sha256(token)) : null;
+    if (refresh) await revoke(refresh.grantId);
     else if (token !== '') {
       const info = await verifier.verifyAccessToken(token).catch(() => null);
       const grantId = info?.extra?.grantId;
-      if (typeof grantId === 'string') revoke(grantId);
+      if (typeof grantId === 'string') await revoke(grantId);
     }
     return c.body(null, 200);
   });
@@ -531,7 +531,7 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
     async verifyAccessToken(token: string): Promise<AuthInfo> {
       let payload;
       try {
-        ({ payload } = await jwtVerify(token, createLocalJWKSet(keys.jwks() as never), {
+        ({ payload } = await jwtVerify(token, createLocalJWKSet((await keys.jwks()) as never), {
           issuer,
           audience: resource,
           algorithms: ['ES256'],
@@ -543,7 +543,7 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
         throw new OAuthError(OAuthErrorCode.InvalidToken, 'the access token is invalid or expired');
       }
       const grantId = typeof payload.grant_id === 'string' ? payload.grant_id : '';
-      const grant = opts.store.getGrant(grantId);
+      const grant = await opts.store.getGrant(grantId);
       if (!grant || grant.revokedAt !== null) throw new OAuthError(OAuthErrorCode.InvalidToken, 'the authorization was revoked');
       return {
         token,
@@ -597,7 +597,7 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
   const credentials: CredentialResolver = async (ctx) => {
     const grantId = ctx.authInfo?.extra?.grantId;
     if (typeof grantId !== 'string') throw new CredentialError('the app is not signed in; reconnect it');
-    const sealed = opts.store.getUpstream(grantId);
+    const sealed = await opts.store.getUpstream(grantId);
     if (!sealed) throw new CredentialError(`the ${opts.projectName} sign-in for this app was removed; reconnect the app`);
     let cred = JSON.parse(box.open(sealed, `grant:${grantId}`)) as UpstreamCredential;
     switch (cred.kind) {
@@ -626,7 +626,7 @@ export function createAuthServer(opts: AuthServerOptions): AuthServer {
           } catch {
             throw new CredentialError(`your ${opts.projectName} sign-in expired; reconnect the app to sign in again`);
           }
-          opts.store.putUpstream(grantId, box.seal(JSON.stringify(cred), `grant:${grantId}`), now());
+          await opts.store.putUpstream(grantId, box.seal(JSON.stringify(cred), `grant:${grantId}`), now());
         }
         if (cred.kind !== 'oidc') return {};
         return { authorization: `Bearer ${cred.accessToken}` };

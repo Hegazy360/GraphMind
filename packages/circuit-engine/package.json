@@ -29,7 +29,8 @@
   "dependencies": {
     "@graphmind-ai/analyze": "workspace:*",
     "@graphmind-ai/circuit-schema": "workspace:*",
-    "@graphmind-ai/circuit-sdk": "workspace:*"
+    "@graphmind-ai/circuit-sdk": "workspace:*",
+    "@graphmind-ai/db": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",

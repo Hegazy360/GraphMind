@@ -52,3 +52,6 @@ packages/circuit-cli/test/.generated-*
 .platform/
 .vercel
 .env*
+
+# Supabase CLI link metadata (written by `supabase link`; includes the pooler URL)
+supabase/.temp/

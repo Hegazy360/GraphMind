@@ -14,7 +14,7 @@ export interface SigningKey {
 }
 
 export class KeyRing {
-  private current: SigningKey | null = null;
+  private current: Promise<SigningKey> | null = null;
 
   constructor(
     private readonly store: AuthStore,
@@ -22,30 +22,42 @@ export class KeyRing {
     private readonly now: () => number,
   ) {}
 
-  async signingKey(): Promise<SigningKey> {
-    if (this.current) return this.current;
-    const existing = this.store.listSigningKeys()[0];
+  /**
+   * The key to sign with. Memoized as a promise so concurrent first requests
+   * (now that the store is async) share one load-or-generate instead of each
+   * minting a key. A failure is not cached. Across instances (hosted) two
+   * cold starts may still each generate one; both stay in the JWKS, so tokens
+   * from either verify.
+   */
+  signingKey(): Promise<SigningKey> {
+    this.current ??= this.loadOrCreate().catch((err) => {
+      this.current = null;
+      throw err;
+    });
+    return this.current;
+  }
+
+  private async loadOrCreate(): Promise<SigningKey> {
+    const existing = (await this.store.listSigningKeys())[0];
     if (existing) {
       const jwk = JSON.parse(this.box.open(existing.sealedPrivateJwk, `key:${existing.kid}`)) as JWK;
-      this.current = { kid: existing.kid, privateKey: (await importJWK(jwk, 'ES256')) as CryptoKey, publicJwk: existing.publicJwk as JWK };
-      return this.current;
+      return { kid: existing.kid, privateKey: (await importJWK(jwk, 'ES256')) as CryptoKey, publicJwk: existing.publicJwk as JWK };
     }
     const { publicKey, privateKey } = await generateKeyPair('ES256', { extractable: true });
     const publicJwk = await exportJWK(publicKey);
     const kid = await calculateJwkThumbprint(publicJwk);
     const full = { ...publicJwk, kid, alg: 'ES256', use: 'sig' };
-    this.store.putSigningKey({
+    await this.store.putSigningKey({
       kid,
       publicJwk: full,
       sealedPrivateJwk: this.box.seal(JSON.stringify(await exportJWK(privateKey)), `key:${kid}`),
       createdAt: this.now(),
     });
-    this.current = { kid, privateKey, publicJwk: full };
-    return this.current;
+    return { kid, privateKey, publicJwk: full };
   }
 
   /** Every key still trusted for verification (rotation keeps the previous one published). */
-  jwks(): { keys: JWK[] } {
-    return { keys: this.store.listSigningKeys().map((k) => k.publicJwk as JWK) };
+  async jwks(): Promise<{ keys: JWK[] }> {
+    return { keys: (await this.store.listSigningKeys()).map((k) => k.publicJwk as JWK) };
   }
 }

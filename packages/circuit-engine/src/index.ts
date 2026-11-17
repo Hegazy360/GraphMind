@@ -2,8 +2,17 @@
  * @graphmind-ai/circuit-engine — durable execution over a step journal.
  * See docs/plans/hosted-workflow-platform.md for the architecture.
  */
-export { Executor, type ExecutorOptions, type EnqueueOptions, type ResumeOptions, type ApprovalDecision } from './executor.js';
+export {
+  Executor,
+  type ExecutorOptions,
+  type EnqueueOptions,
+  type ResumeOptions,
+  type ApprovalDecision,
+  type DrainOptions,
+  type DrainResult,
+} from './executor.js';
 export { SqliteJournalStore } from './sqlite-store.js';
+export { PgJournalStore, type PgJournalStoreOptions } from './pg-store.js';
 export type { JournalStore, Patch, RunFilter, WaitRow } from './store.js';
 export { createContext, SuspendSignal, TapeEndSignal, type Invocation, type InvocationIO, type McpGateway, type McpPolicy, type Suspension, type TestHooks } from './context.js';
 export {

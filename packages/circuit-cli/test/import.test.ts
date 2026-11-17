@@ -76,17 +76,17 @@ describe('importN8n', () => {
 
     const store = new SqliteJournalStore(':memory:');
     const executor = new Executor({ store, clock: new ManualClock(), workflows: defs });
-    const run = executor.enqueue('lead-capture', {});
+    const run = await executor.enqueue('lead-capture', {});
     await executor.drain();
-    const paused = executor.getRun(run.id);
+    const paused = await executor.getRun(run.id);
     expect(paused?.status).toBe('paused');
-    const held = executor.getJournal(run.id)[0];
+    const held = (await executor.getJournal(run.id))[0];
     expect(held?.name).toBe('clean-up');
     expect(held?.error?.message).toContain('TODO(circuit-import)');
     // Porting workflow: inject a value for the unported step; the run moves on.
-    executor.resume(run.id, 0, 'inject', { actor: 'porter', output: { email: 'a@b.c' } });
+    await executor.resume(run.id, 0, 'inject', { actor: 'porter', output: { email: 'a@b.c' } });
     await executor.drain();
-    expect(executor.getRun(run.id)?.status).toBe('suspended'); // now at the 2h sleep
+    expect((await executor.getRun(run.id))?.status).toBe('suspended'); // now at the 2h sleep
   });
 
   it('rejects something that is not an n8n export', () => {

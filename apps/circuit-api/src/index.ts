@@ -49,7 +49,13 @@ export interface ApiOptions {
   apiKeys?: readonly string[];
   /** User accounts (sign-up, sessions, personal tokens). When set, /v1 requires a signed-in user. */
   accounts?: Accounts;
-  /** Kick the engine after writes so `circuit dev` feels immediate. */
+  /**
+   * Called after every write that may have made a run due (enqueue,
+   * resume, approve, fork, event). `circuit dev` kicks its engine loop; a
+   * serverless host can start a budgeted `executor.drain({ budgetMs })`
+   * in the background of the request, or nudge a worker. Must not throw;
+   * it is not awaited, so the response does not wait for the engine.
+   */
   onWork?: () => void;
   /** Serve the web dashboard at `/` (default true). */
   dashboard?: boolean;
@@ -227,18 +233,18 @@ export function createApi(opts: ApiOptions): Hono {
 
   app.post('/v1/workflows/:name/runs', async (c) => {
     const body = enqueueBody.parse(await c.req.json().catch(() => ({})));
-    const run = executor.enqueue(c.req.param('name'), (body.input ?? null) as JsonValue, {
+    const run = await executor.enqueue(c.req.param('name'), (body.input ?? null) as JsonValue, {
       ...(body.idempotencyKey !== undefined ? { idempotencyKey: body.idempotencyKey } : {}),
     });
     kick();
     return c.json({ runId: run.id, status: run.status }, 202);
   });
 
-  app.get('/v1/runs', (c) => {
+  app.get('/v1/runs', async (c) => {
     const status = c.req.query('status');
     const workflow = c.req.query('workflow');
     const limit = Math.min(Number(c.req.query('limit') ?? 50) || 50, 500);
-    const runs = executor.listRuns({
+    const runs = await executor.listRuns({
       ...(workflow !== undefined ? { workflow } : {}),
       ...(status !== undefined ? { status: runStatus.parse(status) } : {}),
       limit,
@@ -246,21 +252,21 @@ export function createApi(opts: ApiOptions): Hono {
     return c.json({ runs });
   });
 
-  app.get('/v1/runs/:id', (c) => {
-    const run = executor.getRun(c.req.param('id'));
+  app.get('/v1/runs/:id', async (c) => {
+    const run = await executor.getRun(c.req.param('id'));
     if (!run) return problem(404, 'Run not found');
-    return c.json({ run, journal: executor.getJournal(run.id) });
+    return c.json({ run, journal: await executor.getJournal(run.id) });
   });
 
-  app.get('/v1/runs/:id/fixture', (c) => {
-    const run = executor.getRun(c.req.param('id'));
+  app.get('/v1/runs/:id/fixture', async (c) => {
+    const run = await executor.getRun(c.req.param('id'));
     if (!run) return problem(404, 'Run not found');
-    return c.json(exportFixture(store, run.id));
+    return c.json(await exportFixture(store, run.id));
   });
 
   app.post('/v1/runs/:id/entries/:seq/resume', async (c) => {
     const body = resumeBody.parse(await c.req.json());
-    const run = executor.resume(c.req.param('id'), Number(c.req.param('seq')), body.action, {
+    const run = await executor.resume(c.req.param('id'), Number(c.req.param('seq')), body.action, {
       actor: actor(c),
       ...(body.reason !== undefined ? { reason: body.reason } : {}),
       ...(body.input !== undefined ? { input: body.input } : {}),
@@ -271,14 +277,14 @@ export function createApi(opts: ApiOptions): Hono {
   });
 
   app.post('/v1/runs/:id/cancel', async (c) => {
-    if (!executor.getRun(c.req.param('id'))) return problem(404, 'Run not found');
-    const run = executor.cancel(c.req.param('id'), { actor: actor(c) });
+    if (!(await executor.getRun(c.req.param('id')))) return problem(404, 'Run not found');
+    const run = await executor.cancel(c.req.param('id'), { actor: actor(c) });
     return c.json({ run });
   });
 
   app.post('/v1/runs/:id/fork', async (c) => {
     const body = forkBody.parse(await c.req.json());
-    const fork = executor.fork(c.req.param('id'), {
+    const fork = await executor.fork(c.req.param('id'), {
       actor: actor(c),
       ...(body.uptoSeq !== undefined ? { uptoSeq: body.uptoSeq } : {}),
       ...(body.substitute !== undefined ? { substitute: body.substitute } : {}),
@@ -289,7 +295,7 @@ export function createApi(opts: ApiOptions): Hono {
 
   app.post('/v1/runs/:id/approvals/:seq', async (c) => {
     const body = approvalBody.parse(await c.req.json());
-    const run = executor.approve(c.req.param('id'), Number(c.req.param('seq')), {
+    const run = await executor.approve(c.req.param('id'), Number(c.req.param('seq')), {
       approved: body.approved,
       // A signed-in account approves as itself; the body's `by` is for API keys and open dev servers.
       by: accounts?.principal(c)?.user.email ?? body.by,
@@ -301,19 +307,19 @@ export function createApi(opts: ApiOptions): Hono {
 
   app.post('/v1/events', async (c) => {
     const body = eventBody.parse(await c.req.json());
-    const result = executor.publishEvent(body.name, (body.data ?? null) as JsonValue);
+    const result = await executor.publishEvent(body.name, (body.data ?? null) as JsonValue);
     kick();
     return c.json(result, 202);
   });
 
   app.post('/v1/breakpoints', async (c) => {
     const matcher = breakpointMatcher.parse(await c.req.json());
-    executor.setBreakpoint(matcher);
+    await executor.setBreakpoint(matcher);
     return c.json({ ok: true }, 201);
   });
 
-  app.delete('/v1/breakpoints', (c) => {
-    executor.clearBreakpoints();
+  app.delete('/v1/breakpoints', async (c) => {
+    await executor.clearBreakpoints();
     return c.json({ ok: true });
   });
 

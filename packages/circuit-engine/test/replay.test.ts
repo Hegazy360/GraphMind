@@ -13,7 +13,7 @@ import {
   SqliteJournalStore,
 } from '../src/index.js';
 
-function setup(defs: Parameters<Executor['register']>[0][]) {
+async function setup(defs: Parameters<Executor['register']>[0][]) {
   const clock = new ManualClock();
   const store = new SqliteJournalStore(':memory:');
   const executor = new Executor({ store, clock, owner: 'test', workflows: defs });
@@ -36,10 +36,10 @@ const makeTrip = (calls: string[]) =>
 describe('fixtures (recorded run as regression test)', () => {
   async function record() {
     const calls: string[] = [];
-    const { store, executor } = setup([makeTrip(calls)]);
-    const run = executor.enqueue('trip', null);
+    const { store, executor } = await setup([makeTrip(calls)]);
+    const run = await executor.enqueue('trip', null);
     await executor.drain();
-    return { fixture: exportFixture(store, run.id), calls };
+    return { fixture: await exportFixture(store, run.id), calls };
   }
 
   it('passes against unchanged code — executing nothing', async () => {
@@ -101,10 +101,10 @@ describe('deploy check', () => {
     });
 
   it('clears an unchanged deploy and names every run a change would break', async () => {
-    const { store, executor } = setup([v1()]);
-    const inflight = executor.enqueue('ship', null);
+    const { store, executor } = await setup([v1()]);
+    const inflight = await executor.enqueue('ship', null);
     await executor.drain(); // now suspended at the sleep
-    expect(executor.getRun(inflight.id)?.status).toBe('suspended');
+    expect((await executor.getRun(inflight.id))?.status).toBe('suspended');
 
     const same = await checkDeploy([v1()], store);
     expect(same.checked).toBe(1);
@@ -121,7 +121,7 @@ describe('deploy check', () => {
     expect(report.broken[0]?.runId).toBe(inflight.id);
     expect(report.broken[0]?.outcome.kind).toBe('diverged');
     // The in-flight run itself was never touched.
-    expect(executor.getRun(inflight.id)?.status).toBe('suspended');
+    expect((await executor.getRun(inflight.id))?.status).toBe('suspended');
   });
 });
 
@@ -136,44 +136,44 @@ describe('fork (what-if)', () => {
       });
       return { total };
     });
-    const { executor } = setup([buggy]);
-    const original = executor.enqueue('budget', null);
+    const { executor } = await setup([buggy]);
+    const original = await executor.enqueue('budget', null);
     await executor.drain();
-    expect(executor.getRun(original.id)?.output).toEqual({ total: 60_000 });
+    expect((await executor.getRun(original.id))?.output).toEqual({ total: 60_000 });
 
-    const fork = executor.fork(original.id, { actor: 'dev@team', substitute: { seq: 0, output: 10 } });
+    const fork = await executor.fork(original.id, { actor: 'dev@team', substitute: { seq: 0, output: 10 } });
     await executor.drain();
-    const forked = executor.getRun(fork.id);
+    const forked = await executor.getRun(fork.id);
     expect(forked?.status).toBe('completed');
     expect(forked?.output).toEqual({ total: 400 }); // downstream step genuinely re-ran
     expect(liveCalls).toEqual(['total', 'total']);
     expect(forked?.forkedFrom).toEqual({ runId: original.id, fromSeq: 0 });
     // The substitution is audited on the forked journal.
-    expect(executor.getJournal(fork.id)[0]?.interventions.at(-1)).toMatchObject({
+    expect((await executor.getJournal(fork.id))[0]?.interventions.at(-1)).toMatchObject({
       actor: 'dev@team',
       action: 'inject',
     });
     // Original run untouched.
-    expect(executor.getRun(original.id)?.output).toEqual({ total: 60_000 });
+    expect((await executor.getRun(original.id))?.output).toEqual({ total: 60_000 });
   });
 
   it('uptoSeq replays the prefix and re-executes the rest', async () => {
     const calls: string[] = [];
     const wf = makeTrip(calls);
-    const { executor } = setup([wf]);
-    const original = executor.enqueue('trip', null);
+    const { executor } = await setup([wf]);
+    const original = await executor.enqueue('trip', null);
     await executor.drain();
     calls.length = 0;
-    const fork = executor.fork(original.id, { actor: 'dev', uptoSeq: 1 });
+    const fork = await executor.fork(original.id, { actor: 'dev', uptoSeq: 1 });
     await executor.drain();
-    expect(executor.getRun(fork.id)?.status).toBe('completed');
+    expect((await executor.getRun(fork.id))?.status).toBe('completed');
     expect(calls).toEqual(['convert-currency']); // step 0 replayed, step 1 re-ran
   });
 
   it('refuses a pointless identical fork', async () => {
-    const { executor } = setup([makeTrip([])]);
-    const run = executor.enqueue('trip', null);
+    const { executor } = await setup([makeTrip([])]);
+    const run = await executor.enqueue('trip', null);
     await executor.drain();
-    expect(() => executor.fork(run.id, { actor: 'dev' })).toThrow(/uptoSeq and\/or substitute/);
+    await expect(executor.fork(run.id, { actor: 'dev' })).rejects.toThrow(/uptoSeq and\/or substitute/);
   });
 });

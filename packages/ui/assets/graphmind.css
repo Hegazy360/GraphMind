@@ -344,6 +344,9 @@ body.gm-page-open [data-gm-app] { display: none !important; }
 .gm-auth .gm-panel { width: min(440px, 100%); padding: 26px 26px 22px; }
 .gm-auth-status { min-height: 1.2em; margin: 10px 0 0; color: var(--gm-danger); font-size: 13px; }
 .gm-auth-switch { margin: 16px 0 0; text-align: center; font-size: 13.5px; color: var(--gm-text-2); }
+.gm-auth-notice { margin: 14px 0 0; padding: 10px 12px; border: 1px solid var(--gm-accent); border-radius: 8px; font-size: 13.5px; color: var(--gm-text-2); }
+.gm-auth-forgot { margin: 6px 0 0; text-align: right; font-size: 12.5px; }
+.gm-auth-forgot a { color: var(--gm-text-2); }
 .gm-auth-switch a { color: var(--gm-accent); }
 
 .gm-profile { display: flex; gap: 14px; align-items: center; }

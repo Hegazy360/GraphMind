@@ -142,6 +142,54 @@ jobs:
           wait "$SERVER_PID" 2>/dev/null || true
           exit "$status"
 
+  # The hosted stores (Circuit journal, Jack, Jack sign-in, accounts) run their
+  # contract suites against SQLite in every `test` cell above; this job runs the
+  # same suites against a real Postgres (PG_TEST_URL), which is what production
+  # uses on Supabase. It then builds the whole graphmind.ai deployment exactly as
+  # Vercel does (minus migrations: no database credentials exist in CI), so a
+  # change that would fail the Vercel build fails here first.
+  postgres-and-site:
+    name: postgres stores and site build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: gm
+          POSTGRES_PASSWORD: gm
+          POSTGRES_DB: gm_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U gm" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PG_TEST_URL: postgres://gm:gm@127.0.0.1:5432/gm_test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm (corepack, pinned by packageManager)
+        run: |
+          corepack enable
+          corepack prepare --activate
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.x'
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the site (as Vercel does, without migrations)
+        run: pnpm build:site
+
+      - name: Store suites against Postgres
+        run: >-
+          pnpm --filter @graphmind-ai/db --filter @graphmind-ai/accounts --filter @graphmind-ai/circuit-engine
+          --filter circuit-api --filter @graphmind-ai/jack-auth --filter jack-api --filter platform run test
+
   # What a fresh `npm install graphmind-ai` user gets: pack all four
   # publishable packages, install the tarballs into an empty project outside
   # the repo, run the binary, and make sure `graphmind demo` actually ingests

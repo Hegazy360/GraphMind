@@ -18,9 +18,12 @@
  */
 import type { JournalEntry, JsonValue, Run } from '@graphmind-ai/circuit-schema';
 import type { AnyWorkflow } from '@graphmind-ai/circuit-sdk';
+import { canonicalValue } from '@graphmind-ai/analyze';
 import { createContext, SuspendSignal, TapeEndSignal, type InvocationIO } from './context.js';
 import { NonDeterminismError, toErrorShape, type Divergence } from './errors.js';
 import type { JournalStore } from './store.js';
+
+const NO_IGNORED_KEYS: ReadonlySet<string> = new Set();
 
 export type ReplayOutcome =
   /** The function consumed the whole journal and returned. */
@@ -68,16 +71,16 @@ export async function replayJournal(
     hermetic: true,
     // Hermetic mode throws TapeEndSignal before any of these can be reached;
     // they exist so a bug surfaces as a loud throw, not a silent effect.
-    append: () => {
+    append: async () => {
       throw new Error('hermetic replay attempted a journal append');
     },
-    update: (seq, patch) => {
+    update: async (seq, patch) => {
       const entry = entries.find((e) => e.seq === seq);
       if (entry) Object.assign(entry, patch);
     },
-    addWait: () => {},
-    removeWait: () => {},
-    spawnChild: () => {
+    addWait: async () => {},
+    removeWait: async () => {},
+    spawnChild: async () => {
       throw new Error('hermetic replay attempted to spawn a child run');
     },
     log: () => {},
@@ -95,15 +98,15 @@ export async function replayJournal(
   }
 }
 
-export function exportFixture(store: JournalStore, runId: string): Fixture {
-  const run = store.getRun(runId);
+export async function exportFixture(store: JournalStore, runId: string): Promise<Fixture> {
+  const run = await store.getRun(runId);
   if (!run) throw new Error(`run ${runId} not found`);
   const fixture: Fixture = {
     circuitFixture: 1,
     workflow: run.workflow,
     input: run.input,
     recordedAt: run.finishedAt ?? run.createdAt,
-    journal: store.listJournal(runId),
+    journal: await store.listJournal(runId),
   };
   if (run.output !== undefined) fixture.output = run.output;
   return fixture;
@@ -122,7 +125,10 @@ export async function replayFixture(def: AnyWorkflow, fixture: Fixture): Promise
   const outcome = await replayJournal(def, fixture.input, fixture.journal);
   switch (outcome.kind) {
     case 'identical': {
-      const same = JSON.stringify(outcome.output ?? null) === JSON.stringify(fixture.output ?? null);
+      // Key-order-insensitive: a fixture exported from PgJournalStore (JSONB
+      // reorders object keys) must still pass against code that builds the
+      // same object in a different key order. No ignored keys.
+      const same = canonicalValue(outcome.output ?? null, NO_IGNORED_KEYS) === canonicalValue(fixture.output ?? null, NO_IGNORED_KEYS);
       return same ? { kind: 'pass' } : { kind: 'output-changed', recorded: fixture.output, replayed: outcome.output };
     }
     case 'compatible':
@@ -165,9 +171,9 @@ export async function checkDeploy(
   let checked = 0;
   for (const def of defs) {
     for (const status of ['running', 'suspended', 'paused', 'queued'] as const) {
-      for (const run of store.listRuns({ workflow: def.config.name, status, limit: 10_000 })) {
+      for (const run of await store.listRuns({ workflow: def.config.name, status, limit: 10_000 })) {
         checked += 1;
-        const outcome = await replayJournal(def, run.input, store.listJournal(run.id));
+        const outcome = await replayJournal(def, run.input, await store.listJournal(run.id));
         if (outcome.kind === 'diverged' || outcome.kind === 'replay-error') {
           broken.push({ runId: run.id, workflow: run.workflow, status: run.status, outcome });
         }

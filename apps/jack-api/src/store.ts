@@ -1,7 +1,9 @@
 /**
  * JackStore — the control plane's persistence contract. One interface, two
  * backends (as Circuit): `SqliteStore` on `node:sqlite` for dev, tests and
- * single-node self-hosting; a Postgres store for the hosted service (M7).
+ * single-node self-hosting; `PgJackStore` (./pg-store.ts) for the hosted
+ * service. Every method is async because the hosted backend is a network
+ * database; SQLite resolves immediately.
  *
  * Per project:
  *   source       the OpenAPI document (text) and where it came from
@@ -75,35 +77,35 @@ export interface CallRow {
 }
 
 export interface JackStore {
-  createProject(p: NewProject): OwnedProject;
-  getProject(id: string): OwnedProject | null;
-  getProjectBySlug(slug: string): OwnedProject | null;
+  createProject(p: NewProject): Promise<OwnedProject>;
+  getProject(id: string): Promise<OwnedProject | null>;
+  getProjectBySlug(slug: string): Promise<OwnedProject | null>;
   /** All projects, or only those owned by `ownerId` when given. */
-  listProjects(ownerId?: string): OwnedProject[];
-  updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'upstream' | 'auth' | 'activeVersion'>>): OwnedProject;
-  deleteProject(id: string): boolean;
+  listProjects(ownerId?: string): Promise<OwnedProject[]>;
+  updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'upstream' | 'auth' | 'activeVersion'>>): Promise<OwnedProject>;
+  deleteProject(id: string): Promise<boolean>;
 
-  getSource(projectId: string): SourceRecord | null;
-  putSource(projectId: string, source: Omit<SourceRecord, 'updatedAt'>): void;
-  getDraft(projectId: string): { config: JackConfig; updatedAt: number } | null;
-  putDraft(projectId: string, config: JackConfig): void;
+  getSource(projectId: string): Promise<SourceRecord | null>;
+  putSource(projectId: string, source: Omit<SourceRecord, 'updatedAt'>): Promise<void>;
+  getDraft(projectId: string): Promise<{ config: JackConfig; updatedAt: number } | null>;
+  putDraft(projectId: string, config: JackConfig): Promise<void>;
 
   /** Assigns the next version number for the project. */
-  createDeployment(d: NewDeployment): StoredDeployment;
-  getDeployment(projectId: string, version: number): StoredDeployment | null;
-  listDeployments(projectId: string): StoredDeployment[];
+  createDeployment(d: NewDeployment): Promise<StoredDeployment>;
+  getDeployment(projectId: string, version: number): Promise<StoredDeployment | null>;
+  listDeployments(projectId: string): Promise<StoredDeployment[]>;
   /** The deployment MCP clients get right now, or null before the first promote. */
-  activeDeployment(projectId: string): StoredDeployment | null;
+  activeDeployment(projectId: string): Promise<StoredDeployment | null>;
 
-  putSecret(projectId: string, name: string, sealed: string): void;
-  getSecret(projectId: string, name: string): string | null;
-  listSecrets(projectId: string): SecretInfo[];
-  deleteSecret(projectId: string, name: string): boolean;
+  putSecret(projectId: string, name: string, sealed: string): Promise<void>;
+  getSecret(projectId: string, name: string): Promise<string | null>;
+  listSecrets(projectId: string): Promise<SecretInfo[]>;
+  deleteSecret(projectId: string, name: string): Promise<boolean>;
 
-  insertCall(row: Omit<CallRow, 'id'>): void;
-  listCalls(projectId: string, opts?: { limit?: number; before?: number }): CallRow[];
+  insertCall(row: Omit<CallRow, 'id'>): Promise<void>;
+  listCalls(projectId: string, opts?: { limit?: number; before?: number }): Promise<CallRow[]>;
 
-  close(): void;
+  close(): Promise<void>;
 }
 
 export class SlugTakenError extends Error {

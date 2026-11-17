@@ -2,7 +2,7 @@
 // sign-in and the account page are the shared shell (./gm/shell.js), the same
 // component every dashboard uses; this file only routes and draws the
 // products page.
-import { h, renderAccount, renderAuth, startShell } from './gm/shell.js';
+import { h, renderAccount, renderAuth, renderReset, startShell } from './gm/shell.js';
 
 const main = document.getElementById('main');
 const shell = await startShell({ product: 'hub' });
@@ -18,6 +18,12 @@ function nextUrl() {
   } catch {
     return null;
   }
+}
+
+/** `#/signin?notice=confirmed`: why an email link brought the visitor back (a key into fixed messages). */
+function noticeParam() {
+  const q = location.hash.split('?')[1];
+  return q ? new URLSearchParams(q).get('notice') ?? undefined : undefined;
 }
 
 function renderHome() {
@@ -56,9 +62,10 @@ function route() {
   shell.renderBar();
   if (!shell.user) {
     const firstVisitor = shell.server.signup && shell.server.users === 0;
-    const mode = path === '/signup' || (path === '/' && firstVisitor) ? 'signup' : 'signin';
+    const mode = path === '/recover' ? 'recover' : path === '/signup' || (path === '/' && firstVisitor) ? 'signup' : 'signin';
     return renderAuth(main, shell, {
       mode,
+      notice: noticeParam(),
       onSignedIn: (user) => {
         shell.user = user;
         const next = nextUrl();
@@ -73,6 +80,11 @@ function route() {
     if (next) return location.assign(next); // already signed in: straight back
     history.replaceState(null, '', '#/');
   }
+  if (path === '/reset') {
+    // A reset link signed the visitor in (the server exchanged its code); now the new password.
+    return renderReset(main, shell, { onDone: () => { location.hash = '#/'; } });
+  }
+  if (path === '/recover') history.replaceState(null, '', '#/');
   if (path === '/account') return renderAccount(main, shell);
   return renderHome();
 }

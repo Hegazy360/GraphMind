@@ -149,34 +149,34 @@ export class SqliteStore implements JackStore {
     return this.db.prepare(sql).all(...args) as Row[];
   }
 
-  createProject(p: NewProject): OwnedProject {
-    if (this.getProjectBySlug(p.slug)) throw new SlugTakenError(p.slug);
+  async createProject(p: NewProject): Promise<OwnedProject> {
+    if (await this.getProjectBySlug(p.slug)) throw new SlugTakenError(p.slug);
     const t = this.now();
     const id = `prj_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
     this.db
       .prepare('INSERT INTO projects (id, slug, name, upstream, auth, active_version, created_at, updated_at, owner_id) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)')
       .run(id, p.slug, p.name, p.upstream, JSON.stringify(p.auth), t, t, p.ownerId ?? null);
-    return this.getProject(id) as OwnedProject;
+    return (await this.getProject(id)) as OwnedProject;
   }
 
-  getProject(id: string): OwnedProject | null {
+  async getProject(id: string): Promise<OwnedProject | null> {
     const r = this.one('SELECT * FROM projects WHERE id = ?', id);
     return r ? rowToProject(r) : null;
   }
 
-  getProjectBySlug(slug: string): OwnedProject | null {
+  async getProjectBySlug(slug: string): Promise<OwnedProject | null> {
     const r = this.one('SELECT * FROM projects WHERE slug = ?', slug);
     return r ? rowToProject(r) : null;
   }
 
-  listProjects(ownerId?: string): OwnedProject[] {
+  async listProjects(ownerId?: string): Promise<OwnedProject[]> {
     return ownerId === undefined
       ? this.all('SELECT * FROM projects ORDER BY created_at, slug').map(rowToProject)
       : this.all('SELECT * FROM projects WHERE owner_id = ? ORDER BY created_at, slug', ownerId).map(rowToProject);
   }
 
-  updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'upstream' | 'auth' | 'activeVersion'>>): OwnedProject {
-    const current = this.getProject(id);
+  async updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'upstream' | 'auth' | 'activeVersion'>>): Promise<OwnedProject> {
+    const current = await this.getProject(id);
     if (!current) throw new NotFoundError(`project ${id}`);
     const next = { ...current, ...patch, updatedAt: this.now() };
     this.db
@@ -185,34 +185,34 @@ export class SqliteStore implements JackStore {
     return next;
   }
 
-  deleteProject(id: string): boolean {
+  async deleteProject(id: string): Promise<boolean> {
     return this.db.prepare('DELETE FROM projects WHERE id = ?').run(id).changes > 0;
   }
 
-  getSource(projectId: string): SourceRecord | null {
+  async getSource(projectId: string): Promise<SourceRecord | null> {
     const r = this.one('SELECT * FROM sources WHERE project_id = ?', projectId);
     return r ? { text: String(r.text), url: str(r.url), updatedAt: Number(r.updated_at) } : null;
   }
 
-  putSource(projectId: string, s: Omit<SourceRecord, 'updatedAt'>): void {
+  async putSource(projectId: string, s: Omit<SourceRecord, 'updatedAt'>): Promise<void> {
     this.db
       .prepare('INSERT INTO sources VALUES (?, ?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET text = excluded.text, url = excluded.url, updated_at = excluded.updated_at')
       .run(projectId, s.text, s.url, this.now());
   }
 
-  getDraft(projectId: string): { config: JackConfig; updatedAt: number } | null {
+  async getDraft(projectId: string): Promise<{ config: JackConfig; updatedAt: number } | null> {
     const r = this.one('SELECT * FROM drafts WHERE project_id = ?', projectId);
     return r ? { config: jackConfig.parse(JSON.parse(String(r.config))), updatedAt: Number(r.updated_at) } : null;
   }
 
-  putDraft(projectId: string, config: JackConfig): void {
+  async putDraft(projectId: string, config: JackConfig): Promise<void> {
     this.db
       .prepare('INSERT INTO drafts VALUES (?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET config = excluded.config, updated_at = excluded.updated_at')
       .run(projectId, JSON.stringify(config), this.now());
   }
 
-  createDeployment(d: NewDeployment): StoredDeployment {
-    if (!this.getProject(d.projectId)) throw new NotFoundError(`project ${d.projectId}`);
+  async createDeployment(d: NewDeployment): Promise<StoredDeployment> {
+    if (!(await this.getProject(d.projectId))) throw new NotFoundError(`project ${d.projectId}`);
     const last = this.one('SELECT COALESCE(MAX(version), 0) AS v FROM deployments WHERE project_id = ?', d.projectId);
     const version = Number(last?.v ?? 0) + 1;
     const id = `dep_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
@@ -221,47 +221,47 @@ export class SqliteStore implements JackStore {
         'INSERT INTO deployments (id, project_id, version, manifest, manifest_hash, created_by, created_at, config, message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(id, d.projectId, version, JSON.stringify(d.manifest), d.manifestHash, d.createdBy, this.now(), d.config ? JSON.stringify(d.config) : null, d.message ?? null);
-    return this.getDeployment(d.projectId, version) as StoredDeployment;
+    return (await this.getDeployment(d.projectId, version)) as StoredDeployment;
   }
 
-  getDeployment(projectId: string, version: number): StoredDeployment | null {
+  async getDeployment(projectId: string, version: number): Promise<StoredDeployment | null> {
     const r = this.one('SELECT * FROM deployments WHERE project_id = ? AND version = ?', projectId, version);
     return r ? rowToDeployment(r) : null;
   }
 
-  listDeployments(projectId: string): StoredDeployment[] {
+  async listDeployments(projectId: string): Promise<StoredDeployment[]> {
     return this.all('SELECT * FROM deployments WHERE project_id = ? ORDER BY version DESC', projectId).map(rowToDeployment);
   }
 
-  activeDeployment(projectId: string): StoredDeployment | null {
-    const p = this.getProject(projectId);
+  async activeDeployment(projectId: string): Promise<StoredDeployment | null> {
+    const p = await this.getProject(projectId);
     if (!p || p.activeVersion === null) return null;
     return this.getDeployment(projectId, p.activeVersion);
   }
 
-  putSecret(projectId: string, name: string, sealed: string): void {
+  async putSecret(projectId: string, name: string, sealed: string): Promise<void> {
     this.db
       .prepare('INSERT INTO secrets VALUES (?, ?, ?, ?) ON CONFLICT(project_id, name) DO UPDATE SET sealed = excluded.sealed, updated_at = excluded.updated_at')
       .run(projectId, name, sealed, this.now());
   }
 
-  getSecret(projectId: string, name: string): string | null {
+  async getSecret(projectId: string, name: string): Promise<string | null> {
     const r = this.one('SELECT sealed FROM secrets WHERE project_id = ? AND name = ?', projectId, name);
     return r ? String(r.sealed) : null;
   }
 
-  listSecrets(projectId: string): SecretInfo[] {
+  async listSecrets(projectId: string): Promise<SecretInfo[]> {
     return this.all('SELECT name, updated_at FROM secrets WHERE project_id = ? ORDER BY name', projectId).map((r) => ({
       name: String(r.name),
       updatedAt: Number(r.updated_at),
     }));
   }
 
-  deleteSecret(projectId: string, name: string): boolean {
+  async deleteSecret(projectId: string, name: string): Promise<boolean> {
     return this.db.prepare('DELETE FROM secrets WHERE project_id = ? AND name = ?').run(projectId, name).changes > 0;
   }
 
-  insertCall(c: Omit<CallRow, 'id'>): void {
+  async insertCall(c: Omit<CallRow, 'id'>): Promise<void> {
     this.db
       .prepare(
         'INSERT INTO calls (project_id, version, tool, status, upstream_status, ms, request_bytes, response_bytes, subject, client_id, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -269,14 +269,14 @@ export class SqliteStore implements JackStore {
       .run(c.projectId, c.version, c.tool, c.status, c.upstreamStatus, c.ms, c.requestBytes, c.responseBytes, c.subject, c.clientId, c.at);
   }
 
-  listCalls(projectId: string, opts: { limit?: number; before?: number } = {}): CallRow[] {
+  async listCalls(projectId: string, opts: { limit?: number; before?: number } = {}): Promise<CallRow[]> {
     const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
     return opts.before !== undefined
       ? this.all('SELECT * FROM calls WHERE project_id = ? AND id < ? ORDER BY id DESC LIMIT ?', projectId, opts.before, limit).map(rowToCall)
       : this.all('SELECT * FROM calls WHERE project_id = ? ORDER BY id DESC LIMIT ?', projectId, limit).map(rowToCall);
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.db.close();
   }
 }

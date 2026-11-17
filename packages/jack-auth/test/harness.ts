@@ -14,7 +14,7 @@ import { Client, StreamableHTTPClientTransport, type OAuthClientProvider } from 
 import { parseManifest, type Manifest } from '@graphmind-ai/jack-schema';
 import { createToolHttpHandler, type CallRecord } from '@graphmind-ai/jack-runtime';
 import { createJackVerifier } from '@graphmind-ai/jack-verify';
-import { createAuthServer, SqliteAuthStore, type AuthEvent, type AuthServerOptions, type ResolvedAuth } from '../src/index.js';
+import { createAuthServer, SqliteAuthStore, type AuthEvent, type AuthStore, type AuthServerOptions, type ResolvedAuth } from '../src/index.js';
 import { browse, type BrowseOptions } from '../src/testing.js';
 
 export const JACK = 'https://jack.test';
@@ -189,7 +189,7 @@ export interface Stack {
   mcpUrl: string;
   net: (url: string | URL, init?: RequestInit) => Promise<Response>;
   auth: ReturnType<typeof createAuthServer>;
-  store: SqliteAuthStore;
+  store: AuthStore;
   idp: IdpControls;
   api: ApiLog;
   calls: CallRecord[];
@@ -209,7 +209,7 @@ export async function createStack(mode: 'oidc' | 'apikey' | 'link' | 'none', ove
   const calls: CallRecord[] = [];
   const events: AuthEvent[] = [];
   const clock = { now: Date.now() };
-  const store = new SqliteAuthStore(':memory:');
+  const store: AuthStore = (overrides.store as AuthStore | undefined) ?? new SqliteAuthStore(':memory:');
   const idpApp = await createIdp(idp);
   const apiApp = createApi(api, mode === 'link' ? { issuer: `${JACK}${prefix}` } : null);
   const m = manifest();

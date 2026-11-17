@@ -69,11 +69,16 @@ export interface InvocationIO {
   clock: Clock;
   entries: JournalEntry[];
   breakpoints: BreakpointMatcher[];
-  append(entry: Omit<JournalEntry, 'seq'>): JournalEntry;
-  update(seq: number, patch: Patch<JournalEntry>): void;
-  addWait(seq: number, eventName: string, match: Record<string, JsonValue> | undefined, expiresAt: number): void;
-  removeWait(seq: number): void;
-  spawnChild(seq: number, workflow: string, input: JsonValue): string;
+  /*
+   * Writes are async (the JournalStore is). The context awaits every one
+   * before acting on its result, so "persist before use" holds; the
+   * executor additionally serializes them in issue order (see invokeRun).
+   */
+  append(entry: Omit<JournalEntry, 'seq'>): Promise<JournalEntry>;
+  update(seq: number, patch: Patch<JournalEntry>): Promise<void>;
+  addWait(seq: number, eventName: string, match: Record<string, JsonValue> | undefined, expiresAt: number): Promise<void>;
+  removeWait(seq: number): Promise<void>;
+  spawnChild(seq: number, workflow: string, input: JsonValue): Promise<string>;
   log(message: string): void;
   hooks?: TestHooks;
   /**
@@ -170,7 +175,7 @@ export function createContext(io: InvocationIO): Invocation {
   }
 
   /** Every novel call funnels through here — the rename/insertion guard. */
-  function appendAndIndex(entry: Omit<JournalEntry, 'seq'>): JournalEntry {
+  async function appendAndIndex(entry: Omit<JournalEntry, 'seq'>): Promise<JournalEntry> {
     const pending = firstUnreplayed();
     if (pending) {
       throw new NonDeterminismError({
@@ -183,15 +188,22 @@ export function createContext(io: InvocationIO): Invocation {
     if (io.hermetic === true) {
       throw new TapeEndSignal({ kind: entry.kind, name: entry.name, ordinal: entry.ordinal });
     }
-    const stored = io.append(entry);
+    const stored = await io.append(entry);
     byIdentity.set(`${stored.name}\u0000${stored.ordinal}`, stored);
     consumed.add(stored.seq);
     return stored;
   }
 
-  function patch(entry: JournalEntry, changes: Patch<JournalEntry>): void {
-    io.update(entry.seq, changes);
+  /**
+   * Persist, then mirror into the in-memory entry. The mirror is applied
+   * when the call is issued (as it was when the store was sync), so a
+   * concurrent branch of the same invocation never sees a stale entry; the
+   * caller awaits the write before using the result.
+   */
+  async function patch(entry: JournalEntry, changes: Patch<JournalEntry>): Promise<void> {
+    const write = io.update(entry.seq, changes);
     Object.assign(entry, changes);
+    await write;
   }
 
   async function executeAttempt<T>(
@@ -201,7 +213,7 @@ export function createContext(io: InvocationIO): Invocation {
   ): Promise<JsonValue | undefined> {
     const attempt = { startedAt: now() } as { startedAt: number; finishedAt?: number; error?: ReturnType<typeof toErrorShape> };
     const attempts = [...entry.attempts, attempt];
-    patch(entry, { attempts, status: 'running' });
+    await patch(entry, { attempts, status: 'running' });
     let raw: unknown;
     try {
       raw = await fn();
@@ -211,15 +223,15 @@ export function createContext(io: InvocationIO): Invocation {
       const failures = attempts.length;
       if (failures < policy.max) {
         const wakeAt = now() + backoffMs(policy, failures);
-        patch(entry, { attempts, wakeAt });
+        await patch(entry, { attempts, wakeAt });
         throw new SuspendSignal({ type: 'retry', wakeAt });
       }
       const pauseOnError = io.workflow.config.onError === 'pause' || breakpointAt(entry.name, entry.kind, 'error');
       if (pauseOnError) {
-        patch(entry, { attempts, status: 'paused', pausePoint: 'error', error: attempt.error });
+        await patch(entry, { attempts, status: 'paused', pausePoint: 'error', error: attempt.error });
         throw new SuspendSignal({ type: 'pause', seq: entry.seq });
       }
-      patch(entry, { attempts, status: 'failed', error: attempt.error, finishedAt: now() });
+      await patch(entry, { attempts, status: 'failed', error: attempt.error, finishedAt: now() });
       throw err;
     }
     attempt.finishedAt = now();
@@ -227,12 +239,12 @@ export function createContext(io: InvocationIO): Invocation {
     if (breakpointAt(entry.name, entry.kind, 'after')) {
       const paused: Partial<JournalEntry> = { attempts, status: 'paused', pausePoint: 'after' };
       if (output !== undefined) paused.output = output;
-      patch(entry, paused);
+      await patch(entry, paused);
       throw new SuspendSignal({ type: 'pause', seq: entry.seq });
     }
     const done: Patch<JournalEntry> = { attempts, status: 'completed', finishedAt: now(), error: undefined };
     if (output !== undefined) done.output = output;
-    patch(entry, done);
+    await patch(entry, done);
     io.hooks?.afterStepPersist?.(io.runId, entry.seq);
     return output;
   }
@@ -285,13 +297,13 @@ export function createContext(io: InvocationIO): Invocation {
         return (await executeAttempt(existing, policy, fn)) as T;
       }
       if (breakpointAt(name, 'step', 'before')) {
-        const held = appendAndIndex({
+        const held = await appendAndIndex({
           runId: io.runId, kind: 'step', name, ordinal, key,
           status: 'paused', pausePoint: 'before', attempts: [], interventions: [], startedAt: now(),
         });
         throw new SuspendSignal({ type: 'pause', seq: held.seq });
       }
-      const entry = appendAndIndex({
+      const entry = await appendAndIndex({
         runId: io.runId, kind: 'step', name, ordinal, key,
         status: 'running', attempts: [], interventions: [], startedAt: now(),
       });
@@ -308,13 +320,13 @@ export function createContext(io: InvocationIO): Invocation {
         if (existing.status === 'completed') return;
         const wakeAt = existing.wakeAt ?? now();
         if (wakeAt <= now()) {
-          patch(existing, { status: 'completed', finishedAt: now() });
+          await patch(existing, { status: 'completed', finishedAt: now() });
           return;
         }
         throw new SuspendSignal({ type: 'sleep', wakeAt });
       }
       const wakeAt = now() + ms;
-      appendAndIndex({
+      await appendAndIndex({
         runId: io.runId, kind: 'sleep', name, ordinal, key,
         status: 'suspended', wakeAt, attempts: [], interventions: [], startedAt: now(),
       });
@@ -331,19 +343,19 @@ export function createContext(io: InvocationIO): Invocation {
         if (existing.status === 'completed') return existing.output ?? null;
         const expiresAt = existing.expiresAt ?? now();
         if (expiresAt <= now()) {
-          io.removeWait(existing.seq);
-          patch(existing, { status: 'completed', output: null, finishedAt: now() });
+          await io.removeWait(existing.seq);
+          await patch(existing, { status: 'completed', output: null, finishedAt: now() });
           return null;
         }
         throw new SuspendSignal({ type: 'wait', wakeAt: expiresAt });
       }
       const expiresAt = now() + timeoutMs;
-      const entry = appendAndIndex({
+      const entry = await appendAndIndex({
         runId: io.runId, kind: 'wait', name, ordinal, key,
         status: 'suspended', waitEvent: spec.name, expiresAt, attempts: [], interventions: [], startedAt: now(),
         ...(spec.match !== undefined ? { waitMatch: spec.match } : {}),
       });
-      io.addWait(entry.seq, spec.name, spec.match, expiresAt);
+      await io.addWait(entry.seq, spec.name, spec.match, expiresAt);
       throw new SuspendSignal({ type: 'wait', wakeAt: expiresAt });
     },
 
@@ -358,14 +370,14 @@ export function createContext(io: InvocationIO): Invocation {
         if (existing.status === 'skipped') return { approved: false, timedOut: false };
         const expiresAt = existing.expiresAt ?? now();
         if (expiresAt <= now()) {
-          patch(existing, { status: 'completed', output: { approved: false, timedOut: true }, finishedAt: now() });
+          await patch(existing, { status: 'completed', output: { approved: false, timedOut: true }, finishedAt: now() });
           return { approved: false, timedOut: true };
         }
         throw new SuspendSignal({ type: 'pause', seq: existing.seq, wakeAt: expiresAt });
       }
       const expiresAt = now() + timeoutMs;
       const input = toJsonValue({ approvers: spec.approvers ?? null, context: spec.context ?? null }, `approval '${name}'`);
-      const held = appendAndIndex({
+      const held = await appendAndIndex({
         runId: io.runId, kind: 'approval', name, ordinal, key,
         status: 'paused', pausePoint: 'before', expiresAt, attempts: [], interventions: [], startedAt: now(),
         ...(input !== undefined ? { input } : {}),
@@ -386,12 +398,12 @@ export function createContext(io: InvocationIO): Invocation {
         }
         throw new SuspendSignal({ type: 'child' });
       }
-      const entry = appendAndIndex({
+      const entry = await appendAndIndex({
         runId: io.runId, kind: 'child', name, ordinal, key,
         status: 'suspended', input: [workflowName, input], attempts: [], interventions: [], startedAt: now(),
       });
-      const childRunId = io.spawnChild(entry.seq, workflowName, input);
-      patch(entry, { childRunId });
+      const childRunId = await io.spawnChild(entry.seq, workflowName, input);
+      await patch(entry, { childRunId });
       throw new SuspendSignal({ type: 'child' });
     },
 
@@ -411,7 +423,7 @@ export function createContext(io: InvocationIO): Invocation {
             if (io.hermetic === true) throw new TapeEndSignal({ kind: 'mcp', name, ordinal });
           } else {
             const base = { runId: io.runId, kind: 'mcp' as const, name, ordinal, key, input, attempts: [], interventions: [], startedAt: now() };
-            if (io.hermetic === true) appendAndIndex({ ...base, status: 'running' }); // throws TapeEndSignal / divergence
+            if (io.hermetic === true) await appendAndIndex({ ...base, status: 'running' }); // throws TapeEndSignal / divergence
             const gateway = io.mcp;
             if (!gateway) {
               throw new Error(`ctx.mcp('${connection}') used, but this engine has no MCP connections — start it with --mcp <config.json>`);
@@ -425,10 +437,10 @@ export function createContext(io: InvocationIO): Invocation {
                   ? undefined
                   : null;
             if (hold !== null) {
-              const held = appendAndIndex({ ...base, status: 'paused', pausePoint: 'before', ...(hold ? { error: hold } : {}) });
+              const held = await appendAndIndex({ ...base, status: 'paused', pausePoint: 'before', ...(hold ? { error: hold } : {}) });
               throw new SuspendSignal({ type: 'pause', seq: held.seq });
             }
-            entry = appendAndIndex({ ...base, status: 'running' });
+            entry = await appendAndIndex({ ...base, status: 'running' });
             if (verdict.policy === 'deny') {
               policy = { ...policy, max: 1 };
               const denied = entry;

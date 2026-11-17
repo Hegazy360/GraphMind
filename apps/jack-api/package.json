@@ -37,7 +37,8 @@
     "@modelcontextprotocol/client": "^2.4.0",
     "yaml": "^2.9.0",
     "@graphmind-ai/accounts": "workspace:*",
-    "@graphmind-ai/ui": "workspace:*"
+    "@graphmind-ai/ui": "workspace:*",
+    "@graphmind-ai/db": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",

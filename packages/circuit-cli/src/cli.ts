@@ -204,7 +204,7 @@ export async function main(argv: string[]): Promise<void> {
     case 'runs': {
       const store = openStore(values.db);
       const executor = new Executor({ store });
-      const runs = executor.listRuns({
+      const runs = await executor.listRuns({
         ...(values.workflow !== undefined ? { workflow: values.workflow } : {}),
         ...(values.status !== undefined ? { status: values.status as never } : {}),
         limit: 50,
@@ -214,16 +214,16 @@ export async function main(argv: string[]): Promise<void> {
         console.log(`${run.id}  ${run.workflow.padEnd(24)} ${run.status}${paused}`);
       }
       if (runs.length === 0) console.log('(no runs)');
-      store.close();
+      await store.close();
       return;
     }
 
     case 'show': {
       const runId = positionals[0] ?? fail('show needs a runId');
       const store = openStore(values.db);
-      const run = store.getRun(runId) ?? fail(`run ${runId} not found`);
-      console.log(JSON.stringify({ run, journal: store.listJournal(runId) }, null, 2));
-      store.close();
+      const run = await store.getRun(runId) ?? fail(`run ${runId} not found`);
+      console.log(JSON.stringify({ run, journal: await store.listJournal(runId) }, null, 2));
+      await store.close();
       return;
     }
 
@@ -237,14 +237,14 @@ export async function main(argv: string[]): Promise<void> {
       const executor = new Executor({ store });
       const output = parseJsonFlag(values.output, 'output');
       const input = parseJsonFlag(values.input, 'input');
-      const run = executor.resume(runId, Number(seqRaw), action, {
+      const run = await executor.resume(runId, Number(seqRaw), action, {
         actor: values.actor ?? 'cli',
         ...(values.reason !== undefined ? { reason: values.reason } : {}),
         ...(output !== undefined ? { output } : {}),
         ...(input !== undefined ? { input } : {}),
       });
       console.log(`${run.id} → ${run.status} (will continue on the next dev tick)`);
-      store.close();
+      await store.close();
       return;
     }
 
@@ -252,11 +252,11 @@ export async function main(argv: string[]): Promise<void> {
       const runId = positionals[0] ?? fail('record needs a runId');
       const out = values.out ?? fail('record needs --out <file.json>');
       const store = openStore(values.db);
-      const fixture = exportFixture(store, runId);
+      const fixture = await exportFixture(store, runId);
       mkdirSync(dirname(resolve(out)), { recursive: true });
       writeFileSync(resolve(out), `${JSON.stringify(fixture, null, 2)}\n`);
       console.log(`recorded ${fixture.workflow} (${fixture.journal.length} entries) → ${out}`);
-      store.close();
+      await store.close();
       return;
     }
 
@@ -310,7 +310,7 @@ export async function main(argv: string[]): Promise<void> {
         }
         process.exit(1);
       }
-      store.close();
+      await store.close();
       return;
     }
 

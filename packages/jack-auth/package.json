@@ -37,7 +37,8 @@
     "@graphmind-ai/jack-runtime": "workspace:*",
     "@modelcontextprotocol/server": "^2.4.0",
     "hono": "^4.13.5",
-    "@graphmind-ai/jack-verify": "workspace:*"
+    "@graphmind-ai/jack-verify": "workspace:*",
+    "@graphmind-ai/db": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",

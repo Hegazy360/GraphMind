@@ -41,6 +41,14 @@ export interface PlatformOptions {
    * demo works locally exactly as graphmind.ai's rewrite serves it in production.
    */
   tryDist?: string;
+  /**
+   * Where the hub is mounted. Defaults to `/app` when `site` is set and `/` otherwise.
+   * The hosted site (graphmind.ai on Vercel) sets `/app` WITHOUT `site`: the CDN serves
+   * the homepage, /docs and /try as static files and only the dynamic paths reach this app.
+   */
+  hubPath?: string;
+  /** Extra routes at the origin root (the hosted site's internal engine tick). */
+  extend?: (app: Hono) => void;
 }
 
 const UI_DIR = new URL('../ui/', import.meta.url);
@@ -125,7 +133,7 @@ async function file(dir: URL | string, name: string, opts: { cacheable?: boolean
 
 export function createPlatform(opts: PlatformOptions): Hono {
   const app = new Hono();
-  const hubPath = hubPathFor(opts.site !== undefined);
+  const hubPath = (opts.hubPath ?? hubPathFor(opts.site !== undefined)).replace(/\/$/, '');
 
   // The hub: sign-in, products, account.
   const hub = new Hono();
@@ -142,6 +150,7 @@ export function createPlatform(opts: PlatformOptions): Hono {
   app.all('/p/*', (c) => opts.jack.app.fetch(c.req.raw));
   app.all('/.well-known/*', (c) => opts.jack.app.fetch(c.req.raw));
   app.get('/dashboard/callback', (c) => opts.jack.app.fetch(c.req.raw));
+  opts.extend?.(app);
 
   if (opts.site !== undefined) {
     const site = opts.site;
@@ -186,6 +195,8 @@ export function createPlatform(opts: PlatformOptions): Hono {
     });
     // The homepage's clips and stills (recorded by `pnpm media`).
     app.get('/media/:name{[a-z0-9._-]+\\.(webm|webp|jpg|png)}', (c) => file(`${site}/media`, c.req.param('name'), { cacheable: true, range: c.req.header('range') }));
+    mount(app, hubPath, (req) => hub.fetch(req));
+  } else if (hubPath !== '') {
     mount(app, hubPath, (req) => hub.fetch(req));
   } else {
     app.route('/', hub);

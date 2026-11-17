@@ -9,7 +9,17 @@ export const CIMD_SUPPORTED = true as const;
 export const PKCE_METHODS = ['S256'] as const;
 
 export { createAuthServer, type AuthEvent, type AuthServer, type AuthServerOptions } from './server.js';
-export { SqliteAuthStore, type AuthStore, type GrantRecord } from './store.js';
+export {
+  SqliteAuthStore,
+  type AuthRequestRecord,
+  type AuthStore,
+  type ClientRecord,
+  type CodeRecord,
+  type GrantRecord,
+  type RefreshRecord,
+  type SigningKeyRecord,
+} from './store.js';
+export { PgAuthStore, type PgAuthStoreOptions } from './pg-store.js';
 export { ClientError, ClientRegistry, redirectMatches, validRedirectUri, type ClientFetch, type ResolvedClient } from './clients.js';
 export { randomToken, SecretBox, sha256, verifyPkce } from './crypto.js';
 export {

@@ -32,10 +32,10 @@ describe('runFixtureTests', () => {
     const clock = new ManualClock();
     const store = new SqliteJournalStore(':memory:');
     const executor = new Executor({ store, clock, workflows: [v1()] });
-    const run = executor.enqueue('trip', null);
+    const run = await executor.enqueue('trip', null);
     await executor.drain();
     const dir = mkdtempSync(join(tmpdir(), 'circuit-fixtures-'));
-    writeFileSync(join(dir, 'trip.json'), JSON.stringify(exportFixture(store, run.id)));
+    writeFileSync(join(dir, 'trip.json'), JSON.stringify(await exportFixture(store, run.id)));
     return dir;
   }
 

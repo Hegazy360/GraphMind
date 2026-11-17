@@ -8,6 +8,9 @@
  * client. If "Try it" works, an AI client will work the same way.
  *
  * Test sessions live in memory (per server process) and are per project.
+ * Hosted on serverless instances they are per INSTANCE: a test sign-in that
+ * finishes on another instance than it started on fails with "expired";
+ * moving `pending`/`sessions` into the store is the fix if that bites.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
@@ -138,10 +141,10 @@ export class TestConsole {
   }
 
   /** Who the test session is signed in as (null if none, or it was revoked). */
-  whoami(project: Project): { signedIn: boolean; as: string | null } {
+  async whoami(project: Project): Promise<{ signedIn: boolean; as: string | null }> {
     const s = this.sessions.get(project.id);
     if (!s) return { signedIn: false, as: null };
-    const grant = this.plane.grants(project).find((g) => g.id === s.grantId);
+    const grant = (await this.plane.grants(project)).find((g) => g.id === s.grantId);
     if (!grant || grant.revokedAt !== null) {
       this.sessions.delete(project.id);
       return { signedIn: false, as: null };
@@ -173,7 +176,7 @@ export class TestConsole {
 
   /** Call one tool through the live /mcp endpoint, as the test session's user. */
   async tryTool(project: Project, tool: string, args: Record<string, unknown>, approve: boolean): Promise<TryResult> {
-    const mode = this.plane.bundle(project).mode;
+    const mode = (await this.plane.bundle(project)).mode;
     const token = mode === 'sign-in' ? await this.token(project) : null;
     if (mode === 'sign-in' && !token) throw new ConsoleError('sign in first: this project requires sign-in (use "Test sign-in")');
     let approval: TryResult['approval'] = 'not-needed';
@@ -201,7 +204,7 @@ export class TestConsole {
         ...(r.structuredContent !== undefined ? { structuredContent: r.structuredContent } : {}),
         isError: r.isError === true,
         approval,
-        as: this.whoami(project).as,
+        as: (await this.whoami(project)).as,
         ms: Date.now() - started,
       };
     } catch (err) {

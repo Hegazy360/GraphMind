@@ -117,9 +117,9 @@ describe('jack link mode never leaks the shared secret or an assertion to the MC
       });
     await call();
     await call();
-    auth.revokeGrant(store.listGrants()[0]!.id);
+    await auth.revokeGrant((await store.listGrants())[0]!.id);
     await call(); // 401 path
-    store.close();
+    await store.close();
 
     const all = [...surfaces, ...events.map((e) => JSON.stringify(e))].join('\n---\n');
     const db = readFileSync(dbPath).toString('latin1') + (() => { try { return readFileSync(`${dbPath}-wal`).toString('latin1'); } catch { return ''; } })();

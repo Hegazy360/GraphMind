@@ -27,7 +27,8 @@
   },
   "dependencies": {
     "hono": "^4.13.5",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@graphmind-ai/db": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",

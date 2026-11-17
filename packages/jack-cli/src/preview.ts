@@ -289,10 +289,12 @@ export async function startPreview(opts: PreviewOptions, io: Io): Promise<Previe
     mkdirSync(stateDir, { recursive: true });
     authStore = new SqliteAuthStore(resolve(stateDir, 'preview-auth.db'));
     const store = authStore;
-    const describe = (e: AuthEvent) => {
-      const g = e.grantId ? store.getGrant(e.grantId) : null;
+    const describe = async (e: AuthEvent) => {
+      const g = e.grantId ? await store.getGrant(e.grantId).catch(() => null) : null;
       return `${g?.display ?? 'someone'} · ${(e.clientId ?? '').slice(0, 48)}`;
     };
+    // Events are synchronous callbacks; the grant lookup is not, so the line is printed when it resolves.
+    const sayAbout = (e: AuthEvent, line: (who: string) => string) => void describe(e).then((who) => say(line(who)));
     authServer = createAuthServer({
       issuer: origin,
       resource: url,
@@ -303,8 +305,8 @@ export async function startPreview(opts: PreviewOptions, io: Io): Promise<Previe
       secretKey: loadOrCreateKey(stateDir),
       egress,
       onEvent: (e) => {
-        if (e.type === 'grant.created') say(`  + signed in: ${describe(e)}`);
-        else if (e.type === 'grant.revoked') say(`  - revoked: ${describe(e)}${e.detail ? ` (${e.detail})` : ''}`);
+        if (e.type === 'grant.created') sayAbout(e, (who) => `  + signed in: ${who}`);
+        else if (e.type === 'grant.revoked') sayAbout(e, (who) => `  - revoked: ${who}${e.detail ? ` (${e.detail})` : ''}`);
         else if (e.type === 'signin.failed') say(`  ✗ sign-in failed: ${e.detail ?? ''}`);
       },
     });
@@ -331,7 +333,7 @@ export async function startPreview(opts: PreviewOptions, io: Io): Promise<Previe
       unregister();
       stopWatching();
       await handler.close();
-      authStore?.close();
+      await authStore?.close();
       await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
     },
   };

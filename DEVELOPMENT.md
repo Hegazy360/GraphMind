@@ -135,6 +135,35 @@ onboarding example), `--data <dir>` (state, default `.platform/`, git-ignored),
 https://app.graphmind.ai --host 0.0.0.0` is the hosted shape: the hub at `/`, no
 homepage (graphmind.ai serves that and redirects `/signup` and `/login` here).
 
+## Hosting: graphmind.ai is one Vercel deployment
+
+Everything public ships from the Vercel project `graphmind`, built from the
+repository root on every push to `master`:
+
+| Path | Served by |
+| --- | --- |
+| `/`, `/docs/*`, `/try/*` | static files (apps/web, apps/docs, apps/viewer `build:try`) |
+| `/app/*`, `/p/*`, `/.well-known/*`, `/api/internal/*` | the platform function (`apps/platform/src/vercel.ts`) |
+| `/api/waitlist`, `/api/events`, `/api/telemetry` | the homepage's Blob functions (`apps/web/api`) |
+| `/login`, `/signup` | redirects into the hub (`/app/#/signin`, `/app/#/signup`) |
+
+`pnpm build:site` produces exactly what is deployed, in `.vercel/output`
+(git-ignored). `vercel deploy --prebuilt` uploads it as a preview.
+
+- **Production** (`POSTGRES_URL` set): Supabase Postgres for every store and
+  Supabase Auth for accounts. The build applies migrations first. The
+  environment variables are listed, with where each one lives, in
+  [docs/plans/one-deployment.md](./docs/plans/one-deployment.md#4-secrets-what-exists-where-it-lives-who-can-read-it).
+  Never pull them to a laptop (`vercel env pull`): nothing local needs them.
+- **Previews** get no database variables and boot on SQLite in the instance's
+  temp directory with the in-house accounts: the whole product, throwaway data.
+- **The Circuit engine** has no resident loop when hosted: work drains after
+  requests and on a per-minute tick from Supabase `pg_cron`
+  (`apps/platform/sql/engine-tick.sql`).
+- **Tests against Postgres**: set `PG_TEST_URL` to a throwaway database, e.g.
+  `PG_TEST_URL=postgres://localhost/gm_test pnpm test`. Without it the Postgres
+  cases skip; CI runs them in the `postgres stores and site build` job.
+
 ## The homepage (apps/web)
 
 A static page, no build step. What is in it:

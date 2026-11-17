@@ -1,8 +1,13 @@
 /**
  * McpConnections — the engine's McpGateway over real MCP servers.
  *
- * - Connections are opened lazily on first use and reused (stdio child
- *   processes or Streamable HTTP).
+ * - Connections are opened lazily on first use and reused: stdio child
+ *   processes, Streamable HTTP, or `inprocess` — an MCP server object living
+ *   in this process, reached over the SDK's linked in-memory transport pair.
+ *   In-process is what serverless hosting needs (no child processes on a
+ *   Vercel Function): the config names a server, `{ "transport":
+ *   "inprocess", "server": "billing" }`, and the embedding code supplies the
+ *   factory for that name — config stays JSON, code stays code.
  * - **Tool pinning (trust on first use):** the first time a tool is seen, a
  *   SHA-256 of its name, description and input schema is pinned. If a later
  *   listing differs — a "rug pull", or just an upgraded server — calls to that
@@ -16,7 +21,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { Client, StreamableHTTPClientTransport, type Transport } from '@modelcontextprotocol/client';
+import { Client, InMemoryTransport, StreamableHTTPClientTransport, type Transport } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import type { McpGateway, McpPolicy } from '@graphmind-ai/circuit-engine';
 import type { JsonValue } from '@graphmind-ai/circuit-schema';
@@ -24,6 +29,8 @@ import type { JsonValue } from '@graphmind-ai/circuit-schema';
 export type ConnectionSpec = (
   | { transport: 'stdio'; command: string; args?: string[]; env?: Record<string, string>; cwd?: string }
   | { transport: 'http'; url: string; headers?: Record<string, string> }
+  /** A server registered in code under `server` (see McpConnectionsOptions.inprocess). */
+  | { transport: 'inprocess'; server: string }
   /** Tests and embedders: supply a ready transport. */
   | { transport: 'custom'; connect: () => Transport | Promise<Transport> }
 ) & {
@@ -41,10 +48,39 @@ export interface ToolInfo {
   inputSchema: Record<string, unknown>;
 }
 
-/** Where pins live. File-backed in dev; the hosted service stores them per environment. */
+/**
+ * Where pins live. File-backed in dev (FilePinStore), in memory for tests
+ * and ephemeral hosts (MemoryPinStore); the hosted service supplies its own
+ * (e.g. a database table per environment) — hence sync OR async: both
+ * results are awaited. A pin store that loses its pins is fail-open (the
+ * next listing is trusted on first use again), so hosted deployments
+ * should persist them.
+ */
 export interface PinStore {
-  get(connection: string, tool: string): string | undefined;
-  set(connection: string, tool: string, hash: string): void;
+  get(connection: string, tool: string): string | undefined | Promise<string | undefined>;
+  set(connection: string, tool: string, hash: string): void | Promise<void>;
+}
+
+/**
+ * The part of an MCP server object (McpServer or the low-level Server from
+ * @modelcontextprotocol/server) the in-process transport needs. Structural
+ * so this module does not depend on the server package's types.
+ */
+export interface InProcessServer {
+  connect(transport: Transport): Promise<void>;
+  close?(): Promise<void>;
+}
+
+/**
+ * Builds a fresh server for one connection. A factory, not an instance: an
+ * SDK server object serves exactly one transport at a time, and a failed
+ * connect is retried with a new one.
+ */
+export type InProcessServerFactory = () => InProcessServer | Promise<InProcessServer>;
+
+export interface McpConnectionsOptions {
+  /** Servers that `{ "transport": "inprocess", "server": <name> }` connections resolve to. */
+  inprocess?: Record<string, InProcessServerFactory>;
 }
 
 export class MemoryPinStore implements PinStore {
@@ -123,12 +159,24 @@ export function toolResultValue(result: {
 
 export class McpConnections implements McpGateway {
   private readonly clients = new Map<string, Promise<Client>>();
+  private readonly servers = new Map<string, InProcessServer>();
   private readonly tools = new Map<string, Map<string, ToolInfo>>();
 
   constructor(
     private readonly config: McpConfig,
     private readonly pins: PinStore = new MemoryPinStore(),
-  ) {}
+    private readonly opts: McpConnectionsOptions = {},
+  ) {
+    // Fail at construction, not at the first workflow step: a config naming
+    // an unregistered in-process server is a deployment bug.
+    for (const [name, spec] of Object.entries(config.connections)) {
+      if (spec.transport === 'inprocess' && !opts.inprocess?.[spec.server]) {
+        throw new UnknownConnectionError(
+          `MCP connection '${name}' wants in-process server '${spec.server}', but none is registered. Registered: ${Object.keys(opts.inprocess ?? {}).join(', ') || '(none)'}`,
+        );
+      }
+    }
+  }
 
   connectionNames(): string[] {
     return Object.keys(this.config.connections);
@@ -163,6 +211,14 @@ export class McpConnections implements McpGateway {
             new URL(spec.url),
             spec.headers ? { requestInit: { headers: spec.headers } } : undefined,
           );
+        } else if (spec.transport === 'inprocess') {
+          const factory = this.opts.inprocess?.[spec.server];
+          if (!factory) throw new UnknownConnectionError(`no in-process MCP server '${spec.server}' registered`);
+          const server = await factory();
+          const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+          await server.connect(serverSide);
+          this.servers.set(connection, server);
+          transport = clientSide;
         } else {
           transport = await spec.connect();
         }
@@ -209,9 +265,9 @@ export class McpConnections implements McpGateway {
     const info = (await this.listTools(connection, true)).find((t) => t.name === tool);
     if (!info) throw new McpToolError(`MCP server '${connection}' has no tool '${tool}'`);
     const hash = toolHash(info);
-    const pinned = this.pins.get(connection, tool);
+    const pinned = await this.pins.get(connection, tool);
     if (pinned === undefined) {
-      this.pins.set(connection, tool, hash); // trust on first use
+      await this.pins.set(connection, tool, hash); // trust on first use
       return { policy };
     }
     if (pinned !== hash) return { policy, changed: `pinned ${pinned.slice(0, 12)}…, now ${hash.slice(0, 12)}…` };
@@ -222,7 +278,7 @@ export class McpConnections implements McpGateway {
     const client = await this.client(connection);
     if (opts.acceptDefinition) {
       const info = (await this.listTools(connection, true)).find((t) => t.name === tool);
-      if (info) this.pins.set(connection, tool, toolHash(info));
+      if (info) await this.pins.set(connection, tool, toolHash(info));
     }
     const result = await client.callTool({
       name: tool,
@@ -233,15 +289,20 @@ export class McpConnections implements McpGateway {
 
   async close(): Promise<void> {
     const all = [...this.clients.values()];
+    const servers = [...this.servers.values()];
     this.clients.clear();
+    this.servers.clear();
     await Promise.all(all.map(async (p) => (await p.catch(() => null))?.close().catch(() => {})));
+    // Closing the client closes the linked pair; close the server objects too
+    // so anything they hold (timers, handles) is released.
+    await Promise.all(servers.map((srv) => srv.close?.().catch(() => {})));
   }
 }
 
 export function loadMcpConfig(path: string): McpConfig {
   const raw = JSON.parse(readFileSync(path, 'utf8')) as McpConfig;
   if (!raw || typeof raw !== 'object' || typeof raw.connections !== 'object') {
-    throw new Error(`${path}: expected {"connections": {"<name>": {"transport": "stdio"|"http", ...}}}`);
+    throw new Error(`${path}: expected {"connections": {"<name>": {"transport": "stdio"|"http"|"inprocess", ...}}}`);
   }
   return raw;
 }

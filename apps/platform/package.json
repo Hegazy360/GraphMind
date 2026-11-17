@@ -39,13 +39,18 @@
     "hono": "^4.13.5",
     "jack-api": "workspace:*",
     "@graphmind-ai/circuit-mcp": "workspace:*",
-    "@graphmind-ai/ui": "workspace:*"
+    "@graphmind-ai/ui": "workspace:*",
+    "@graphmind-ai/db": "workspace:*",
+    "@vercel/functions": "^3.1.0",
+    "circuit-onboarding": "workspace:*",
+    "@graphmind-ai/jack-auth": "workspace:*"
   },
   "devDependencies": {
     "@graphmind-ai/circuit-sdk": "workspace:*",
     "@types/node": "^26.3.0",
     "playwright": "1.59.1",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "esbuild": "^0.28.2"
   }
 }

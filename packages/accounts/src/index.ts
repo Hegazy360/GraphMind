@@ -2,3 +2,4 @@ export { createAccounts, type Accounts, type AccountsOptions, type Principal } f
 export { hashPassword, verifyPassword } from './password.js';
 export { SqliteAccountStore } from './sqlite-store.js';
 export { EmailTakenError, type AccountStore, type ApiToken, type Session, type User, type UserWithPassword } from './store.js';
+export { accountsMigrations, createSupabaseAccounts, type SupabaseAccountsOptions } from './supabase.js';

@@ -113,10 +113,10 @@ export async function startShell({ product }) {
   const isHub = product === 'hub';
   const [own, parent] = await Promise.all([getJson('health'), isHub ? null : getJson('../health')]);
   const platform = isHub || parent?.service === 'platform';
-  const server = { accounts: own?.accounts === true, signup: own?.signup === true, users: own?.users };
+  const server = { accounts: own?.accounts === true, signup: own?.signup === true, users: own?.users, reset: own?.reset === true };
   if (server.accounts && server.users === undefined) {
     const st = await getJson('auth/status');
-    if (st) Object.assign(server, { signup: st.signup, users: st.users });
+    if (st) Object.assign(server, { signup: st.signup, users: st.users, reset: st.reset === true });
   }
   const shell = {
     product,
@@ -288,9 +288,100 @@ export async function startShell({ product }) {
 }
 
 // --------------------------------------------------- sign-in / sign-up --
+/** Messages for `?notice=` after an email link brings the visitor back (fixed text, never echoed from the URL). */
+const NOTICES = {
+  confirmed: 'Your email is confirmed. Sign in to continue.',
+  'link-expired': 'That link has expired. Sign in, or ask for a new one.',
+  'link-invalid': 'That link could not be used. Sign in, or ask for a new one.',
+  'reset-other-browser': 'Open the reset link in the browser you asked for it from, or ask for a new one.',
+};
+
+/** One centred panel: eyebrow, title, lede, then the given content. */
+function authPanel(eyebrow, title, lede, ...content) {
+  return h(
+    'div',
+    { class: 'gm-auth' },
+    h(
+      'div',
+      { class: 'gm-panel' },
+      h('p', { class: 'gm-eyebrow' }, eyebrow),
+      h('h1', { class: 'gm-h1', style: 'font-size:24px' }, title),
+      lede ? h('p', { class: 'gm-muted gm-small', style: 'margin:8px 0 0' }, lede) : '',
+      ...content,
+    ),
+  );
+}
+
+/** Shown after sign-up when the server asks the visitor to confirm their email first. */
+function renderCheckEmail(container, address, { what = 'confirm your email', onSwitch } = {}) {
+  container.replaceChildren(
+    authPanel('Check your email', 'One more step', null,
+      h('p', { class: 'gm-small', style: 'margin:12px 0 0', 'data-testid': 'check-email' },
+        `We sent a link to ${address}. Open it in this browser to ${what}. It can take a minute to arrive; check spam if it does not.`),
+      h('p', { class: 'gm-auth-switch' },
+        h('a', { href: '#/signin', onclick: (e) => { if (onSwitch) { e.preventDefault(); onSwitch('signin'); } } }, 'Back to sign in')),
+    ),
+  );
+}
+
+/** "Forgot password": asks for the email and sends a reset link. Same answer whether or not the address has an account. */
+export function renderRecover(container, shell, { onSwitch } = {}) {
+  const email = h('input', { class: 'gm-input', type: 'email', id: 'recover-email', autocomplete: 'email', placeholder: 'you@company.com', required: true });
+  const status = h('p', { class: 'gm-auth-status', role: 'alert' });
+  const submit = h('button', { class: 'gm-btn gm-btn-primary gm-btn-block', type: 'submit', style: 'margin-top:18px', 'data-testid': 'recover-submit' }, 'Send reset link');
+  const form = h('form', {
+    'data-testid': 'recover-form',
+    onsubmit: async (e) => {
+      e.preventDefault();
+      submit.disabled = true;
+      status.textContent = '';
+      try {
+        await auth('POST', '/recover', { email: email.value.trim() });
+        renderCheckEmail(container, email.value.trim(), { what: 'choose a new password', onSwitch });
+      } catch (err) {
+        status.textContent = err.message;
+        submit.disabled = false;
+      }
+    },
+  }, h('label', { class: 'gm-label', for: 'recover-email' }, 'Email'), email, status, submit);
+  container.replaceChildren(
+    authPanel('Reset password', 'Forgot your password?', 'Enter your account email and we will send you a link to choose a new one.', form,
+      h('p', { class: 'gm-auth-switch' },
+        h('a', { href: '#/signin', onclick: (e) => { if (onSwitch) { e.preventDefault(); onSwitch('signin'); } } }, 'Back to sign in')),
+    ),
+  );
+  email.focus();
+}
+
+/** After a reset link signed the visitor in: choose the new password. */
+export function renderReset(container, shell, { onDone } = {}) {
+  const password = h('input', { class: 'gm-input', type: 'password', id: 'reset-password', autocomplete: 'new-password', placeholder: 'At least 10 characters', required: true, minlength: 10 });
+  const status = h('p', { class: 'gm-auth-status', role: 'alert' });
+  const submit = h('button', { class: 'gm-btn gm-btn-primary gm-btn-block', type: 'submit', style: 'margin-top:18px', 'data-testid': 'reset-submit' }, 'Save new password');
+  const form = h('form', {
+    'data-testid': 'reset-form',
+    onsubmit: async (e) => {
+      e.preventDefault();
+      submit.disabled = true;
+      status.textContent = '';
+      try {
+        await auth('POST', '/password', { password: password.value });
+        toast('Password changed.');
+        onDone?.();
+      } catch (err) {
+        status.textContent = err.message;
+        submit.disabled = false;
+      }
+    },
+  }, h('label', { class: 'gm-label', for: 'reset-password' }, 'New password'), password, status, submit);
+  container.replaceChildren(authPanel('Reset password', 'Choose a new password', `Signed in as ${shell.user?.email ?? 'you'}.`, form));
+  password.focus();
+}
+
 /** The one sign-in / sign-up form. `onSignedIn(user)` runs after success. */
-export function renderAuth(container, shell, { mode = 'signin', onSignedIn, onSwitch } = {}) {
+export function renderAuth(container, shell, { mode = 'signin', onSignedIn, onSwitch, notice } = {}) {
   const server = shell.server;
+  if (mode === 'recover' && server.reset) return renderRecover(container, shell, { onSwitch });
   const signup = mode === 'signup' && server.signup;
   const email = h('input', { class: 'gm-input', type: 'email', id: 'auth-email', autocomplete: 'email', placeholder: 'you@company.com', required: true });
   const name = h('input', { class: 'gm-input', type: 'text', id: 'auth-name', autocomplete: 'name', placeholder: 'How should we address you?' });
@@ -328,6 +419,7 @@ export function renderAuth(container, shell, { mode = 'signin', onSignedIn, onSw
           const body = { email: email.value.trim(), password: password.value };
           if (signup && name.value.trim()) body.name = name.value.trim();
           const r = await auth('POST', signup ? '/signup' : '/login', body);
+          if (r.confirm) return renderCheckEmail(container, r.email ?? body.email, { onSwitch });
           if (signup) server.users = (server.users ?? 0) + 1;
           toast(signup ? 'Welcome — your account is ready.' : `Signed in as ${r.user.email}`);
           onSignedIn?.(r.user);
@@ -344,9 +436,21 @@ export function renderAuth(container, shell, { mode = 'signin', onSignedIn, onSw
     signup ? name : '',
     h('label', { class: 'gm-label', for: 'auth-password' }, 'Password'),
     password,
+    !signup && server.reset
+      ? h('p', { class: 'gm-auth-forgot' }, h('a', {
+          href: '#/recover',
+          'data-testid': 'to-recover',
+          onclick: (e) => {
+            if (!onSwitch) return;
+            e.preventDefault();
+            onSwitch('recover');
+          },
+        }, 'Forgot password?'))
+      : '',
     status,
     submit,
   );
+  const noticeText = notice ? NOTICES[notice] : undefined;
 
   container.replaceChildren(
     h(
@@ -360,6 +464,7 @@ export function renderAuth(container, shell, { mode = 'signin', onSignedIn, onSw
         h('p', { class: 'gm-muted gm-small', style: 'margin:8px 0 0' }, signup
           ? 'Free while GraphMind is in early access: no plans, no card, every feature. One account for Circuit, Jack and what comes next.'
           : 'One account for Circuit, Jack and what comes next.'),
+        noticeText ? h('p', { class: 'gm-auth-notice', role: 'status', 'data-testid': 'auth-notice' }, noticeText) : '',
         form,
         h('p', { class: 'gm-auth-switch' },
           signup

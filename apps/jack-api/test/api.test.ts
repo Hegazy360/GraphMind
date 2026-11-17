@@ -147,7 +147,7 @@ describe('jack control plane', () => {
     const id = (json!.project as { id: string }).id;
     await call('POST', `/v1/projects/${id}/deployments`, { manifest: petstore() });
     expect((await call('DELETE', `/v1/projects/${id}`)).status).toBe(204);
-    expect(store.listDeployments(id)).toEqual([]);
+    expect(await store.listDeployments(id)).toEqual([]);
     expect((await call('GET', `/v1/projects/${id}`)).status).toBe(404);
   });
 });

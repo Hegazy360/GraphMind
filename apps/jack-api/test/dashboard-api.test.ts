@@ -39,7 +39,7 @@ afterAll(async () => {
   for (const { jack, store } of opened) {
     await jack.close().catch(() => {});
     try {
-      store.close();
+      await store.close();
     } catch {
       // already closed by the test itself
     }
@@ -217,7 +217,7 @@ describe('secrets', () => {
     const all = [await t.call('GET', `/v1/projects/${id}`), await t.call('GET', `/v1/projects/${id}/draft`), await t.call('GET', '/v1/projects'), await t.call('GET', `/v1/projects/${id}/jack.yaml`)];
     for (const r of all) expect(r.text).not.toContain(secret);
     expect(all[0]!.json.secrets).toEqual([{ name: 'oidc_client_secret', updatedAt: expect.any(Number) }]);
-    t.store.close();
+    await t.store.close();
     expect(readFileSync(t.dbPath).toString('latin1')).not.toContain(secret);
   });
 });

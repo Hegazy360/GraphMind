@@ -117,7 +117,7 @@ describe('jack with accounts', () => {
     };
     const dep = await ada('POST', `/v1/projects/${json.project.id}/deployments`, { manifest });
     expect(dep.status).toBe(201);
-    expect(store.getDeployment(json.project.id, 1)?.createdBy).toBe('ada@example.com');
+    expect((await store.getDeployment(json.project.id, 1))?.createdBy).toBe('ada@example.com');
   });
 
   it('lets a CLI act as the account with a personal token, never with a cookie-less call', async () => {
@@ -169,7 +169,7 @@ describe('jack with accounts', () => {
 
   it('projects created before accounts existed stay visible to the operator only', async () => {
     const { store, browser, cli } = setup({ apiKeys: ['op'] });
-    store.createProject({ slug: 'legacy', name: 'Legacy', upstream: 'https://legacy.test', auth: { mode: 'none', requireSignIn: false } });
+    await store.createProject({ slug: 'legacy', name: 'Legacy', upstream: 'https://legacy.test', auth: { mode: 'none', requireSignIn: false } });
     const ada = browser();
     await signup(ada, 'ada@example.com');
     expect((await ada('GET', '/v1/projects')).json.projects).toHaveLength(0);

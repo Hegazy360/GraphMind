@@ -120,7 +120,7 @@ describe('jack authorization server never returns or stores the user\'s upstream
     // 3. Failure paths: replayed refresh (revokes), then a call with the dead token.
     await tokenReq({ grant_type: 'refresh_token', refresh_token: t1.refresh_token, client_id: client.client_id });
     await callTool(t2.access_token, 'read_note');
-    store.close();
+    await store.close();
 
     const db = readFileSync(dbPath).toString('latin1') + (() => { try { return readFileSync(`${dbPath}-wal`).toString('latin1'); } catch { return ''; } })();
     const all = [...surfaces, ...events.map((e) => JSON.stringify(e))].join('\n---\n');

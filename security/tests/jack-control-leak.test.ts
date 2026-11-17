@@ -31,9 +31,9 @@ const dir = mkdtempSync(join(tmpdir(), 'jack-audit-'));
 const dbPath = join(dir, 'jack.db');
 const store = new SqliteStore(dbPath);
 const app = createApi({ store, apiKeys: [FORBIDDEN_KEY] });
-afterAll(() => {
+afterAll(async () => {
   try {
-    store.close();
+    await store.close();
   } catch {
     // the SQLite-file test already closed it to read the file
   }
@@ -76,9 +76,9 @@ describe('jack control plane never records or echoes its bearer key', () => {
     expect(all).toContain(BY_DESIGN_HOST);
   });
 
-  it('the SQLite file holds the project but not the key', () => {
+  it('the SQLite file holds the project but not the key', async () => {
     // WAL mode: closing the last connection checkpoints the log into the main file.
-    store.close();
+    await store.close();
     const bytes = readFileSync(dbPath).toString('latin1');
     expect(bytes).toContain(BY_DESIGN_SLUG);
     expect(bytes).not.toContain(FORBIDDEN_KEY);

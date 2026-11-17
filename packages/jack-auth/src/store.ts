@@ -1,7 +1,13 @@
 /**
  * AuthStore — persistence for the authorization server. One interface; the
  * SQLite backend here serves `jack preview`, tests and single-node
- * self-hosting, and the hosted service gets Postgres behind the same calls.
+ * self-hosting, and the hosted service gets Postgres (`PgAuthStore`,
+ * ./pg-store.ts) behind the same calls.
+ *
+ * Every method is async: the SQLite backend is synchronous underneath and
+ * simply resolves immediately, but a network database cannot be. One store
+ * instance is ONE project's issuer — the SQLite file is per project, and a
+ * Postgres handle is scoped to one project id.
  *
  * What is stored, and how:
  *   clients          DCR registrations (public clients only; no secrets exist)
@@ -75,40 +81,47 @@ export interface SigningKeyRecord {
 }
 
 export interface AuthStore {
-  putClient(c: ClientRecord): void;
-  getClient(clientId: string): ClientRecord | null;
-  touchClient(clientId: string, at: number): void;
-  countClientsSince(since: number): number;
+  putClient(c: ClientRecord): Promise<void>;
+  getClient(clientId: string): Promise<ClientRecord | null>;
+  touchClient(clientId: string, at: number): Promise<void>;
+  countClientsSince(since: number): Promise<number>;
 
-  putAuthRequest(r: AuthRequestRecord): void;
-  getAuthRequest(id: string): AuthRequestRecord | null;
-  updateAuthRequest(id: string, data: Record<string, unknown>): void;
-  deleteAuthRequest(id: string): void;
+  putAuthRequest(r: AuthRequestRecord): Promise<void>;
+  getAuthRequest(id: string): Promise<AuthRequestRecord | null>;
+  updateAuthRequest(id: string, data: Record<string, unknown>): Promise<void>;
+  deleteAuthRequest(id: string): Promise<void>;
 
-  putCode(c: CodeRecord): void;
-  getCode(codeHash: string): CodeRecord | null;
+  putCode(c: CodeRecord): Promise<void>;
+  getCode(codeHash: string): Promise<CodeRecord | null>;
   /** Atomically mark used. Returns false if it was already used (a replay). */
-  useCode(codeHash: string, at: number): boolean;
+  useCode(codeHash: string, at: number): Promise<boolean>;
 
-  putGrant(g: GrantRecord): void;
-  getGrant(id: string): GrantRecord | null;
-  listGrants(): GrantRecord[];
-  revokeGrant(id: string, at: number): void;
+  putGrant(g: GrantRecord): Promise<void>;
+  getGrant(id: string): Promise<GrantRecord | null>;
+  listGrants(): Promise<GrantRecord[]>;
+  revokeGrant(id: string, at: number): Promise<void>;
 
-  putRefresh(r: RefreshRecord): void;
-  getRefresh(tokenHash: string): RefreshRecord | null;
+  putRefresh(r: RefreshRecord): Promise<void>;
+  getRefresh(tokenHash: string): Promise<RefreshRecord | null>;
   /** Atomically mark rotated. Returns false if it already was (a replay). */
-  rotateRefresh(tokenHash: string, at: number): boolean;
+  rotateRefresh(tokenHash: string, at: number): Promise<boolean>;
 
-  putUpstream(grantId: string, sealed: string, at: number): void;
-  getUpstream(grantId: string): string | null;
+  putUpstream(grantId: string, sealed: string, at: number): Promise<void>;
+  getUpstream(grantId: string): Promise<string | null>;
 
-  putSigningKey(k: SigningKeyRecord): void;
-  listSigningKeys(): SigningKeyRecord[];
+  putSigningKey(k: SigningKeyRecord): Promise<void>;
+  listSigningKeys(): Promise<SigningKeyRecord[]>;
+
+  /**
+   * Remove every row this store holds (project deletion). For the per-project
+   * SQLite file that is the whole database; for a project-scoped Postgres
+   * handle it is that project's rows only.
+   */
+  purge(): Promise<void>;
 
   /** Remove expired requests, codes and refresh tokens. */
-  sweep(now: number): void;
-  close(): void;
+  sweep(now: number): Promise<void>;
+  close(): Promise<void>;
 }
 
 const SCHEMA = `
@@ -142,23 +155,23 @@ export class SqliteAuthStore implements AuthStore {
     return this.db.prepare(sql).run(...args);
   }
 
-  putClient(c: ClientRecord) {
+  async putClient(c: ClientRecord) {
     this.run('INSERT INTO clients VALUES (?, ?, ?, ?, ?)', c.clientId, c.kind, json(c.metadata), c.createdAt, c.lastUsedAt);
   }
-  getClient(id: string): ClientRecord | null {
+  async getClient(id: string): Promise<ClientRecord | null> {
     const r = this.one('SELECT * FROM clients WHERE client_id = ?', id);
     return r
       ? { clientId: String(r.client_id), kind: 'dcr', metadata: parse(r.metadata), createdAt: Number(r.created_at), lastUsedAt: Number(r.last_used_at) }
       : null;
   }
-  touchClient(id: string, at: number) {
+  async touchClient(id: string, at: number) {
     this.run('UPDATE clients SET last_used_at = ? WHERE client_id = ?', at, id);
   }
-  countClientsSince(since: number) {
+  async countClientsSince(since: number) {
     return Number(this.one('SELECT COUNT(*) AS n FROM clients WHERE created_at >= ?', since)?.n ?? 0);
   }
 
-  putAuthRequest(r: AuthRequestRecord) {
+  async putAuthRequest(r: AuthRequestRecord) {
     this.run(
       'INSERT INTO auth_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       r.id,
@@ -173,7 +186,7 @@ export class SqliteAuthStore implements AuthStore {
       r.expiresAt,
     );
   }
-  getAuthRequest(id: string): AuthRequestRecord | null {
+  async getAuthRequest(id: string): Promise<AuthRequestRecord | null> {
     const r = this.one('SELECT * FROM auth_requests WHERE id = ?', id);
     if (!r) return null;
     return {
@@ -189,17 +202,17 @@ export class SqliteAuthStore implements AuthStore {
       expiresAt: Number(r.expires_at),
     };
   }
-  updateAuthRequest(id: string, data: Record<string, unknown>) {
+  async updateAuthRequest(id: string, data: Record<string, unknown>) {
     this.run('UPDATE auth_requests SET data = ? WHERE id = ?', json(data), id);
   }
-  deleteAuthRequest(id: string) {
+  async deleteAuthRequest(id: string) {
     this.run('DELETE FROM auth_requests WHERE id = ?', id);
   }
 
-  putCode(c: CodeRecord) {
+  async putCode(c: CodeRecord) {
     this.run('INSERT INTO auth_codes VALUES (?, ?, ?, ?, ?, ?, ?, NULL)', c.codeHash, c.grantId, c.clientId, c.redirectUri, c.codeChallenge, c.resource, c.expiresAt);
   }
-  getCode(hash: string): CodeRecord | null {
+  async getCode(hash: string): Promise<CodeRecord | null> {
     const r = this.one('SELECT * FROM auth_codes WHERE code_hash = ?', hash);
     if (!r) return null;
     return {
@@ -213,11 +226,11 @@ export class SqliteAuthStore implements AuthStore {
       usedAt: r.used_at === null ? null : Number(r.used_at),
     };
   }
-  useCode(hash: string, at: number) {
+  async useCode(hash: string, at: number) {
     return this.run('UPDATE auth_codes SET used_at = ? WHERE code_hash = ? AND used_at IS NULL', at, hash).changes > 0;
   }
 
-  putGrant(g: GrantRecord) {
+  async putGrant(g: GrantRecord) {
     this.run('INSERT INTO grants VALUES (?, ?, ?, ?, ?, ?, ?, ?)', g.id, g.clientId, g.subject, g.display, json(g.scopes), g.resource, g.createdAt, g.revokedAt);
   }
   private toGrant(r: Row): GrantRecord {
@@ -232,43 +245,43 @@ export class SqliteAuthStore implements AuthStore {
       revokedAt: r.revoked_at === null ? null : Number(r.revoked_at),
     };
   }
-  getGrant(id: string) {
+  async getGrant(id: string) {
     const r = this.one('SELECT * FROM grants WHERE id = ?', id);
     return r ? this.toGrant(r) : null;
   }
-  listGrants() {
+  async listGrants() {
     return (this.db.prepare('SELECT * FROM grants ORDER BY created_at').all() as Row[]).map((r) => this.toGrant(r));
   }
-  revokeGrant(id: string, at: number) {
+  async revokeGrant(id: string, at: number) {
     this.run('UPDATE grants SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?', at, id);
     this.run('DELETE FROM upstream WHERE grant_id = ?', id);
   }
 
-  putRefresh(r: RefreshRecord) {
+  async putRefresh(r: RefreshRecord) {
     this.run('INSERT INTO refresh_tokens VALUES (?, ?, ?, NULL)', r.tokenHash, r.grantId, r.expiresAt);
   }
-  getRefresh(hash: string): RefreshRecord | null {
+  async getRefresh(hash: string): Promise<RefreshRecord | null> {
     const r = this.one('SELECT * FROM refresh_tokens WHERE token_hash = ?', hash);
     return r
       ? { tokenHash: String(r.token_hash), grantId: String(r.grant_id), expiresAt: Number(r.expires_at), rotatedAt: r.rotated_at === null ? null : Number(r.rotated_at) }
       : null;
   }
-  rotateRefresh(hash: string, at: number) {
+  async rotateRefresh(hash: string, at: number) {
     return this.run('UPDATE refresh_tokens SET rotated_at = ? WHERE token_hash = ? AND rotated_at IS NULL', at, hash).changes > 0;
   }
 
-  putUpstream(grantId: string, sealed: string, at: number) {
+  async putUpstream(grantId: string, sealed: string, at: number) {
     this.run('INSERT INTO upstream VALUES (?, ?, ?) ON CONFLICT(grant_id) DO UPDATE SET sealed = excluded.sealed, updated_at = excluded.updated_at', grantId, sealed, at);
   }
-  getUpstream(grantId: string) {
+  async getUpstream(grantId: string) {
     const r = this.one('SELECT sealed FROM upstream WHERE grant_id = ?', grantId);
     return r ? String(r.sealed) : null;
   }
 
-  putSigningKey(k: SigningKeyRecord) {
+  async putSigningKey(k: SigningKeyRecord) {
     this.run('INSERT INTO signing_keys VALUES (?, ?, ?, ?)', k.kid, json(k.publicJwk), k.sealedPrivateJwk, k.createdAt);
   }
-  listSigningKeys(): SigningKeyRecord[] {
+  async listSigningKeys(): Promise<SigningKeyRecord[]> {
     return (this.db.prepare('SELECT * FROM signing_keys ORDER BY created_at DESC').all() as Row[]).map((r) => ({
       kid: String(r.kid),
       publicJwk: parse(r.public_jwk),
@@ -277,14 +290,18 @@ export class SqliteAuthStore implements AuthStore {
     }));
   }
 
-  sweep(now: number) {
+  async sweep(now: number) {
     this.run('DELETE FROM auth_requests WHERE expires_at < ?', now);
     // Keep used codes a little past expiry so a late replay is still recognised (and revokes).
     this.run('DELETE FROM auth_codes WHERE expires_at < ?', now - 3_600_000);
     this.run('DELETE FROM refresh_tokens WHERE expires_at < ?', now);
   }
 
-  close() {
+  async purge() {
+    this.db.exec('DELETE FROM clients; DELETE FROM auth_requests; DELETE FROM auth_codes; DELETE FROM grants; DELETE FROM refresh_tokens; DELETE FROM upstream; DELETE FROM signing_keys;');
+  }
+
+  async close() {
     this.db.close();
   }
 }

@@ -88,7 +88,7 @@ describe('accounts never return or store a password or an API token in clear', (
     expect(viaToken.json.projects.map((p: any) => p.slug)).toEqual(['canary']);
 
     await jack.close();
-    store.close();
+    await store.close();
     accountStore.close();
 
     const all = surfaces.join('\n---\n');

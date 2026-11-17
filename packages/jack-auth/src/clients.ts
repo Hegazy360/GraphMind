@@ -105,9 +105,9 @@ export class ClientRegistry {
 
   async resolve(clientId: string): Promise<ResolvedClient> {
     if (ClientRegistry.isCimdId(clientId)) return this.resolveCimd(clientId);
-    const rec = this.store.getClient(clientId);
+    const rec = await this.store.getClient(clientId);
     if (!rec) throw new ClientError('invalid_client', 'unknown client_id');
-    this.store.touchClient(clientId, this.now());
+    await this.store.touchClient(clientId, this.now());
     const m = rec.metadata as { client_name?: string; redirect_uris?: string[]; logo_uri?: string };
     return {
       clientId,
@@ -155,8 +155,8 @@ export class ClientRegistry {
   }
 
   /** RFC 7591 registration, public clients only. */
-  register(metadata: Record<string, unknown>): Record<string, unknown> {
-    if (this.store.countClientsSince(this.now() - 3_600_000) >= this.dcrLimitPerHour) {
+  async register(metadata: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if ((await this.store.countClientsSince(this.now() - 3_600_000)) >= this.dcrLimitPerHour) {
       throw new ClientError('temporarily_unavailable', 'too many registrations; try again later');
     }
     const uris = Array.isArray(metadata.redirect_uris) ? metadata.redirect_uris : [];
@@ -179,7 +179,7 @@ export class ClientRegistry {
       response_types: ['code'],
       token_endpoint_auth_method: 'none',
     };
-    this.store.putClient({ clientId, kind: 'dcr', metadata: stored, createdAt: now, lastUsedAt: now });
+    await this.store.putClient({ clientId, kind: 'dcr', metadata: stored, createdAt: now, lastUsedAt: now });
     return { client_id: clientId, client_id_issued_at: Math.floor(now / 1000), ...stored };
   }
 }

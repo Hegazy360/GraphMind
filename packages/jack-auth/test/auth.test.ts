@@ -132,7 +132,7 @@ describe('sign-in, end to end with the SDK client', () => {
     expect(JSON.parse(text(r))).toMatchObject({ ok: true, by: 'alice', text: 'buy milk' });
     expect(s.api.authorizations).toContain('Bearer idp-at-alice');
     expect(JSON.stringify(provider.savedTokens)).not.toContain('idp-at-alice');
-    expect(s.store.listGrants()[0]).toMatchObject({ clientId: CIMD_URL, subject: 'https://idp.test|alice', display: 'Alice Martin' });
+    expect((await s.store.listGrants())[0]).toMatchObject({ clientId: CIMD_URL, subject: 'https://idp.test|alice', display: 'Alice Martin' });
   });
 
   it('renews the upstream token with the IdP before it expires (once, shared by concurrent calls)', async () => {
@@ -152,7 +152,7 @@ describe('sign-in, end to end with the SDK client', () => {
     });
     expect(new URL(res.url!).searchParams.get('error')).toBe('access_denied');
     expect(new URL(res.url!).searchParams.get('state')).toBe('st-1');
-    expect(s.store.listGrants()).toEqual([]);
+    expect((await s.store.listGrants())).toEqual([]);
   });
 
   it('a wrong API key is refused on Jack\'s page, before any grant exists', async () => {
@@ -160,7 +160,7 @@ describe('sign-in, end to end with the SDK client', () => {
     const res = await s.browser(authorizeUrl({}), { 'jack-apikey': ({ html }) => (html.includes('did not accept') ? null : { api_key: 'key-wrong' }) });
     expect(res.stuck?.status).toBe(400);
     expect(res.stuck?.html).toContain('the API did not accept that key');
-    expect(s.store.listGrants()).toEqual([]);
+    expect((await s.store.listGrants())).toEqual([]);
   });
 });
 
@@ -179,7 +179,7 @@ describe('an issuer with a path (many projects on one origin, as jack serve host
     const { client, browse } = await signedInClient(s, new TestOAuthProvider({ cimd: true }));
     expect(browse!.visited.some((u) => u.startsWith(`${JACK}/p/notes/oauth/apikey`))).toBe(true);
     expect(JSON.parse(text(await client.callTool({ name: 'whoami', arguments: {} })))).toMatchObject({ id: 'alice' });
-    const t = s.store.listGrants()[0]!;
+    const t = (await s.store.listGrants())[0]!;
     expect(t.resource).toBe(`${JACK}/p/notes/mcp`);
   });
 
@@ -302,7 +302,7 @@ describe('the token endpoint', () => {
     expect((await mcpPost(s, t.access_token, toolsCall('whoami'))).status).toBe(401);
 
     const t2 = (await json(await exchange(s, await codeFor(s)))) as { access_token: string };
-    s.auth.revokeGrant(s.store.listGrants().at(-1)!.id);
+    await s.auth.revokeGrant((await s.store.listGrants()).at(-1)!.id);
     expect((await mcpPost(s, t2.access_token, toolsCall('whoami'))).status).toBe(401);
   });
 });
@@ -377,7 +377,7 @@ describe('the browser side', () => {
     const res = await s.browser(authorizeUrl({}));
     expect(new URL(res.url!).searchParams.get('error')).toBe('access_denied');
     expect(new URL(res.url!).searchParams.get('error_description')).toMatch(/nonce/);
-    expect(s.store.listGrants()).toEqual([]);
+    expect((await s.store.listGrants())).toEqual([]);
   });
 });
 
@@ -401,7 +401,7 @@ describe('account linking (link mode)', () => {
     await client.callTool({ name: 'whoami', arguments: {} });
     expect(s.api.assertions).toHaveLength(2);
     expect(s.api.assertions[0]).not.toBe(s.api.assertions[1]);
-    expect(s.store.listGrants()[0]).toMatchObject({ subject: 'link:alice', display: 'Alice Martin' });
+    expect((await s.store.listGrants())[0]).toMatchObject({ subject: 'link:alice', display: 'Alice Martin' });
     // What Jack stored for the grant is just the app's user id, sealed — there is nothing else to steal.
     const verifier = createJackVerifier({ secret: LINK_SECRET, issuer: JACK, audience: API });
     expect(() => verifier.verifyAssertion(s.api.assertions[1]!)).not.toThrow();
@@ -458,7 +458,7 @@ describe('account linking (link mode)', () => {
     f = await fresh();
     r = await cb(response({ jti: f.id, sub: '' }), f.ck);
     expect(new URL(r.headers.get('location')!).searchParams.get('error_description')).toMatch(/names no user/);
-    expect(s.store.listGrants()).toEqual([]);
+    expect((await s.store.listGrants())).toEqual([]);
   });
 
   it('the link route must live on the upstream origin, and the secret must be strong', async () => {
@@ -507,7 +507,7 @@ describe('at rest', () => {
     const t = (await json(await exchange(s, await codeFor(s)))) as { refresh_token: string };
     const s2 = await createStack('apikey', { store });
     await exchange(s2, await codeFor(s2));
-    store.close();
+    await store.close();
     const bytes = readFileSync(path).toString('latin1') + (() => {
       try {
         return readFileSync(`${path}-wal`).toString('latin1');

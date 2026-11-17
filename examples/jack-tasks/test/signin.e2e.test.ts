@@ -126,7 +126,7 @@ describe('jack preview, sign-in mode', () => {
     // A second person on the same server is a different grant, with their own data.
     const bob = await call(handle.url!, 'get_me', {}, user('bob'), join(dir, 'bob-cli.json'));
     expect(bob.json).toMatchObject({ id: 'usr_bob' });
-    expect(handle.auth!.listGrants().map((g) => g.display).sort()).toEqual(['Alice Martin', 'Bob Okafor']);
+    expect((await handle.auth!.listGrants()).map((g) => g.display).sort()).toEqual(['Alice Martin', 'Bob Okafor']);
 
     // The key is in neither CLI's credential file.
     for (const f of ['alice-cli.json', 'bob-cli.json']) expect(readFileSync(join(dir, f), 'utf8')).not.toMatch(/tk_demo_/);
@@ -153,7 +153,7 @@ describe('jack preview, sign-in mode', () => {
 
   it('a wrong Acme password stops at Acme\'s login; a declined consent creates no grant', async () => {
     const { handle } = await preview('jack.oidc.yaml', 'state-oidc-neg');
-    const before = handle.auth!.listGrants().length;
+    const before = (await handle.auth!.listGrants()).length;
     // Wrong password: the browser stays on Acme's login (401) and the CLI gives up waiting.
     const wrong = user('alice', { password: 'nope' });
     const io = capture();
@@ -164,7 +164,7 @@ describe('jack preview, sign-in mode', () => {
 
     const declined = await call(handle.url!, 'get_me', {}, user('alice', { consent: 'deny' }), join(dir, 'declined.json')).catch((e: Error) => ({ code: 1, text: e.message }));
     expect(declined.code).toBe(1);
-    expect(handle.auth!.listGrants().length).toBe(before);
+    expect((await handle.auth!.listGrants()).length).toBe(before);
   });
 
   it('link: Acme has only a session login; one route + one middleware make per-user sign-in work', async () => {
@@ -225,6 +225,6 @@ describe('jack preview, sign-in mode', () => {
     const out = capture();
     expect(await logoutCommand({ url: handle.url!, credentialsPath: creds }, out)).toBe(0);
     expect(out.lines[0]).toMatch(/signed out/);
-    expect(handle.auth!.listGrants().every((g) => g.revokedAt !== null)).toBe(true);
+    expect((await handle.auth!.listGrants()).every((g) => g.revokedAt !== null)).toBe(true);
   });
 });

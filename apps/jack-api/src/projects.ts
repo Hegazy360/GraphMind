@@ -131,79 +131,79 @@ export class Projects {
     private readonly env: Record<string, string | undefined>,
   ) {}
 
-  private project(id: string): Project {
-    const p = this.store.getProject(id);
+  private async project(id: string): Promise<Project> {
+    const p = await this.store.getProject(id);
     if (!p) throw new NotFoundError(`project ${id}`);
     return p;
   }
 
-  private source(projectId: string) {
-    const s = this.store.getSource(projectId);
+  private async source(projectId: string) {
+    const s = await this.store.getSource(projectId);
     if (!s) throw new DraftError('this project has no API spec yet: import one first');
     return s;
   }
 
-  private draftConfig(projectId: string): JackConfig {
-    const d = this.store.getDraft(projectId);
+  private async draftConfig(projectId: string): Promise<JackConfig> {
+    const d = await this.store.getDraft(projectId);
     if (!d) throw new DraftError('this project has no draft yet: import a spec first');
     return d.config;
   }
 
   /** Compile a config against the project's stored document. Throws on configs that cannot compile. */
-  compileConfig(projectId: string, config: JackConfig): CompileResult {
-    const s = this.source(projectId);
+  async compileConfig(projectId: string, config: JackConfig): Promise<CompileResult> {
+    const s = await this.source(projectId);
     return compile(parse(s.text), config, s.url ? { documentUrl: s.url } : {});
   }
 
   /** Create a project from a spec. Returns the project and its first draft. */
-  createFromSource(input: { slug?: string; name?: string; text: string; url?: string | null; upstream?: string; ownerId?: string | null }) {
+  async createFromSource(input: { slug?: string; name?: string; text: string; url?: string | null; upstream?: string; ownerId?: string | null }) {
     const preview = previewImport(input.text, { url: input.url ?? null, ...(input.upstream ? { upstream: input.upstream } : {}) });
     const slug = input.slug ?? slugFrom(input.name ?? preview.title);
     const config: JackConfig = { ...preview.config, ...(input.name ? { name: input.name } : {}) };
-    const project = this.store.createProject({
+    const project = await this.store.createProject({
       slug,
       name: input.name ?? preview.title,
       upstream: new URL(preview.baseUrl).origin,
       auth: { mode: 'none', requireSignIn: false },
       ownerId: input.ownerId ?? null,
     });
-    this.store.putSource(project.id, { text: input.text, url: input.url ?? null });
-    this.store.putDraft(project.id, config);
-    return { project, draft: this.draftView(project.id) };
+    await this.store.putSource(project.id, { text: input.text, url: input.url ?? null });
+    await this.store.putDraft(project.id, config);
+    return { project, draft: await this.draftView(project.id) };
   }
 
   /** Replace the spec (a new version of the API). Keeps every override in the draft. */
-  replaceSource(projectId: string, text: string, url: string | null) {
-    this.project(projectId);
-    const existing = this.store.getDraft(projectId);
+  async replaceSource(projectId: string, text: string, url: string | null) {
+    await this.project(projectId);
+    const existing = await this.store.getDraft(projectId);
     parse(text); // validate before storing
-    this.store.putSource(projectId, { text, url });
+    await this.store.putSource(projectId, { text, url });
     if (!existing) {
       const preview = previewImport(text, { url });
-      this.store.putDraft(projectId, preview.config);
+      await this.store.putDraft(projectId, preview.config);
     } else {
       // A draft that no longer compiles against the new spec is still kept; the view reports why.
-      this.store.putDraft(projectId, { ...existing.config, ...(url ? { source: url } : {}) });
+      await this.store.putDraft(projectId, { ...existing.config, ...(url ? { source: url } : {}) });
     }
-    return this.draftView(projectId);
+    return await this.draftView(projectId);
   }
 
   /** Validate a whole config (from `jack deploy` or an import of jack.yaml) and save it as the draft. */
-  saveDraft(projectId: string, raw: unknown): DraftView {
-    this.project(projectId);
+  async saveDraft(projectId: string, raw: unknown): Promise<DraftView> {
+    await this.project(projectId);
     const parsed = jackConfig.safeParse(raw);
     if (!parsed.success) throw new DraftError(`not a valid jack.yaml: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`);
-    this.compileConfig(projectId, parsed.data);
-    this.store.putDraft(projectId, parsed.data);
-    return this.draftView(projectId);
+    await this.compileConfig(projectId, parsed.data);
+    await this.store.putDraft(projectId, parsed.data);
+    return await this.draftView(projectId);
   }
 
   /**
    * Change one tool's override. `null` for a field removes the override
    * (back to the spec / the default rules).
    */
-  updateTool(projectId: string, key: string, patch: Record<string, unknown>): DraftView {
-    const config = structuredClone(this.draftConfig(projectId));
+  async updateTool(projectId: string, key: string, patch: Record<string, unknown>): Promise<DraftView> {
+    const config = structuredClone(await this.draftConfig(projectId));
     const current = { ...(config.tools[key] ?? {}) } as Record<string, unknown>;
     for (const [field, value] of Object.entries(patch)) {
       if (value === null) delete current[field];
@@ -212,26 +212,26 @@ export class Projects {
     const parsed = toolOverride.safeParse(current);
     if (!parsed.success) throw new DraftError(`invalid change to ${key}: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'value'}: ${i.message}`).join('; ')}`);
     config.tools[key] = parsed.data;
-    const result = this.compileConfig(projectId, config);
+    const result = await this.compileConfig(projectId, config);
     if (!result.tools.some((t) => t.key === key)) throw new DraftError(`'${key}' is not an operation in the spec`);
-    this.store.putDraft(projectId, config);
-    return this.draftView(projectId);
+    await this.store.putDraft(projectId, config);
+    return await this.draftView(projectId);
   }
 
   /** Project-level settings in the draft: name, description, upstream, auth, lint, toolsets. */
-  updateSettings(projectId: string, patch: Record<string, unknown>): DraftView {
-    const config = structuredClone(this.draftConfig(projectId)) as Record<string, unknown>;
+  async updateSettings(projectId: string, patch: Record<string, unknown>): Promise<DraftView> {
+    const config = structuredClone(await this.draftConfig(projectId)) as Record<string, unknown>;
     for (const [field, value] of Object.entries(patch)) {
       if (!['name', 'description', 'upstream', 'auth', 'lint', 'toolsets'].includes(field)) throw new DraftError(`unknown setting '${field}'`);
       if (value === null) delete config[field];
       else config[field] = value;
     }
-    return this.saveDraft(projectId, config);
+    return await this.saveDraft(projectId, config);
   }
 
-  draftView(projectId: string): DraftView {
-    const config = this.draftConfig(projectId);
-    const result = this.compileConfig(projectId, config);
+  async draftView(projectId: string): Promise<DraftView> {
+    const config = await this.draftConfig(projectId);
+    const result = await this.compileConfig(projectId, config);
     // Definitions for disabled tools too: compile once more with everything enabled.
     const allOn: JackConfig = {
       ...config,
@@ -239,7 +239,7 @@ export class Projects {
     };
     let everything: CompileResult | null = null;
     try {
-      everything = this.compileConfig(projectId, allOn);
+      everything = await this.compileConfig(projectId, allOn);
     } catch {
       everything = null; // e.g. two disabled tools renamed to the same name; enabled ones still show
     }
@@ -275,7 +275,7 @@ export class Projects {
       })
       .sort((a, b) => Number(b.enabled) - Number(a.enabled) || kindOrder[a.kind] - kindOrder[b.kind]);
 
-    const live = this.store.activeDeployment(projectId);
+    const live = await this.store.activeDeployment(projectId);
     const diff = diffManifests(live?.manifest ?? null, result.manifest);
     const changes = diff.added.length + diff.removed.length + diff.changed.length + diff.rewired.length;
     const configChanged =
@@ -294,37 +294,37 @@ export class Projects {
   }
 
   /** Resolve `secret:NAME` (project secrets) and `env:NAME` (server environment). */
-  resolveSecret(projectId: string, ref: string): string | undefined {
+  async resolveSecret(projectId: string, ref: string): Promise<string | undefined> {
     const m = /^(secret|env):([A-Za-z_][A-Za-z0-9_]*)$/.exec(ref);
     if (!m) return undefined;
     if (m[1] === 'env') return this.env[m[2] as string];
-    const sealed = this.store.getSecret(projectId, m[2] as string);
+    const sealed = await this.store.getSecret(projectId, m[2] as string);
     return sealed ? this.box.open(sealed, `secret:${projectId}:${m[2]}`) : undefined;
   }
 
-  setSecret(projectId: string, name: string, value: string) {
-    this.project(projectId);
+  async setSecret(projectId: string, name: string, value: string) {
+    await this.project(projectId);
     if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name)) throw new DraftError('secret names are letters, digits and _');
     if (value === '' || value.length > 8192) throw new DraftError('secret value must be 1–8192 characters');
-    this.store.putSecret(projectId, name, this.box.seal(value, `secret:${projectId}:${name}`));
+    await this.store.putSecret(projectId, name, this.box.seal(value, `secret:${projectId}:${name}`));
   }
 
-  private checkDeployable(projectId: string, auth: AuthConfig | undefined) {
-    if (auth?.mode === 'oidc' && this.resolveSecret(projectId, auth.clientSecretRef) === undefined) {
+  private async checkDeployable(projectId: string, auth: AuthConfig | undefined) {
+    if (auth?.mode === 'oidc' && (await this.resolveSecret(projectId, auth.clientSecretRef)) === undefined) {
       throw new DraftError(`sign-in needs the client secret (${auth.clientSecretRef}); set it on the Sign-in page before deploying`);
     }
-    if (auth?.mode === 'link' && this.resolveSecret(projectId, auth.secretRef) === undefined) {
+    if (auth?.mode === 'link' && (await this.resolveSecret(projectId, auth.secretRef)) === undefined) {
       throw new DraftError(`account linking needs the shared secret (${auth.secretRef}); set it on the Sign-in page before deploying`);
     }
   }
 
   /** Compile the draft, snapshot it as a new version, and make it live. */
-  deploy(projectId: string, actor: string, message?: string): { deployment: StoredDeployment; diff: ManifestDiff; project: Project } {
-    const config = this.draftConfig(projectId);
-    this.checkDeployable(projectId, config.auth);
-    const result = this.compileConfig(projectId, config);
-    const before = this.store.activeDeployment(projectId);
-    const deployment = this.store.createDeployment({
+  async deploy(projectId: string, actor: string, message?: string): Promise<{ deployment: StoredDeployment; diff: ManifestDiff; project: Project }> {
+    const config = await this.draftConfig(projectId);
+    await this.checkDeployable(projectId, config.auth);
+    const result = await this.compileConfig(projectId, config);
+    const before = await this.store.activeDeployment(projectId);
+    const deployment = await this.store.createDeployment({
       projectId,
       manifest: result.manifest,
       manifestHash: manifestHash(result.manifest),
@@ -332,24 +332,24 @@ export class Projects {
       config,
       message: message ?? null,
     });
-    const project = this.promote(projectId, deployment.version);
+    const project = await this.promote(projectId, deployment.version);
     return { deployment, diff: diffManifests(before?.manifest ?? null, result.manifest), project };
   }
 
   /** Make a version live (deploy or roll back). Its sign-in settings go live with it. */
-  promote(projectId: string, version: number): Project {
-    const d = this.store.getDeployment(projectId, version);
+  async promote(projectId: string, version: number): Promise<Project> {
+    const d = await this.store.getDeployment(projectId, version);
     if (!d) throw new NotFoundError(`deployment ${version}`);
-    if (d.config) this.checkDeployable(projectId, d.config.auth);
-    return this.store.updateProject(projectId, {
+    if (d.config) await this.checkDeployable(projectId, d.config.auth);
+    return await this.store.updateProject(projectId, {
       activeVersion: version,
       upstream: d.manifest.upstream,
       ...(d.config ? { auth: d.config.auth ?? { mode: 'none', requireSignIn: false } } : {}),
     });
   }
 
-  history(projectId: string) {
-    const all = this.store.listDeployments(projectId);
+  async history(projectId: string) {
+    const all = await this.store.listDeployments(projectId);
     return all.map((d, i) => {
       const prev = all[i + 1];
       const diff = diffManifests(prev?.manifest ?? null, d.manifest);
@@ -366,10 +366,10 @@ export class Projects {
     });
   }
 
-  exportYaml(projectId: string): string {
-    const p = this.project(projectId);
-    const config = this.draftConfig(projectId);
-    const s = this.store.getSource(projectId);
+  async exportYaml(projectId: string): Promise<string> {
+    const p = await this.project(projectId);
+    const config = await this.draftConfig(projectId);
+    const s = await this.store.getSource(projectId);
     const out: Record<string, unknown> = { ...config, source: s?.url ?? './openapi.json' };
     // Drop empty defaults so the file reads like a hand-written one.
     if (Object.keys(config.toolsets).length === 0) delete out.toolsets;

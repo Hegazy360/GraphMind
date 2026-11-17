@@ -39,9 +39,9 @@ describe('jack deploy', () => {
     const b = io();
     await deployCommand({ config, server: SERVER, fetchImpl: s.fetchImpl }, b);
     expect(b.lines.join('\n')).toMatch(/deployed v2 \(\+1 added, -1 removed\)/);
-    const p = s.store.getProjectBySlug('pets')!;
+    const p = (await s.store.getProjectBySlug('pets'))!;
     expect(p.activeVersion).toBe(2);
-    expect(s.store.listDeployments(p.id)[1]!.message).toBe('v1 from git');
+    expect((await s.store.listDeployments(p.id))[1]!.message).toBe('v1 from git');
     await s.jack.close();
   });
 
@@ -54,10 +54,10 @@ describe('jack deploy', () => {
     );
     await expect(deployCommand({ config, server: SERVER, fetchImpl: s.fetchImpl, env: {} }, io())).rejects.toThrow(DeployError);
     expect(await deployCommand({ config, server: SERVER, fetchImpl: s.fetchImpl, env: { PETS_SECRET: 's3cret-value' } }, io())).toBe(0);
-    const p = s.store.getProjectBySlug('pets-oidc')!;
+    const p = (await s.store.getProjectBySlug('pets-oidc'))!;
     expect(p.auth).toMatchObject({ mode: 'oidc', clientSecretRef: 'secret:PETS_SECRET' });
-    expect(s.store.listSecrets(p.id).map((x) => x.name)).toEqual(['PETS_SECRET']);
-    expect(JSON.stringify(s.store.getDraft(p.id))).not.toContain('s3cret-value');
+    expect((await s.store.listSecrets(p.id)).map((x) => x.name)).toEqual(['PETS_SECRET']);
+    expect(JSON.stringify(await s.store.getDraft(p.id))).not.toContain('s3cret-value');
     await s.jack.close();
   });
 

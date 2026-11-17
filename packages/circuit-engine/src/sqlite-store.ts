@@ -2,22 +2,32 @@
  * SqliteJournalStore — JournalStore on `node:sqlite` (built into Node >=
  * 22.13, zero native dependencies, the same choice as GraphMind's CLI
  * storage). Single-writer by design: this backend serves `circuit dev`,
- * tests and single-node self-hosting. The hosted multi-worker service gets
- * PostgresJournalStore (SKIP LOCKED claims) behind the same interface.
+ * tests and single-node self-hosting. The hosted multi-worker service uses
+ * PgJournalStore (SKIP LOCKED claims) behind the same interface.
+ *
+ * The methods are async only to satisfy the JournalStore contract; each
+ * body runs synchronously to completion before its promise settles (no
+ * internal await other than createRun's own lookup), so two calls issued
+ * back to back hit the database in issue order — exactly the old sync
+ * behavior. List ordering breaks ties by rowid (insertion order), matching
+ * PgJournalStore's identity columns.
  *
  * JSON columns are TEXT; absent optionals are NULL, never 'null'.
  */
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
-import type {
-  BreakpointMatcher,
-  JournalEntry,
-  JsonValue,
-  Run,
-  Attempt,
-  Intervention,
-  ErrorShape,
-  WorkflowEvent,
-} from '@graphmind-ai/circuit-schema';
+import type { BreakpointMatcher, JournalEntry, JsonValue, Run, WorkflowEvent } from '@graphmind-ai/circuit-schema';
+import {
+  ENTRY_COLUMNS,
+  ENTRY_JSON_COLUMNS,
+  json,
+  maybeJson,
+  parseMaybe,
+  RUN_COLUMNS,
+  RUN_JSON_COLUMNS,
+  rowToEntry,
+  rowToRun,
+  type Row,
+} from './rows.js';
 import type { JournalStore, Patch, RunFilter, WaitRow } from './store.js';
 
 const SCHEMA = `
@@ -86,118 +96,6 @@ CREATE TABLE IF NOT EXISTS breakpoints (
 );
 `;
 
-function json(value: unknown): string {
-  return JSON.stringify(value);
-}
-
-function maybeJson(value: unknown): string | null {
-  return value === undefined ? null : JSON.stringify(value);
-}
-
-function parseMaybe<T>(text: unknown): T | undefined {
-  return text === null || text === undefined ? undefined : (JSON.parse(text as string) as T);
-}
-
-type Row = Record<string, unknown>;
-
-function rowToRun(row: Row): Run {
-  const run: Run = {
-    id: row.id as string,
-    workflow: row.workflow as string,
-    status: row.status as Run['status'],
-    input: JSON.parse(row.input as string) as JsonValue,
-    createdAt: Number(row.created_at),
-  };
-  const output = parseMaybe<JsonValue>(row.output);
-  if (output !== undefined) run.output = output;
-  const error = parseMaybe<ErrorShape>(row.error);
-  if (error !== undefined) run.error = error;
-  if (row.idempotency_key != null) run.idempotencyKey = row.idempotency_key as string;
-  if (row.parent_run_id != null) run.parentRunId = row.parent_run_id as string;
-  if (row.parent_seq != null) run.parentSeq = Number(row.parent_seq);
-  const forked = parseMaybe<Run['forkedFrom']>(row.forked_from);
-  if (forked !== undefined) run.forkedFrom = forked;
-  if (row.wake_at != null) run.wakeAt = Number(row.wake_at);
-  if (row.lease_owner != null) run.leaseOwner = row.lease_owner as string;
-  if (row.lease_expires_at != null) run.leaseExpiresAt = Number(row.lease_expires_at);
-  if (row.paused_seq != null) run.pausedSeq = Number(row.paused_seq);
-  if (row.started_at != null) run.startedAt = Number(row.started_at);
-  if (row.finished_at != null) run.finishedAt = Number(row.finished_at);
-  return run;
-}
-
-function rowToEntry(row: Row): JournalEntry {
-  const entry: JournalEntry = {
-    runId: row.run_id as string,
-    seq: Number(row.seq),
-    kind: row.kind as JournalEntry['kind'],
-    name: row.name as string,
-    ordinal: Number(row.ordinal),
-    key: row.key as string,
-    status: row.status as JournalEntry['status'],
-    attempts: JSON.parse(row.attempts as string) as Attempt[],
-    interventions: JSON.parse(row.interventions as string) as Intervention[],
-    startedAt: Number(row.started_at),
-  };
-  if (row.pause_point != null) entry.pausePoint = row.pause_point as JournalEntry['pausePoint'];
-  const input = parseMaybe<JsonValue>(row.input);
-  if (input !== undefined) entry.input = input;
-  const output = parseMaybe<JsonValue>(row.output);
-  if (output !== undefined) entry.output = output;
-  const error = parseMaybe<ErrorShape>(row.error);
-  if (error !== undefined) entry.error = error;
-  if (row.wake_at != null) entry.wakeAt = Number(row.wake_at);
-  if (row.wait_event != null) entry.waitEvent = row.wait_event as string;
-  const match = parseMaybe<Record<string, JsonValue>>(row.wait_match);
-  if (match !== undefined) entry.waitMatch = match;
-  if (row.expires_at != null) entry.expiresAt = Number(row.expires_at);
-  if (row.child_run_id != null) entry.childRunId = row.child_run_id as string;
-  if (row.finished_at != null) entry.finishedAt = Number(row.finished_at);
-  return entry;
-}
-
-const RUN_COLUMNS: Record<string, string> = {
-  workflow: 'workflow',
-  status: 'status',
-  input: 'input',
-  output: 'output',
-  error: 'error',
-  idempotencyKey: 'idempotency_key',
-  parentRunId: 'parent_run_id',
-  parentSeq: 'parent_seq',
-  forkedFrom: 'forked_from',
-  wakeAt: 'wake_at',
-  leaseOwner: 'lease_owner',
-  leaseExpiresAt: 'lease_expires_at',
-  pausedSeq: 'paused_seq',
-  createdAt: 'created_at',
-  startedAt: 'started_at',
-  finishedAt: 'finished_at',
-};
-const RUN_JSON_COLUMNS = new Set(['input', 'output', 'error', 'forkedFrom']);
-
-const ENTRY_COLUMNS: Record<string, string> = {
-  kind: 'kind',
-  name: 'name',
-  ordinal: 'ordinal',
-  key: 'key',
-  status: 'status',
-  pausePoint: 'pause_point',
-  input: 'input',
-  output: 'output',
-  error: 'error',
-  attempts: 'attempts',
-  interventions: 'interventions',
-  wakeAt: 'wake_at',
-  waitEvent: 'wait_event',
-  waitMatch: 'wait_match',
-  expiresAt: 'expires_at',
-  childRunId: 'child_run_id',
-  startedAt: 'started_at',
-  finishedAt: 'finished_at',
-};
-const ENTRY_JSON_COLUMNS = new Set(['input', 'output', 'error', 'attempts', 'interventions', 'waitMatch']);
-
 export class SqliteJournalStore implements JournalStore {
   private readonly db: DatabaseSync;
 
@@ -212,9 +110,9 @@ export class SqliteJournalStore implements JournalStore {
     return this.db.prepare(sql);
   }
 
-  createRun(run: Run): Run {
+  async createRun(run: Run): Promise<Run> {
     if (run.idempotencyKey !== undefined) {
-      const existing = this.findByIdempotencyKey(run.workflow, run.idempotencyKey);
+      const existing = this.findIdem(run.workflow, run.idempotencyKey);
       if (existing) return existing;
     }
     this.prep(
@@ -243,19 +141,24 @@ export class SqliteJournalStore implements JournalStore {
     return run;
   }
 
-  getRun(id: string): Run | undefined {
+  async getRun(id: string): Promise<Run | undefined> {
     const row = this.prep('SELECT * FROM runs WHERE id = ?').get(id) as Row | undefined;
     return row ? rowToRun(row) : undefined;
   }
 
-  findByIdempotencyKey(workflow: string, key: string): Run | undefined {
+  async findByIdempotencyKey(workflow: string, key: string): Promise<Run | undefined> {
+    return this.findIdem(workflow, key);
+  }
+
+  /** Sync so createRun's check-then-insert never yields between the two. */
+  private findIdem(workflow: string, key: string): Run | undefined {
     const row = this.prep('SELECT * FROM runs WHERE workflow = ? AND idempotency_key = ?').get(workflow, key) as
       | Row
       | undefined;
     return row ? rowToRun(row) : undefined;
   }
 
-  listRuns(filter?: RunFilter): Run[] {
+  async listRuns(filter?: RunFilter): Promise<Run[]> {
     const clauses: string[] = [];
     const args: Array<string | number> = [];
     if (filter?.workflow !== undefined) {
@@ -267,14 +170,14 @@ export class SqliteJournalStore implements JournalStore {
       args.push(filter.status);
     }
     const where = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : '';
-    const rows = this.prep(`SELECT * FROM runs${where} ORDER BY created_at DESC LIMIT ?`).all(
+    const rows = this.prep(`SELECT * FROM runs${where} ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(
       ...args,
       filter?.limit ?? 100,
     ) as Row[];
     return rows.map(rowToRun);
   }
 
-  updateRun(id: string, patch: Patch<Run>): void {
+  async updateRun(id: string, patch: Patch<Run>): Promise<void> {
     const sets: string[] = [];
     const args: Array<string | number | null> = [];
     for (const [field, column] of Object.entries(RUN_COLUMNS)) {
@@ -290,9 +193,10 @@ export class SqliteJournalStore implements JournalStore {
     this.prep(`UPDATE runs SET ${sets.join(', ')} WHERE id = ?`).run(...args);
   }
 
-  claimDue(now: number, owner: string, leaseMs: number, limit: number): Run[] {
-    // Single-writer backend: SELECT then UPDATE is atomic enough here. The
-    // Postgres backend replaces this with FOR UPDATE SKIP LOCKED.
+  async claimDue(now: number, owner: string, leaseMs: number, limit: number): Promise<Run[]> {
+    // Single-writer backend: SELECT then UPDATE is atomic here, because the
+    // body never yields (node:sqlite is sync). PgJournalStore uses
+    // FOR UPDATE SKIP LOCKED instead.
     const rows = this.prep(
       `SELECT * FROM runs
        WHERE (lease_expires_at IS NULL OR lease_expires_at <= ?)
@@ -301,7 +205,7 @@ export class SqliteJournalStore implements JournalStore {
            OR (status IN ('suspended','paused') AND wake_at IS NOT NULL AND wake_at <= ?)
            OR status = 'running'
          )
-       ORDER BY COALESCE(wake_at, created_at) ASC
+       ORDER BY COALESCE(wake_at, created_at) ASC, rowid ASC
        LIMIT ?`,
     ).all(now, now, limit) as Row[];
     const claimed: Run[] = [];
@@ -319,21 +223,21 @@ export class SqliteJournalStore implements JournalStore {
     return claimed;
   }
 
-  releaseLease(id: string): void {
+  async releaseLease(id: string): Promise<void> {
     this.prep('UPDATE runs SET lease_owner = NULL, lease_expires_at = NULL WHERE id = ?').run(id);
   }
 
-  listJournal(runId: string): JournalEntry[] {
+  async listJournal(runId: string): Promise<JournalEntry[]> {
     const rows = this.prep('SELECT * FROM journal WHERE run_id = ? ORDER BY seq ASC').all(runId) as Row[];
     return rows.map(rowToEntry);
   }
 
-  getEntry(runId: string, seq: number): JournalEntry | undefined {
+  async getEntry(runId: string, seq: number): Promise<JournalEntry | undefined> {
     const row = this.prep('SELECT * FROM journal WHERE run_id = ? AND seq = ?').get(runId, seq) as Row | undefined;
     return row ? rowToEntry(row) : undefined;
   }
 
-  appendEntry(entry: Omit<JournalEntry, 'seq'>): JournalEntry {
+  async appendEntry(entry: Omit<JournalEntry, 'seq'>): Promise<JournalEntry> {
     const next = this.prep('SELECT COALESCE(MAX(seq) + 1, 0) AS seq FROM journal WHERE run_id = ?').get(
       entry.runId,
     ) as Row;
@@ -367,7 +271,7 @@ export class SqliteJournalStore implements JournalStore {
     return { ...entry, seq };
   }
 
-  updateEntry(runId: string, seq: number, patch: Patch<JournalEntry>): void {
+  async updateEntry(runId: string, seq: number, patch: Patch<JournalEntry>): Promise<void> {
     const sets: string[] = [];
     const args: Array<string | number | null> = [];
     for (const [field, column] of Object.entries(ENTRY_COLUMNS)) {
@@ -383,7 +287,7 @@ export class SqliteJournalStore implements JournalStore {
     this.prep(`UPDATE journal SET ${sets.join(', ')} WHERE run_id = ? AND seq = ?`).run(...args);
   }
 
-  addWait(wait: WaitRow): void {
+  async addWait(wait: WaitRow): Promise<void> {
     this.prep('INSERT OR REPLACE INTO waits (run_id, seq, event_name, match, expires_at) VALUES (?,?,?,?,?)').run(
       wait.runId,
       wait.seq,
@@ -393,12 +297,12 @@ export class SqliteJournalStore implements JournalStore {
     );
   }
 
-  removeWait(runId: string, seq: number): void {
+  async removeWait(runId: string, seq: number): Promise<void> {
     this.prep('DELETE FROM waits WHERE run_id = ? AND seq = ?').run(runId, seq);
   }
 
-  findWaits(eventName: string): WaitRow[] {
-    const rows = this.prep('SELECT * FROM waits WHERE event_name = ?').all(eventName) as Row[];
+  async findWaits(eventName: string): Promise<WaitRow[]> {
+    const rows = this.prep('SELECT * FROM waits WHERE event_name = ? ORDER BY rowid ASC').all(eventName) as Row[];
     return rows.map((row) => ({
       runId: row.run_id as string,
       seq: Number(row.seq),
@@ -408,7 +312,7 @@ export class SqliteJournalStore implements JournalStore {
     }));
   }
 
-  insertEvent(event: WorkflowEvent): void {
+  async insertEvent(event: WorkflowEvent): Promise<void> {
     this.prep('INSERT INTO events (id, name, data, received_at) VALUES (?,?,?,?)').run(
       event.id,
       event.name,
@@ -417,20 +321,20 @@ export class SqliteJournalStore implements JournalStore {
     );
   }
 
-  listBreakpoints(): BreakpointMatcher[] {
-    const rows = this.prep('SELECT matcher FROM breakpoints').all() as Row[];
+  async listBreakpoints(): Promise<BreakpointMatcher[]> {
+    const rows = this.prep('SELECT matcher FROM breakpoints ORDER BY id ASC').all() as Row[];
     return rows.map((row) => JSON.parse(row.matcher as string) as BreakpointMatcher);
   }
 
-  setBreakpoint(matcher: BreakpointMatcher): void {
+  async setBreakpoint(matcher: BreakpointMatcher): Promise<void> {
     this.prep('INSERT INTO breakpoints (matcher) VALUES (?)').run(json(matcher));
   }
 
-  clearBreakpoints(): void {
+  async clearBreakpoints(): Promise<void> {
     this.prep('DELETE FROM breakpoints').run();
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.db.close();
   }
 }

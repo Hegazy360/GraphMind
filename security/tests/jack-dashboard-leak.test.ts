@@ -91,7 +91,7 @@ describe('jack dashboard never returns or stores a client secret in clear', () =
     const start = await call('POST', `/v1/projects/${id}/test-signin`);
     await browse(start.url, async (u, i) => (u.startsWith(ORIGIN) ? jack.app.fetch(new Request(u, i)) : fetch(u, i)), { stopAt: (u) => new URL(u).pathname === '/', forms: {}, maxSteps: 10 }).catch(() => null);
     await jack.close();
-    store.close();
+    await store.close();
 
     const all = surfaces.join('\n---\n');
     expect(all).not.toContain(FORBIDDEN_SECRET);

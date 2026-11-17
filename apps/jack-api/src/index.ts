@@ -37,7 +37,7 @@ import {
 } from '@graphmind-ai/jack-schema';
 import { loadSource, MAX_DOCUMENT_BYTES } from '@graphmind-ai/jack-openapi';
 import { guardedFetch, type EgressPolicy } from '@graphmind-ai/jack-runtime';
-import { SecretBox } from '@graphmind-ai/jack-auth';
+import { SecretBox, type AuthStore } from '@graphmind-ai/jack-auth';
 import type { Accounts, Principal } from '@graphmind-ai/accounts';
 import { uiAsset } from '@graphmind-ai/ui';
 import { ConsoleError, TestConsole } from './console.js';
@@ -46,8 +46,9 @@ import { DraftError, isUserError, previewImport, Projects } from './projects.js'
 import { NotFoundError, SlugTakenError, type JackStore, type OwnedProject } from './store.js';
 
 export { SqliteStore } from './sqlite-store.js';
+export { PgJackStore, type PgJackStoreOptions } from './pg-store.js';
 export { NotFoundError, SlugTakenError, type CallRow, type JackStore, type NewDeployment, type NewProject, type OwnedProject, type StoredDeployment } from './store.js';
-export { DataPlane, issuerFor, NotLiveError } from './data-plane.js';
+export { DataPlane, issuerFor, NotLiveError, type DataPlaneOptions } from './data-plane.js';
 export { Projects, previewImport, type DraftView, type ToolView } from './projects.js';
 export { TestConsole, type TryResult } from './console.js';
 
@@ -67,8 +68,15 @@ export interface ApiOptions {
    * redirect back to the page needs it. Default `/`.
    */
   dashboardPath?: string;
-  /** Where per-project sign-in databases live. Default: a fresh temp dir. */
+  /**
+   * Each project's sign-in store. Hosted: `(id) => PgAuthStore.forProject(sql, id, { schema })`.
+   * When given, Jack touches no filesystem for sign-in data (and `dataDir` is ignored).
+   */
+  authStoreFor?: (projectId: string) => AuthStore;
+  /** Where per-project sign-in databases live when `authStoreFor` is not given. Default: a fresh temp dir. */
   dataDir?: string;
+  /** Keep post-response work (call-log writes) alive on serverless hosts; see DataPlaneOptions.waitUntil. */
+  waitUntil?: (p: Promise<unknown>) => void;
   /** 32 bytes sealing secrets and upstream credentials. Default: random (lost on restart). */
   secretKey?: Uint8Array;
   /** Egress for the data plane and imports. Default `public`; local `jack serve` uses `any`. */
@@ -133,7 +141,9 @@ export function createJack(opts: ApiOptions): Jack {
   const plane = new DataPlane({
     store,
     publicOrigin,
-    dataDir: opts.dataDir ?? mkdtempSync(join(tmpdir(), 'jack-data-')),
+    // Only the SQLite default needs a directory; with authStoreFor nothing is created on disk.
+    ...(opts.authStoreFor ? { authStoreFor: opts.authStoreFor } : { dataDir: opts.dataDir ?? mkdtempSync(join(tmpdir(), 'jack-data-')) }),
+    ...(opts.waitUntil ? { waitUntil: opts.waitUntil } : {}),
     secretKey,
     egress,
     resolveSecret: (projectId, ref) => projects.resolveSecret(projectId, ref),
@@ -249,14 +259,14 @@ export function createJack(opts: ApiOptions): Jack {
   });
 
   /** The project in the URL, if the caller may see it (another account's project is a 404, not a 403: its existence is private). */
-  const project = (c: Context) => {
-    const p = store.getProject(c.req.param('id') ?? '');
+  const project = async (c: Context) => {
+    const p = await store.getProject(c.req.param('id') ?? '');
     const { ownerId } = caller(c);
     if (!p || (ownerId !== null && p.ownerId !== ownerId)) throw new NotFoundError('project not found');
     return p;
   };
   const actor = (c: Context) => caller(c).principal?.user.email ?? c.req.header('x-jack-actor') ?? 'dashboard';
-  const visibleProjects = (c: Context) => {
+  const visibleProjects = async (c: Context) => {
     const { ownerId } = caller(c);
     return ownerId === null ? store.listProjects() : store.listProjects(ownerId);
   };
@@ -274,7 +284,7 @@ export function createJack(opts: ApiOptions): Jack {
     }),
   );
 
-  app.get('/v1/health', (c) =>
+  app.get('/v1/health', async (c) =>
     c.json({
       ok: true,
       service: SERVICE,
@@ -282,7 +292,7 @@ export function createJack(opts: ApiOptions): Jack {
       auth: keys.size > 0 || accounts !== undefined,
       accounts: accounts !== undefined,
       signup: accounts?.status().signup ?? false,
-      projects: visibleProjects(c).length,
+      projects: (await visibleProjects(c)).length,
       origin: publicOrigin,
       ...(caller(c).principal ? { user: { email: caller(c).principal!.user.email, name: caller(c).principal!.user.name } } : {}),
     }),
@@ -290,9 +300,11 @@ export function createJack(opts: ApiOptions): Jack {
 
   // ---------------------------------------------------------- projects --
 
-  app.get('/v1/projects', (c) =>
+  app.get('/v1/projects', async (c) =>
     c.json({
-      projects: visibleProjects(c).map((p) => ({ ...describe(p), tools: store.activeDeployment(p.id)?.manifest.tools.length ?? 0 })),
+      projects: await Promise.all(
+        (await visibleProjects(c)).map(async (p) => ({ ...describe(p), tools: (await store.activeDeployment(p.id))?.manifest.tools.length ?? 0 })),
+      ),
     }),
   );
 
@@ -308,7 +320,7 @@ export function createJack(opts: ApiOptions): Jack {
       // Import: create from a spec (dashboard wizard, `jack deploy` on first run).
       const body = importBody.parse(raw);
       const src = await readSource(body.source);
-      const { project: p, draft } = projects.createFromSource({
+      const { project: p, draft } = await projects.createFromSource({
         text: src.text,
         url: src.url,
         ownerId: caller(c).ownerId,
@@ -319,7 +331,7 @@ export function createJack(opts: ApiOptions): Jack {
       return c.json({ project: describe(p), draft }, 201);
     }
     const body = createProjectBody.parse(raw);
-    const p = store.createProject({
+    const p = await store.createProject({
       slug: body.slug,
       name: body.name ?? body.slug,
       upstream: new URL(body.upstream).origin,
@@ -329,73 +341,73 @@ export function createJack(opts: ApiOptions): Jack {
     return c.json({ project: describe(p) }, 201);
   });
 
-  app.get('/v1/projects/:id', (c) => {
-    const p = project(c);
-    const s = store.getSource(p.id);
+  app.get('/v1/projects/:id', async (c) => {
+    const p = await project(c);
+    const s = await store.getSource(p.id);
     return c.json({
       project: describe(p),
-      active: store.activeDeployment(p.id),
+      active: await store.activeDeployment(p.id),
       issuer: issuerFor(publicOrigin, p.slug),
       oidcRedirectUri: `${issuerFor(publicOrigin, p.slug)}/oauth/upstream/callback`,
       source: s ? { url: s.url, updatedAt: s.updatedAt, bytes: s.text.length } : null,
-      secrets: store.listSecrets(p.id),
-      testSession: console_.whoami(p),
+      secrets: await store.listSecrets(p.id),
+      testSession: await console_.whoami(p),
     });
   });
 
-  app.delete('/v1/projects/:id', (c) => {
-    const p = project(c);
-    plane.drop(p.id);
+  app.delete('/v1/projects/:id', async (c) => {
+    const p = await project(c);
+    await plane.drop(p.id);
     console_.signOut(p.id);
-    store.deleteProject(p.id);
+    await store.deleteProject(p.id);
     return c.body(null, 204);
   });
 
   app.put('/v1/projects/:id/source', async (c) => {
-    const p = project(c);
+    const p = await project(c);
     const src = await readSource(sourceBody.parse(await c.req.json()));
-    return c.json({ draft: projects.replaceSource(p.id, src.text, src.url) });
+    return c.json({ draft: await projects.replaceSource(p.id, src.text, src.url) });
   });
 
   // ------------------------------------------------------------- draft --
 
-  app.get('/v1/projects/:id/draft', (c) => {
-    const p = project(c);
+  app.get('/v1/projects/:id/draft', async (c) => {
+    const p = await project(c);
     // A project created without a spec (the M0 API, or before an import) has no draft yet: a state, not an error.
-    if (!store.getSource(p.id) || !store.getDraft(p.id)) return c.json({ draft: null });
-    return c.json({ draft: projects.draftView(p.id) });
+    if (!(await store.getSource(p.id)) || !(await store.getDraft(p.id))) return c.json({ draft: null });
+    return c.json({ draft: await projects.draftView(p.id) });
   });
 
   app.put('/v1/projects/:id/draft', async (c) => {
     const body = z.object({ config: z.unknown() }).parse(await c.req.json());
-    return c.json({ draft: projects.saveDraft(project(c).id, body.config) });
+    return c.json({ draft: await projects.saveDraft((await project(c)).id, body.config) });
   });
 
   app.patch('/v1/projects/:id/draft', async (c) => {
     const body = z.record(z.string(), z.unknown()).parse(await c.req.json());
-    return c.json({ draft: projects.updateSettings(project(c).id, body) });
+    return c.json({ draft: await projects.updateSettings((await project(c)).id, body) });
   });
 
   app.patch('/v1/projects/:id/draft/tools/:key', async (c) => {
     const body = z.record(z.string(), z.unknown()).parse(await c.req.json());
-    return c.json({ draft: projects.updateTool(project(c).id, c.req.param('key'), body) });
+    return c.json({ draft: await projects.updateTool((await project(c)).id, c.req.param('key'), body) });
   });
 
-  app.get('/v1/projects/:id/jack.yaml', (c) => {
-    const p = project(c);
-    return new Response(projects.exportYaml(p.id), {
+  app.get('/v1/projects/:id/jack.yaml', async (c) => {
+    const p = await project(c);
+    return new Response(await projects.exportYaml(p.id), {
       headers: { 'content-type': 'application/yaml; charset=utf-8', 'content-disposition': `attachment; filename="jack.${p.slug}.yaml"` },
     });
   });
 
   app.put('/v1/projects/:id/secrets/:name', async (c) => {
     const body = z.object({ value: z.string() }).parse(await c.req.json());
-    projects.setSecret(project(c).id, c.req.param('name'), body.value);
+    await projects.setSecret((await project(c)).id, c.req.param('name'), body.value);
     return c.body(null, 204);
   });
 
-  app.delete('/v1/projects/:id/secrets/:name', (c) => {
-    store.deleteSecret(project(c).id, c.req.param('name'));
+  app.delete('/v1/projects/:id/secrets/:name', async (c) => {
+    await store.deleteSecret((await project(c)).id, c.req.param('name'));
     return c.body(null, 204);
   });
 
@@ -403,46 +415,46 @@ export function createJack(opts: ApiOptions): Jack {
 
   app.post('/v1/projects/:id/deploy', async (c) => {
     const body = z.object({ message: z.string().max(500).optional() }).parse(await c.req.json().catch(() => ({})));
-    const r = projects.deploy(project(c).id, actor(c), body.message);
+    const r = await projects.deploy((await project(c)).id, actor(c), body.message);
     return c.json({ deployment: { ...r.deployment, manifest: undefined }, diff: r.diff, project: describe(r.project) }, 201);
   });
 
-  app.get('/v1/projects/:id/deployments', (c) => {
-    const p = project(c);
-    return c.json({ activeVersion: p.activeVersion, deployments: projects.history(p.id) });
+  app.get('/v1/projects/:id/deployments', async (c) => {
+    const p = await project(c);
+    return c.json({ activeVersion: p.activeVersion, deployments: await projects.history(p.id) });
   });
 
   // Raw manifest upload (M0 contract; `jack build` output).
   app.post('/v1/projects/:id/deployments', async (c) => {
-    const p = project(c);
+    const p = await project(c);
     const body = createDeploymentBody.parse(await c.req.json());
     const m = parseManifest(body.manifest);
     if (new URL(m.upstream).origin !== p.upstream) {
       return problem(400, 'Upstream mismatch', `manifest upstream ${m.upstream} is not the project's ${p.upstream}`);
     }
-    const previous = store.activeDeployment(p.id);
-    const deployment = store.createDeployment({ projectId: p.id, manifest: m, manifestHash: manifestHash(m), createdBy: caller(c).principal?.user.email ?? c.req.header('x-jack-actor') ?? 'api' });
+    const previous = await store.activeDeployment(p.id);
+    const deployment = await store.createDeployment({ projectId: p.id, manifest: m, manifestHash: manifestHash(m), createdBy: caller(c).principal?.user.email ?? c.req.header('x-jack-actor') ?? 'api' });
     return c.json({ deployment: { ...deployment, manifest: undefined }, diff: diffManifests(previous?.manifest ?? null, m) }, 201);
   });
 
-  app.get('/v1/projects/:id/deployments/:version', (c) => {
-    const d = store.getDeployment(project(c).id, Number(c.req.param('version')));
+  app.get('/v1/projects/:id/deployments/:version', async (c) => {
+    const d = await store.getDeployment((await project(c)).id, Number(c.req.param('version')));
     if (!d) return problem(404, 'Deployment not found');
     return c.json({ deployment: d });
   });
 
   app.post('/v1/projects/:id/promote', async (c) => {
-    const p = project(c);
+    const p = await project(c);
     const { version } = promoteBody.parse(await c.req.json());
-    if (!store.getDeployment(p.id, version)) return problem(404, 'Deployment not found');
-    return c.json({ project: describe(projects.promote(p.id, version)) });
+    if (!(await store.getDeployment(p.id, version))) return problem(404, 'Deployment not found');
+    return c.json({ project: describe(await projects.promote(p.id, version)) });
   });
 
   // ------------------------------------------------- users and activity --
 
-  app.get('/v1/projects/:id/grants', (c) => {
-    const p = project(c);
-    const grants = plane.grants(p).map((g) => {
+  app.get('/v1/projects/:id/grants', async (c) => {
+    const p = await project(c);
+    const grants = (await plane.grants(p)).map((g) => {
       let app_ = g.clientId;
       try {
         app_ = new URL(g.clientId).host; // CIMD: the verified host
@@ -454,29 +466,29 @@ export function createJack(opts: ApiOptions): Jack {
     return c.json({ grants: grants.reverse() });
   });
 
-  app.delete('/v1/projects/:id/grants/:grant', (c) => {
-    if (!plane.revoke(project(c), c.req.param('grant'))) return problem(404, 'Grant not found');
+  app.delete('/v1/projects/:id/grants/:grant', async (c) => {
+    if (!(await plane.revoke(await project(c), c.req.param('grant')))) return problem(404, 'Grant not found');
     return c.body(null, 204);
   });
 
-  app.get('/v1/projects/:id/calls', (c) => {
+  app.get('/v1/projects/:id/calls', async (c) => {
     const limit = Number(c.req.query('limit') ?? 100) || 100;
     const before = c.req.query('before');
-    return c.json({ calls: store.listCalls(project(c).id, { limit, ...(before ? { before: Number(before) } : {}) }) });
+    return c.json({ calls: await store.listCalls((await project(c)).id, { limit, ...(before ? { before: Number(before) } : {}) }) });
   });
 
   // ---------------------------------------------------------- try it --
 
-  app.post('/v1/projects/:id/test-signin', async (c) => c.json({ url: await console_.start(project(c)) }));
+  app.post('/v1/projects/:id/test-signin', async (c) => c.json({ url: await console_.start(await project(c)) }));
 
-  app.delete('/v1/projects/:id/test-signin', (c) => {
-    console_.signOut(project(c).id);
+  app.delete('/v1/projects/:id/test-signin', async (c) => {
+    console_.signOut((await project(c)).id);
     return c.body(null, 204);
   });
 
   app.post('/v1/projects/:id/try', async (c) => {
     const body = tryBody.parse(await c.req.json());
-    return c.json({ result: await console_.tryTool(project(c), body.tool, body.args, body.approve) });
+    return c.json({ result: await console_.tryTool(await project(c), body.tool, body.args, body.approve) });
   });
 
   // -------------------------------------------------------- data plane --

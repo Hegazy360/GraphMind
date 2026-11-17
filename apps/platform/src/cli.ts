@@ -129,16 +129,16 @@ export async function main(argv: string[]): Promise<void> {
     console.log(`  accounts   ${st.signup ? 'anyone can sign up' : 'sign-up closed'} · ${st.users} user(s) · ${data}`);
     if (!hosted) console.log('  walk it:   open the homepage, click "Create a free account", then open Circuit and Jack from the hub.');
   });
-  const stop = () => {
+  const stop = async () => {
     loop.stop();
-    void jack.close();
-    journal.close();
-    jackStore.close();
+    await jack.close();
+    await journal.close();
+    await jackStore.close();
     accountStore.close();
     process.exit(0);
   };
-  process.on('SIGINT', stop);
-  process.on('SIGTERM', stop);
+  process.on('SIGINT', () => void stop());
+  process.on('SIGTERM', () => void stop());
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
