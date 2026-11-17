@@ -94,18 +94,13 @@ Assets are copied from the repo's `docs/assets/`; re-copy from there if the orig
 
 ## Deploying
 
-The site lives in the Vercel project `graphmind-docs`, which is **not connected to the Git
-repository** — nothing deploys by itself when `master` changes. Two ways to ship it:
+The docs ship with the rest of graphmind.ai: every push to `master` builds the
+whole site (`pnpm build:site`), which runs `astro build` and `check:links` here
+and copies `dist/docs` into the deployment's static files at `/docs`. There is
+no separate docs project, token or deploy command; see
+[DEVELOPMENT.md](../../DEVELOPMENT.md#hosting-graphmindai-is-one-vercel-deployment).
 
-- **Automatically**: `.github/workflows/deploy-docs.yml` builds, runs `check:links` and deploys
-  to production on every push to `master` that touches `apps/docs/` (and on manual dispatch). It
-  needs one repository secret, `VERCEL_TOKEN` (Vercel → Account settings → Tokens); the team and
-  project ids are pinned in the workflow file.
-- **From a machine**: `pnpm --filter docs deploy:vercel` (`vercel deploy --prod`). Run `vercel link`
-  once in `apps/docs/` and pick `graphmind-docs`.
-
-Zero-config on Vercel beyond framework detection: it picks up Astro, builds with `astro build`,
-and serves `dist/`. Fully static — no server runtime, no environment variables.
+Fully static — no server runtime, no environment variables.
 
 `vercel.json` sets `cleanUrls` + `trailingSlash`, and rewrites `/docs/*` → `/*` so this project
 answers correctly on **both** path shapes: at its own deployment URL and behind a

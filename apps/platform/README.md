@@ -1,7 +1,7 @@
 # platform
 
 The GraphMind platform server: the whole end-user experience on one origin, behind one account.
-This is what `app.graphmind.ai` runs; locally, `pnpm platform` runs it with the homepage in front
+This is what graphmind.ai runs at `/app/` (`src/hosted.ts`, on Vercel with Supabase); locally, `pnpm platform` runs it with the homepage in front
 so the complete journey can be walked and tested: graphmind.ai → Create a free account → the hub →
 Circuit → Jack, with the same session everywhere.
 

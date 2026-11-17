@@ -1,6 +1,6 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { afterAll, describe, expect, it } from 'vitest';
-import { createSql } from '@graphmind-ai/db';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createSql, type Sql } from '@graphmind-ai/db';
 import { ConfigError, createHostedPlatform, migrateAll, publicOriginFrom, type Hosted } from '../src/hosted.js';
 import { redact } from '../src/redact.js';
 
@@ -127,7 +127,11 @@ dpg('production mode (Postgres + Supabase Auth)', () => {
   };
   const d = deferred();
   let h: Hosted;
-  const admin = createSql(PG!);
+  // Created lazily: a skipped describe still evaluates its body, and there is no URL to parse then.
+  let admin: Sql;
+  beforeAll(() => {
+    admin = createSql(PG!);
+  });
 
   afterAll(async () => {
     await h?.close();

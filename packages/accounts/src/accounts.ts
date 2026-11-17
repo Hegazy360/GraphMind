@@ -27,7 +27,7 @@ import { EmailTakenError, type AccountStore, type User } from './store.js';
 
 export interface AccountsOptions {
   store: AccountStore;
-  /** The origin browsers use to reach this server, e.g. https://app.graphmind.ai or http://127.0.0.1:4820. */
+  /** The origin browsers use to reach this server, e.g. https://graphmind.ai or http://127.0.0.1:4820. */
   publicOrigin: string;
   /** Anyone may create an account (default true). */
   allowSignup?: boolean;

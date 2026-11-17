@@ -40,7 +40,6 @@ All of these run from the repository root.
 | `pnpm release:status` | Read-only: what npm, PyPI and RubyGems serve vs. what the repo says, plus anything that would block the next release. Exits 1 if anything is behind. |
 | `pnpm release` | Guided release from your terminal: fixes blockers, runs the CI gates locally, tags and pushes (or publishes from this machine), watches the registries. Confirms every step; safe to re-run at any point. `--dry-run` shows every command without running any. |
 | `gh workflow run publish-npm.yml --ref master -f tag=vX.Y.Z -f dry_run=false` | Run the publish workflow for a tag that already exists, with the workflow file from `master`. Use it when the tag's own run failed for a reason fixed since: a re-run uses the file as it was at the tag. Already-published packages are skipped; the GitHub Release is created if missing. |
-| `pnpm --filter docs deploy:vercel` | Deploy the docs site to production on Vercel from this machine (`vercel link` once, first). `deploy-docs.yml` does the same on every push to `master` that touches `apps/docs/`. |
 | `pnpm build` | Build everything (packages, viewer, docs). |
 
 Tests:
@@ -132,8 +131,9 @@ on the hub only.
 Options: `--port`, `--workflows <module>` and `--mcp <config>` (defaults: the Circuit
 onboarding example), `--data <dir>` (state, default `.platform/`, git-ignored),
 `--no-signup`, `--no-site` (hub at `/`). `graphmind-platform serve --public-origin
-https://app.graphmind.ai --host 0.0.0.0` is the hosted shape: the hub at `/`, no
-homepage (graphmind.ai serves that and redirects `/signup` and `/login` here).
+<url> --host 0.0.0.0` is the self-hosted shape: the hub at `/`, no homepage.
+graphmind.ai itself runs `src/hosted.ts` on Vercel instead (see
+[Hosting](#hosting-graphmindai-is-one-vercel-deployment)).
 
 ## Hosting: graphmind.ai is one Vercel deployment
 

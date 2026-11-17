@@ -300,8 +300,9 @@ online on one origin: the homepage at `http://127.0.0.1:4800/`, "Create a
 free account" leading to the hub at `/app/`, Circuit at `/app/circuit/` and
 Jack at `/app/jack/`, one session for all of it, every Jack project's MCP
 server at `/p/<slug>/mcp`. `pnpm platform:e2e` walks that path in a browser.
-The same server (`apps/platform`) is what `app.graphmind.ai` runs, with the
-homepage served by graphmind.ai in front.
+The same composition (`apps/platform`) is what graphmind.ai runs at `/app/`,
+on Supabase Postgres and Supabase Auth, as one Vercel deployment with the
+homepage, the docs and `/try`.
 
 ### 3. Import traces from any other framework
 

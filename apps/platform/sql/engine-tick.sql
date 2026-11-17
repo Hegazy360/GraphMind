@@ -3,13 +3,22 @@
 -- even when nobody is using the dashboard. Requests made by users already kick
 -- the engine; this is the backstop.
 --
--- Run ONCE as the `postgres` role (cron jobs need it), e.g.
---   psql "<session pooler URI as postgres, no password in it>" -f apps/platform/sql/engine-tick.sql
--- Safe to re-run: it replaces the job.
+-- Run ONCE as the `postgres` role: only it may use the cron and vault schemas.
+-- The app's own role (graphmind_app, the one in Vercel's POSTGRES_URL) cannot,
+-- by design, so use the pooler URI with user `postgres.<project-ref>`:
+--   psql "postgresql://postgres.<project-ref>@<pooler-host>:5432/postgres?sslmode=require" -f apps/platform/sql/engine-tick.sql
+-- and type the postgres password at the prompt. Safe to re-run: it replaces the job.
 --
 -- The bearer token is read from Supabase Vault (secret `cron_secret`) each time
 -- the job runs, so it never appears in this file, in cron.job, or in logs.
 -- It must equal the CRON_SECRET environment variable of the Vercel project.
+
+do $$
+begin
+  if current_user <> 'postgres' then
+    raise exception 'run this file as the postgres role (pooler user postgres.<project-ref>), not as %', current_user;
+  end if;
+end $$;
 
 create extension if not exists pg_cron;
 create extension if not exists pg_net;

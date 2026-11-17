@@ -39,9 +39,11 @@ and where it differs from the plan below:
   `postgres stores and site build` runs the Postgres legs and the full site
   build on each push.
 
-Left for the owner: run `engine-tick.sql`; optionally add the secret key and
-enable IP forwarding; merge; then Step 6 (decommission `graphmind-docs`,
-`graphmind-try`, `deploy-docs.yml`).
+Merged and live on 2026-11-17. Step 6 (decommission), repo side, done the same
+day: `deploy-docs.yml`, `apps/docs/vercel.json` and the docs deploy script
+removed, every reference to the old deployments updated. Account side, for the
+owner: `vercel project rm graphmind-docs`, `vercel project rm graphmind-try`,
+`gh secret delete VERCEL_TOKEN`. `app.graphmind.ai` stays unregistered.
 
 ## 1. Where we are
 

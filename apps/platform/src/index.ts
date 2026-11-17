@@ -15,7 +15,8 @@
  *
  * `<hub>` is `/app` when the homepage is served too (local dev: the whole
  * journey from graphmind.ai to a running dashboard) and `/` when this is
- * deployed as app.graphmind.ai behind the static homepage.
+ * self-hosted at an origin of its own. graphmind.ai uses `/app` without `site`
+ * (hosted.ts): the CDN serves the homepage, /docs and /try as static files.
  *
  * One `Accounts` instance is shared by the hub, Circuit and Jack, so a
  * session started on the hub is valid in both dashboards (the cookie is

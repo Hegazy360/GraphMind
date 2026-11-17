@@ -35,7 +35,7 @@ const USAGE = `usage:
   graphmind-platform serve  --public-origin <url> [--host 0.0.0.0] [--port 4800] [--workflows <module>] [--data <dir>] [--no-signup]
 
 dev    everything on http://127.0.0.1:<port>: the homepage, /signup, the hub at /app/, Circuit and Jack.
-serve  the hosted shape (app.graphmind.ai): the hub at /, accounts required, binds --host.`;
+serve  the self-hosted shape: the hub at /, accounts required, binds --host (graphmind.ai itself runs src/hosted.ts on Vercel).`;
 
 function fail(message: string): never {
   console.error(`graphmind-platform: ${message}`);
@@ -64,7 +64,7 @@ export async function main(argv: string[]): Promise<void> {
   const hosted = command === 'serve';
   const host = values.host ?? (hosted ? '0.0.0.0' : '127.0.0.1');
   const port = Number(values.port ?? 4800);
-  if (hosted && values['public-origin'] === undefined) fail('serve needs --public-origin <url> (the address browsers use, e.g. https://app.graphmind.ai)');
+  if (hosted && values['public-origin'] === undefined) fail('serve needs --public-origin <url> (the address browsers use, e.g. https://circuit.example.com)');
   const shownHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
   const publicOrigin = (values['public-origin'] ?? `http://${shownHost}:${port}`).replace(/\/$/, '');
   try {

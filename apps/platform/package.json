@@ -1,7 +1,7 @@
 {
   "name": "platform",
   "version": "0.0.1",
-  "description": "GraphMind platform — one origin for the end-user experience: the homepage, sign-up, a hub page, Circuit and Jack under a single account. What app.graphmind.ai runs; `pnpm platform` runs it locally.",
+  "description": "GraphMind platform \u2014 one origin for the end-user experience: the homepage, sign-up, a hub page, Circuit and Jack under a single account. What graphmind.ai runs at /app (hosted on Vercel with Supabase); `pnpm platform` runs it locally.",
   "license": "MIT",
   "private": true,
   "type": "module",
