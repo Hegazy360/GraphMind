@@ -36,7 +36,7 @@
     "@modelcontextprotocol/client": "^2.4.0",
     "@types/node": "^26.3.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11",
+    "vitest": "^5.1.0",
     "@graphmind-ai/jack-auth": "workspace:*"
   }
 }
