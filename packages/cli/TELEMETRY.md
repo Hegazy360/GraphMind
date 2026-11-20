@@ -20,7 +20,7 @@ about what it did:
 ```
 
 - **event** — a short command name only (`serve`, `demo`, `init`, `import`,
-  `mcp`, `mcp-proxy`, `runs`, `record`, `pauses`, `wait`, `resume`, `skill`,
+  `mcp`, `mcp-proxy`, `runs`, `record`, `pauses`, `wait`, `resume`, `skill`, `insights`,
   `help`). Never arguments, file paths, prompts, traces, run data, or
   payloads of any kind — `graphmind help record` and `graphmind help` both
   send exactly `"event":"help"`.

@@ -15,6 +15,7 @@ import { runRecord } from './commands/record.js';
 import { runReplay } from './commands/replay.js';
 import { runRuns } from './commands/runs.js';
 import { runSkill } from './commands/skill.js';
+import { runInsights } from './commands/insights.js';
 import { MCP_PROXY_SUMMARY } from './mcp-proxy/help.js';
 import { DEFAULT_PORT } from './paths.js';
 import { startServer } from './server.js';
@@ -88,8 +89,12 @@ const commands: Record<string, CommandDef> = {
     summary: 'Release a pause: resume <pauseId> --run <id> --action <a>',
     run: runResume,
   },
+  insights: {
+    summary: 'What to change in your agent, from its recorded runs (--app, --json)',
+    run: runInsights,
+  },
   skill: {
-    summary: 'Print the GraphMind Agent Skill, or --install it here',
+    summary: 'Print an Agent Skill (graphmind|circuit|jack), or --install it (or all) here',
     run: runSkill,
   },
   help: {

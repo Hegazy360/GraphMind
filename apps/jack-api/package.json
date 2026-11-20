@@ -1,7 +1,7 @@
 {
   "name": "jack-api",
   "version": "0.0.1",
-  "description": "GraphMind Jack control plane and data plane — projects, deployments, the hosted /mcp and /oauth endpoints.",
+  "description": "GraphMind Jack control plane and data plane \u2014 projects, deployments, the hosted /mcp and /oauth endpoints.",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -38,7 +38,8 @@
     "yaml": "^2.9.0",
     "@graphmind-ai/accounts": "workspace:*",
     "@graphmind-ai/ui": "workspace:*",
-    "@graphmind-ai/db": "workspace:*"
+    "@graphmind-ai/db": "workspace:*",
+    "@graphmind-ai/analyze": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",

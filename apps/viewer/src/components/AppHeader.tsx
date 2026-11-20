@@ -23,7 +23,7 @@ import {
 } from '../store/uiStore.js';
 import { useDismissable } from '../hooks/useDismissable.js';
 import { DebugMenu } from './DebugMenu.js';
-import { IconChevron, IconCompass, IconPlus, IconReplay, IconSearch, IconStack } from './Icons.js';
+import { IconChevron, IconCompass, IconPlus, IconReplay, IconSearch, IconStack, IconTimeline } from './Icons.js';
 import { GraphMindMark } from './Mark.js';
 import { ViewMenu } from './ViewMenu.js';
 
@@ -107,7 +107,7 @@ function PlacesMenu() {
   const ref = useRef<HTMLDivElement>(null);
   useDismissable(open, () => setOpen(false), ref);
 
-  const go = (to: 'runs' | 'connect' | 'build') => {
+  const go = (to: 'runs' | 'insights' | 'connect' | 'build') => {
     setOpen(false);
     useUiStore.getState().setPage(to);
   };
@@ -133,6 +133,15 @@ function PlacesMenu() {
           >
             <IconStack />
             Runs
+          </button>
+          <button
+            className={`gm-filter-row${page === 'insights' ? ' gm-filter-row--on' : ''}`}
+            role="menuitem"
+            data-testid="nav-insights"
+            onClick={() => go('insights')}
+          >
+            <IconTimeline />
+            Insights
           </button>
           <button
             className={`gm-filter-row${page === 'connect' ? ' gm-filter-row--on' : ''}`}

@@ -15,7 +15,7 @@
  * — and every ancestor stays a link. A place you can enter and not leave is
  * a bug, not a layout.
  */
-export type Page = 'runs' | 'run' | 'node' | 'connect' | 'build';
+export type Page = 'runs' | 'run' | 'node' | 'connect' | 'build' | 'insights';
 
 /** The places inside a run — the two that need one selected. */
 export function inRun(page: Page): boolean {
@@ -24,7 +24,7 @@ export function inRun(page: Page): boolean {
 
 /** A side trip: entered from somewhere, and expected to return there. */
 export function isAside(page: Page): boolean {
-  return page === 'connect' || page === 'build';
+  return page === 'connect' || page === 'build' || page === 'insights';
 }
 
 export interface Route {
@@ -36,6 +36,7 @@ export interface Route {
 export const RUNS_HASH = '#/runs';
 export const BUILD_HASH = '#/build';
 export const CONNECT_HASH = '#/connect';
+export const INSIGHTS_HASH = '#/insights';
 
 /** One step of the breadcrumb: a label, and where clicking it goes. */
 export interface Crumb {
@@ -45,9 +46,12 @@ export interface Crumb {
   current: boolean;
 }
 
-const ASIDE_LABEL: Record<'connect' | 'build', string> = {
+type Aside = 'connect' | 'build' | 'insights';
+
+const ASIDE_LABEL: Record<Aside, string> = {
   connect: 'Connect an agent',
   build: 'Build a workflow',
+  insights: 'Insights',
 };
 
 /**
@@ -65,7 +69,7 @@ export function crumbsFor(
   /** How deep the stack was when a side trip was taken. */
   stack: 'runs' | 'run' | 'node' = 'runs',
 ): Crumb[] {
-  const aside = isAside(page) ? (page as 'connect' | 'build') : undefined;
+  const aside = isAside(page) ? (page as Aside) : undefined;
   const at = aside === undefined ? (page as 'runs' | 'run' | 'node') : stack;
 
   const crumbs: Omit<Crumb, 'current'>[] = [{ label: 'Runs', hash: RUNS_HASH }];
@@ -88,6 +92,7 @@ export function crumbsFor(
 
 export function parseHash(hash: string): Route {
   if (hash === BUILD_HASH || hash === `${BUILD_HASH}/`) return { page: 'build' };
+  if (hash === INSIGHTS_HASH || hash === `${INSIGHTS_HASH}/`) return { page: 'insights' };
   if (hash === CONNECT_HASH || hash === `${CONNECT_HASH}/`) return { page: 'connect' };
   if (hash === RUNS_HASH || hash === `${RUNS_HASH}/`) return { page: 'runs' };
   const match = /^#\/run\/([^/]+)(?:\/node\/(.+))?$/.exec(hash);
@@ -111,6 +116,7 @@ export function formatHash(runId: string | undefined, nodeId: string | undefined
 export function pageHash(page: Page): string {
   if (page === 'build') return BUILD_HASH;
   if (page === 'connect') return CONNECT_HASH;
+  if (page === 'insights') return INSIGHTS_HASH;
   if (page === 'runs') return RUNS_HASH;
   return '';
 }

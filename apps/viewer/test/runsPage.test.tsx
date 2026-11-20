@@ -18,6 +18,11 @@ import { useUiStore } from '../src/store/uiStore.js';
 import { makeRun, resetStores, seedRuns, setConnection } from './render.js';
 
 const NOW = Date.now();
+/**
+ * An hour ago, but never before local midnight: "Today" shelving must not
+ * depend on the clock (an hour ago is yesterday between 00:00 and 01:00).
+ */
+const EARLIER_TODAY = Math.max(NOW - 3_600_000, new Date(NOW).setHours(0, 0, 0, 0));
 const DAY = 86_400_000;
 
 beforeEach(() => {
@@ -239,14 +244,14 @@ describe('the app filter', () => {
 describe('group by', () => {
   const across = () =>
     seedRuns(
-      makeRun({ runId: 'a1', app: 'my-agent', startedTs: NOW - 3_600_000, finishedTs: NOW - 3_500_000 }),
+      makeRun({ runId: 'a1', app: 'my-agent', startedTs: EARLIER_TODAY, finishedTs: Math.min(EARLIER_TODAY + 100_000, NOW) }),
       makeRun({ runId: 'b1', app: 'trip-planner', startedTs: NOW - DAY, finishedTs: NOW - DAY + 1000 }),
     );
 
   /** The reported bug: a control that cannot change anything reads as broken. */
   it('is not offered when there is only one app to group by', () => {
     seedRuns(
-      makeRun({ runId: 'a1', app: 'my-agent', startedTs: NOW - 3_600_000, finishedTs: NOW }),
+      makeRun({ runId: 'a1', app: 'my-agent', startedTs: EARLIER_TODAY, finishedTs: NOW }),
       makeRun({ runId: 'a2', app: 'my-agent', startedTs: NOW - DAY, finishedTs: NOW - DAY + 1 }),
     );
     show();

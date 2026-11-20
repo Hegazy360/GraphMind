@@ -46,6 +46,31 @@ const report = analyzeRun(sample);
 console.log(report.verdict);
 ```
 
+Across many runs of one agent:
+
+```ts
+import { analyzeTrend, groupByApp } from '@graphmind-ai/analyze';
+
+for (const [app, samples] of groupByApp(allSamples)) {
+  const trend = analyzeTrend(samples); // per-tool health pooled over runs, baseline vs recent
+  console.log(app, trend.verdict);
+  for (const shift of trend.shifts) console.log(shift.direction, shift.summary, shift.firstRunId);
+}
+```
+
+A shift is only reported with enough data: 5 runs per window, rates that move
+0.15 and pass a two-proportion z-test (|z| >= 2), sizes that move 1.5x
+(`TrendOptions` changes each threshold).
+
+What to change, with evidence:
+
+```ts
+import { recommend } from '@graphmind-ai/analyze';
+
+const { recommendations } = recommend(samples); // one agent's runs
+for (const r of recommendations) console.log(r.severity, r.id, r.title, r.evidence.runIds, r.change, r.verify);
+```
+
 Sources that already hold derived state (the viewer) can build the
 `RunSample` themselves instead of replaying events; the metrics only need
 executions in start order.

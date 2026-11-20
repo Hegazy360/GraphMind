@@ -44,12 +44,28 @@ export interface ExecutionSample {
   heldMs?: number;
   /** `node.error`'s message, when one was recorded for this execution. */
   errorMessage?: string;
+  /**
+   * What people did to this execution while it was held (Circuit's
+   * fix-and-resume: retry, inject, skip, edit...), oldest first.
+   */
+  interventions?: Array<{ action: string }>;
 }
+
+/** Where a sample came from: decides which advice applies (a Jack tool is fixed in jack.yaml, not in code). */
+export type SampleOrigin = 'agent' | 'circuit' | 'jack';
 
 export interface RunSample {
   runId?: string;
   app?: string;
-  status?: 'running' | RunStatus;
+  /**
+   * `abandoned`: the run never finished (its process stopped, or it was left
+   * paused) — known to stores that reconcile runs, never to the events alone.
+   */
+  status?: 'running' | 'abandoned' | RunStatus;
+  /** The store's record of where the run came from (`live`, `demo`, `import`; `replay` in older databases). */
+  source?: string;
+  /** Default `agent`. */
+  origin?: SampleOrigin;
   /** Executions in start order. */
   executions: ExecutionSample[];
 }

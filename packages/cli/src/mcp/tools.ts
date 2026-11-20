@@ -8,6 +8,7 @@
  * result carries viewer deep links (see links.ts) so coding agents can
  * cite the exact run/node.
  */
+import { loadInsights, trendSummary } from '../insights.js';
 import { analyzeRun, outputFinishReason, sampleFromEvents } from '@graphmind-ai/analyze';
 import { readUsage, type UsageView } from '@graphmind-ai/schema';
 import type { RunSummary, Storage } from '../storage.js';
@@ -281,6 +282,50 @@ export function findErrors(ctx: ToolContext, args: Record<string, unknown>) {
     errors,
     scannedRuns,
     ...(errors.length === 0 ? { note: 'no failed nodes recorded in any run' } : {}),
+  };
+}
+
+/** The `app` argument, when given: one agent's runs only. */
+function readApp(args: Record<string, unknown>): string | undefined {
+  const app = args['app'];
+  if (app === undefined) return undefined;
+  if (typeof app !== 'string' || app.length === 0) throw new ToolError('"app" must be a non-empty string');
+  return app;
+}
+
+/**
+ * get_insights({app?}) — how each agent behaves across its recent runs: the
+ * trend's verdict, pooled per-tool health, and what changed between earlier
+ * and recent runs (only when the sample sizes support it).
+ */
+export function getInsights(ctx: ToolContext, args: Record<string, unknown>) {
+  const app = readApp(args);
+  const apps = loadInsights(ctx.storage, app !== undefined ? { app } : {});
+  return {
+    apps: apps.map((a) => ({ app: a.app, ...trendSummary(a.trend), recommendationCount: a.recommendations.length })),
+    ...(apps.length === 0 ? { note: app !== undefined ? `no runs for app "${app}"` : 'no runs recorded yet' } : {}),
+  };
+}
+
+/**
+ * suggest_improvements({app?, limit?}) — ranked changes to make, each with the
+ * runs that prove it (with deep links), what to change, and the metric that
+ * should move once it is fixed.
+ */
+export function suggestImprovements(ctx: ToolContext, args: Record<string, unknown>) {
+  const app = readApp(args);
+  const limit = readLimit(args, 10);
+  const apps = loadInsights(ctx.storage, { ...(app !== undefined ? { app } : {}), limit });
+  return {
+    apps: apps.map((a) => ({
+      app: a.app,
+      verdict: a.trend.verdict,
+      recommendations: a.recommendations.map((r) => ({
+        ...r,
+        evidence: { ...r.evidence, links: r.evidence.runIds.map((id) => runLink(ctx.viewerBaseUrl, id)) },
+      })),
+    })),
+    ...(apps.length === 0 ? { note: app !== undefined ? `no runs for app "${app}"` : 'no runs recorded yet' } : {}),
   };
 }
 

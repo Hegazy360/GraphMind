@@ -231,6 +231,14 @@ function useActionItems(runId: string | undefined): PaletteItem[] {
         run: () => ui.setPage('connect'),
       },
       {
+        id: 'act:insights',
+        group: 'Actions',
+        title: 'Insights',
+        subtitle: 'Behaviour trends and ranked recommendations across your recorded runs',
+        keywords: 'insights recommendations suggest improvements trend behaviour behavior health tools',
+        run: () => ui.setPage('insights'),
+      },
+      {
         id: 'act:build',
         group: 'Actions',
         title: 'Build a workflow',

@@ -25,6 +25,7 @@ export {
   type ExecutionSample,
   type RunSample,
   type SampleEvent,
+  type SampleOrigin,
 } from './sample.js';
 export { scanWaste, ERROR_REPEAT_COUNT, type WasteIncident, type WasteScan } from './waste.js';
 export {
@@ -38,3 +39,31 @@ export {
   type ToolHealth,
   type WasteSummary,
 } from './report.js';
+export {
+  analyzeTrend,
+  groupByApp,
+  twoProportionZ,
+  type BehaviorTrend,
+  type ShiftMetric,
+  type ToolTrend,
+  type TrendOptions,
+  type TrendPoint,
+  type TrendShift,
+  type WindowStats,
+} from './trend.js';
+export {
+  recommend,
+  type Evidence,
+  type Recommendation,
+  type RecommendationId,
+  type Recommendations,
+  type RecommendOptions,
+  type Severity,
+} from './recommend.js';
+export {
+  sampleFromCircuitRun,
+  samplesFromJackCalls,
+  type CircuitEntryLike,
+  type CircuitRunLike,
+  type JackCallLike,
+} from './adapters.js';

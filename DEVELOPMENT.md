@@ -34,6 +34,7 @@ All of these run from the repository root.
 | `pnpm dev:viewer` | Viewer only, no server. Append `?fixture=1` to the URL for a canned run. |
 | `pnpm dev:docs` | The documentation site (Astro/Starlight) with hot reload. |
 | `pnpm demo` | The shipped first-run experience: `graphmind demo` from this checkout. |
+| `pnpm insights` | What to change in your agents, from the runs recorded in `~/.graphmind/graphmind.db`: a behaviour trend per app and ranked recommendations with evidence (`--app <name>`, `--json`, `--include-replays`). Same as `graphmind insights`. |
 | `pnpm cli <args>` | Any CLI command against this checkout: `pnpm cli runs`, `pnpm cli record <runId> --out bug.ndjson`, … `pnpm cli help` lists them all, and a typo gets a "did you mean" suggestion. |
 | `pnpm build:packages` | Rebuild `packages/*` after editing them (the dev commands do **not** watch package sources). |
 | `pnpm build:viewer` | Build the viewer and copy it into `packages/cli/viewer-dist/`, so the CLI serves the real viewer like a published install. |
@@ -51,7 +52,10 @@ Tests:
 | `pnpm test:e2e` | The viewer's Playwright suite. |
 | `pnpm test:security` | The security regression suite. Run `pnpm build:viewer` first — it audits the HTML export, which needs the bundled viewer (CI does the same). |
 | `pnpm test:all` | `pnpm test` plus the web app's tests. |
-| `pnpm --filter e2e-smoke e2e` | Full-stack smoke test against a server you already started. |
+| `pnpm test:smoke` | Full-stack smoke test against a server you already started. |
+| `pnpm test:circuit` | Builds Circuit, then the analyze, Circuit engine/MCP/CLI and `circuit-api` unit tests (run ownership, insights). |
+| `pnpm test:platform` | Builds the platform, then its request-level tests (redirects, shared session, root MCP URLs, hosted shape). |
+| `pnpm test:pg` | The store suites (Circuit journal, Jack, Jack sign-in, accounts, platform) against Postgres, as CI runs them. Starts a temporary Postgres from the binaries on PATH (`brew install postgresql`) and removes it afterwards; uses `PG_TEST_URL` instead when set. |
 
 Long-running checks: `pnpm soak` (sustained-load harness) and
 `pnpm live-check` (runs a real agent; needs an API key).
@@ -106,8 +110,8 @@ one is taken, stop whatever holds it.
 
 | Command | What it does |
 | --- | --- |
-| `pnpm --filter demo-agent start` | The trip-planner demo agent in deterministic mock mode (no key). Point it at a running server, e.g. `pnpm dev --serve`. |
-| `pnpm --filter demo-agent start:live` | Same agent against a real model (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`). |
+| `pnpm demo:agent` | The trip-planner demo agent in deterministic mock mode (no key). Point it at a running server, e.g. `pnpm dev --serve`. |
+| `pnpm demo:agent:live` | Same agent against a real model (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`). |
 | `pnpm cli demo --live` | Server + live demo agent in one command. |
 
 ## The platform: the end-user experience, end to end
@@ -120,7 +124,7 @@ visitor would, from the homepage to a running dashboard:
 | --- | --- |
 | `pnpm platform` | Builds Circuit, Jack and the platform, then serves `http://127.0.0.1:4800`: the homepage at `/` (apps/web, with `/signup` and `/login` wired as graphmind.ai's redirects are), the hub at `/app/`, Circuit at `/app/circuit/`, Jack at `/app/jack/`, every Jack project's MCP server at `/p/<slug>/mcp`. One sign-up on the hub is a session everywhere. |
 | `pnpm platform:e2e` | The browser test of that journey: homepage → Create a free account → hub → Circuit (a run pauses) → Jack (import an API) → account token → sign out. |
-| `pnpm --filter platform test` | Request-level tests of the composition (redirects, shared session, root MCP URLs, hosted shape). |
+| `pnpm test:platform` | Request-level tests of the composition (redirects, shared session, root MCP URLs, hosted shape). |
 
 Every surface (the hub, Circuit, Jack) uses the shared look and shell from
 `packages/ui`: edit `packages/ui/assets/graphmind.css` for the look and
@@ -160,9 +164,10 @@ repository root on every push to `master`:
 - **The Circuit engine** has no resident loop when hosted: work drains after
   requests and on a per-minute tick from Supabase `pg_cron`
   (`apps/platform/sql/engine-tick.sql`).
-- **Tests against Postgres**: set `PG_TEST_URL` to a throwaway database, e.g.
-  `PG_TEST_URL=postgres://localhost/gm_test pnpm test`. Without it the Postgres
-  cases skip; CI runs them in the `postgres stores and site build` job.
+- **Tests against Postgres**: `pnpm test:pg` starts a temporary Postgres and runs
+  the store suites against it (or uses `PG_TEST_URL` when set). Without a
+  database the Postgres cases skip; CI runs them in the `postgres stores and
+  site build` job through the same `pnpm test:stores`.
 
 ## The homepage (apps/web)
 
@@ -173,11 +178,11 @@ A static page, no build step. What is in it:
   visitor what to do and posts each step to the parent page (`watch → held →
   resumed → done`); `embed=1` hides the canvas controls. In production `/try` is
   graphmind.ai's rewrite to the viewer deployment; locally `pnpm platform` serves
-  `apps/viewer/dist-try/try` (`pnpm --filter viewer build:try`). On narrow screens,
+  `apps/viewer/dist-try/try` (`pnpm build:try`). On narrow screens,
   under reduced motion or when WebM can't play, the short recording stands in.
 - **Motion** is GSAP 3 + ScrollTrigger (free "no charge" licence), vendored into
   `apps/web/vendor/` with the three fonts (Bricolage Grotesque, Instrument Sans,
-  Geist Mono — all OFL) by `pnpm --filter web vendor`; `vendor/NOTICES.txt` lists
+  Geist Mono — all OFL) by `pnpm web:vendor`; `vendor/NOTICES.txt` lists
   versions and licences. Nothing loads from a CDN. All motion is skipped under
   `prefers-reduced-motion`, and every clip has a pause control (WCAG 2.2.2).
 - **The funnel**: `home.js` sends eight anonymous events (`home-view`, `demo-start`,
@@ -230,7 +235,7 @@ registration, and `--host` / `--public-origin` to put one on a network
 | `pnpm circuit:dev` | Builds Circuit and starts `circuit dev` on `examples/circuit-onboarding/workflows.mjs`, dashboard at `http://127.0.0.1:4810/`, with hot reload of the workflows file. |
 | `pnpm build:circuit` | Rebuild the accounts package and the Circuit packages (`circuit-schema`, `-sdk`, `-engine`, `-mcp`, `circuit-api`, `circuit-cli`). Needed after editing any of them; the two commands above run it first. |
 | `pnpm circuit:e2e` | Circuit's browser suite (`apps/circuit-api/e2e/*.e2e.mjs`): the dashboard story and the accounts flow. |
-| `pnpm --filter circuit-api test` | Circuit's API unit tests, including `test/accounts.test.ts`. |
+| `pnpm test:circuit` | Circuit's unit tests, including `apps/circuit-api/test/accounts.test.ts` (sign-in, per-account runs, insights). |
 | `pnpm jack serve` / `pnpm jack:dev` | The Jack dashboard from this checkout (`pnpm jack …` rebuilds first when the source is newer than `dist/`; `jack:dev` always rebuilds). `pnpm jack serve --accounts` for the sign-up flow. |
 | `pnpm jack init <openapi>` / `check` / `build` / `preview` / `tools` / `call` / `deploy` | The `jack` CLI against this checkout; `docs/jack/USAGE.md` covers each. |
 | `pnpm jack:example` | Builds Jack and starts the `examples/jack-tasks` API, the worked example every sign-in mode runs against. |

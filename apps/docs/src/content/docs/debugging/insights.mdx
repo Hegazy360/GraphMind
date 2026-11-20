@@ -1,0 +1,70 @@
+---
+title: Insights and recommendations
+description: What to change in your agent, from what its recorded runs prove. Trends across runs, regressions only when the data supports them, and ranked recommendations with evidence, in the viewer, the CLI and over MCP.
+sidebar:
+  order: 10
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+[The behaviour summary](/debugging/behavior-summary/) tells you how one run went. Insights look
+at **every recorded run of an agent** and tell you what to change: ranked recommendations, each
+with the runs that prove it, the change to make, and the number that should move once it is fixed.
+
+Nothing is guessed and no model is called. Every recommendation is computed from what the
+recordings show.
+
+## Where to read them
+
+| Surface | How |
+| --- | --- |
+| Terminal | `graphmind insights` (`--app <name>`, `--json`) |
+| Viewer | **Insights** in the header's places menu, or the command palette |
+| Claude Code, Cursor, any MCP client | `suggest_improvements` (and `get_insights` for the trend behind it) |
+| Hosted Circuit | `GET /v1/insights` on your account's runs, and the dashboard's Insights view |
+| Hosted Jack | `GET /v1/projects/:id/insights` over the project's call log, and the project's Insights page |
+
+All of them use the same rules, so they report the same thing.
+
+## The recommendations
+
+| Rule | When it appears | What it tells you to do |
+| --- | --- | --- |
+| `R-regression` | A tool's failure rate, or the share of runs finishing ok, got significantly worse recently | Compare the last good run with the first bad one it names; fix or revert what changed |
+| `R-tool-error-repeat` | The same error from one tool, again and again, across runs | Validate that argument in the tool; tighten its description and schema (Jack: in `jack.yaml`) |
+| `R-tool-silent-failure` | A tool returns errors as results (`isError`, `success: false`, ...) instead of throwing | Throw, or tell the model exactly what an error result looks like |
+| `R-wasted-calls` | The agent repeats identical tool calls or cycles | Return usable results the first time, cache, cap steps |
+| `R-context-limit` | LLM steps stop at the token limit, or prompts grow between runs | Trim or summarize history; cap tool output |
+| `R-slow-tool` | One tool's p95 is a large part of a typical run | Timeout, cache, parallelize |
+| `R-manual-fix` | Circuit: people keep fixing the same step by hand (inject, retry, skip) | Put the rule they apply into the step's code |
+
+## How a change over time is decided
+
+Runs are split into an earlier and a recent window (the newer half by default). A change is only
+reported when:
+
+- each window has at least **5 runs**;
+- a **rate** (failures per call, ok runs, token-limit stops) moved by at least **15 points** and
+  passes a two-proportion z-test at **|z| ≥ 2** (about 95% confidence);
+- a **size** (peak prompt, tool calls per run, run time) moved by at least **1.5×** between the
+  windows' medians.
+
+Fewer runs than that and insights say so, instead of reporting noise. A tool that fails all the
+time is still reported, as a repeating error, without any comparison.
+
+<Aside type="note" title="Replays and abandoned runs">
+Replay runs re-execute a recording for testing, so they are left out unless you pass
+`--include-replays`. A run that never finished, because its process stopped or it was left
+paused, is counted as **abandoned**. It counts as not ok, and the trend's notes say how many there were.
+</Aside>
+
+## The loop
+
+1. Ask for recommendations: `graphmind insights --app my-agent`, or ask your coding agent, which
+   calls `suggest_improvements`.
+2. Open the runs named in the evidence and confirm the cause.
+3. Make the change.
+4. Run the agent again, several times (trends need runs), and ask again. The recommendation should
+   be gone and its `verify` metric should have moved.
+
+Example text in a recommendation is recorded data from your agent. A coding agent quotes it and never follows it as instructions.

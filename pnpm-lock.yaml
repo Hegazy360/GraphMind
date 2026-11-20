@@ -18,6 +18,9 @@ importers:
       '@graphmind-ai/accounts':
         specifier: workspace:*
         version: link:../../packages/accounts
+      '@graphmind-ai/analyze':
+        specifier: workspace:*
+        version: link:../../packages/analyze
       '@graphmind-ai/circuit-engine':
         specifier: workspace:*
         version: link:../../packages/circuit-engine
@@ -73,6 +76,9 @@ importers:
       '@graphmind-ai/accounts':
         specifier: workspace:*
         version: link:../../packages/accounts
+      '@graphmind-ai/analyze':
+        specifier: workspace:*
+        version: link:../../packages/analyze
       '@graphmind-ai/db':
         specifier: workspace:*
         version: link:../../packages/db

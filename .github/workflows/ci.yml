@@ -186,9 +186,7 @@ jobs:
         run: pnpm build:site
 
       - name: Store suites against Postgres
-        run: >-
-          pnpm --filter @graphmind-ai/db --filter @graphmind-ai/accounts --filter @graphmind-ai/circuit-engine
-          --filter circuit-api --filter @graphmind-ai/jack-auth --filter jack-api --filter platform run test
+        run: pnpm test:stores
 
   # What a fresh `npm install graphmind-ai` user gets: pack all four
   # publishable packages, install the tarballs into an empty project outside

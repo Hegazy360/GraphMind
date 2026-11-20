@@ -28,3 +28,10 @@ a.hub-card:hover { border-color: var(--gm-border-strong); }
 .hub-card h2 { margin: 14px 0 0; font-size: 19px; letter-spacing: -0.01em; }
 .hub-card p { margin: 10px 0 0; font-size: 14px; color: var(--gm-text-2); flex: 1; }
 .hub-go { margin-top: 16px; color: var(--gm-accent); font-weight: 600; font-size: 14px; text-decoration: none; }
+
+/* "Using Claude Code?": under the product cards, full width. */
+.hub-card p.hub-note { flex: 0; margin-top: 8px; font-size: 13px; color: var(--gm-text-3); }
+.hub-skills { margin-top: 16px; }
+.hub-skills p { flex: 0; }
+.hub-skills .gm-copy { max-width: 560px; margin-top: 12px; }
+.hub-links { display: flex; gap: 20px; flex-wrap: wrap; }

@@ -8,6 +8,63 @@ distribution, and the Ruby `graphmind` gem).
 
 ## Unreleased
 
+### Added — Insights everywhere
+
+- `graphmind insights` (`pnpm insights` in the repo): per app, the behaviour
+  trend and ranked recommendations from the local recordings.
+- MCP tools `get_insights` and `suggest_improvements`, so Claude Code can pick
+  a recommendation, change the code and check that it went away.
+- The viewer's **Insights** page (`#/insights`), served by `GET /api/insights`.
+- Hosted Circuit: `GET /v1/insights`, per account, including a new rule,
+  `R-manual-fix`, for a step people keep fixing by hand. Hosted Jack:
+  `GET /v1/projects/:id/insights` over the call log, with Jack-specific advice
+  (4xx from the API, arguments that miss the schema). Both have dashboard views.
+- The hub has a "Using Claude Code?" card with the skills install line; the
+  homepage notices a signed-in visitor (Open app, skills, insights).
+- Trends leave replay runs out by default and report runs the store marked
+  `abandoned` as such, instead of as still running.
+- Root scripts instead of `--filter` commands: `pnpm insights`,
+  `pnpm test:circuit`, `pnpm test:platform`, `pnpm test:pg` (starts a temporary
+  Postgres), `pnpm test:stores`, `pnpm test:smoke`, `pnpm demo:agent`,
+  `pnpm jack:example:dev`, `pnpm build:try`, `pnpm web:vendor`; all in `pnpm start`.
+
+### Added — Improvement recommendations
+
+`recommend(samples)` in `@graphmind-ai/analyze` turns recorded runs into ranked,
+evidence-backed changes: a tool that started failing recently (pointing at the
+last good run and the first bad one), the same error repeating across runs,
+errors returned as results instead of thrown, repeated tool calls, token-limit
+stops and growing prompts, and one tool dominating run time. Each carries the
+runs that show it, the counts, a clipped example, what to change, and the metric
+that should move. No model calls: every rule is computed from the recording.
+
+### Added — Behaviour trends across runs
+
+`analyzeTrend(samples)` in `@graphmind-ai/analyze`: per-tool health pooled over
+many runs of one agent, completion rate, token-limit stops, prompt size and run
+time, and a baseline-vs-recent comparison that reports a shift only when the
+sample sizes support it (two-proportion z-test for rates, median ratio for
+sizes), naming the first run that showed it. `groupByApp` splits runs per agent.
+
+### Changed — Circuit runs belong to accounts
+
+On a Circuit server with accounts (graphmind.ai, `circuit dev --accounts`) each
+run is owned by the account that started it, and children and forks inherit it.
+Another account's run is a 404 on every route. Idempotency keys, event delivery,
+breakpoints and the deploy check are per account. A static `--api-key` remains
+the operator and sees every run. Existing SQLite databases upgrade in place;
+Postgres applies migration `circuit-002-run-account`.
+
+### Added — Agent Skills for Circuit and Jack
+
+`graphmind skill circuit` and `graphmind skill jack` print two new skills next
+to the debugger's; `graphmind skill all --install` writes all three to
+`.claude/skills/`. They teach a coding agent the hosted Circuit and Jack APIs
+(runs, fix-and-resume, approvals, deploy check; import, tool shaping, deploy,
+call log) with a personal token kept in `GRAPHMIND_TOKEN`. `graphmind skill`
+with no name is unchanged. Plan for what follows (cross-run behaviour trends
+and evidence-backed recommendations): `docs/plans/behavior-insights.md`.
+
 ### Added — GraphMind Circuit (durable workflows)
 
 A second product in the repo, under the GraphMind brand and MIT like the

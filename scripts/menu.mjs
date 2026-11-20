@@ -45,12 +45,18 @@ const ITEMS = [
   {
     label: 'Docs site with hot reload',
     hint: 'pnpm dev:docs',
-    steps: [['pnpm', '--filter', 'docs', 'dev']],
+    steps: [['pnpm', 'dev:docs']],
   },
   {
     label: 'The shipped demo (graphmind demo from this checkout)',
     hint: 'pnpm demo',
     steps: [[node, join(repoRoot, 'scripts', 'cli.mjs'), 'demo']],
+  },
+  { header: 'Insights' },
+  {
+    label: 'What to change in your agents, from their recorded runs',
+    hint: 'pnpm insights',
+    steps: [[node, join(repoRoot, 'scripts', 'cli.mjs'), 'insights']],
   },
   { header: 'The platform (what users get online)' },
   {
@@ -86,13 +92,20 @@ const ITEMS = [
   },
   {
     label: 'Jack — the example API + preview, wired together',
-    hint: 'pnpm --filter jack-tasks dev',
-    steps: [['pnpm', '--filter', 'jack-tasks', 'dev']],
+    hint: 'pnpm jack:example:dev',
+    steps: [['pnpm', 'jack:example:dev']],
   },
   { header: 'Check' },
   { label: 'Typecheck everything', hint: 'pnpm typecheck', steps: [['pnpm', 'typecheck']] },
   { label: 'Unit tests (packages + viewer + jack-api)', hint: 'pnpm test', steps: [['pnpm', 'test']] },
   { label: 'Jack tests (accounts, auth server, control plane, example)', hint: 'pnpm test:jack', steps: [['pnpm', 'test:jack']] },
+  { label: 'Circuit tests (engine, API, MCP, CLI, insights)', hint: 'pnpm test:circuit', steps: [['pnpm', 'test:circuit']] },
+  { label: 'Platform tests (hub, shared session, hosted shape)', hint: 'pnpm test:platform', steps: [['pnpm', 'test:platform']] },
+  {
+    label: 'Store suites against Postgres (starts a temporary one)',
+    hint: 'pnpm test:pg',
+    steps: [['pnpm', 'test:pg']],
+  },
   { label: "Viewer end-to-end tests (Playwright)", hint: 'pnpm test:e2e', steps: [['pnpm', 'test:e2e']] },
   {
     label: 'Security regression suite',

@@ -133,6 +133,17 @@ on first use and pauses with `ToolDefinitionChanged` if the server changes it la
 `circuit mcp serve` goes the other way: it exposes every workflow as a `run_<workflow>` MCP tool,
 so Claude Code or any MCP client can start runs that appear in the dashboard like any other.
 
+## Your runs, and what to change
+
+With accounts (graphmind.ai, `circuit dev --accounts`), every run belongs to the account that
+started it, and children and forks inherit it. Another account's run doesn't exist for you on any
+route. Idempotency keys, events, breakpoints and the deploy check are per account. A static
+`--api-key` is the operator and sees every run.
+
+`GET /v1/insights` (the dashboard's Insights view) turns your runs into recommendations: a step
+people keep fixing by hand (`R-manual-fix`), a step failing the same way in run after run, a step
+that started failing recently. See [insights](/debugging/insights/).
+
 ## Tests and the deploy check
 
 ```sh

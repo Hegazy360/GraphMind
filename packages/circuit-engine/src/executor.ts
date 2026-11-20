@@ -57,6 +57,8 @@ export interface EnqueueOptions {
   parentRunId?: string;
   parentSeq?: number;
   forkedFrom?: { runId: string; fromSeq?: number };
+  /** The owning account (see Run.accountId). */
+  accountId?: string;
 }
 
 export interface ResumeOptions {
@@ -176,6 +178,7 @@ export class Executor {
     if (opts.parentRunId !== undefined) run.parentRunId = opts.parentRunId;
     if (opts.parentSeq !== undefined) run.parentSeq = opts.parentSeq;
     if (opts.forkedFrom !== undefined) run.forkedFrom = opts.forkedFrom;
+    if (opts.accountId !== undefined) run.accountId = opts.accountId;
     return this.store.createRun(run);
   }
 
@@ -187,7 +190,7 @@ export class Executor {
     return this.store.listJournal(runId);
   }
 
-  async listRuns(filter?: { workflow?: string; status?: RunStatus; limit?: number }): Promise<Run[]> {
+  async listRuns(filter?: { workflow?: string; status?: RunStatus; limit?: number; accountId?: string }): Promise<Run[]> {
     return this.store.listRuns(filter);
   }
 
@@ -195,8 +198,9 @@ export class Executor {
     await this.store.setBreakpoint(matcher);
   }
 
-  async clearBreakpoints(): Promise<void> {
-    await this.store.clearBreakpoints();
+  /** One account's breakpoints, or (undefined) all of them. */
+  async clearBreakpoints(accountId?: string): Promise<void> {
+    await this.store.clearBreakpoints(accountId);
   }
 
   /** Process due runs once. Returns how many were invoked. */
@@ -300,7 +304,8 @@ export class Executor {
       workflow: def,
       clock: this.clock,
       entries: await this.store.listJournal(run.id),
-      breakpoints: await this.store.listBreakpoints(),
+      // An account's breakpoints pause only that account's runs; operator ones (no account) pause every run.
+      breakpoints: (await this.store.listBreakpoints()).filter((m) => m.accountId === undefined || m.accountId === run.accountId),
       append: (entry) => {
         const copy = structuredClone(entry);
         return serial(() => this.store.appendEntry(copy));
@@ -316,7 +321,16 @@ export class Executor {
       removeWait: (seq) => serial(() => this.store.removeWait(run.id, seq)),
       spawnChild: (seq, workflow, input) => {
         const copy = structuredClone(input);
-        return serial(async () => (await this.enqueue(workflow, copy, { parentRunId: run.id, parentSeq: seq })).id);
+        return serial(
+          async () =>
+            (
+              await this.enqueue(workflow, copy, {
+                parentRunId: run.id,
+                parentSeq: seq,
+                ...(run.accountId !== undefined ? { accountId: run.accountId } : {}),
+              })
+            ).id,
+        );
       },
       log: (message: string) => this.onLog(run.id, message),
       ...(this.mcp !== undefined ? { mcp: this.mcp } : {}),
@@ -509,7 +523,10 @@ export class Executor {
       throw new InvalidResumeError('fork needs uptoSeq and/or substitute — an identical copy would just re-complete');
     }
     const cut = opts.substitute?.seq ?? opts.uptoSeq ?? Number.MAX_SAFE_INTEGER;
-    const fork = await this.enqueue(source.workflow, source.input, { forkedFrom: { runId, fromSeq: cut } });
+    const fork = await this.enqueue(source.workflow, source.input, {
+      forkedFrom: { runId, fromSeq: cut },
+      ...(source.accountId !== undefined ? { accountId: source.accountId } : {}),
+    });
     const now = this.clock.now();
     for (const entry of await this.store.listJournal(runId)) {
       if (entry.seq > cut) break;
@@ -540,7 +557,16 @@ export class Executor {
   }
 
   /** Deliver an event: completes every matching wait and wakes its run. */
-  async publishEvent(name: string, data: JsonValue): Promise<{ eventId: string; matchedRuns: string[] }> {
+  /**
+   * Deliver an event to the runs waiting for it. With `accountId`, only that
+   * account's runs can match: one account's events never move another's runs.
+   * Without it (operator, open dev server), every waiting run can match.
+   */
+  async publishEvent(
+    name: string,
+    data: JsonValue,
+    opts: { accountId?: string } = {},
+  ): Promise<{ eventId: string; matchedRuns: string[] }> {
     const now = this.clock.now();
     const event = { id: newId('evt'), name, data, receivedAt: now };
     await this.store.insertEvent(event);
@@ -548,6 +574,7 @@ export class Executor {
     for (const wait of await this.store.findWaits(name)) {
       if (wait.match !== undefined && !subsetMatches(wait.match, data)) continue;
       const waiting = await this.store.getRun(wait.runId);
+      if (waiting && opts.accountId !== undefined && waiting.accountId !== opts.accountId) continue;
       if (!waiting || !ACTIVE_RUN_STATUSES.has(waiting.status)) {
         // The run was cancelled or finished out from under its wait: clean up
         // the orphan instead of mutating a dead run's journal.

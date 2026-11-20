@@ -32,6 +32,7 @@ export function rowToRun(row: Row): Run {
   const error = parseMaybe<ErrorShape>(row.error);
   if (error !== undefined) run.error = error;
   if (row.idempotency_key != null) run.idempotencyKey = row.idempotency_key as string;
+  if (row.account_id != null) run.accountId = row.account_id as string;
   if (row.parent_run_id != null) run.parentRunId = row.parent_run_id as string;
   if (row.parent_seq != null) run.parentSeq = Number(row.parent_seq);
   const forked = parseMaybe<Run['forkedFrom']>(row.forked_from);

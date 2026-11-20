@@ -36,13 +36,16 @@ export interface RunFilter {
   workflow?: string;
   status?: RunStatus;
   limit?: number;
+  /** Only this account's runs. Undefined: every run (the operator's view). */
+  accountId?: string;
 }
 
 export interface JournalStore {
   // --- runs ---
   createRun(run: Run): Promise<Run>;
   getRun(id: string): Promise<Run | undefined>;
-  findByIdempotencyKey(workflow: string, key: string): Promise<Run | undefined>;
+  /** Idempotency keys are per account: the same key from two accounts names two runs. */
+  findByIdempotencyKey(workflow: string, key: string, accountId?: string): Promise<Run | undefined>;
   /** Newest first (created_at DESC, later insert first on ties); default limit 100. */
   listRuns(filter?: RunFilter): Promise<Run[]>;
   updateRun(id: string, patch: Patch<Run>): Promise<void>;
@@ -76,7 +79,8 @@ export interface JournalStore {
   /** In the order they were set. */
   listBreakpoints(): Promise<BreakpointMatcher[]>;
   setBreakpoint(matcher: BreakpointMatcher): Promise<void>;
-  clearBreakpoints(): Promise<void>;
+  /** Clear one account's breakpoints, or (undefined) every breakpoint. */
+  clearBreakpoints(accountId?: string): Promise<void>;
 
   /** Release what the store owns (a SQLite handle; PgJournalStore leaves the caller's pool open). */
   close(): Promise<void>;

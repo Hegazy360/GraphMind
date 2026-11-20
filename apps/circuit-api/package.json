@@ -1,7 +1,7 @@
 {
   "name": "circuit-api",
   "version": "0.0.1",
-  "description": "GraphMind Circuit control plane — the HTTP API: runs, events, resume/approve, fork, breakpoints, deploy check.",
+  "description": "GraphMind Circuit control plane \u2014 the HTTP API: runs, events, resume/approve, fork, breakpoints, deploy check.",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -28,7 +28,8 @@
     "hono": "^4.13.5",
     "zod": "^4.4.3",
     "@graphmind-ai/accounts": "workspace:*",
-    "@graphmind-ai/ui": "workspace:*"
+    "@graphmind-ai/ui": "workspace:*",
+    "@graphmind-ai/analyze": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",

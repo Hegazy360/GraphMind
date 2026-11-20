@@ -53,7 +53,13 @@ after(async () => {
 });
 
 test('homepage → create a free account → the hub', async () => {
+  const me = page.waitForResponse((r) => r.url().endsWith('/app/auth/me'));
   await page.goto(`${base}/`);
+  assert.equal((await me).status(), 401);
+  // Signed out: the page as served, nothing swapped in.
+  assert.equal(await page.isVisible('#nav-start'), true);
+  assert.equal(await page.isHidden('#nav-app'), true);
+  assert.equal(await page.isHidden('#signed-in'), true);
   assert.equal(await page.title(), 'GraphMind — The debugger for AI agents');
   await page.click('.hero-actions a.btn-solid'); // "Start free" → /signup → /app/#/signup
   await page.waitForSelector('[data-testid=signup-form]');
@@ -130,6 +136,34 @@ test('signed out, a dashboard sends you to the hub to sign in, and back', async 
   await other.waitForURL(`${base}/app/jack/#/new`); // ...and straight back where they were going
   await other.waitForSelector('#spec-url');
   await fresh.close();
+});
+
+test('signed in: the homepage offers the app and the Claude Code skills; the hub card and Insights', async () => {
+  const me = page.waitForResponse((r) => r.url().endsWith('/app/auth/me'));
+  await page.goto(`${base}/`);
+  assert.equal((await me).status(), 200);
+  await page.waitForSelector('#nav-app', { state: 'visible' });
+  assert.equal(await page.isHidden('#nav-start'), true);
+  await page.waitForSelector('#signed-in', { state: 'visible' });
+  assert.equal(await page.textContent('#skills-cmd'), 'npx graphmind-ai skill all --install');
+  assert.equal(await page.getAttribute('#nav-app', 'href'), '/app/');
+
+  await page.click('#nav-app');
+  await page.waitForSelector('[data-testid=claude-code-card]');
+  assert.equal(new URL(page.url()).pathname, '/app/');
+  const card = await page.textContent('[data-testid=claude-code-card]');
+  assert.ok(card.includes('npx graphmind-ai skill all --install'), card);
+  assert.match(card, /GRAPHMIND_TOKEN/);
+  await page.click('[data-testid=circuit-insights]');
+  await page.waitForSelector('[data-testid=insight-workflow][data-workflow=triage-invoice] [data-testid=verdict]');
+  assert.equal(new URL(page.url()).pathname, '/app/circuit/');
+  assert.equal(new URL(page.url()).hash, '#/insights');
+
+  // Jack's Insights, next to Activity on the project imported above.
+  await page.goto(`${base}/app/jack/#/p/${(await (await page.request.get(`${base}/app/jack/v1/projects`)).json()).projects[0].id}/insights`);
+  // No calls on this project yet: one plain line, no verdict about nothing.
+  await page.waitForSelector('[data-testid=no-calls]');
+  assert.match(await page.textContent('[data-testid=no-calls]'), /No calls yet/);
 });
 
 test('back on the hub: token, sign out; the homepage still stands', async () => {

@@ -304,3 +304,25 @@ describe('sign-in through a hosted project, users and activity', () => {
     expect((await t.call('GET', `/v1/projects/${ids.beta}/grants`)).json.grants).toEqual([]);
   });
 });
+
+describe('insights', () => {
+  it('turns the call log into recommendations: a tool the API started rejecting is a regression', async () => {
+    const t = setup('insights');
+    const id = await importAcme(t, 'acme-insights');
+    expect((await t.call('GET', `/v1/projects/${id}/insights`)).json).toMatchObject({ trend: { runs: 0 }, recommendations: [] });
+    const at = Date.now();
+    for (let i = 0; i < 40; i += 1) {
+      await t.store.insertCall({
+        projectId: id, version: 1, tool: 'create_task', status: i < 20 ? 'ok' : 'upstream_error', upstreamStatus: i < 20 ? 201 : 400,
+        ms: 30, requestBytes: 10, responseBytes: 10, subject: null, clientId: null, at: at + i,
+      });
+    }
+    const r = await t.call('GET', `/v1/projects/${id}/insights`);
+    expect(r.status).toBe(200);
+    expect(r.json.trend.runs).toBe(40);
+    expect(r.json.trend.points).toBeUndefined();
+    const [rec] = r.json.recommendations;
+    expect(rec).toMatchObject({ id: 'R-regression', severity: 'high', target: { name: 'create_task' } });
+    expect((await t.call('GET', '/v1/projects/nope/insights')).status).toBe(404);
+  });
+});

@@ -53,7 +53,7 @@ function runSelect(t = ''): string {
   return `${p}id, ${p}workflow, ${p}status, ${p}input::text AS input, ${p}output::text AS output,
   ${p}error::text AS error, ${p}idempotency_key, ${p}parent_run_id, ${p}parent_seq,
   ${p}forked_from::text AS forked_from, ${p}wake_at, ${p}lease_owner, ${p}lease_expires_at, ${p}paused_seq,
-  ${p}created_at, ${p}started_at, ${p}finished_at`;
+  ${p}created_at, ${p}started_at, ${p}finished_at, ${p}account_id`;
 }
 const RUN_SELECT = runSelect();
 
@@ -163,6 +163,16 @@ export class PgJournalStore implements JournalStore {
         ...TABLES.map((t) => `ALTER TABLE {schema}.${t} ENABLE ROW LEVEL SECURITY`),
       ],
     },
+    {
+      // Per-account runs: the owner column, and idempotency keys scoped to it.
+      id: 'circuit-002-run-account',
+      statements: [
+        `ALTER TABLE {schema}.runs ADD COLUMN IF NOT EXISTS account_id TEXT`,
+        `DROP INDEX IF EXISTS {schema}.runs_idem`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS runs_idem_account ON {schema}.runs (workflow, (COALESCE(account_id, '')), idempotency_key) WHERE idempotency_key IS NOT NULL`,
+        `CREATE INDEX IF NOT EXISTS runs_account ON {schema}.runs (account_id, created_at DESC, pos DESC)`,
+      ],
+    },
   ];
 
   private readonly schema: string;
@@ -199,10 +209,10 @@ export class PgJournalStore implements JournalStore {
     // on one idempotency key must both get the single winning run.
     const inserted = await this.sql.query(
       `INSERT INTO ${this.runs} (id, workflow, status, input, output, error, idempotency_key, parent_run_id, parent_seq,
-         forked_from, wake_at, lease_owner, lease_expires_at, paused_seq, created_at, started_at, finished_at)
+         forked_from, wake_at, lease_owner, lease_expires_at, paused_seq, created_at, started_at, finished_at, account_id)
        VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7, $8, $9::int, $10::jsonb, $11::bigint, $12,
-         $13::bigint, $14::int, $15::bigint, $16::bigint, $17::bigint)
-       ON CONFLICT (workflow, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+         $13::bigint, $14::int, $15::bigint, $16::bigint, $17::bigint, $18)
+       ON CONFLICT (workflow, (COALESCE(account_id, '')), idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
        RETURNING id`,
       [
         run.id,
@@ -222,10 +232,11 @@ export class PgJournalStore implements JournalStore {
         run.createdAt,
         run.startedAt ?? null,
         run.finishedAt ?? null,
+        run.accountId ?? null,
       ],
     );
     if (inserted.length === 0 && run.idempotencyKey !== undefined) {
-      const existing = await this.findByIdempotencyKey(run.workflow, run.idempotencyKey);
+      const existing = await this.findByIdempotencyKey(run.workflow, run.idempotencyKey, run.accountId);
       if (existing) return existing;
     }
     return run;
@@ -236,10 +247,10 @@ export class PgJournalStore implements JournalStore {
     return row ? rowToRun(row) : undefined;
   }
 
-  async findByIdempotencyKey(workflow: string, key: string): Promise<Run | undefined> {
+  async findByIdempotencyKey(workflow: string, key: string, accountId?: string): Promise<Run | undefined> {
     const [row] = await this.sql.query(
-      `SELECT ${RUN_SELECT} FROM ${this.runs} WHERE workflow = $1 AND idempotency_key = $2`,
-      [workflow, key],
+      `SELECT ${RUN_SELECT} FROM ${this.runs} WHERE workflow = $1 AND idempotency_key = $2 AND COALESCE(account_id, '') = $3`,
+      [workflow, key, accountId ?? ''],
     );
     return row ? rowToRun(row) : undefined;
   }
@@ -254,6 +265,10 @@ export class PgJournalStore implements JournalStore {
     if (filter?.status !== undefined) {
       args.push(filter.status);
       clauses.push(`status = $${args.length}`);
+    }
+    if (filter?.accountId !== undefined) {
+      args.push(filter.accountId);
+      clauses.push(`account_id = $${args.length}`);
     }
     const where = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : '';
     args.push(filter?.limit ?? 100);
@@ -427,8 +442,9 @@ export class PgJournalStore implements JournalStore {
     await this.sql.query(`INSERT INTO ${this.breakpoints} (matcher) VALUES ($1::jsonb)`, [json(matcher)]);
   }
 
-  async clearBreakpoints(): Promise<void> {
-    await this.sql.query(`DELETE FROM ${this.breakpoints}`);
+  async clearBreakpoints(accountId?: string): Promise<void> {
+    if (accountId === undefined) await this.sql.query(`DELETE FROM ${this.breakpoints}`);
+    else await this.sql.query(`DELETE FROM ${this.breakpoints} WHERE matcher->>'accountId' = $1`, [accountId]);
   }
 
   /** No-op: the Sql pool belongs to the caller (shared across stores); end it there. */

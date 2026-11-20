@@ -18,6 +18,8 @@ const state = {
   filter: '',
   runId: null,
   seq: null,
+  view: 'runs', // 'runs' | 'insights' (#/insights)
+  insights: null, // GET /v1/insights: { workflows: [...] }, or { error }
   detail: null,
   detailSig: '',
   dirty: false, // a fix form has unsaved edits: don't clobber it on poll
@@ -89,8 +91,10 @@ function actor() {
   return shell.user?.email || localStorage.getItem('circuit.actor') || 'dashboard';
 }
 
-// ---------- routing: #/runs/<id>[/<seq>] ----------
+// ---------- routing: #/runs/<id>[/<seq>], #/insights ----------
 function readRoute() {
+  state.view = /^#\/insights\b/.test(location.hash) ? 'insights' : 'runs';
+  $('btn-insights')?.classList.toggle('on', state.view === 'insights');
   const m = location.hash.match(/^#\/runs\/([\w-]+)(?:\/(\d+))?/);
   state.runId = m ? m[1] : null;
   state.seq = m && m[2] !== undefined ? Number(m[2]) : null;
@@ -102,7 +106,8 @@ window.addEventListener('hashchange', () => {
   readRoute();
   state.dirty = false;
   state.detailSig = '';
-  refresh();
+  if (state.view === 'insights') loadInsights();
+  else refresh();
 });
 
 // ---------- runs list ----------
@@ -393,6 +398,89 @@ function renderDetail() {
   );
 }
 
+// ---------- insights: what to change, from the recorded runs ----------
+const pct = (rate) => `${Math.round(rate * 100)}%`;
+/** A verify line's "now": rates as percentages, durations in ms/s, counts as they are. */
+function metricValue(metric, value) {
+  if (typeof value !== 'number') return String(value);
+  if (/rate/.test(metric)) return pct(value);
+  if (/-ms$/.test(metric)) return value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${Math.round(value)}ms`;
+  return String(Math.round(value * 100) / 100);
+}
+
+function renderRecommendation(rec) {
+  const ev = rec.evidence ?? { runIds: [], runs: 0, counts: {} };
+  const ids = ev.runIds ?? [];
+  const counts = Object.entries(ev.counts ?? {}).map(([k, v]) => `${k} ${v}`).join(' · ');
+  return h('li', { class: `rec sev-${rec.severity}`, 'data-testid': 'recommendation', 'data-rec': rec.id },
+    h('div', { class: 'rec-head' },
+      h('span', { class: `sev sev-${rec.severity}` }, rec.severity),
+      h('span', { class: 'rec-title' }, rec.title)),
+    rec.target ? h('div', { class: 'hint' }, `step: ${rec.target.name}`) : null,
+    h('p', { class: 'rec-change' }, h('b', {}, 'Change: '), rec.change),
+    h('div', { class: 'rec-evidence' },
+      h('b', {}, 'Evidence: '), `${ev.runs} run${ev.runs === 1 ? '' : 's'}`,
+      ids.length > 0 ? ' — ' : '',
+      ids.flatMap((id, i) => [i > 0 ? ', ' : '', h('a', { href: `#/runs/${encodeURIComponent(id)}`, 'data-testid': 'evidence-run' }, h('code', {}, id.slice(0, 16)))]),
+      ev.runs > ids.length && ids.length > 0 ? ` and ${ev.runs - ids.length} more` : '',
+      counts ? h('span', { class: 'hint' }, ` (${counts})`) : ''),
+    ev.example !== undefined ? h('pre', { class: 'json rec-example', 'data-testid': 'rec-example' }, ev.example) : null,
+    h('p', { class: 'rec-verify' }, h('b', {}, 'Verify: '), `${rec.verify.metric} is ${metricValue(rec.verify.metric, rec.verify.now)} now; expect ${rec.verify.expect}.`),
+  );
+}
+
+function renderWorkflowInsights(w) {
+  const trend = w.trend ?? { runs: 0, verdict: '', notes: [] };
+  const title = h('div', { class: 'row' }, h('h3', {}, w.workflow), h('span', { class: 'hint' }, `${trend.runs} recent run${trend.runs === 1 ? '' : 's'}`));
+  // No runs: one plain line, not a verdict and a note that both say "nothing to analyze".
+  if (trend.runs === 0) {
+    return h('section', { class: 'panel insight', 'data-testid': 'insight-workflow', 'data-workflow': w.workflow }, title,
+      h('p', { class: 'explain', 'data-testid': 'no-recommendations' }, 'No runs yet: start one, and insights appear here as runs finish.'));
+  }
+  return h('section', { class: 'panel insight', 'data-testid': 'insight-workflow', 'data-workflow': w.workflow },
+    title,
+    trend.verdict ? h('p', { class: 'verdict', 'data-testid': 'verdict' }, trend.verdict) : null,
+    (trend.notes ?? []).length > 0 ? h('ul', { class: 'list hint' }, trend.notes.map((n) => h('li', {}, n))) : null,
+    w.recommendations.length === 0
+      ? h('p', { class: 'explain', 'data-testid': 'no-recommendations' }, trend.runs === 0
+        ? 'No runs yet: start one, and insights appear here as runs finish.'
+        : 'No recommendations: runs finish without anyone fixing them by hand.')
+      : h('ol', { class: 'recs' }, w.recommendations.map(renderRecommendation)),
+  );
+}
+
+function renderInsights() {
+  const root = $('detail');
+  const data = state.insights;
+  const head = h('div', { class: 'run-head' }, h('h2', {}, 'Insights'),
+    h('button', { type: 'button', onclick: () => loadInsights() }, 'Refresh'));
+  const lede = h('p', { class: 'explain' }, "What to change in each workflow, worked out from its recent runs: steps that keep failing the same way, steps people keep fixing by hand, slow steps, regressions. Each one names the runs it came from and how you'll know the change worked.");
+  if (!data) { root.replaceChildren(head, lede, h('div', { class: 'empty' }, h('p', {}, 'Loading…'))); return; }
+  if (data.error) { root.replaceChildren(head, lede, h('div', { class: 'banner err' }, `Could not load insights: ${data.error}`)); return; }
+  root.replaceChildren(head, lede,
+    data.workflows.length === 0
+      ? h('div', { class: 'empty', 'data-testid': 'no-recommendations' }, h('p', {}, 'No workflows are registered with this server.'))
+      : data.workflows.every((w) => (w.trend?.runs ?? 0) === 0)
+        // Nothing has run: there is nothing to give the all-clear on yet.
+        ? h('div', { class: 'empty', 'data-testid': 'insights-no-runs' }, h('p', {}, 'No runs yet. Start a run (New run), and insights appear here as runs finish.'))
+        : data.workflows.every((w) => w.recommendations.length === 0)
+          ? h('div', { class: 'banner ok', 'data-testid': 'insights-all-clear' }, 'No recommendations: runs finish without anyone fixing them by hand.')
+          : '',
+    ...data.workflows.map(renderWorkflowInsights));
+}
+
+async function loadInsights() {
+  state.insights = null;
+  renderInsights();
+  try {
+    const { data } = await api('GET', '/insights');
+    state.insights = data;
+  } catch (err) {
+    state.insights = { error: err.message };
+  }
+  if (state.view === 'insights') renderInsights();
+}
+
 // ---------- dialogs ----------
 function openDialog(title, content, onSubmit, submitLabel = 'Submit') {
   const dlg = $('dialog');
@@ -519,7 +607,9 @@ async function refresh() {
     const { data } = await api('GET', `/runs?${q}`);
     state.runs = data.runs;
     renderRuns();
-    if (state.runId) {
+    if (state.view === 'insights') {
+      // the insights pane is loaded on entry and on Refresh, not on every poll
+    } else if (state.runId) {
       const { data: detail } = await api('GET', `/runs/${state.runId}`).catch((e) => {
         if (String(e.message).includes('not found')) { toast('That run does not exist on this server.', true); go(null); }
         throw e;
@@ -566,6 +656,7 @@ async function boot() {
   const { data } = await api('GET', '/workflows');
   state.workflows = data.workflows;
   await refresh();
+  if (state.view === 'insights') await loadInsights();
   state.booted = true;
 }
 
@@ -602,6 +693,7 @@ $('btn-new-run').addEventListener('click', openNewRunDialog);
 $('btn-new-wf').addEventListener('click', openNewWorkflowDialog);
 $('btn-event').addEventListener('click', openEventDialog);
 $('btn-deploy-check').addEventListener('click', runDeployCheck);
+$('btn-insights').addEventListener('click', () => { location.hash = state.view === 'insights' ? '#/' : '#/insights'; });
 $('status-filter').addEventListener('change', (ev) => { state.filter = ev.target.value; refresh(); });
 $('conn').addEventListener('click', () => {
   if (shell.user) { location.href = shell.accountHref(); return; } // your name comes from your account

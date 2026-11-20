@@ -111,6 +111,21 @@ How well the run worked, not just whether it finished — the same report as
 `find_errors` only covers what threw. See
 [the behaviour summary](/debugging/behavior-summary/) for how to read it.
 
+### `get_insights({ app? })`
+
+How each agent behaves across its recent runs: a one-line verdict, completion rate, per-tool
+health pooled over every call, and what changed between earlier and recent runs. A change is
+reported only when the sample sizes support it, with the first run that showed it. Replays are
+left out; abandoned runs count as not ok.
+
+### `suggest_improvements({ app?, limit? })`
+
+What to change, ranked, each with `evidence` (run ids with viewer links, counts, a clipped
+example), `change` and `verify` (the metric that should move, and its value now). Empty when
+nothing needs changing. **This is the right first call** for "how do I make my agent better?";
+after the change, ask again: the recommendation should be gone. See
+[insights](/debugging/insights/).
+
 ## What it looks like in practice
 
 > **You:** why did my last support-agent run fail?
@@ -126,6 +141,7 @@ Other things it is good at:
 - "What did `searchOrders` get called with across this run?"
 - "Which node is eating the tokens in run `run_01H8…`?"
 - "Is the agent going in circles? What did the loop cost?" (`get_behavior`)
+- "What should I fix first in `trip-planner`? Fix it, then check it worked." (`suggest_improvements`)
 
 <Aside type="tip" title="Why this is more than convenience">
 Your coding agent gets to read what your *other* agent actually did — the real arguments, the

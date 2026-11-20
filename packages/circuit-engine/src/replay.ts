@@ -166,12 +166,14 @@ export interface DeployCheckReport {
 export async function checkDeploy(
   defs: ReadonlyArray<AnyWorkflow>,
   store: JournalStore,
+  /** Only this account's in-flight runs. Undefined: every run. */
+  accountId?: string,
 ): Promise<DeployCheckReport> {
   const broken: DeployCheckEntry[] = [];
   let checked = 0;
   for (const def of defs) {
     for (const status of ['running', 'suspended', 'paused', 'queued'] as const) {
-      for (const run of await store.listRuns({ workflow: def.config.name, status, limit: 10_000 })) {
+      for (const run of await store.listRuns({ workflow: def.config.name, status, limit: 10_000, ...(accountId !== undefined ? { accountId } : {}) })) {
         checked += 1;
         const outcome = await replayJournal(def, run.input, await store.listJournal(run.id));
         if (outcome.kind === 'diverged' || outcome.kind === 'replay-error') {

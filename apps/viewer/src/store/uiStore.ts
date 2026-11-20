@@ -328,7 +328,7 @@ export const useUiStore = create<UiState>((set) => ({
     }),
   leaveAside: () =>
     set((s) => {
-      if (s.page !== 'connect' && s.page !== 'build') return s;
+      if (s.page !== 'connect' && s.page !== 'build' && s.page !== 'insights') return s;
       // A run that has since gone away (a cleared list, a new session) would
       // strand us on a place with nothing to show; the list always exists.
       const back = s.selectedRunId === undefined ? 'runs' : s.stackAt;

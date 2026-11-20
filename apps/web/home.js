@@ -7,7 +7,9 @@
       media drifts a little. All of it is skipped under prefers-reduced-motion
       (the page is complete without it) and every clip has a pause control.
    3. The funnel: eight anonymous events, no cookies, sent with sendBeacon.
-   4. The small things: copy the command, release notes, the sticky bar. */
+   4. The small things: copy the command, release notes, the sticky bar.
+   5. Signed in already (the /app account cookie): "Open app" in the bar and
+      the Claude Code skills. Signed out, or any failure: nothing changes. */
 (function () {
   'use strict';
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -41,6 +43,44 @@
     var a = e.target.closest && e.target.closest('[data-track]');
     if (a) track(a.getAttribute('data-track'), { where: a.getAttribute('data-where') || 'page' });
   });
+
+  /* ------------------------------------------------- signed in? -- */
+  // Only reveals things: the page as served is the signed-out page, so a 401,
+  // a network error or an old browser leaves it exactly as it is.
+  function showSignedIn(doc) {
+    var signin = doc.getElementById('nav-signin');
+    var start = doc.getElementById('nav-start');
+    var app = doc.getElementById('nav-app');
+    var section = doc.getElementById('signed-in');
+    if (!app) return false;
+    if (signin) signin.hidden = true;
+    if (start) start.hidden = true;
+    app.hidden = false;
+    if (section) section.hidden = false;
+    // Every other "sign up" call to action now opens the app instead: a signed-in
+    // visitor is never asked to create the account they already have.
+    var ctas = doc.querySelectorAll ? doc.querySelectorAll('a[href^="/signup"]') : [];
+    for (var i = 0; i < ctas.length; i++) {
+      var a = ctas[i];
+      if (a === start) continue;
+      var href = a.getAttribute('href') || '';
+      var product = /[?&]start=(circuit|jack)\b/.exec(href);
+      a.setAttribute('href', product ? '/app/' + product[1] + '/' : '/app/');
+      a.textContent = product ? 'Open ' + (product[1] === 'circuit' ? 'Circuit' : 'Jack') : 'Open app';
+    }
+    doc.documentElement.classList.add('is-signed-in');
+    return true;
+  }
+  function checkSignedIn(doc, fetchFn) {
+    if (typeof fetchFn !== 'function') return Promise.resolve(false);
+    try {
+      return fetchFn('/app/auth/me', { credentials: 'same-origin', headers: { accept: 'application/json' } })
+        .then(function (res) { return res && res.status === 200 ? res.json() : null; })
+        .then(function (data) { return data && data.user ? showSignedIn(doc) : false; })
+        .catch(function () { return false; });
+    } catch (e) { return Promise.resolve(false); }
+  }
+  window.__gmSignedIn = checkSignedIn(document, window.fetch && window.fetch.bind(window));
 
   /* -------------------------------------------------------- the demo -- */
   var demo = document.getElementById('demo');
@@ -186,9 +226,10 @@
   }
 
   /* ---------------------------------------------------------- the rest -- */
-  var copyBtn = document.getElementById('cmd-copy');
-  var cmd = document.getElementById('cmd');
-  if (copyBtn && cmd && navigator.clipboard) {
+  function wireCopy(buttonId, codeId) {
+    var copyBtn = document.getElementById(buttonId);
+    var cmd = document.getElementById(codeId);
+    if (!copyBtn || !cmd || !navigator.clipboard) return;
     copyBtn.addEventListener('click', function () {
       navigator.clipboard.writeText(cmd.textContent).then(function () {
         copyBtn.textContent = 'Copied';
@@ -196,6 +237,8 @@
       }, function () {});
     });
   }
+  wireCopy('cmd-copy', 'cmd');
+  wireCopy('skills-copy', 'skills-cmd');
 
   var form = document.getElementById('waitlist-form');
   if (form) {

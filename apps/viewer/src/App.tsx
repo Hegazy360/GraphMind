@@ -44,6 +44,7 @@ import { BuilderPage } from './builder/BuilderPage.js';
 import { NodePage } from './pages/NodePage.js';
 import { RunPage } from './pages/RunPage.js';
 import { RunsPage } from './pages/RunsPage.js';
+import { InsightsPage } from './pages/InsightsPage.js';
 import { ConnectPage } from './pages/ConnectPage.js';
 import {
   connectSeen,
@@ -114,7 +115,10 @@ export default function App() {
     const apply = () => {
       const route = parseHash(location.hash);
       const ui = useUiStore.getState();
-      if (route.page === 'build' || route.page === 'connect' || route.page === 'runs') {
+      if (route.page === 'build' ||
+        route.page === 'connect' ||
+        route.page === 'insights' ||
+        route.page === 'runs') {
         ui.setPage(route.page);
         return;
       }
@@ -374,6 +378,7 @@ export default function App() {
   let main: React.ReactNode;
   if (page === 'build') main = <BuilderPage />;
   else if (page === 'connect') main = <ConnectPage />;
+  else if (page === 'insights') main = <InsightsPage />;
   else if (insideRun && page === 'node' && selectedNodeId !== undefined)
     main = <NodePage runId={selectedRunId} nodeId={selectedNodeId} />;
   else if (insideRun) main = <RunPage runId={selectedRunId} />;

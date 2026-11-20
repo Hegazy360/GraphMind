@@ -313,7 +313,9 @@ export function analyzeRun(sample: RunSample): BehaviorReport {
   if (context.reportedBasis) {
     notes.push('Some token counts were recorded before GraphMind 0.6 and may exclude cached tokens.');
   }
-  if (sample.status === 'running' || sample.status === undefined) {
+  if (sample.status === 'abandoned') {
+    notes.push('The run was abandoned: it never finished (its process stopped, or it was left paused).');
+  } else if (sample.status === 'running' || sample.status === undefined) {
     notes.push('The run has not finished (or its end was never recorded); every number is a so-far.');
   }
 

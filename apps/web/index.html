@@ -53,8 +53,9 @@
         <span class="top-sep hide-md" aria-hidden="true"></span>
         <a class="top-link" href="https://graphmind.ai/docs">Docs</a>
         <a class="top-link hide-sm" href="https://github.com/Hegazy360/GraphMind" rel="noopener">GitHub</a>
-        <a class="top-link hide-sm" href="/login" data-track="cta-click" data-where="nav-signin">Sign in</a>
-        <a class="btn btn-solid btn-sm" href="/signup" data-track="cta-click" data-where="nav">Start free</a>
+        <a class="top-link hide-sm" id="nav-signin" href="/login" data-track="cta-click" data-where="nav-signin">Sign in</a>
+        <a class="btn btn-solid btn-sm" id="nav-start" href="/signup" data-track="cta-click" data-where="nav">Start free</a>
+        <a class="btn btn-solid btn-sm" id="nav-app" href="/app/" data-track="cta-click" data-where="nav-app" hidden>Open app</a>
       </nav>
     </div>
   </header>
@@ -98,6 +99,27 @@
             <span>You just debugged an agent.</span>
             <a class="btn btn-solid btn-sm" href="/signup" data-track="cta-click" data-where="demo-done">Do it with yours &mdash; start free</a>
           </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== signed in: Claude Code skills (home.js reveals it) ===================== -->
+    <section class="signed-in" id="signed-in" aria-labelledby="signed-in-title" hidden>
+      <div class="wrap signed-in-grid">
+        <div>
+          <h2 class="h-small" id="signed-in-title">Using Claude Code?</h2>
+          <p class="muted">Install the GraphMind skills and Claude Code knows how to debug your agent runs, build and fix Circuit workflows, and set up Jack.</p>
+          <span class="cmd" role="group" aria-label="Install the Claude Code skills">
+            <code id="skills-cmd">npx graphmind-ai skill all --install</code>
+            <button type="button" class="cmd-copy" id="skills-copy" aria-label="Copy command">Copy</button>
+          </span>
+          <p class="muted fine">A personal token from your <a href="/app/#/account">account page</a> in <code>GRAPHMIND_TOKEN</code> lets Claude Code drive Circuit and Jack.</p>
+        </div>
+        <div>
+          <h3 class="h-small">What to change next</h3>
+          <p class="muted">Insights reads your recent runs and says what to fix, with the runs that show it.</p>
+          <a class="more" href="/app/circuit/#/insights" data-track="cta-click" data-where="signed-in-circuit">Circuit insights</a><br>
+          <a class="more" href="/app/jack/" data-track="cta-click" data-where="signed-in-jack">Jack insights, per project</a>
         </div>
       </div>
     </section>

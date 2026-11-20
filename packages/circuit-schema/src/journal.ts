@@ -122,5 +122,7 @@ export const breakpointMatcher = z.object({
   step: z.string().optional(),
   kind: entryKind.optional(),
   point: pausePoint.default('before'),
+  /** Only runs of this account pause on it (set by the server from the caller, never trusted from a body). */
+  accountId: z.string().optional(),
 });
 export type BreakpointMatcher = z.infer<typeof breakpointMatcher>;

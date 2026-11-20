@@ -303,17 +303,41 @@ long to wait for the app's answer (default 30, at most 120). The first resume fo
 
 ## `graphmind skill`
 
-Print the GraphMind [Agent Skill](https://docs.claude.com/en/docs/claude-code/skills) — setup
-for each framework, running the server headless, and the pause/wait/resume loop — or install it
-for Claude Code in the current project.
+Print one of GraphMind's [Agent Skills](https://docs.claude.com/en/docs/claude-code/skills), or
+install them for Claude Code in the current project:
+
+| Skill | Teaches a coding agent to |
+| --- | --- |
+| `graphmind` (default) | set up the debugger per framework, serve headless, run the pause/wait/resume loop, act on insights |
+| `circuit` | start, inspect, fix and resume runs on hosted Circuit; read its insights; write workflows |
+| `jack` | publish an API as a hosted MCP server: import, shape tools, deploy, read the call log and insights |
 
 ```sh
-graphmind skill                     # print SKILL.md
-graphmind skill --install           # write .claude/skills/graphmind/SKILL.md here
-graphmind skill --install --force   # overwrite an existing one
+graphmind skill                     # print the debugger's SKILL.md
+graphmind skill jack                # print another one
+graphmind skill all --install       # write all three under .claude/skills/ here
+graphmind skill all --install --force   # overwrite existing ones
 ```
 
-The file ships in the npm package (`skills/graphmind/SKILL.md`).
+`all --install` writes nothing if any target already exists (without `--force`). The Circuit and
+Jack skills read a personal token from `GRAPHMIND_TOKEN` (create one on your account page) and
+never print it. The files ship in the npm package (`skills/`).
+
+## `graphmind insights`
+
+What to change in your agents, from what their recorded runs prove. One block per app: the
+behaviour trend's verdict, then ranked recommendations, each with its evidence (runs, counts, an
+example), the change to make, and the metric that should move.
+
+```sh
+graphmind insights                     # every app, the most urgent first
+graphmind insights --app trip-planner  # one app
+graphmind insights --json              # trend summary + recommendations, machine-readable
+graphmind insights --include-replays   # count replay runs too (left out by default)
+```
+
+The same list is the MCP tool `suggest_improvements` and the viewer's Insights page; see
+[insights](/debugging/insights/).
 
 ## `graphmind runs`
 
@@ -519,6 +543,12 @@ Each run: `{ id, app, startedAt, finishedAt, status, schemaVersion, source, even
 errorCount, live }`. `status` is `running | ok | error | aborted`; `source` is
 `live | import | demo`; `live` is whether the owning app socket is currently connected.
 Timestamps are epoch milliseconds; `finishedAt` is `null` while running.
+
+### `GET /api/insights?app=<name>&includeReplays=1`
+
+`{ apps: [{ app, trend, recommendations }] }`, the most urgent app first: the same data as
+`graphmind insights --json`, with the trend's per-run series (`points`) included. Both query
+parameters are optional.
 
 ### `GET /api/runs/:id/events?afterSeq=N&limit=M`
 

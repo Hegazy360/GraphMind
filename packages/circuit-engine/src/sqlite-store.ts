@@ -50,7 +50,6 @@ CREATE TABLE IF NOT EXISTS runs (
   started_at INTEGER,
   finished_at INTEGER
 );
-CREATE UNIQUE INDEX IF NOT EXISTS runs_idem ON runs(workflow, idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS runs_due ON runs(status, wake_at);
 CREATE TABLE IF NOT EXISTS journal (
   run_id TEXT NOT NULL,
@@ -104,6 +103,22 @@ export class SqliteJournalStore implements JournalStore {
     this.db = new DatabaseSync(path);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
     this.db.exec(SCHEMA);
+    this.upgrade();
+  }
+
+  /**
+   * Bring a database written by an older version up to date, in place.
+   * Idempotent: every step checks before it changes anything.
+   *
+   *   - runs.account_id (per-account runs); the idempotency index becomes
+   *     per account, so the same key from two accounts names two runs.
+   */
+  private upgrade(): void {
+    const columns = this.db.prepare('PRAGMA table_info(runs)').all() as Row[];
+    if (!columns.some((c) => c.name === 'account_id')) this.db.exec('ALTER TABLE runs ADD COLUMN account_id TEXT');
+    this.db.exec(`DROP INDEX IF EXISTS runs_idem;
+CREATE UNIQUE INDEX IF NOT EXISTS runs_idem_account ON runs(workflow, COALESCE(account_id, ''), idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS runs_account ON runs(account_id, created_at);`);
   }
 
   private prep(sql: string): StatementSync {
@@ -112,13 +127,13 @@ export class SqliteJournalStore implements JournalStore {
 
   async createRun(run: Run): Promise<Run> {
     if (run.idempotencyKey !== undefined) {
-      const existing = this.findIdem(run.workflow, run.idempotencyKey);
+      const existing = this.findIdem(run.workflow, run.idempotencyKey, run.accountId);
       if (existing) return existing;
     }
     this.prep(
       `INSERT INTO runs (id, workflow, status, input, output, error, idempotency_key, parent_run_id, parent_seq,
-         forked_from, wake_at, lease_owner, lease_expires_at, paused_seq, created_at, started_at, finished_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         forked_from, wake_at, lease_owner, lease_expires_at, paused_seq, created_at, started_at, finished_at, account_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(
       run.id,
       run.workflow,
@@ -137,6 +152,7 @@ export class SqliteJournalStore implements JournalStore {
       run.createdAt,
       run.startedAt ?? null,
       run.finishedAt ?? null,
+      run.accountId ?? null,
     );
     return run;
   }
@@ -146,15 +162,15 @@ export class SqliteJournalStore implements JournalStore {
     return row ? rowToRun(row) : undefined;
   }
 
-  async findByIdempotencyKey(workflow: string, key: string): Promise<Run | undefined> {
-    return this.findIdem(workflow, key);
+  async findByIdempotencyKey(workflow: string, key: string, accountId?: string): Promise<Run | undefined> {
+    return this.findIdem(workflow, key, accountId);
   }
 
   /** Sync so createRun's check-then-insert never yields between the two. */
-  private findIdem(workflow: string, key: string): Run | undefined {
-    const row = this.prep('SELECT * FROM runs WHERE workflow = ? AND idempotency_key = ?').get(workflow, key) as
-      | Row
-      | undefined;
+  private findIdem(workflow: string, key: string, accountId: string | undefined): Run | undefined {
+    const row = this.prep(
+      "SELECT * FROM runs WHERE workflow = ? AND idempotency_key = ? AND COALESCE(account_id, '') = ?",
+    ).get(workflow, key, accountId ?? '') as Row | undefined;
     return row ? rowToRun(row) : undefined;
   }
 
@@ -168,6 +184,10 @@ export class SqliteJournalStore implements JournalStore {
     if (filter?.status !== undefined) {
       clauses.push('status = ?');
       args.push(filter.status);
+    }
+    if (filter?.accountId !== undefined) {
+      clauses.push('account_id = ?');
+      args.push(filter.accountId);
     }
     const where = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : '';
     const rows = this.prep(`SELECT * FROM runs${where} ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(
@@ -330,8 +350,9 @@ export class SqliteJournalStore implements JournalStore {
     this.prep('INSERT INTO breakpoints (matcher) VALUES (?)').run(json(matcher));
   }
 
-  async clearBreakpoints(): Promise<void> {
-    this.prep('DELETE FROM breakpoints').run();
+  async clearBreakpoints(accountId?: string): Promise<void> {
+    if (accountId === undefined) this.prep('DELETE FROM breakpoints').run();
+    else this.prep("DELETE FROM breakpoints WHERE json_extract(matcher, '$.accountId') = ?").run(accountId);
   }
 
   async close(): Promise<void> {

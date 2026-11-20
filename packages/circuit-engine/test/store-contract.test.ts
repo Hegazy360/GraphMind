@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import type { JournalEntry, Run } from '@graphmind-ai/circuit-schema';
 import { BACKENDS, openPgPair, openStore, pgAvailable, unavailable } from './backends.js';
+import { SqliteJournalStore } from '../src/index.js';
 
 function run(id: string, over: Partial<Run> = {}): Run {
   return { id, workflow: 'wf', status: 'queued', input: { n: 1 }, createdAt: 1_000, ...over };
@@ -246,6 +247,59 @@ describe.each(BACKENDS)('%s', (backend) => {
       await store.clearBreakpoints();
       expect(await store.listBreakpoints()).toEqual([]);
     });
+
+    it('runs belong to accounts: list filter, and idempotency keys per account', async () => {
+      const store = await openStore(backend);
+      await store.createRun(run('a1', { accountId: 'acct-a', idempotencyKey: 'k', createdAt: 1 }));
+      const b1 = await store.createRun(run('b1', { accountId: 'acct-b', idempotencyKey: 'k', createdAt: 2 }));
+      expect(b1.id).toBe('b1'); // same key, another account: another run
+      await store.createRun(run('op', { idempotencyKey: 'k', createdAt: 3 })); // no account (operator / dev)
+      expect((await store.createRun(run('a2', { accountId: 'acct-a', idempotencyKey: 'k' }))).id).toBe('a1');
+      expect((await store.getRun('a1'))?.accountId).toBe('acct-a');
+      expect('accountId' in (await store.getRun('op'))!).toBe(false);
+      expect((await store.findByIdempotencyKey('wf', 'k', 'acct-b'))?.id).toBe('b1');
+      expect((await store.findByIdempotencyKey('wf', 'k'))?.id).toBe('op');
+      expect((await store.listRuns({ accountId: 'acct-a' })).map((r) => r.id)).toEqual(['a1']);
+      expect((await store.listRuns()).map((r) => r.id)).toEqual(['op', 'b1', 'a1']);
+    });
+
+    it('clears one account’s breakpoints, or all of them', async () => {
+      const store = await openStore(backend);
+      await store.setBreakpoint({ step: 'x', point: 'before', accountId: 'acct-a' });
+      await store.setBreakpoint({ step: 'y', point: 'before', accountId: 'acct-b' });
+      await store.setBreakpoint({ step: 'z', point: 'before' });
+      await store.clearBreakpoints('acct-a');
+      expect((await store.listBreakpoints()).map((m) => m.step)).toEqual(['y', 'z']);
+      await store.clearBreakpoints();
+      expect(await store.listBreakpoints()).toEqual([]);
+    });
+  });
+});
+
+describe('SqliteJournalStore upgrade', () => {
+  it('adds runs.account_id to a database written before accounts, keeping its runs and keys', async () => {
+    const { DatabaseSync } = await import('node:sqlite');
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const file = join(mkdtempSync(join(tmpdir(), 'circuit-upgrade-')), 'old.db');
+    const old = new DatabaseSync(file);
+    old.exec(`CREATE TABLE runs (id TEXT PRIMARY KEY, workflow TEXT NOT NULL, status TEXT NOT NULL, input TEXT NOT NULL,
+      output TEXT, error TEXT, idempotency_key TEXT, parent_run_id TEXT, parent_seq INTEGER, forked_from TEXT, wake_at INTEGER,
+      lease_owner TEXT, lease_expires_at INTEGER, paused_seq INTEGER, created_at INTEGER NOT NULL, started_at INTEGER, finished_at INTEGER);
+      CREATE UNIQUE INDEX runs_idem ON runs(workflow, idempotency_key) WHERE idempotency_key IS NOT NULL;
+      INSERT INTO runs (id, workflow, status, input, idempotency_key, created_at) VALUES ('old', 'wf', 'completed', 'null', 'k', 1);`);
+    old.close();
+    for (let open = 0; open < 2; open += 1) {
+      const store = new SqliteJournalStore(file); // twice: the upgrade is idempotent
+      expect((await store.getRun('old'))?.idempotencyKey).toBe('k');
+      expect((await store.findByIdempotencyKey('wf', 'k'))?.id).toBe('old');
+      await store.close();
+    }
+    const store = new SqliteJournalStore(file);
+    // The old global index is gone: another account may now use the same key.
+    expect((await store.createRun(run('new', { accountId: 'acct-a', idempotencyKey: 'k' }))).id).toBe('new');
+    await store.close();
   });
 });
 

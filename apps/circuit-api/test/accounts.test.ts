@@ -113,3 +113,90 @@ describe('circuit with accounts', () => {
     expect((await ada('POST', '/v1/workflows/flaky/runs', { input: {} })).status).toBe(202);
   });
 });
+
+describe('circuit runs belong to accounts', () => {
+  const PASSWORD = 'a-long-enough-password';
+
+  it('each account sees and acts on its own runs only; the operator key sees all', async () => {
+    const { executor, browser, cli } = setup({ apiKeys: ['op-key'] });
+    const ada = browser();
+    const bob = browser();
+    await ada('POST', '/auth/signup', { email: 'ada@example.com', password: PASSWORD });
+    await bob('POST', '/auth/signup', { email: 'bob@example.com', password: PASSWORD });
+
+    const mine = (await ada('POST', '/v1/workflows/flaky/runs', { input: {}, idempotencyKey: 'same' })).json.runId as string;
+    const theirs = (await bob('POST', '/v1/workflows/flaky/runs', { input: {}, idempotencyKey: 'same' })).json.runId as string;
+    expect(theirs).not.toBe(mine); // idempotency keys are per account
+    await executor.drain();
+
+    expect((await ada('GET', '/v1/runs')).json.runs.map((r: { id: string }) => r.id)).toEqual([mine]);
+    expect((await bob('GET', '/v1/runs')).json.runs.map((r: { id: string }) => r.id)).toEqual([theirs]);
+
+    // Every per-run route answers 404 for another account's run, as if it did not exist.
+    for (const [method, path, body] of [
+      ['GET', `/v1/runs/${mine}`, undefined],
+      ['GET', `/v1/runs/${mine}/fixture`, undefined],
+      ['POST', `/v1/runs/${mine}/entries/0/resume`, { action: 'abort' }],
+      ['POST', `/v1/runs/${mine}/approvals/0`, { approved: true, by: 'bob' }],
+      ['POST', `/v1/runs/${mine}/fork`, { uptoSeq: 0 }],
+      ['POST', `/v1/runs/${mine}/cancel`, undefined],
+    ] as const) {
+      expect((await bob(method, path, body)).status, `${method} ${path}`).toBe(404);
+    }
+    expect((await executor.getRun(mine))?.status).toBe('paused'); // untouched
+
+    const op = cli('op-key');
+    expect((await op('GET', '/v1/runs')).json.runs).toHaveLength(2);
+    expect((await op('GET', `/v1/runs/${mine}`)).status).toBe(200);
+  });
+
+  it('breakpoints from an account pause only its runs, whatever the body claims', async () => {
+    const { executor, browser } = setup();
+    const ada = browser();
+    const bob = browser();
+    await ada('POST', '/auth/signup', { email: 'ada@example.com', password: PASSWORD });
+    await bob('POST', '/auth/signup', { email: 'bob@example.com', password: PASSWORD });
+    const bobId = (await bob('GET', '/auth/me')).json.user.id as string;
+
+    // Ada tries to plant a breakpoint on Bob's account.
+    expect((await ada('POST', '/v1/breakpoints', { step: 'fetch', point: 'before', accountId: bobId })).status).toBe(201);
+    const bobRun = (await bob('POST', '/v1/workflows/flaky/runs', { input: {} })).json.runId as string;
+    const adaRun = (await ada('POST', '/v1/workflows/flaky/runs', { input: {} })).json.runId as string;
+    await executor.drain();
+    expect((await executor.getJournal(bobRun))[0]?.pausePoint).not.toBe('before');
+    expect((await executor.getJournal(adaRun))[0]?.pausePoint).toBe('before');
+
+    // Bob clearing breakpoints leaves Ada's alone.
+    await bob('DELETE', '/v1/breakpoints');
+    const again = (await ada('POST', '/v1/workflows/flaky/runs', { input: {} })).json.runId as string;
+    await executor.drain();
+    expect((await executor.getJournal(again))[0]?.pausePoint).toBe('before');
+  });
+});
+
+describe('circuit insights', () => {
+  it('per account: a step fixed by hand in run after run becomes a recommendation; others see none of it', async () => {
+    const { executor, browser } = setup();
+    const ada = browser();
+    const bob = browser();
+    await ada('POST', '/auth/signup', { email: 'ada@example.com', password: 'a-long-enough-password' });
+    await bob('POST', '/auth/signup', { email: 'bob@example.com', password: 'a-long-enough-password' });
+    for (let i = 0; i < 3; i += 1) {
+      const runId = (await ada('POST', '/v1/workflows/flaky/runs', { input: {} })).json.runId as string;
+      await executor.drain();
+      expect((await ada('POST', `/v1/runs/${runId}/entries/0/resume`, { action: 'inject', output: { ok: true } })).status).toBe(200);
+      await executor.drain();
+    }
+    const mine = await ada('GET', '/v1/insights');
+    expect(mine.status).toBe(200);
+    const flaky = mine.json.workflows.find((w: { workflow: string }) => w.workflow === 'flaky');
+    expect(flaky.trend.runs).toBe(3);
+    expect(flaky.trend.points).toBeUndefined();
+    const rec = flaky.recommendations.find((r: { id: string }) => r.id === 'R-manual-fix');
+    expect(rec).toMatchObject({ target: { name: 'fetch' }, evidence: { runs: 3, counts: { inject: 3 } } });
+
+    const theirs = await bob('GET', '/v1/insights?workflow=flaky');
+    expect(theirs.json.workflows[0]).toMatchObject({ workflow: 'flaky', trend: { runs: 0 }, recommendations: [] });
+    expect((await bob('GET', '/v1/insights?workflow=nope')).status).toBe(404);
+  });
+});

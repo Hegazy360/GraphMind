@@ -2,7 +2,7 @@
 // sign-in and the account page are the shared shell (./gm/shell.js), the same
 // component every dashboard uses; this file only routes and draws the
 // products page.
-import { h, renderAccount, renderAuth, renderReset, startShell } from './gm/shell.js';
+import { h, renderAccount, renderAuth, renderReset, startShell, toast } from './gm/shell.js';
 
 const main = document.getElementById('main');
 const shell = await startShell({ product: 'hub' });
@@ -26,6 +26,27 @@ function noticeParam() {
   return q ? new URLSearchParams(q).get('notice') ?? undefined : undefined;
 }
 
+const SKILLS_COMMAND = 'npx graphmind-ai skill all --install';
+
+/** "Using Claude Code?": the Agent Skills, and the token that lets Claude Code drive Circuit and Jack. */
+function claudeCodeCard() {
+  return h('section', { class: 'hub-card quiet hub-skills', 'data-testid': 'claude-code-card' },
+    h('div', {}, h('span', { class: 'gm-pill' }, 'Claude Code'), h('span', { class: 'hub-kind' }, 'Agent Skills')),
+    h('h2', {}, 'Using Claude Code?'),
+    h('p', {}, 'Install the GraphMind skills and Claude Code knows how to debug your agent runs, build and fix Circuit workflows, and set up Jack, and acts on the Insights recommendations.'),
+    h('div', { class: 'gm-copy' },
+      h('code', { 'data-testid': 'skills-command' }, SKILLS_COMMAND),
+      h('button', { class: 'gm-btn gm-btn-sm', type: 'button', 'data-testid': 'copy-skills', onclick: () => navigator.clipboard?.writeText(SKILLS_COMMAND).then(() => toast('Copied'), () => {}) }, 'Copy'),
+    ),
+    h('p', {}, 'It writes the skills into ', h('code', { class: 'gm-code' }, '.claude/skills/'), '. With a personal token from your ',
+      h('a', { href: '#/account' }, 'Account page'), ' in ', h('code', { class: 'gm-code' }, 'GRAPHMIND_TOKEN'), ', Claude Code can drive Circuit and Jack for you.'),
+    h('div', { class: 'hub-links' },
+      h('a', { class: 'hub-go', href: 'circuit/#/insights', 'data-testid': 'circuit-insights' }, 'Circuit insights →'),
+      h('a', { class: 'hub-go', href: 'jack/', 'data-testid': 'jack-insights' }, 'Jack insights (per project) →'),
+    ),
+  );
+}
+
 function renderHome() {
   const user = shell.user;
   main.replaceChildren(
@@ -38,12 +59,14 @@ function renderHome() {
           h('div', {}, h('span', { class: 'gm-pill gm-pill-accent' }, 'Circuit'), h('span', { class: 'hub-kind' }, 'Durable workflows')),
           h('h2', {}, 'Workflows as code, with a flight recorder.'),
           h('p', {}, 'Start a run, watch it pause on a failing step, fix it and resume. Fork a what-if, check a deploy against in-flight runs, call MCP servers from steps.'),
+          h('p', { class: 'hub-note' }, 'Insights: what to change in each workflow, from its recent runs.'),
           h('span', { class: 'hub-go' }, 'Open Circuit →'),
         ),
         h('a', { class: 'hub-card', href: 'jack/', 'data-testid': 'open-jack' },
           h('div', {}, h('span', { class: 'gm-pill gm-pill-accent' }, 'Jack'), h('span', { class: 'hub-kind' }, 'Your API as an MCP server')),
           h('h2', {}, 'Point it at the API you already have.'),
           h('p', {}, 'Import an OpenAPI document, choose and describe the tools, pick how your users sign in, deploy, and hand Claude or Cursor the URL.'),
+          h('p', { class: 'hub-note' }, "Insights, per project: which tools keep failing, and what to change."),
           h('span', { class: 'hub-go' }, 'Open Jack →'),
         ),
         h('div', { class: 'hub-card quiet' },
@@ -53,6 +76,7 @@ function renderHome() {
           h('a', { class: 'hub-go', href: 'https://graphmind.ai/docs/start/install/' }, 'Install guide →'),
         ),
       ),
+      claudeCodeCard(),
     ),
   );
 }

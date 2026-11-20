@@ -15,6 +15,7 @@
  *
  * Errors follow RFC 9457 (application/problem+json).
  */
+import { recommend, sampleFromCircuitRun } from '@graphmind-ai/analyze';
 import { readFile } from 'node:fs/promises';
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
@@ -135,6 +136,9 @@ const approvalBody = z.object({
   comment: z.string().max(2_000).optional(),
 });
 
+/** Newest runs per workflow that /v1/insights analyzes by default. */
+const INSIGHT_RUNS = 200;
+
 function problem(status: number, title: string, detail?: string) {
   return Response.json(
     { type: 'about:blank', title, status, ...(detail !== undefined ? { detail } : {}) },
@@ -199,6 +203,26 @@ export function createApi(opts: ApiOptions): Hono {
   const actor = (c: Context): string =>
     accounts?.principal(c)?.user.email ?? c.req.header('x-circuit-actor') ?? 'api';
 
+  /**
+   * Tenancy, the same model as Jack's projects: a signed-in caller (session or
+   * personal token) works on its own account's runs only, and another
+   * account's run is a 404, as if it did not exist. A static `--api-key` is
+   * the operator and sees every run; an open dev server has no accounts.
+   */
+  const scope = (c: Context): string | undefined => accounts?.principal(c)?.user.id;
+  const scoped = (c: Context) => {
+    const accountId = scope(c);
+    return accountId !== undefined ? { accountId } : {};
+  };
+  /** The run, if the caller may see it. */
+  const visibleRun = async (c: Context) => {
+    const run = await executor.getRun(c.req.param('id') ?? '');
+    if (!run) return undefined;
+    const accountId = scope(c);
+    return accountId === undefined || run.accountId === accountId ? run : undefined;
+  };
+  const runNotFound = () => problem(404, 'Run not found');
+
   app.onError((err) => {
     if (err instanceof InvalidResumeError) return problem(409, 'Invalid resume', err.message);
     if (err instanceof WorkflowNotRegisteredError) return problem(404, 'Unknown workflow', err.message);
@@ -235,6 +259,7 @@ export function createApi(opts: ApiOptions): Hono {
     const body = enqueueBody.parse(await c.req.json().catch(() => ({})));
     const run = await executor.enqueue(c.req.param('name'), (body.input ?? null) as JsonValue, {
       ...(body.idempotencyKey !== undefined ? { idempotencyKey: body.idempotencyKey } : {}),
+      ...scoped(c),
     });
     kick();
     return c.json({ runId: run.id, status: run.status }, 202);
@@ -248,24 +273,26 @@ export function createApi(opts: ApiOptions): Hono {
       ...(workflow !== undefined ? { workflow } : {}),
       ...(status !== undefined ? { status: runStatus.parse(status) } : {}),
       limit,
+      ...scoped(c),
     });
     return c.json({ runs });
   });
 
   app.get('/v1/runs/:id', async (c) => {
-    const run = await executor.getRun(c.req.param('id'));
-    if (!run) return problem(404, 'Run not found');
+    const run = await visibleRun(c);
+    if (!run) return runNotFound();
     return c.json({ run, journal: await executor.getJournal(run.id) });
   });
 
   app.get('/v1/runs/:id/fixture', async (c) => {
-    const run = await executor.getRun(c.req.param('id'));
-    if (!run) return problem(404, 'Run not found');
+    const run = await visibleRun(c);
+    if (!run) return runNotFound();
     return c.json(await exportFixture(store, run.id));
   });
 
   app.post('/v1/runs/:id/entries/:seq/resume', async (c) => {
     const body = resumeBody.parse(await c.req.json());
+    if (!(await visibleRun(c))) return runNotFound();
     const run = await executor.resume(c.req.param('id'), Number(c.req.param('seq')), body.action, {
       actor: actor(c),
       ...(body.reason !== undefined ? { reason: body.reason } : {}),
@@ -277,13 +304,14 @@ export function createApi(opts: ApiOptions): Hono {
   });
 
   app.post('/v1/runs/:id/cancel', async (c) => {
-    if (!(await executor.getRun(c.req.param('id')))) return problem(404, 'Run not found');
+    if (!(await visibleRun(c))) return runNotFound();
     const run = await executor.cancel(c.req.param('id'), { actor: actor(c) });
     return c.json({ run });
   });
 
   app.post('/v1/runs/:id/fork', async (c) => {
     const body = forkBody.parse(await c.req.json());
+    if (!(await visibleRun(c))) return runNotFound();
     const fork = await executor.fork(c.req.param('id'), {
       actor: actor(c),
       ...(body.uptoSeq !== undefined ? { uptoSeq: body.uptoSeq } : {}),
@@ -295,6 +323,7 @@ export function createApi(opts: ApiOptions): Hono {
 
   app.post('/v1/runs/:id/approvals/:seq', async (c) => {
     const body = approvalBody.parse(await c.req.json());
+    if (!(await visibleRun(c))) return runNotFound();
     const run = await executor.approve(c.req.param('id'), Number(c.req.param('seq')), {
       approved: body.approved,
       // A signed-in account approves as itself; the body's `by` is for API keys and open dev servers.
@@ -307,24 +336,47 @@ export function createApi(opts: ApiOptions): Hono {
 
   app.post('/v1/events', async (c) => {
     const body = eventBody.parse(await c.req.json());
-    const result = await executor.publishEvent(body.name, (body.data ?? null) as JsonValue);
+    const result = await executor.publishEvent(body.name, (body.data ?? null) as JsonValue, scoped(c));
     kick();
     return c.json(result, 202);
   });
 
   app.post('/v1/breakpoints', async (c) => {
-    const matcher = breakpointMatcher.parse(await c.req.json());
-    await executor.setBreakpoint(matcher);
+    // The account comes from the caller, never from the body.
+    const { accountId: _ignored, ...matcher } = breakpointMatcher.parse(await c.req.json());
+    await executor.setBreakpoint({ ...matcher, ...scoped(c) });
     return c.json({ ok: true }, 201);
   });
 
   app.delete('/v1/breakpoints', async (c) => {
-    await executor.clearBreakpoints();
+    await executor.clearBreakpoints(scope(c));
     return c.json({ ok: true });
   });
 
+  /**
+   * Behaviour insights per workflow, over the caller's newest runs (the same
+   * @graphmind-ai/analyze rules as the debugger: repeated step failures, steps
+   * fixed by hand again and again, regressions, slow steps). Scoped like every
+   * run route: an account only ever sees its own runs.
+   */
+  app.get('/v1/insights', async (c) => {
+    const only = c.req.query('workflow');
+    const maxRuns = Math.min(Math.max(Number(c.req.query('runs') ?? INSIGHT_RUNS) || INSIGHT_RUNS, 1), 1000);
+    const names = getWorkflows().map((w) => w.config.name).filter((n) => only === undefined || n === only);
+    if (only !== undefined && names.length === 0) return problem(404, 'Unknown workflow', `no workflow named '${only}'`);
+    const workflows = [];
+    for (const workflow of names) {
+      const runs = await executor.listRuns({ workflow, limit: maxRuns, ...scoped(c) });
+      const samples = await Promise.all(runs.map(async (run) => sampleFromCircuitRun(run, await executor.getJournal(run.id))));
+      const { trend, recommendations } = recommend(samples);
+      const { points: _points, ...summary } = trend;
+      workflows.push({ workflow, trend: summary, recommendations });
+    }
+    return c.json({ workflows });
+  });
+
   app.post('/v1/deploy-check', async (c) => {
-    const report = await checkDeploy(getWorkflows(), store);
+    const report = await checkDeploy(getWorkflows(), store, scope(c));
     return c.json(report, report.broken.length > 0 ? 409 : 200);
   });
 

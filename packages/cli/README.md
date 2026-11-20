@@ -157,12 +157,28 @@ characters escaped. Exit codes: 0 ok · 1 usage · 2 timeout · 3 no 0.6+
 server on that port · 4 nothing to act on · 5 not authorized · 6 refused
 (still held) · 7 taken.
 
-### `graphmind skill [--install] [--force]`
+### `graphmind skill [graphmind|circuit|jack|all] [--install] [--force]`
 
-Print the GraphMind Agent Skill (`skills/graphmind/SKILL.md`, shipped in this
-package: setup per framework, headless serve, the pause/wait/resume loop), or
-write it to `.claude/skills/graphmind/SKILL.md` in the current directory
-(refuses to overwrite without `--force`).
+Print one of GraphMind's Agent Skills (shipped in this package under
+`skills/`), or write it to `.claude/skills/<skill>/SKILL.md` in the current
+directory (refuses to overwrite without `--force`; `all --install` writes
+every skill, or none if one already exists):
+
+| Skill | Teaches a coding agent to |
+|---|---|
+| `graphmind` (default) | set up the debugger per framework, serve headless, run the pause/wait/resume loop |
+| `circuit` | start, inspect, fix and resume durable workflow runs over the hosted Circuit API; write workflows |
+| `jack` | publish an OpenAPI-described API as a hosted MCP server: import, shape tools, deploy, read the call log |
+
+The Circuit and Jack skills use a personal token from graphmind.ai, read from
+`GRAPHMIND_TOKEN` and never printed.
+
+### `graphmind insights [--app <name>] [--json] [--include-replays]`
+
+What to change in your agents, from their recorded runs: per app, the trend's
+verdict and ranked recommendations, each with its evidence (runs, counts, an
+example), the change to make, and the metric that should move. Replays are
+left out unless `--include-replays`; abandoned runs count as not ok.
 
 ### `graphmind mcp`
 
@@ -170,7 +186,9 @@ Serve recorded runs to MCP clients (Claude Code, Cursor, ...) over stdio. No
 control tools — releasing a pause goes through `graphmind resume`.
 Read-only tools: `list_runs`, `get_run`, `get_node`, `find_errors`,
 `get_behavior` (one verdict on how well a run worked: wasted calls, silent
-failures, finish reasons, prompt growth) — each result carries a deep link
+failures, finish reasons, prompt growth), `get_insights` (each app's trend
+across runs) and `suggest_improvements` (ranked changes with evidence, the
+same as `graphmind insights`) — each result carries a deep link
 into the viewer. Reads the SQLite database directly, so it works while the
 server/viewer is closed.
 

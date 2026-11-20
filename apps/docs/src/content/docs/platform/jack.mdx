@@ -135,6 +135,14 @@ With `--accounts` on the server, every project belongs to the account that creat
 accounts cannot see it (they get a 404), and `jack deploy` needs a personal API token:
 `jack deploy --api-key gmt_…`. See [accounts](/platform/accounts/).
 
+## Insights from the call log
+
+`GET /v1/projects/:id/insights` (the project's Insights page) reads the newest 1,000 calls and
+recommends changes: a tool your API keeps rejecting with a 4xx (fix its description or the spec in
+`jack.yaml`), arguments that keep missing the schema, a tool that started failing after a deploy.
+The log holds no arguments or results, so status codes are the evidence. See
+[insights](/debugging/insights/).
+
 ## Where it is going
 
 The hosted service — sign in on graphmind.ai, create a project, hand the MCP URL to your users —

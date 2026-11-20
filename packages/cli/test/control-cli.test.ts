@@ -5,16 +5,16 @@
  * into a private directory and run as a child process.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpServer, type RequestListener, type Server as HttpServer } from 'node:http';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createSession, mergeToolInput, type GateDecision } from '@graphmind-ai/client';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { defaultFlags, parseCliArgs, type ParsedCli } from '../src/args.js';
 import { EXIT, INLINE_LIMIT, portFlag, runPauses, runResume, runWait, type ControlIo } from '../src/commands/control.js';
-import { SKILL_INSTALL_PATH, SKILL_SOURCE, runSkill } from '../src/commands/skill.js';
+import { SKILLS, SKILL_INSTALL_PATH, SKILL_SOURCE, runSkill, skillInstallPath, skillSource, type SkillName } from '../src/commands/skill.js';
 import { DEFAULT_PORT, packageRoot } from '../src/paths.js';
 import type { ServerOptions } from '../src/server.js';
 import { serveViewer } from '../src/static-site.js';
@@ -686,7 +686,53 @@ describe('graphmind skill', () => {
   it('ships in the npm package', () => {
     const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { files: string[] };
     expect(pkg.files).toContain('skills');
-    expect(existsSync(join(packageRoot, 'skills', 'graphmind', 'SKILL.md'))).toBe(true);
+    for (const name of Object.keys(SKILLS) as SkillName[]) expect(existsSync(skillSource(name)), name).toBe(true);
+  });
+
+  it('prints the Circuit and Jack skills by name, each with its own frontmatter', async () => {
+    const needles: Record<'circuit' | 'jack', string[]> = {
+      circuit: ['/app/circuit/v1', 'entries/<seq>/resume', 'NonDeterminismError', 'deploy-check', 'instead of trying `npm install @graphmind-ai/circuit-sdk`', '$GRAPHMIND_TOKEN'],
+      jack: ['/app/jack/v1', '/import/preview', 'draft/tools/<key>', '/deploy', 'mcpUrl', '/calls', '$GRAPHMIND_TOKEN'],
+    };
+    for (const name of ['circuit', 'jack'] as const) {
+      const chunks: string[] = [];
+      expect(await runSkill(cli(['skill', name]), { out: (t) => chunks.push(t), log: () => {}, error: () => {}, cwd: tempDir('gm-') })).toBe(0);
+      const text = chunks.join('');
+      const front = new RegExp(`^---\\nname: ${SKILLS[name]}\\ndescription: (.+)\\n---\\n`).exec(text);
+      expect(front, name).not.toBeNull();
+      expect((front?.[1] ?? '').length).toBeLessThanOrEqual(1024);
+      for (const needle of needles[name]) expect(text, `${name}: ${needle}`).toContain(needle);
+      // A skill must never show a real-looking token: only the env var name.
+      expect(text).not.toMatch(/gmt_[A-Za-z0-9]{6,}/);
+    }
+  });
+
+  it('`all --install` writes every skill, and refuses before writing anything if one exists', async () => {
+    const cwd = tempDir('gm-all-');
+    const errors: string[] = [];
+    const io = { out: () => {}, log: () => {}, error: (m: string) => errors.push(m), cwd };
+    const jackTarget = join(cwd, skillInstallPath('jack'));
+    mkdirSync(dirname(jackTarget), { recursive: true });
+    writeFileSync(jackTarget, 'mine');
+    expect(await runSkill(cli(['skill', 'all', '--install']), io)).toBe(1);
+    expect(existsSync(join(cwd, skillInstallPath('graphmind')))).toBe(false);
+    expect(readFileSync(jackTarget, 'utf8')).toBe('mine');
+    expect(await runSkill(cli(['skill', 'all', '--install', '--force']), io)).toBe(0);
+    for (const name of Object.keys(SKILLS) as SkillName[]) {
+      expect(readFileSync(join(cwd, skillInstallPath(name)), 'utf8')).toBe(readFileSync(skillSource(name), 'utf8'));
+    }
+  });
+
+  it('rejects an unknown skill, a second argument, and printing "all"', async () => {
+    for (const [args, message] of [
+      [['skill', 'nope'], 'unknown skill "nope"'],
+      [['skill', 'jack', 'extra'], 'unexpected argument "extra"'],
+      [['skill', 'all'], 'only works with --install'],
+    ] as const) {
+      const errors: string[] = [];
+      expect(await runSkill(cli([...args]), { out: () => {}, log: () => {}, error: (m) => errors.push(m), cwd: tempDir('gm-') })).toBe(1);
+      expect(errors.join('\n')).toContain(message);
+    }
   });
 });
 

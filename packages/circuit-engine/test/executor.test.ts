@@ -325,6 +325,49 @@ describe.skipIf(unavailable(backend))('executor', () => {
     });
   });
 
+  describe('accounts', () => {
+    const waiter = () =>
+      workflow({ name: 'waiter' }, async (ctx: Ctx) => {
+        const evt = await ctx.waitForEvent('go', { name: 'go', timeout: '1d' });
+        return evt === null ? 'timed-out' : 'went';
+      });
+
+    it('an account’s event wakes only its own runs; an operator event wakes all', async () => {
+      const { executor } = await setup([waiter()]);
+      const a = await executor.enqueue('waiter', null, { accountId: 'acct-a' });
+      const b = await executor.enqueue('waiter', null, { accountId: 'acct-b' });
+      const op = await executor.enqueue('waiter', null);
+      await executor.drain();
+      expect((await executor.publishEvent('go', {}, { accountId: 'acct-a' })).matchedRuns).toEqual([a.id]);
+      expect((await executor.getRun(b.id))?.status).toBe('suspended');
+      expect((await executor.publishEvent('go', {})).matchedRuns.sort()).toEqual([b.id, op.id].sort());
+    });
+
+    it('an account’s breakpoint pauses only its own runs', async () => {
+      const wf = workflow({ name: 'bp' }, async (ctx: Ctx) => ctx.step('s', () => 1));
+      const { executor } = await setup([wf]);
+      await executor.setBreakpoint({ step: 's', point: 'before', accountId: 'acct-a' });
+      const a = await executor.enqueue('bp', null, { accountId: 'acct-a' });
+      const b = await executor.enqueue('bp', null, { accountId: 'acct-b' });
+      await executor.drain();
+      expect((await executor.getRun(a.id))?.status).toBe('paused');
+      expect((await executor.getRun(b.id))?.status).toBe('completed');
+    });
+
+    it('children and forks inherit the account', async () => {
+      const child = workflow({ name: 'kid' }, async (ctx: Ctx) => ctx.step('k', () => 2));
+      const parent = workflow({ name: 'parent' }, async (ctx: Ctx) => ctx.invoke('call', 'kid', null));
+      const { executor } = await setup([child, parent]);
+      const run = await executor.enqueue('parent', null, { accountId: 'acct-a' });
+      await executor.drain();
+      expect((await executor.listRuns({ workflow: 'kid' }))[0]?.accountId).toBe('acct-a');
+      const fork = await executor.fork(run.id, { actor: 't', uptoSeq: 0 });
+      expect(fork.accountId).toBe('acct-a');
+      expect((await executor.listRuns({ accountId: 'acct-a' })).length).toBe(3);
+      expect(await executor.listRuns({ accountId: 'acct-b' })).toEqual([]);
+    });
+  });
+
   describe('events, approvals, children', () => {
     it('waitForEvent matches on payload subset and ignores non-matching events', async () => {
       const wf = workflow({ name: 'waits' }, async (ctx: Ctx) => {

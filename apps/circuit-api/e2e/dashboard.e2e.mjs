@@ -26,14 +26,20 @@ const triage = workflow(
   },
 );
 
+// Always fails, with markup in its error: Insights must recommend a fix and show the error as text.
+const lookup = workflow(
+  { name: 'lookup-vendor', input: z.object({}) },
+  async (ctx) => ctx.step('vendor-api', () => { throw new Error('<img src=x onerror=alert(1)> vendor API down'); }),
+);
+
 const shots = process.env.CIRCUIT_SHOTS;
 let server, browser, page, base, loop, store;
 
 before(async () => {
   store = new SqliteJournalStore(':memory:');
-  const executor = new Executor({ store, workflows: [triage] });
+  const executor = new Executor({ store, workflows: [triage, lookup] });
   loop = startEngineLoop(executor, 50);
-  let defs = [triage];
+  let defs = [triage, lookup];
   const app = createApi({
     executor,
     store,
@@ -158,4 +164,40 @@ test('customer data is rendered as text, never as HTML', async () => {
   await page.getByText('Approval requested').waitFor({ timeout: 5000 });
   assert.equal(await page.locator('img').count(), 0);
   await page.getByText('<img src=x onerror=alert(1)>').first().waitFor();
+});
+
+test('Insights: a recommendation per workflow, evidence links to runs, examples shown as text', async () => {
+  // Three runs that fail the same way: enough for "the same error, again and again".
+  for (let i = 0; i < 3; i++) {
+    const res = await fetch(`${base}v1/workflows/lookup-vendor/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ input: {} }) });
+    assert.ok(res.ok, `start run: HTTP ${res.status}`);
+  }
+  for (let t = 0; ; t++) {
+    const { runs } = await (await fetch(`${base}v1/runs?limit=100`)).json();
+    if (runs.filter((r) => r.workflow === 'lookup-vendor' && r.status === 'paused').length >= 3) break;
+    assert.ok(t < 100, 'the lookup runs never paused');
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  await page.goto(base);
+  await page.getByText('connected').waitFor();
+  await page.locator('.toolbar').getByRole('button', { name: 'Insights' }).click();
+  assert.match(page.url(), /#\/insights$/);
+  const card = page.locator('[data-testid=insight-workflow][data-workflow=lookup-vendor]');
+  await card.locator('[data-testid=recommendation]').first().waitFor({ timeout: 5000 });
+  await card.locator('[data-testid=verdict]').waitFor();
+  const rec = card.locator('[data-testid=recommendation][data-rec=R-tool-error-repeat]');
+  await rec.waitFor();
+  assert.match(await rec.textContent(), /vendor-api failed 3 times[\s\S]*Change:[\s\S]*Evidence: 3 runs[\s\S]*Verify: tool-failure-rate is 100% now/);
+  // The error text is customer data: shown as text, never parsed as HTML.
+  assert.equal(await rec.locator('[data-testid=rec-example]').textContent(), '<img src=x onerror=alert(1)> vendor API down');
+  assert.equal(await page.locator('img').count(), 0);
+  // A workflow whose runs went fine says so.
+  await page.locator('[data-workflow=scaffolded-flow] [data-testid=no-recommendations]').getByText('No recommendations').waitFor();
+  await snap('07-insights');
+
+  // Evidence run ids open that run.
+  await rec.locator('[data-testid=evidence-run]').first().click();
+  assert.match(page.url(), /#\/runs\//);
+  await page.getByText('This step failed — fix it and resume').waitFor({ timeout: 5000 });
 });

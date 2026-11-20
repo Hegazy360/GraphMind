@@ -113,3 +113,18 @@ dialog h3 { margin: 0 0 12px; }
 .toast.err { border-left-color: var(--failed); }
 
 @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .runs { max-height: 35vh; border-right: 0; border-bottom: 1px solid var(--border); } .cols { grid-template-columns: 1fr; } }
+
+/* Insights (#/insights): recommendations per workflow. All text, never markup. */
+#btn-insights.on { border-color: var(--gm-accent); color: var(--gm-accent); }
+.insight { margin-top: 14px; }
+.insight .row { display: flex; align-items: baseline; gap: 10px; }
+.insight .verdict { margin: 4px 0 8px; }
+.recs { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.rec { border: 1px solid var(--border); border-left: 3px solid var(--queued); border-radius: 10px; padding: 10px 12px; background: var(--panel-2); }
+.rec.sev-high { border-left-color: var(--failed); } .rec.sev-medium { border-left-color: var(--paused); }
+.rec-head { display: flex; gap: 8px; align-items: baseline; }
+.rec-title { font-weight: 600; }
+.sev { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--queued); }
+.sev.sev-high { color: var(--failed); } .sev.sev-medium { color: var(--paused); }
+.rec p, .rec-evidence { margin: 6px 0 0; font-size: 13px; }
+.rec-example { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; }

@@ -150,6 +150,7 @@ const TABS = [
   ['deploy', 'Deploy'],
   ['users', 'Users'],
   ['activity', 'Activity'],
+  ['insights', 'Insights'],
   ['settings', 'Settings'],
 ];
 
@@ -365,7 +366,7 @@ function projectHeader(tab) {
 }
 
 function renderProject(tab, params) {
-  const views = { tools: viewTools, signin: viewSignin, try: viewTry, deploy: viewDeploy, users: viewUsers, activity: viewActivity, settings: viewSettings };
+  const views = { tools: viewTools, signin: viewSignin, try: viewTry, deploy: viewDeploy, users: viewUsers, activity: viewActivity, insights: viewInsights, settings: viewSettings };
   const view = views[tab] ?? viewTools;
   const body = h('div', { id: 'tab' });
   mount(...projectHeader(tab), body);
@@ -880,6 +881,80 @@ async function viewActivity(el) {
   }
   await load();
   state.timer = setInterval(load, 3000);
+}
+
+// ----------------------------------------------------------- insights --
+const pct = (rate) => `${Math.round(rate * 100)}%`;
+/** A verify line's "now": rates as percentages, durations in ms/s, counts as they are. */
+function metricValue(metric, value) {
+  if (typeof value !== 'number') return String(value);
+  if (/rate/.test(metric)) return pct(value);
+  if (/-ms$/.test(metric)) return value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${Math.round(value)} ms`;
+  return String(Math.round(value * 100) / 100);
+}
+const SEVERITY_PILL = { high: 'err', medium: 'warn', low: '' };
+
+function recommendationCard(rec, project) {
+  const ev = rec.evidence ?? { runIds: [], runs: 0, counts: {} };
+  const ids = ev.runIds ?? [];
+  const counts = Object.entries(ev.counts ?? {}).map(([k, v]) => `${k} ${v}`).join(' · ');
+  // Jack has calls, not runs: evidence ids are `call-<n>`, rows in Activity.
+  return h(
+    'div',
+    { class: 'panel rec', 'data-testid': 'recommendation', 'data-rec': rec.id },
+    h('div', { class: 'rec-head' }, h('span', { class: `pill ${SEVERITY_PILL[rec.severity] ?? ''}` }, rec.severity), h('b', {}, rec.title)),
+    rec.target ? h('div', { class: 'muted small' }, 'tool ', h('span', { class: 'toolname' }, rec.target.name)) : '',
+    h('p', {}, h('b', {}, 'Change: '), rec.change),
+    h(
+      'p',
+      { class: 'small' },
+      h('b', {}, 'Evidence: '),
+      `${ev.runs} call${ev.runs === 1 ? '' : 's'}`,
+      ids.length ? [' — ', ids.flatMap((id, i) => [i ? ', ' : '', h('code', { 'data-testid': 'evidence-call' }, id)]), ev.runs > ids.length ? ` and ${ev.runs - ids.length} more` : ''] : '',
+      ' (',
+      h('a', { href: `#/p/${project.id}/activity` }, 'see Activity'),
+      ')',
+      counts ? h('span', { class: 'muted' }, ` · ${counts}`) : '',
+    ),
+    ev.example !== undefined ? h('pre', { class: 'rec-example', 'data-testid': 'rec-example' }, ev.example) : '',
+    h('p', { class: 'small' }, h('b', {}, 'Verify: '), `${rec.verify.metric} is ${metricValue(rec.verify.metric, rec.verify.now)} now; expect ${rec.verify.expect}.`),
+  );
+}
+
+async function viewInsights(el) {
+  const { project } = state.project;
+  const body = h('div', {}, h('p', { class: 'muted' }, 'Loading…'));
+  el.append(
+    h('p', { class: 'muted' }, 'What to change in jack.yaml or your API, worked out from the call log: tools that keep failing the same way, slow tools, regressions. Each names the calls it came from and how you will know it worked.'),
+    body,
+  );
+  const r = await api('GET', `/projects/${project.id}/insights`).catch((err) => ({ error: err.message }));
+  if (r.error) {
+    body.replaceChildren(h('div', { class: 'banner err' }, `Could not load insights: ${r.error}`));
+    return;
+  }
+  const trend = r.trend ?? { runs: 0, verdict: '', notes: [] };
+  if (trend.runs === 0) {
+    // Nothing logged yet: one plain line, no verdict about nothing and no all-clear.
+    body.replaceChildren(h('p', { class: 'muted', 'data-testid': 'no-calls' }, 'No calls yet. Use "Try it", or connect an AI client; insights appear as calls come in.'));
+    return;
+  }
+  body.replaceChildren(
+    h(
+      'div',
+      { class: 'panel' },
+      h('div', { class: 'muted small' }, `${trend.runs} recent call${trend.runs === 1 ? '' : 's'}`),
+      trend.verdict ? h('p', { 'data-testid': 'verdict' }, trend.verdict) : '',
+      (trend.notes ?? []).length ? h('ul', { class: 'muted small' }, trend.notes.map((n) => h('li', {}, n))) : '',
+    ),
+    r.recommendations.length === 0
+      ? h(
+          'div',
+          { class: 'banner ok', 'data-testid': 'no-recommendations' },
+          'No recommendations: tools answer without failing the same way again and again.',
+        )
+      : h('div', { 'data-testid': 'recommendations' }, r.recommendations.map((rec) => recommendationCard(rec, project))),
+  );
 }
 
 // ----------------------------------------------------------- settings --

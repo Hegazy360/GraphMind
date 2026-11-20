@@ -25,6 +25,7 @@
  * upgrade therefore goes through origin-guard.ts, which requires a loopback
  * `Host` and either no `Origin` (non-browser clients) or this server's own.
  */
+import { loadInsights } from './insights.js';
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { serve } from '@hono/node-server';
@@ -326,6 +327,15 @@ export async function startServer(options: ServerOptions = {}): Promise<GraphMin
   registerBuilderRoutes(app, { verifier, runner, sessionSecrets, env, log });
   app.get('/health', (c) => c.json({ ok: true, name: 'graphmind-ai', version: VERSION }));
   app.get('/api/runs', (c) => c.json({ runs: hub.listRunInfos() }));
+  // The Insights page: one trend + recommendations per app (src/insights.ts, shared with the CLI and MCP).
+  app.get('/api/insights', (c) => {
+    const appName = c.req.query('app');
+    const apps = loadInsights(storage, {
+      ...(appName ? { app: appName } : {}),
+      ...(c.req.query('includeReplays') === '1' ? { includeReplays: true } : {}),
+    });
+    return c.json({ apps });
+  });
   app.get('/api/runs/:id/events', (c) => {
     const id = c.req.param('id');
     const run = hub.getRunInfo(id);

@@ -164,6 +164,37 @@ test('activity shows every call, users shows Alice, and disconnecting her works'
   assert.equal(await page.$('[data-testid=signed-in-as]'), null, 'the revoked test session is gone');
 });
 
+test('insights: the verdict from the call log, and recommendations shown as text', async () => {
+  // The real endpoint: three healthy calls are nothing to fix.
+  await tab('insights');
+  await page.waitForSelector('[data-testid=verdict]');
+  assert.match(await page.textContent('[data-testid=verdict]'), /\d+ calls?/);
+  assert.match(await page.textContent('[data-testid=no-recommendations]'), /No recommendations/);
+
+  // A recommendation whose example carries markup (served by a stub): it must stay text.
+  const html = '<img src=x onerror=alert(1)> HTTP 422';
+  await page.route('**/v1/projects/*/insights', (route) => route.fulfill({
+    json: {
+      trend: { runs: 6, overall: {}, tools: [], shifts: [], verdict: '6 calls, 50% ok.', notes: [] },
+      recommendations: [{
+        id: 'R-tool-error-repeat', severity: 'high', title: 'create_task failed 3 times with the same error across 3 runs (50% of its calls fail).',
+        target: { nodeId: 'jack:acme:create_task', name: 'create_task' },
+        evidence: { runIds: ['call-4', 'call-5', 'call-6'], runs: 3, counts: { calls: 6, failures: 3 }, example: html },
+        change: 'Rewrite the tool description in jack.yaml.', verify: { metric: 'tool-failure-rate', now: 0.5, expect: 'below 5%, and this error gone' },
+      }],
+    },
+  }));
+  await tab('activity');
+  await tab('insights');
+  await page.waitForSelector('[data-testid=recommendation]');
+  const card = await page.textContent('[data-testid=recommendation]');
+  assert.match(card, /high[\s\S]*create_task failed 3 times[\s\S]*Change:[\s\S]*Evidence: 3 calls — call-4, call-5, call-6[\s\S]*Verify: tool-failure-rate is 50% now/);
+  assert.equal(await page.textContent('[data-testid=rec-example]'), html);
+  assert.equal(await page.locator('#main img').count(), 0);
+  await shot('07b-insights');
+  await page.unroute('**/v1/projects/*/insights');
+});
+
 test('deploy again, roll back, export jack.yaml, delete', async () => {
   await tab('tools');
   await page.click('[data-testid=toggle-add_comment] + span');

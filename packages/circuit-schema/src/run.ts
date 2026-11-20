@@ -37,6 +37,13 @@ export const run = z.object({
   output: jsonValue.optional(),
   error: errorShape.optional(),
   idempotencyKey: z.string().optional(),
+  /**
+   * The account the run belongs to, on servers with accounts. Every API read
+   * and write is scoped to it; idempotency keys, event delivery and
+   * breakpoints are per account. Absent on open/dev servers and for runs
+   * started with a static operator key. Children and forks inherit it.
+   */
+  accountId: z.string().optional(),
   /** Set on child runs spawned by ctx.invoke. */
   parentRunId: z.string().optional(),
   /** The parent journal entry (seq) this child reports back to. */

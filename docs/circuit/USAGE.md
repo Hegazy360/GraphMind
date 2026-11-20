@@ -119,6 +119,11 @@ node packages/circuit-cli/dist/cli.js dev --workflows examples/circuit-onboardin
   creates an account with an email and a password (10 characters or more).
   Registration is open and free, with no plans or quotas, by decision.
   `--no-signup` closes it while keeping existing accounts working.
+- **Your runs are yours.** A run belongs to the account that started it
+  (children and forks inherit it). Another account's run is a 404 on every
+  route, as if it did not exist; idempotency keys, events (`POST /events`
+  wakes only your runs), breakpoints and the deploy check are per account.
+  A static `--api-key` is the operator and sees every run.
 - **Attribution.** Every resume, approval, fork and cancel is recorded under
   the signed-in account's email. The `x-circuit-actor` header and the `by`
   field of an approval are overridden when someone is signed in; they still

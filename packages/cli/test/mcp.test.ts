@@ -179,15 +179,16 @@ afterAll(async () => {
 });
 
 describe('graphmind mcp over stdio', () => {
-  it('starts, identifies itself, and exposes the five tools', async () => {
+  it('starts, identifies itself, and exposes the seven tools', async () => {
     expect(seeded.client.getServerVersion()?.name).toBe('graphmind');
     expect(seeded.client.getInstructions()).toContain('GraphMind');
     expect(seeded.client.getInstructions()).toContain('find_errors');
     expect(seeded.client.getInstructions()).toContain('get_behavior');
+    expect(seeded.client.getInstructions()).toContain('suggest_improvements');
 
     const { tools } = await seeded.client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
-      'find_errors', 'get_behavior', 'get_node', 'get_run', 'list_runs',
+      'find_errors', 'get_behavior', 'get_insights', 'get_node', 'get_run', 'list_runs', 'suggest_improvements',
     ]);
     for (const tool of tools) {
       expect(tool.description).toBeTruthy();

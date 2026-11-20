@@ -15,6 +15,7 @@
  *   - neither: open, for local `jack serve` on 127.0.0.1.
  * Errors follow RFC 9457.
  */
+import { recommend, samplesFromJackCalls } from '@graphmind-ai/analyze';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -475,6 +476,27 @@ export function createJack(opts: ApiOptions): Jack {
     const limit = Number(c.req.query('limit') ?? 100) || 100;
     const before = c.req.query('before');
     return c.json({ calls: await store.listCalls((await project(c)).id, { limit, ...(before ? { before: Number(before) } : {}) }) });
+  });
+
+  /**
+   * Behaviour insights over the project's newest calls (up to 1,000): tools
+   * the API keeps rejecting, arguments that miss the schema, tools that
+   * started failing after a deploy. The call log holds no arguments or
+   * results, so status codes are the evidence.
+   */
+  app.get('/v1/projects/:id/insights', async (c) => {
+    const p = await project(c);
+    const calls: Awaited<ReturnType<typeof store.listCalls>> = [];
+    let before: number | undefined;
+    while (calls.length < 1000) {
+      const page = await store.listCalls(p.id, { limit: 500, ...(before !== undefined ? { before } : {}) });
+      calls.push(...page);
+      if (page.length < 500) break;
+      before = page[page.length - 1]!.id;
+    }
+    const { trend, recommendations } = recommend(samplesFromJackCalls(p.slug, calls));
+    const { points: _points, ...summary } = trend;
+    return c.json({ trend: summary, recommendations });
   });
 
   // ---------------------------------------------------------- try it --

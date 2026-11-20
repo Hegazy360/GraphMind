@@ -90,6 +90,10 @@ export interface CliFlags {
   substitute: string[];
   /** `graphmind replay --live-model`: replay tools, call the real model. */
   liveModel: boolean;
+  /** `graphmind insights --app <name>`: one app only. */
+  app: string | undefined;
+  /** `graphmind insights --include-replays`: count replays as behaviour. */
+  includeReplays: boolean;
 }
 
 /**
@@ -173,8 +177,11 @@ export const OPTION_HELP: readonly string[] = [
   '  --live-model   (replay) serve tool calls from the recording but let model',
   '                 steps call the provider — for testing a prompt, a tool',
   '                 description or a model change against fixed tools',
-  '  --install      (skill) write .claude/skills/graphmind/SKILL.md here',
-  '  --force        (skill --install) overwrite an existing SKILL.md',
+  '  --app <name>   (insights) only that app',
+  '  --include-replays',
+  '                 (insights) count replay runs as behaviour (left out by default)',
+  '  --install      (skill [graphmind|circuit|jack|all]) write .claude/skills/<skill>/SKILL.md here',
+  '  --force        (skill --install) overwrite existing SKILL.md files',
   '  -v, --version  Print the version and exit',
   '  -h, --help     Show this help',
 ];
@@ -241,6 +248,8 @@ export function defaultFlags(): CliFlags {
     onLossy: undefined,
     substitute: [],
     liveModel: false,
+    app: undefined,
+    includeReplays: false,
   };
 }
 
@@ -385,6 +394,14 @@ export function parseCliArgs(argv: string[]): ParsedCli {
         }
         break;
       }
+      case '--app': {
+        const raw = takeValue('--app', inline, next);
+        if (raw !== undefined) flags.app = raw;
+        break;
+      }
+      case '--include-replays':
+        flags.includeReplays = true;
+        break;
       case '--behavior': {
         const raw = takeValue('--behavior', inline, next);
         if (raw !== undefined) flags.behavior = raw;

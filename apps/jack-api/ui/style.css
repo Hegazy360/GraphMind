@@ -125,3 +125,8 @@ pre.result.error { background: #450a0a; color: #fecaca; }
 /* Shown only if app.js never replaces it. Hidden for the first 1.5 s so a normal load never flashes it. */
 #boot-failed { animation: boot-failed-appear 0s 1.5s both; }
 @keyframes boot-failed-appear { from { visibility: hidden; } to { visibility: visible; } }
+
+/* Insights: recommendations from the call log. All text, never markup. */
+.rec .rec-head { display: flex; gap: 8px; align-items: baseline; }
+.rec p { margin: 8px 0 0; }
+.rec-example { margin: 8px 0 0; padding: 8px 10px; background: var(--soft); border-radius: 7px; white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
